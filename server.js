@@ -7,11 +7,8 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// 1. 静态资源服务（确保 public/vendor 第一优先级）
+// 静态资源服务（位于所有路由之前，且无 fallback）
 app.use(express.static(path.join(__dirname, 'public')));
-
-// 注意：绝不添加 app.get('*', ...) 之类会覆盖静态文件的 catch‑all 路由
-// 此项目无需 SPA fallback，静态文件 404 时自然返回 404，不会落入 HTML
 
 const wss = new WebSocketServer({ server, path: '/ssh' });
 
@@ -21,7 +18,11 @@ wss.on('connection', (ws) => {
 
   ws.on('message', (msg) => {
     let data;
-    try { data = JSON.parse(msg.toString()); } catch _ { return; }
+    try {
+      data = JSON.parse(msg.toString());
+    } catch (_) {   // ✅ 修正点：加上括号
+      return;
+    }
 
     if (data.type === 'connect') {
       conn = new Client();
@@ -39,7 +40,7 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({ type: 'data', data: chunk.toString('utf8') }));
           });
           stream.on('close', () => {
-            try { ws.close(); } catch _ {}
+            try { ws.close(); } catch (_) {}   // ✅ 修正点
             conn.end();
           });
 
