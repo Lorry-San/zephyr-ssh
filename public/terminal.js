@@ -84,7 +84,7 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// --- 复制功能（保留原始内容） ---
+// --- 复制功能（保留完整文本，不 trim） ---
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
     const text = selection.toString();
@@ -107,12 +107,12 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- Ctrl+C 智能判断（有选区复制，无选区发 SIGINT） ---
+// --- Ctrl+C 智能判断：有选区交给浏览器复制，无选区发送 SIGINT ---
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'c') {
         const selection = window.getSelection();
         const text = selection.toString();
-        if (text) return; // 交给浏览器复制
+        if (text) return;                // 有选中文本，让浏览器复制
         e.preventDefault();
         sendData('\x03');
     }
@@ -198,16 +198,18 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// 事件委托：整行点击，但按钮区不触发
+// ========== 点击整行逻辑 ==========
 fmList.addEventListener('click', (e) => {
+    // ① 如果点击的是按钮区域，完全忽略
+    if (e.target.closest('.fm-item-actions')) return;
+
+    // ② 找到所在行
     const item = e.target.closest('.fm-item');
     if (!item) return;
+
     const fileName = item.dataset.fileName;
     const fileType = item.dataset.fileType;
     if (!fileName) return;
-
-    // 如果点的是操作按钮区，什么都不做（按钮有自己的事件）
-    if (e.target.closest('.fm-item-actions')) return;
 
     const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
     if (fileType === 'd') {
@@ -473,7 +475,7 @@ const comboSequences = {
     'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15',
 };
 
-// 修复选区消失：mouseup 无选区才聚焦
+// 保留选区：mouseup 且无选中文本时才聚焦
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) {
