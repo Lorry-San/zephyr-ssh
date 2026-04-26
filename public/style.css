@@ -473,7 +473,7 @@ body {
     padding: 8px;
 }
 
-/* 关键：整行可点 */
+/* 🔧 关键修复：整行可点击 */ 
 .fm-item {
     display: flex;
     align-items: center;
@@ -481,7 +481,7 @@ body {
     width: 100%;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    cursor: pointer;
+    cursor: pointer;                 /* 鼠标变成手型 */
     animation: fadeInItem 0.2s ease-out;
     transition: background 0.1s;
 }
@@ -493,14 +493,13 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* 按钮容器（不占单独点击，用 flex 放右侧） */
+/* 右侧操作按钮容器 */
 .fm-item-actions {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: auto;
+    margin-left: auto;               /* 推到最右边 */
 }
-
 .fm-item-actions button {
     background: none;
     border: none;
