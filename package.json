@@ -1,6 +1,6 @@
 {
   "name": "zephyr-ssh",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A WebSSH client with smooth text selection and copy experience",
   "main": "server.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "express": "^4.18.2",
     "socket.io": "^4.6.1",
     "ssh2": "^1.15.0",
-    "@wterm/dom": "^0.3.0"
+    "@wterm/dom": "latest"
   },
   "keywords": ["ssh", "webssh", "terminal", "wterm"],
   "license": "GPL-3.0"
