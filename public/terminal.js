@@ -24,13 +24,12 @@ const wtermWrapper = $('#wtermWrapper');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 
-let wtermInstance = null;
+let term = null;
 let wsConnection = null;
 let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// 状态更新
 function setStatus(state, msg) {
     statusDot.className = 'status-dot';
     if (state === 'connecting') {
@@ -59,62 +58,44 @@ function setStatus(state, msg) {
 
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
-// 初始化 wterm
 async function initWTerm() {
+    // 从 vendor 目录动态导入
     let WTermClass;
     try {
-        const wtermModule = await import('/vendor/@wterm/dom/dist/index.js');
-        WTermClass = wtermModule.WTerm || wtermModule.default || wtermModule;
-    } catch {
-        try {
-            const wtermModule = await import('/vendor/@wterm/dom/dist/wterm.js');
-            WTermClass = wtermModule.WTerm || wtermModule.default || wtermModule;
-        } catch (err2) {
-            throw new Error('无法加载终端引擎 @wterm/dom，请检查 vendor 目录');
-        }
+        const mod = await import('/vendor/@wterm/dom/dist/index.js');
+        WTermClass = mod.WTerm;
+    } catch (e) {
+        throw new Error('无法加载 WTerm 模块，请检查 vendor 目录是否完整');
     }
-    if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
-    const termConfig = {
-        element: wtermWrapper,
-        fontSize: 14,
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+
+    // 创建 WTerm 实例
+    term = new WTermClass(wtermWrapper, {
+        cols: 80,
+        rows: 24,
+        autoResize: true,
         cursorBlink: true,
-        theme: {
-            background: '#0a0a0a',
-            foreground: '#e6edf3',
-            cursor: '#58a6ff',
-            selectionBackground: 'rgba(88,166,255,0.3)',
-        },
-    };
-    try {
-        wtermInstance = new WTermClass(termConfig);
-    } catch {
-        wtermInstance = new WTermClass({ element: wtermWrapper });
-    }
-
-    const sendInput = (data) => {
-        if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-            wsConnection.send(JSON.stringify({ type: 'input', data }));
-        }
-    };
-    if (typeof wtermInstance.onData === 'function') {
-        wtermInstance.onData(sendInput);
-    } else if (typeof wtermInstance.on === 'function') {
-        wtermInstance.on('data', sendInput);
-    }
-
-    const observeResize = () => {
-        if (wtermInstance && typeof wtermInstance.getSize === 'function') {
-            const size = wtermInstance.getSize();
-            if (size && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-                wsConnection.send(JSON.stringify({
-                    type: 'resize',
-                    rows: size.rows || size.lines || 24,
-                    cols: size.cols || size.columns || 80,
-                }));
+        // 用户输入时通过 WebSocket 发送到后端
+        onData: (data) => {
+            if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+                wsConnection.send(JSON.stringify({ type: 'input', data }));
             }
+        },
+    });
+
+    // 初始化（加载 WASM）
+    await term.init();
+
+    // 监听容器大小变化，实时调整终端尺寸
+    const observeResize = () => {
+        if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+            // 获取当前列数和行数
+            // 注意：wterm 0.1.9 暂未直接暴露 cols/rows 属性，可通过 ResizeObserver 计算
+            const rect = wtermWrapper.getBoundingClientRect();
+            const cols = Math.floor(rect.width / 7.2);  // 等宽字体估算
+            const rows = Math.floor(rect.height / 17);
+            wsConnection.send(JSON.stringify({ type: 'resize', rows, cols }));
         }
     };
     if (window.ResizeObserver) {
@@ -125,19 +106,18 @@ async function initWTerm() {
         ro.observe(wtermWrapper);
     }
     window.addEventListener('resize', observeResize);
+
     console.log('[Zephyr] wterm 终端初始化完成');
 }
 
-// WebSocket 连接
 function connectWebSocket() {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${proto}//${location.host}/ssh`;
         const ws = new WebSocket(wsUrl);
-
         const timeout = setTimeout(() => {
             ws.close();
-            reject(new Error('WebSocket 连接超时（10秒）'));
+            reject(new Error('WebSocket 连接超时'));
         }, 10000);
 
         ws.addEventListener('open', () => {
@@ -159,12 +139,14 @@ function connectWebSocket() {
                 switch (msg.type) {
                     case 'ready':
                         setStatus('connected', '已连接');
-                        if (wtermInstance && typeof wtermInstance.focus === 'function') wtermInstance.focus();
+                        if (term && typeof term.focus === 'function') term.focus();
                         reconnectAttempts = 0;
                         resolve(ws);
                         break;
                     case 'data':
-                        if (wtermInstance && typeof wtermInstance.write === 'function') wtermInstance.write(msg.data);
+                        if (term && typeof term.write === 'function') {
+                            term.write(msg.data);
+                        }
                         break;
                     case 'error':
                         setStatus('error', msg.message);
@@ -174,16 +156,15 @@ function connectWebSocket() {
                         setStatus('disconnected', msg.message || '会话已关闭');
                         break;
                     case 'banner':
-                        if (wtermInstance && typeof wtermInstance.write === 'function' && msg.data) wtermInstance.write(msg.data);
+                        if (term && typeof term.write === 'function' && msg.data) {
+                            term.write(msg.data);
+                        }
                         break;
                 }
-            } catch {}
+            } catch { /* 忽略解析错误 */ }
         });
 
-        ws.addEventListener('error', () => {
-            clearTimeout(timeout);
-        });
-
+        ws.addEventListener('error', () => clearTimeout(timeout));
         ws.addEventListener('close', (event) => {
             clearTimeout(timeout);
             wsConnection = null;
@@ -196,10 +177,9 @@ function connectWebSocket() {
 }
 
 function cleanupWTerm() {
-    if (wtermInstance) {
-        try { if (typeof wtermInstance.destroy === 'function') wtermInstance.destroy(); } catch {}
-        try { if (typeof wtermInstance.dispose === 'function') wtermInstance.dispose(); } catch {}
-        wtermInstance = null;
+    if (term) {
+        try { if (typeof term.destroy === 'function') term.destroy(); } catch {}
+        term = null;
     }
 }
 
@@ -219,7 +199,6 @@ async function reconnect() {
     cleanupWTerm();
     reconnectAttempts = 0;
     wtermWrapper.innerHTML = '';
-    wtermInstance = null;
     setStatus('connecting', '正在重新连接...');
     try {
         await initWTerm();
