@@ -25,6 +25,7 @@ const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
+const copyBtn = $('#copyBtn');
 
 let term = null;
 let wsConnection = null;
@@ -58,6 +59,39 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
+// --- 复制功能 ---
+copyBtn.addEventListener('click', async () => {
+    const selection = window.getSelection();
+    const text = selection.toString().trim();
+    if (!text) {
+        // 无选中内容时不做任何操作（或短暂提示）
+        return;
+    }
+    const originalText = copyBtn.textContent;
+    try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = '✅ 已复制';
+    } catch {
+        // 回退方案
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            copyBtn.textContent = '✅ 已复制';
+        } catch (e) {
+            copyBtn.textContent = '❌ 失败';
+        }
+        document.body.removeChild(textarea);
+    }
+    setTimeout(() => {
+        copyBtn.textContent = originalText;
+    }, 1500);
+});
+
 // --- 辅助键处理 ---
 const modifierState = { ctrl: false, alt: false, shift: false };
 const modifierButtons = document.querySelectorAll('.modifier');
@@ -69,37 +103,26 @@ function updateModifierUI() {
     });
 }
 
-// 将字符按照当前激活的修饰键转换为对应序列
 function processModifiers(data) {
     if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
         return data;
     }
-
     let result = '';
     for (const ch of data) {
         const code = ch.charCodeAt(0);
         let transformed = ch;
-
         if (modifierState.ctrl) {
-            // 处理字母 a-z (97-122) 和 A-Z (65-90)
             if (code >= 65 && code <= 90) {
-                transformed = String.fromCharCode(code - 64); // A=1 -> Ctrl+A
+                transformed = String.fromCharCode(code - 64);
             } else if (code >= 97 && code <= 122) {
-                transformed = String.fromCharCode(code - 96); // a=1 -> Ctrl+A
+                transformed = String.fromCharCode(code - 96);
             }
-            // 可选：添加其他常用 CTRL 字符映射（如 2-8 等），这里只处理字母
         }
-
         if (modifierState.alt) {
-            // ALT 通常发送 ESC 前缀 + 字符
             transformed = '\x1b' + transformed;
         }
-
-        // Shift 通常不影响控制字符，如果同时激活 Ctrl+Shift 可能发送不一样，这里忽略
         result += transformed;
     }
-
-    // 修饰键保持 sticky，不清除
     return result;
 }
 
@@ -110,7 +133,6 @@ function sendData(data) {
     }
 }
 
-// 命令发送函数
 function sendCommand() {
     const text = cmdInput.value;
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
@@ -119,7 +141,6 @@ function sendCommand() {
     cmdInput.value = '';
 }
 
-// 命令输入框回车事件（移动端可能有兼容问题，也提供发送按钮）
 cmdInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
@@ -127,25 +148,20 @@ cmdInput.addEventListener('keydown', (e) => {
     }
 });
 
-// 发送按钮点击
 cmdSendBtn.addEventListener('click', sendCommand);
 
-// 辅助键点击处理
 document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     btn.addEventListener('click', () => {
         const key = btn.dataset.key;
-
         if (btn.classList.contains('modifier')) {
             modifierState[key] = !modifierState[key];
             updateModifierUI();
             return;
         }
-
         if (keySequences[key]) {
             sendData(keySequences[key]);
             return;
         }
-
         if (comboSequences[key]) {
             sendData(comboSequences[key]);
             return;
@@ -153,7 +169,6 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     });
 });
 
-// 按键映射表
 const keySequences = {
     esc: '\x1b',
     tab: '\t',
@@ -172,7 +187,6 @@ const comboSequences = {
     'ctrl-u': '\x15',
 };
 
-// 点击终端区域时聚焦终端
 wtermWrapper.addEventListener('click', () => {
     if (term && typeof term.focus === 'function') term.focus();
 });
@@ -210,7 +224,6 @@ connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
     let WTermClass;
-
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
         WTermClass = module.WTerm;
@@ -223,7 +236,6 @@ async function initWTerm() {
             throw new Error('无法加载 WTerm 模块：' + e2.message);
         }
     }
-
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
@@ -234,14 +246,11 @@ async function initWTerm() {
             rows: 24,
             autoResize: true,
             cursorBlink: true,
-            onData: (data) => {
-                sendData(data);
-            },
+            onData: (data) => { sendData(data); },
         });
     } catch (e) {
         console.warn('[Zephyr] 完整配置失败，使用最小配置:', e);
         term = new WTermClass(wtermWrapper);
-        // 手动绑定数据回调
         if (typeof term.onData === 'function') {
             term.onData((data) => sendData(data));
         } else if (typeof term.on === 'function') {
