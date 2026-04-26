@@ -26,10 +26,32 @@ const themeToggle = $('#themeToggle');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
+const fileBtn = $('#fileBtn');
+
+// 文件管理器 DOM
+const fileManager = $('#fileManager');
+const fmBackBtn = $('#fmBackBtn');
+const fmPathInput = $('#fmPathInput');
+const fmGoBtn = $('#fmGoBtn');
+const fmRefreshBtn = $('#fmRefreshBtn');
+const fmCloseBtn = $('#fmCloseBtn');
+const fmNewFolderBtn = $('#fmNewFolderBtn');
+const fmNewFileBtn = $('#fmNewFileBtn');
+const fmUploadInput = $('#fmUploadInput');
+const fmList = $('#fmList');
+const fmEditorModal = $('#fmEditorModal');
+const fmEditorTitle = $('#fmEditorTitle');
+const fmEditorTextarea = $('#fmEditorTextarea');
+const fmEditorSaveBtn = $('#fmEditorSaveBtn');
+const fmEditorCancelBtn = $('#fmEditorCancelBtn');
+const fmEditorCloseBtn = $('#fmEditorCloseBtn');
 
 let term = null;
 let wsConnection = null;
 let isConnected = false;
+let sftpReady = false;
+let currentPath = '.';
+let editorFilePath = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
@@ -63,33 +85,23 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
     const text = selection.toString().trim();
-    if (!text) {
-        // 无选中内容时不做任何操作（或短暂提示）
-        return;
-    }
+    if (!text) return;
     const originalText = copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(text);
         copyBtn.textContent = '✅ 已复制';
     } catch {
-        // 回退方案
         const textarea = document.createElement('textarea');
         textarea.value = text;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
         document.body.appendChild(textarea);
         textarea.select();
-        try {
-            document.execCommand('copy');
-            copyBtn.textContent = '✅ 已复制';
-        } catch (e) {
-            copyBtn.textContent = '❌ 失败';
-        }
+        try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; }
+        catch (e) { copyBtn.textContent = '❌ 失败'; }
         document.body.removeChild(textarea);
     }
-    setTimeout(() => {
-        copyBtn.textContent = originalText;
-    }, 1500);
+    setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
 // --- 辅助键处理 ---
@@ -153,15 +165,18 @@ cmdSendBtn.addEventListener('click', sendCommand);
 document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     btn.addEventListener('click', () => {
         const key = btn.dataset.key;
+
         if (btn.classList.contains('modifier')) {
             modifierState[key] = !modifierState[key];
             updateModifierUI();
             return;
         }
+
         if (keySequences[key]) {
             sendData(keySequences[key]);
             return;
         }
+
         if (comboSequences[key]) {
             sendData(comboSequences[key]);
             return;
@@ -190,6 +205,245 @@ const comboSequences = {
 wtermWrapper.addEventListener('click', () => {
     if (term && typeof term.focus === 'function') term.focus();
 });
+
+// --- 文件管理器逻辑 ---
+function showFileManager() {
+    fileManager.style.display = 'flex';
+    if (!sftpReady) {
+        initSFTP();
+    } else {
+        refreshFileList();
+    }
+}
+
+function hideFileManager() {
+    fileManager.style.display = 'none';
+}
+
+fileBtn.addEventListener('click', () => {
+    if (fileManager.style.display === 'none' || !fileManager.style.display) {
+        showFileManager();
+    } else {
+        hideFileManager();
+    }
+});
+
+fmCloseBtn.addEventListener('click', hideFileManager);
+
+function initSFTP() {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+    wsConnection.send(JSON.stringify({ type: 'sftp-init' }));
+}
+
+function refreshFileList() {
+    if (!sftpReady) return;
+    wsConnection.send(JSON.stringify({ type: 'sftp-list', path: currentPath }));
+    fmPathInput.value = currentPath;
+}
+
+fmRefreshBtn.addEventListener('click', refreshFileList);
+
+function navigateTo(path) {
+    currentPath = path;
+    refreshFileList();
+}
+
+fmGoBtn.addEventListener('click', () => {
+    const path = fmPathInput.value.trim();
+    if (path) navigateTo(path);
+});
+
+fmPathInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        const path = fmPathInput.value.trim();
+        if (path) navigateTo(path);
+    }
+});
+
+fmBackBtn.addEventListener('click', () => {
+    const parts = currentPath.replace(/\/+$/, '').split('/');
+    parts.pop();
+    const parent = parts.join('/') || '/';
+    navigateTo(parent);
+});
+
+fmNewFolderBtn.addEventListener('click', () => {
+    const name = prompt('请输入文件夹名称:');
+    if (!name) return;
+    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
+    wsConnection.send(JSON.stringify({ type: 'sftp-mkdir', path: fullPath }));
+});
+
+fmNewFileBtn.addEventListener('click', () => {
+    const name = prompt('请输入文件名:');
+    if (!name) return;
+    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
+    wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: fullPath }));
+});
+
+fmUploadInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
+        wsConnection.send(JSON.stringify({ type: 'sftp-upload', path: targetPath, data: base64 }));
+    };
+    reader.readAsDataURL(file);
+    fmUploadInput.value = '';
+});
+
+function renderFileList(files) {
+    fmList.innerHTML = '';
+    files.forEach(file => {
+        const item = document.createElement('div');
+        item.className = 'fm-item';
+        const icon = file.type === 'd' ? '📁' : '📄';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = `${icon} ${file.name}`;
+        nameSpan.style.cursor = 'pointer';
+
+        nameSpan.addEventListener('click', () => {
+            if (file.type === 'd') {
+                navigateTo(currentPath.replace(/\/+$/, '') + '/' + file.name);
+            } else {
+                openEditor(currentPath.replace(/\/+$/, '') + '/' + file.name);
+            }
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'fm-item-actions';
+
+        const renameBtn = document.createElement('button');
+        renameBtn.textContent = '✏️';
+        renameBtn.title = '重命名';
+        renameBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const newName = prompt('新名称:', file.name);
+            if (!newName) return;
+            const oldPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
+            const newPath = currentPath.replace(/\/+$/, '') + '/' + newName;
+            wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
+        });
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '🗑️';
+        deleteBtn.title = '删除';
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (confirm(`确认删除 ${file.name}?`)) {
+                wsConnection.send(JSON.stringify({
+                    type: 'sftp-delete',
+                    path: currentPath.replace(/\/+$/, '') + '/' + file.name
+                }));
+            }
+        });
+
+        if (file.type !== 'd') {
+            const downloadBtn = document.createElement('button');
+            downloadBtn.textContent = '⬇️';
+            downloadBtn.title = '下载';
+            downloadBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                wsConnection.send(JSON.stringify({
+                    type: 'sftp-download',
+                    path: currentPath.replace(/\/+$/, '') + '/' + file.name
+                }));
+            });
+            actions.appendChild(downloadBtn);
+        }
+
+        actions.appendChild(renameBtn);
+        actions.appendChild(deleteBtn);
+        item.appendChild(nameSpan);
+        item.appendChild(actions);
+        fmList.appendChild(item);
+    });
+}
+
+function openEditor(filePath) {
+    editorFilePath = filePath;
+    fmEditorModal.style.display = 'flex';
+    fmEditorTitle.textContent = `编辑: ${filePath}`;
+    wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
+}
+
+fmEditorCloseBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
+fmEditorCancelBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
+
+fmEditorSaveBtn.addEventListener('click', () => {
+    if (!editorFilePath) return;
+    const content = fmEditorTextarea.value;
+    wsConnection.send(JSON.stringify({ type: 'sftp-writefile', path: editorFilePath, data: content }));
+    fmEditorModal.style.display = 'none';
+});
+
+function handleSFTPMessage(msg) {
+    switch (msg.type) {
+        case 'sftp-ready':
+            sftpReady = true;
+            refreshFileList();
+            break;
+        case 'sftp-list':
+            if (msg.error) {
+                alert('列出目录失败: ' + msg.error);
+            } else {
+                renderFileList(msg.files);
+                currentPath = msg.path;
+                fmPathInput.value = currentPath;
+            }
+            break;
+        case 'sftp-mkdir':
+        case 'sftp-touch':
+        case 'sftp-delete':
+        case 'sftp-rename':
+        case 'sftp-upload':
+            if (msg.success) {
+                refreshFileList();
+            } else {
+                alert('操作失败: ' + (msg.error || '未知错误'));
+            }
+            break;
+        case 'sftp-download':
+            if (msg.error) {
+                alert('下载失败: ' + msg.error);
+            } else {
+                const byteChars = atob(msg.data);
+                const byteNums = new Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) {
+                    byteNums[i] = byteChars.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNums);
+                const blob = new Blob([byteArray]);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = msg.path.split('/').pop();
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+            break;
+        case 'sftp-readfile':
+            if (msg.error) {
+                alert('读取文件失败: ' + msg.error);
+            } else {
+                fmEditorTextarea.value = msg.data;
+            }
+            break;
+        case 'sftp-writefile':
+            if (msg.success) {
+                refreshFileList();
+            } else {
+                alert('保存失败: ' + (msg.error || '未知错误'));
+            }
+            break;
+        case 'sftp-error':
+            alert('SFTP 错误: ' + msg.message);
+            sftpReady = false;
+            break;
+    }
+}
 
 // --- 状态指示 ---
 function setStatus(state, msg) {
@@ -224,6 +478,7 @@ connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
     let WTermClass;
+
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
         WTermClass = module.WTerm;
@@ -236,6 +491,7 @@ async function initWTerm() {
             throw new Error('无法加载 WTerm 模块：' + e2.message);
         }
     }
+
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
@@ -309,6 +565,11 @@ function connectWebSocket() {
         ws.addEventListener('message', (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                // SFTP 相关消息独立处理
+                if (msg.type && msg.type.startsWith('sftp-')) {
+                    handleSFTPMessage(msg);
+                    return;
+                }
                 switch (msg.type) {
                     case 'ready':
                         setStatus('connected', '已连接');
