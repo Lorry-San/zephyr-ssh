@@ -13,7 +13,7 @@ if (!params) {
     throw new Error('缺少连接参数');
 }
 
-// DOM 元素
+// DOM 元素（已移除 clearBtn）
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
 const connInfo = $('#connInfo');
@@ -27,7 +27,6 @@ const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
-const clearBtn = $('#clearBtn');   // 新增
 
 // 文件管理器 DOM
 const fileManager = $('#fileManager');
@@ -106,12 +105,6 @@ copyBtn.addEventListener('click', async () => {
         document.body.removeChild(textarea);
     }
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
-});
-
-// --- 清屏按钮 ---
-clearBtn.addEventListener('click', () => {
-    // 发送 Ctrl+L 序列
-    sendData('\x0c');
 });
 
 // --- 文件管理器动画 ---
@@ -196,7 +189,7 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// 渲染文件列表
+// 渲染文件列表（整行点击，且操作按钮不触发行事件）
 function renderFileList(files) {
     allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
@@ -208,8 +201,9 @@ function renderFileList(files) {
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
 
-        // 整行点击事件
+        // 整行点击
         item.addEventListener('click', (e) => {
+            // 如果点击的是操作按钮区域，不触发
             if (e.target.closest('.fm-item-actions')) return;
             const fullPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
             if (file.type === 'd') {
@@ -222,6 +216,7 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
+        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -234,6 +229,7 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
+        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -247,6 +243,7 @@ function renderFileList(files) {
             }
         });
 
+        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -479,8 +476,15 @@ const comboSequences = {
     'ctrl-u': '\x15',
 };
 
-wtermWrapper.addEventListener('click', () => {
-    if (term && typeof term.focus === 'function') term.focus();
+// 优化：不再强制聚焦导致选区消失
+// 仅在终端无选区且点击时聚焦
+wtermWrapper.addEventListener('mousedown', (e) => {
+    const selection = window.getSelection();
+    if (selection && selection.toString().length === 0) {
+        if (term && typeof term.focus === 'function') {
+            setTimeout(() => term.focus(), 0);
+        }
+    }
 });
 
 // --- 状态指示 ---
