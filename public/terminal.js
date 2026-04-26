@@ -34,54 +34,26 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// ---------- 终端主题预设 ----------
-const TERMINAL_THEMES = {
-    default: {
-        background: '#0a0a0a',
-        foreground: '#e6edf3',
-        cursor: '#58a6ff',
-        selectionBackground: 'rgba(88,166,255,0.3)',
-    },
-    solarized: {
-        background: '#002b36',
-        foreground: '#839496',
-        cursor: '#93a1a1',
-        selectionBackground: 'rgba(131,148,150,0.3)',
-    },
-    monokai: {
-        background: '#272822',
-        foreground: '#f8f8f2',
-        cursor: '#f8f8f2',
-        selectionBackground: 'rgba(248,248,242,0.3)',
-    },
-    light: {
-        background: '#f6f8fa',
-        foreground: '#1f2328',
-        cursor: '#0969da',
-        selectionBackground: 'rgba(9,105,218,0.2)',
-    },
-};
-
+// ---------- 官方主题切换（基于 wterm CSS 类名） ----------
 function getSavedTerminalTheme() {
     return localStorage.getItem('zephyr-terminal-theme') || 'default';
 }
 
 function applyTerminalTheme(themeName) {
-    const theme = TERMINAL_THEMES[themeName] || TERMINAL_THEMES.default;
-    const root = wtermWrapper.querySelector('[data-wterm-root]');
-    if (root) {
-        root.style.backgroundColor = theme.background;
-        root.style.color = theme.foreground;
-        root.style.setProperty('--w-cursor-color', theme.cursor);
-        root.style.setProperty('--w-selection-bg', theme.selectionBackground);
-    }
-    if (term && typeof term.setTheme === 'function') {
-        term.setTheme(theme);
+    // 所有官方内置主题类名
+    const themeClasses = ['solarized-dark', 'monokai', 'light'];
+    if (term && term.element) {
+        // 移除现有主题类
+        themeClasses.forEach(cls => term.element.classList.remove(`theme-${cls}`));
+        // 如果不是默认主题，则添加对应类
+        if (themeName !== 'default') {
+            term.element.classList.add(`theme-${themeName}`);
+        }
     }
     localStorage.setItem('zephyr-terminal-theme', themeName);
 }
 
-// ---------- 页面 UI 主题（亮/暗） ----------
+// ---------- 页面 UI 亮/暗主题 ----------
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
@@ -252,16 +224,14 @@ async function initWTerm() {
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
-    const savedTermTheme = getSavedTerminalTheme();
-    const initialTheme = TERMINAL_THEMES[savedTermTheme] || TERMINAL_THEMES.default;
 
+    // 创建终端实例（无需传入 theme 属性，主题通过后续 class 控制）
     try {
         term = new WTermClass(wtermWrapper, {
             cols: 80,
             rows: 24,
             autoResize: true,
             cursorBlink: true,
-            theme: initialTheme,
             onData: (data) => { sendData(data); },
         });
     } catch (e) {
@@ -279,9 +249,10 @@ async function initWTerm() {
         console.log('[Zephyr] WASM 初始化完成');
     }
 
-    // 应用主题选择器初始值
-    terminalThemeSelect.value = savedTermTheme;
-    applyTerminalTheme(savedTermTheme);
+    // 应用保存的主题
+    const savedTheme = getSavedTerminalTheme();
+    terminalThemeSelect.value = savedTheme;
+    applyTerminalTheme(savedTheme);
 
     const observeResize = () => {
         if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
