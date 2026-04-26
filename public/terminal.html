@@ -34,8 +34,8 @@
             </div>
         </div>
 
-        <!-- 文件管理器覆盖层 / 面板 -->
-        <div class="file-manager" id="fileManager" style="display:none;">
+        <!-- 文件管理器覆盖层（添加 open 类控制动画） -->
+        <div class="file-manager" id="fileManager">
             <div class="fm-header">
                 <button class="tool-btn fm-back-btn" id="fmBackBtn" title="返回上级">⬆️ 上级</button>
                 <div class="fm-path-box">
@@ -45,6 +45,9 @@
                 <button class="tool-btn fm-refresh-btn" id="fmRefreshBtn" title="刷新">🔄</button>
                 <button class="tool-btn fm-close-btn" id="fmCloseBtn" title="关闭">✕</button>
             </div>
+            <div class="fm-header">
+                <input type="text" class="fm-search-input" id="fmSearchInput" placeholder="🔍 搜索当前目录...">
+            </div>
             <div class="fm-toolbar">
                 <button class="tool-btn" id="fmNewFolderBtn">📁 新建文件夹</button>
                 <button class="tool-btn" id="fmNewFileBtn">📄 新建文件</button>
@@ -53,7 +56,7 @@
             </div>
             <div class="fm-list" id="fmList"></div>
             <!-- 编辑文件模态框 -->
-            <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
+            <div class="fm-editor-modal" id="fmEditorModal">
                 <div class="fm-editor-header">
                     <span id="fmEditorTitle">编辑文件</span>
                     <button class="tool-btn" id="fmEditorCloseBtn">关闭</button>
