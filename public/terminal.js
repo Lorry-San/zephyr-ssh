@@ -84,10 +84,10 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// --- 复制功能 ---
+// --- 复制功能（移除 .trim() 保留原始内容） ---
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
-    const text = selection.toString().trim();
+    const text = selection.toString();      // 不 trim，保留换行/空格
     if (!text) return;
     const originalText = copyBtn.textContent;
     try {
@@ -105,6 +105,21 @@ copyBtn.addEventListener('click', async () => {
         document.body.removeChild(textarea);
     }
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
+});
+
+// --- Ctrl+C 智能判断 ---
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'c') {
+        const selection = window.getSelection();
+        const text = selection.toString();
+        if (text) {
+            // 有选区：让浏览器执行默认复制行为，不拦截
+            return;
+        }
+        // 无选区：阻止默认，发送 SIGINT 给终端
+        e.preventDefault();
+        sendData('\x03');
+    }
 });
 
 // --- 文件管理器动画 ---
@@ -192,12 +207,11 @@ function filterFiles(files, query) {
 // 事件委托：在 fmList 上统一处理行点击
 fmList.addEventListener('click', (e) => {
     const item = e.target.closest('.fm-item');
-    if (!item) return; // 点击不在行内
+    if (!item) return;
     const fileName = item.dataset.fileName;
     const fileType = item.dataset.fileType;
     if (!fileName) return;
 
-    // 如果点击的是操作按钮区域，不触发行操作
     if (e.target.closest('.fm-item-actions')) return;
 
     const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
@@ -208,7 +222,7 @@ fmList.addEventListener('click', (e) => {
     }
 });
 
-// 渲染文件列表（不再给每个 item 单独绑定事件，改由委托处理）
+// 渲染文件列表
 function renderFileList(files) {
     allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
@@ -226,7 +240,6 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
-        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -239,7 +252,6 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
-        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -253,7 +265,6 @@ function renderFileList(files) {
             }
         });
 
-        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -486,13 +497,11 @@ const comboSequences = {
     'ctrl-u': '\x15',
 };
 
-// 修复选区自动消失：仅在未选中文本时点击终端才聚焦
-wtermWrapper.addEventListener('mousedown', () => {
+// ✅ 在 mouseup 时判断选区是否为空，为空才聚焦，避免选区消失
+wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) {
-        if (term && typeof term.focus === 'function') {
-            setTimeout(() => term.focus(), 0);
-        }
+        term?.focus?.();
     }
 });
 
