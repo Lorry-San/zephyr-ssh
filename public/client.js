@@ -1,91 +1,32 @@
-const socket = io({
-    transports: ['websocket', 'polling'],
-    reconnection: false
-});
+// client.js — Login page logic
 
-let isConnecting = false;
+document.getElementById("connect").addEventListener("click", () => {
+  const host = document.getElementById("host").value.trim();
+  const port = document.getElementById("port").value.trim();
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const privateKey = document.getElementById("privateKey").value;
+  const passphrase = document.getElementById("passphrase").value;
+  const init = document.getElementById("init").value;
 
-// DOM 元素
-const hostname = document.getElementById('hostname');
-const port = document.getElementById('port');
-const username = document.getElementById('username');
-const password = document.getElementById('password');
-const privateKey = document.getElementById('privateKey');
-const passphrase = document.getElementById('passphrase');
-const initialCommand = document.getElementById('initialCommand');
-const connectBtn = document.getElementById('connectBtn');
-const resetBtn = document.getElementById('resetBtn');
-const uploadBtn = document.getElementById('uploadBtn');
-const fileName = document.getElementById('fileName');
+  if (!host || !username) {
+    alert("主机地址与用户名不能为空");
+    return;
+  }
 
-// 连接按钮
-connectBtn.addEventListener('click', () => {
-    if (isConnecting) return;
-    
-    const host = hostname.value.trim();
-    const user = username.value.trim();
-    
-    if (!host) {
-        alert('请输入主机地址');
-        return;
-    }
-    if (!user) {
-        alert('请输入用户名');
-        return;
-    }
-    
-    const config = {
-        host,
-        port: port.value || '22',
-        username: user,
-        password: password.value,
-        privateKey: privateKey.value,
-        passphrase: passphrase.value,
-        initialCommand: initialCommand.value
-    };
-    
-    // 存储配置，跳转到终端页面
-    sessionStorage.setItem('zephyrConfig', JSON.stringify(config));
-    window.location.href = '/terminal.html';
-});
+  // 保存到 sessionStorage
+  const payload = {
+    host,
+    port,
+    username,
+    password,
+    privateKey,
+    passphrase,
+    init
+  };
 
-// 重置按钮
-resetBtn.addEventListener('click', () => {
-    hostname.value = '';
-    port.value = '22';
-    username.value = '';
-    password.value = '';
-    privateKey.value = '';
-    passphrase.value = '';
-    initialCommand.value = '';
-    fileName.textContent = '未上传文件';
-});
+  sessionStorage.setItem("zephyr-ssh-opts", JSON.stringify(payload));
 
-// 上传私钥
-uploadBtn.addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pem,.key,.txt';
-    input.onchange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-            fileName.textContent = file.name;
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                privateKey.value = event.target.result;
-            };
-            reader.readAsText(file);
-        }
-    };
-    input.click();
-});
-
-// 回车快捷连接
-const inputs = [hostname, port, username, password, passphrase, initialCommand];
-inputs.forEach(input => {
-    input.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            connectBtn.click();
-        }
-    });
+  // 跳转到终端页面
+  window.location.href = "/terminal.html";
 });
