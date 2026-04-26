@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Zephyr-SSH · 轻云终端</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">
+                <span class="logo-icon">🌬️</span>
+                <h1>Zephyr-SSH</h1>
+                <p class="tagline">轻云 · 终端</p>
+            </div>
+
+            <div class="form-group">
+                <label>主机地址 <span class="required">*</span></label>
+                <input type="text" id="hostname" placeholder="example.com 或 192.168.1.1" autocomplete="off">
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>端口</label>
+                    <input type="number" id="port" placeholder="22" value="22">
+                </div>
+                <div class="form-group">
+                    <label>用户名 <span class="required">*</span></label>
+                    <input type="text" id="username" placeholder="root" autocomplete="off">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="password" placeholder="请输入密码">
+            </div>
+
+            <div class="form-group">
+                <label>私钥</label>
+                <div class="file-upload">
+                    <button type="button" id="uploadBtn" class="btn-outline">📂 上传密钥</button>
+                    <span id="fileName" class="file-name">未上传文件</span>
+                </div>
+                <textarea id="privateKey" rows="3" placeholder="或直接粘贴私钥内容 (PEM格式)"></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>密钥口令</label>
+                <input type="password" id="passphrase" placeholder="如有设置请输入">
+            </div>
+
+            <div class="form-group">
+                <label>初始命令</label>
+                <input type="text" id="initialCommand" placeholder="登录后自动执行 (可选)">
+            </div>
+
+            <div class="button-group">
+                <button id="resetBtn" class="btn-secondary">重置</button>
+                <button id="connectBtn" class="btn-primary">✨ 连接 SSH</button>
+            </div>
+
+            <div class="footer-note">
+                <span>💡 提示：终端内文字可直接拖拽选中复制</span>
+            </div>
+        </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="client.js"></script>
+</body>
+</html>
