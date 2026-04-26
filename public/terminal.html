@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,7 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
     <link rel="stylesheet" href="style.css">
-    <!-- 关键修复：importmap 让浏览器能解析 @wterm/core -->
+    <!-- 解析 @wterm/core 路径 -->
     <script type="importmap">
         {
             "imports": {
@@ -19,6 +19,7 @@
 </head>
 <body>
     <div class="terminal-page">
+        <!-- 顶栏 -->
         <div class="terminal-topbar">
             <div class="status">
                 <span class="status-dot" id="statusDot"></span>
@@ -26,10 +27,45 @@
             </div>
             <span class="info" id="connInfo"></span>
             <div style="display:flex;gap:8px;">
+                <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
                 <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
             </div>
         </div>
+
+        <!-- 辅助工具栏 -->
+        <div class="toolbar" id="toolbar">
+            <div class="toolbar-row">
+                <!-- 修饰键（sticky） -->
+                <button class="tool-btn modifier" data-key="ctrl">Ctrl</button>
+                <button class="tool-btn modifier" data-key="alt">Alt</button>
+                <button class="tool-btn modifier" data-key="shift">Shift</button>
+                <span class="tool-sep"></span>
+                <!-- 功能键（即时发送） -->
+                <button class="tool-btn func" data-key="esc">Esc</button>
+                <button class="tool-btn func" data-key="tab">Tab</button>
+                <button class="tool-btn func" data-key="home">Home</button>
+                <button class="tool-btn func" data-key="end">End</button>
+                <span class="tool-sep"></span>
+                <!-- 方向键 -->
+                <button class="tool-btn arrow" data-key="up">↑</button>
+                <button class="tool-btn arrow" data-key="down">↓</button>
+                <button class="tool-btn arrow" data-key="left">←</button>
+                <button class="tool-btn arrow" data-key="right">→</button>
+                <span class="tool-sep"></span>
+                <!-- 快捷组合键 -->
+                <button class="tool-btn combo" data-key="ctrl-c">Ctrl+C</button>
+                <button class="tool-btn combo" data-key="ctrl-d">Ctrl+D</button>
+                <button class="tool-btn combo" data-key="ctrl-l">Ctrl+L</button>
+                <button class="tool-btn combo" data-key="ctrl-u">Ctrl+U</button>
+            </div>
+            <!-- 命令输入框 -->
+            <div class="cmd-input-row">
+                <input type="text" class="cmd-input" id="cmdInput" placeholder="在此输入命令，回车发送..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            </div>
+        </div>
+
+        <!-- 终端容器 -->
         <div class="terminal-container" id="terminalContainer">
             <div class="terminal-overlay" id="terminalOverlay">
                 <div class="spinner"></div>
