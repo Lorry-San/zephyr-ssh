@@ -1,20 +1,20 @@
-# Zephyr‑SSH Dockerfile
 FROM node:18-alpine
-
-# 工作目录
 WORKDIR /app
 
-# 复制依赖文件
+# copy package files first for caching
 COPY package.json package-lock.json* ./
 
-# 安装生产依赖
+# install production dependencies
 RUN npm install --production
 
-# 复制项目全部文件
+# copy app files
 COPY . .
 
-# 暴露端口
-EXPOSE 3000
+# copy wterm static assets into public/vendor so express can serve them
+# adjust paths if package structure differs
+RUN mkdir -p public/vendor/@wterm/dom && \
+    cp -r node_modules/@wterm/dom/dist public/vendor/@wterm/dom/dist 2>/dev/null || true && \
+    cp -r node_modules/@wterm/dom/css.css public/vendor/@wterm/dom/css.css 2>/dev/null || true
 
-# 启动服务
+EXPOSE 3000
 CMD ["node", "server.js"]
