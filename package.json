@@ -8,7 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@wterm/dom": "^0.4.0",
+    "@wterm/dom": "latest",
     "express": "^4.18.2",
     "ws": "^8.17.0",
     "ssh2": "^1.14.0"
