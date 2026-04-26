@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zephyr-SSH - 终端</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
+    <!-- 官方 wterm 样式，包含主题 CSS 变量 -->
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
     <link rel="stylesheet" href="style.css">
     <script type="importmap">
@@ -70,7 +71,8 @@
                 <div class="spinner"></div>
                 <span class="msg" id="overlayMsg">正在建立 SSH 连接...</span>
             </div>
-            <div class="wterm-wrapper" id="wtermWrapper"></div>
+            <!-- 终端容器，初始添加 wterm 类和主题类 -->
+            <div class="wterm-wrapper wterm wterm-theme-default" id="wtermWrapper"></div>
         </div>
     </div>
     <script src="terminal.js" type="module"></script>
