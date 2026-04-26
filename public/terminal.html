@@ -1,21 +1,18 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Zephyr‑SSH Terminal</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Zephyr-SSH Terminal</title>
 
-  <!-- WTerm DOM 样式 -->
-  <link rel="stylesheet" href="/node_modules/@wterm/dom/css.css" />
-
-  <!-- 自己的样式 -->
-  <link rel="stylesheet" href="./style.css" />
+  <!-- Use vendor path that will be present under public/vendor/@wterm/dom -->
+  <link rel="stylesheet" href="/vendor/@wterm/dom/css.css" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
-
 <body class="terminal-body">
   <div id="terminal"></div>
 
-  <!-- Terminal logic -->
-  <script type="module" src="./terminal.js"></script>
+  <!-- terminal core module -->
+  <script type="module" src="/terminal.js"></script>
 </body>
 </html>
