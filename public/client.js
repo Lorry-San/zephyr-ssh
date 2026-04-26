@@ -1,4 +1,3 @@
-// client.js — Login page logic
 document.getElementById('connect').addEventListener('click', () => {
   const host = document.getElementById('host').value.trim();
   const port = document.getElementById('port').value.trim();
@@ -12,7 +11,6 @@ document.getElementById('connect').addEventListener('click', () => {
     alert('主机地址与用户名不能为空');
     return;
   }
-
   const payload = { host, port, username, password, privateKey, passphrase, init };
   sessionStorage.setItem('zephyr-ssh-opts', JSON.stringify(payload));
   window.location.href = '/terminal.html';
