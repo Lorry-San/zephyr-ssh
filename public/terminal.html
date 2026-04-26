@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zephyr-SSH - 终端</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <!-- 官方 wterm 样式，包含主题 CSS 变量 -->
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
     <link rel="stylesheet" href="style.css">
     <script type="importmap">
@@ -27,13 +26,7 @@
             <span class="info" id="connInfo"></span>
             <div style="display:flex;gap:8px;">
                 <button class="btn-sm" id="copyBtn" title="复制选中内容">📋 复制</button>
-                <select class="theme-select" id="terminalThemeSelect">
-                    <option value="default">💻 Default</option>
-                    <option value="solarized-dark">☀️ Solarized</option>
-                    <option value="monokai">🧛 Monokai</option>
-                    <option value="light">💡 Light</option>
-                </select>
-                <button class="btn-sm" id="themeToggle" title="切换界面亮暗">🌓</button>
+                <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
                 <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
             </div>
@@ -71,8 +64,7 @@
                 <div class="spinner"></div>
                 <span class="msg" id="overlayMsg">正在建立 SSH 连接...</span>
             </div>
-            <!-- 终端容器，初始添加 wterm 类和主题类 -->
-            <div class="wterm-wrapper wterm wterm-theme-default" id="wtermWrapper"></div>
+            <div class="wterm-wrapper" id="wtermWrapper"></div>
         </div>
     </div>
     <script src="terminal.js" type="module"></script>
