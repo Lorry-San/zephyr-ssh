@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
@@ -8,14 +7,12 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 
-// Serve static files from public (includes public/vendor)
+// 1. 静态资源服务（确保 public/vendor 第一优先级）
 app.use(express.static(path.join(__dirname, 'public')));
 
-// IMPORTANT: Do NOT add a catch-all that returns index.html before static middleware.
-// If you need SPA fallback, add it after verifying static file not found and only for HTML routes.
-// For this simple app we avoid any catch-all to prevent CSS/JS requests returning HTML.
+// 注意：绝不添加 app.get('*', ...) 之类会覆盖静态文件的 catch‑all 路由
+// 此项目无需 SPA fallback，静态文件 404 时自然返回 404，不会落入 HTML
 
-// WebSocket server for SSH transport at /ssh
 const wss = new WebSocketServer({ server, path: '/ssh' });
 
 wss.on('connection', (ws) => {
@@ -23,17 +20,10 @@ wss.on('connection', (ws) => {
   let sshStream = null;
 
   ws.on('message', (msg) => {
-    // Expect JSON messages from client
     let data;
-    try {
-      data = JSON.parse(msg.toString());
-    } catch (e) {
-      // ignore non-json or binary messages
-      return;
-    }
+    try { data = JSON.parse(msg.toString()); } catch _ { return; }
 
     if (data.type === 'connect') {
-      // create ssh connection
       conn = new Client();
       conn.on('ready', () => {
         conn.shell((err, stream) => {
@@ -48,13 +38,11 @@ wss.on('connection', (ws) => {
           stream.on('data', (chunk) => {
             ws.send(JSON.stringify({ type: 'data', data: chunk.toString('utf8') }));
           });
-
           stream.on('close', () => {
-            try { ws.close(); } catch (e) {}
+            try { ws.close(); } catch _ {}
             conn.end();
           });
 
-          // write initial command if provided
           if (data.init && data.init.trim() !== '') {
             stream.write(data.init + '\n');
           }
@@ -67,26 +55,18 @@ wss.on('connection', (ws) => {
         username: data.username,
         password: data.password || undefined,
         privateKey: data.privateKey || undefined,
-        passphrase: data.passphrase || undefined
+        passphrase: data.passphrase || undefined,
       });
     }
 
     if (data.type === 'input' && sshStream) {
-      // forward terminal input to ssh
       sshStream.write(data.data);
     }
   });
 
-  ws.on('close', () => {
-    if (conn) conn.end();
-  });
-
-  ws.on('error', () => {
-    if (conn) conn.end();
-  });
+  ws.on('close', () => { if (conn) conn.end(); });
+  ws.on('error', () => { if (conn) conn.end(); });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Zephyr-SSH listening on ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Zephyr-SSH listening on ${PORT}`));
