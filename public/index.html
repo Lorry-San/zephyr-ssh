@@ -1,38 +1,29 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Zephyr‑SSH Login</title>
-  <link rel="stylesheet" href="./style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Zephyr-SSH Login</title>
+  <link rel="stylesheet" href="/style.css" />
 </head>
-
 <body>
   <div class="container">
-    <h2>Zephyr‑SSH</h2>
-
+    <h2>Zephyr-SSH</h2>
     <form id="ssh-form">
       <label>主机地址</label>
       <input id="host" placeholder="example.com" required />
-
       <label>端口</label>
       <input id="port" value="22" required />
-
       <label>用户名</label>
       <input id="username" required />
-
       <label>密码（可选）</label>
       <input id="password" type="password" />
-
       <label>私钥（可选）</label>
       <textarea id="privateKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-
       <label>密钥口令（可选）</label>
       <input id="passphrase" type="password" />
-
       <label>初始命令（可选）</label>
-      <input id="init" placeholder="如：ls -al" />
-
+      <input id="init" placeholder="e.g. ls -al" />
       <div class="btn-row">
         <button type="reset" class="secondary">重置</button>
         <button type="button" id="connect" class="primary">连接 SSH</button>
@@ -40,6 +31,6 @@
     </form>
   </div>
 
-  <script src="./client.js"></script>
+  <script src="/client.js"></script>
 </body>
 </html>
