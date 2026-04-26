@@ -52,7 +52,7 @@ let wsConnection = null;
 let isConnected = false;
 let sftpReady = false;
 let currentPath = '.';
-let allFiles = [];          // 存储当前目录的全部文件（未过滤）
+let allFiles = [];
 let searchQuery = '';
 let editorFilePath = null;
 let reconnectAttempts = 0;
@@ -107,7 +107,7 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- 文件管理器动画控制 ---
+// --- 文件管理器动画 ---
 function showFileManager() {
     fileManager.classList.add('open');
     if (!sftpReady) {
@@ -131,7 +131,6 @@ fileBtn.addEventListener('click', () => {
 
 fmCloseBtn.addEventListener('click', hideFileManager);
 
-// --- SFTP 初始化与刷新 ---
 function initSFTP() {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
     wsConnection.send(JSON.stringify({ type: 'sftp-init' }));
@@ -145,10 +144,9 @@ function refreshFileList() {
 
 fmRefreshBtn.addEventListener('click', refreshFileList);
 
-// 路径跳转
 function navigateTo(path) {
     currentPath = path;
-    searchQuery = '';                  // 清空搜索
+    searchQuery = '';
     fmSearchInput.value = '';
     refreshFileList();
 }
@@ -165,7 +163,6 @@ fmPathInput.addEventListener('keydown', (e) => {
     }
 });
 
-// 返回上级
 fmBackBtn.addEventListener('click', () => {
     const parts = currentPath.replace(/\/+$/, '').split('/');
     parts.pop();
@@ -173,31 +170,28 @@ fmBackBtn.addEventListener('click', () => {
     navigateTo(parent);
 });
 
-// --- 搜索功能 ---
 fmSearchInput.addEventListener('input', () => {
     searchQuery = fmSearchInput.value.trim();
-    renderFileList(allFiles);   // 重新渲染过滤后的列表
+    renderFileList(allFiles);
 });
 
-// --- 排序函数（先文件夹后文件，同类型按名称排序） ---
 function sortFiles(files) {
     return [...files].sort((a, b) => {
         if (a.type === b.type) {
             return a.name.localeCompare(b.name);
         }
-        return a.type === 'd' ? -1 : 1;   // 文件夹在前
+        return a.type === 'd' ? -1 : 1;
     });
 }
 
-// --- 过滤函数 ---
 function filterFiles(files, query) {
     if (!query) return files;
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// 渲染文件列表（使用排序和过滤）
+// 渲染文件列表 - 优化整行点击
 function renderFileList(files) {
-    allFiles = sortFiles(files);   // 排序并缓存
+    allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
     fmList.innerHTML = '';
     filtered.forEach(file => {
@@ -206,20 +200,23 @@ function renderFileList(files) {
         const icon = file.type === 'd' ? '📁' : '📄';
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
-        nameSpan.style.cursor = 'pointer';
 
-        nameSpan.addEventListener('click', () => {
+        // 整行点击事件（进入文件夹或编辑文件）
+        item.addEventListener('click', (e) => {
+            // 如果点击的是操作按钮，不触发整行点击
+            if (e.target.closest('.fm-item-actions')) return;
+            const fullPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
             if (file.type === 'd') {
-                navigateTo(currentPath.replace(/\/+$/, '') + '/' + file.name);
+                navigateTo(fullPath);
             } else {
-                openEditor(currentPath.replace(/\/+$/, '') + '/' + file.name);
+                openEditor(fullPath);
             }
         });
 
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
-        // 重命名按钮
+        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -232,7 +229,7 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
-        // 删除按钮
+        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -246,6 +243,7 @@ function renderFileList(files) {
             }
         });
 
+        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -268,7 +266,7 @@ function renderFileList(files) {
     });
 }
 
-// --- 文件编辑相关（与原来一致） ---
+// 新建文件夹
 fmNewFolderBtn.addEventListener('click', () => {
     const name = prompt('请输入文件夹名称:');
     if (!name) return;
@@ -276,6 +274,7 @@ fmNewFolderBtn.addEventListener('click', () => {
     wsConnection.send(JSON.stringify({ type: 'sftp-mkdir', path: fullPath }));
 });
 
+// 新建文件
 fmNewFileBtn.addEventListener('click', () => {
     const name = prompt('请输入文件名:');
     if (!name) return;
@@ -283,6 +282,7 @@ fmNewFileBtn.addEventListener('click', () => {
     wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: fullPath }));
 });
 
+// 上传文件
 fmUploadInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -296,6 +296,7 @@ fmUploadInput.addEventListener('change', (e) => {
     fmUploadInput.value = '';
 });
 
+// 编辑器
 function openEditor(filePath) {
     editorFilePath = filePath;
     fmEditorModal.style.display = 'flex';
@@ -313,7 +314,7 @@ fmEditorSaveBtn.addEventListener('click', () => {
     fmEditorModal.style.display = 'none';
 });
 
-// --- SFTP 消息处理 ---
+// SFTP 消息处理
 function handleSFTPMessage(msg) {
     switch (msg.type) {
         case 'sftp-ready':
@@ -379,8 +380,6 @@ function handleSFTPMessage(msg) {
             break;
     }
 }
-
-// ========== 以下为辅助键、终端、WebSocket 等原有逻辑（已精简注释） ==========
 
 // --- 辅助键处理 ---
 const modifierState = { ctrl: false, alt: false, shift: false };
