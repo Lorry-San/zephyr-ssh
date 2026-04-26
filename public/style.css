@@ -176,17 +176,19 @@ body {
 .btn-sm.danger { border-color: rgba(248,81,73,0.4); color: var(--danger); }
 .btn-sm.danger:hover { background: rgba(248,81,73,0.1); }
 
-/* 终端主题选择下拉 */
+/* 终端主题选择下拉（确保与按钮圆角一致） */
 .theme-select {
     padding: 6px 10px;
     font-size: 12px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 6px;  /* 与.btn-sm圆角一致 */
     background: var(--surface);
     color: var(--text);
     font-family: var(--font-sans);
     cursor: pointer;
     outline: none;
+    height: 32px;  /* 与按钮高度近似对齐 */
+    line-height: 1;
 }
 .theme-select:hover { border-color: var(--text-secondary); }
 
@@ -261,4 +263,5 @@ body {
     .terminal-topbar { padding: 6px 10px; font-size: 11px; }
     .tool-btn { padding: 3px 6px; font-size: 10px; min-width: 30px; }
     .cmd-send-btn { padding: 4px 8px; font-size: 11px; }
+    .theme-select { height: 28px; padding: 4px 8px; font-size: 11px; }
 }
