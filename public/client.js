@@ -4,7 +4,37 @@ const loginForm = $('#loginForm');
 const toggleKeyBtn = $('#toggleKeyBtn');
 const keySection = $('#keySection');
 const privateKeyTA = $('#privateKey');
+const themeToggleLogin = $('#themeToggleLogin');
 
+// ===== 主题管理 (登录页) =====
+function getPreferredTheme() {
+    const saved = localStorage.getItem('zephyr-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('zephyr-theme', theme);
+    if (themeToggleLogin) {
+        themeToggleLogin.textContent = theme === 'dark' ? '☀️' : '🌙';
+    }
+}
+
+applyTheme(getPreferredTheme());
+
+themeToggleLogin.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('zephyr-theme')) {
+        applyTheme(e.matches ? 'light' : 'dark');
+    }
+});
+
+// ===== 原有登录逻辑 =====
 let keyVisible = false;
 toggleKeyBtn.addEventListener('click', () => {
     keyVisible = !keyVisible;
