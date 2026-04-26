@@ -13,6 +13,7 @@ if (!params) {
     throw new Error('缺少连接参数');
 }
 
+// DOM 元素
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
 const connInfo = $('#connInfo');
@@ -21,6 +22,8 @@ const overlayMsg = $('#overlayMsg');
 const wtermWrapper = $('#wtermWrapper');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
+const themeToggle = $('#themeToggle');
+const cmdInput = $('#cmdInput');
 
 let term = null;
 let wsConnection = null;
@@ -28,6 +31,113 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
+// --- 主题管理 ---
+function getPreferredTheme() {
+    const saved = localStorage.getItem('zephyr-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('zephyr-theme', theme);
+    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+applyTheme(getPreferredTheme());
+
+themeToggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    if (!localStorage.getItem('zephyr-theme')) {
+        applyTheme(e.matches ? 'light' : 'dark');
+    }
+});
+
+// --- 辅助键处理 ---
+const modifierState = { ctrl: false, alt: false, shift: false };
+const modifierButtons = document.querySelectorAll('.modifier');
+
+function updateModifierUI() {
+    modifierButtons.forEach(btn => {
+        const key = btn.dataset.key;
+        btn.classList.toggle('active', modifierState[key]);
+    });
+}
+
+function sendKeySequence(seq) {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+        wsConnection.send(JSON.stringify({ type: 'input', data: seq }));
+    }
+}
+
+// 按键映射表（不带修饰）
+const keySequences = {
+    esc: '\x1b',
+    tab: '\t',
+    home: '\x1b[1~',
+    end: '\x1b[4~',
+    up: '\x1b[A',
+    down: '\x1b[B',
+    left: '\x1b[D',
+    right: '\x1b[C',
+};
+
+// 组合键映射（直接发送完整序列，不受sticky修饰键影响）
+const comboSequences = {
+    'ctrl-c': '\x03',
+    'ctrl-d': '\x04',
+    'ctrl-l': '\x0c',
+    'ctrl-u': '\x15',
+};
+
+// 处理辅助按钮点击
+document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+
+        // 处理 sticky 修饰键
+        if (btn.classList.contains('modifier')) {
+            modifierState[key] = !modifierState[key];
+            updateModifierUI();
+            return;
+        }
+
+        // 普通功能键/方向键（发送直接序列，不受 sticky 修饰键影响）
+        if (keySequences[key]) {
+            sendKeySequence(keySequences[key]);
+            return;
+        }
+
+        // 快捷组合键（直接发送预设序列）
+        if (comboSequences[key]) {
+            sendKeySequence(comboSequences[key]);
+            return;
+        }
+    });
+});
+
+// 命令输入框：回车发送
+cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const text = cmdInput.value;
+        if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+            wsConnection.send(JSON.stringify({ type: 'input', data: text + '\r\n' }));
+        }
+        cmdInput.value = '';
+    }
+});
+
+// 当终端获得焦点时，自动失焦输入框，避免误触
+wtermWrapper.addEventListener('click', () => {
+    if (term && typeof term.focus === 'function') term.focus();
+});
+
+// --- 状态指示 ---
 function setStatus(state, msg) {
     statusDot.className = 'status-dot';
     if (state === 'connecting') {
@@ -56,15 +166,13 @@ function setStatus(state, msg) {
 
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
+// --- WTerm 初始化 ---
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
-
     let WTermClass;
 
     try {
-        // 主入口（importmap 已解决 @wterm/core 路径）
         const module = await import('/vendor/@wterm/dom/dist/index.js');
-        console.log('[Zephyr] 模块加载成功', Object.keys(module));
         WTermClass = module.WTerm;
     } catch (e) {
         console.error('[Zephyr] 主入口加载失败，尝试直接导入 wterm.js:', e);
@@ -76,9 +184,7 @@ async function initWTerm() {
         }
     }
 
-    if (!WTermClass) {
-        throw new Error('WTerm 类未在模块中找到');
-    }
+    if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
 
@@ -97,6 +203,20 @@ async function initWTerm() {
     } catch (e) {
         console.warn('[Zephyr] 完整配置失败，使用最小配置:', e);
         term = new WTermClass(wtermWrapper);
+        // 手动绑定数据回调
+        if (typeof term.onData === 'function') {
+            term.onData((data) => {
+                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+                    wsConnection.send(JSON.stringify({ type: 'input', data }));
+                }
+            });
+        } else if (typeof term.on === 'function') {
+            term.on('data', (data) => {
+                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+                    wsConnection.send(JSON.stringify({ type: 'input', data }));
+                }
+            });
+        }
     }
 
     if (typeof term.init === 'function') {
@@ -112,7 +232,6 @@ async function initWTerm() {
             wsConnection.send(JSON.stringify({ type: 'resize', rows, cols }));
         }
     };
-
     if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => {
             clearTimeout(ro._timer);
@@ -121,10 +240,10 @@ async function initWTerm() {
         ro.observe(wtermWrapper);
     }
     window.addEventListener('resize', observeResize);
-
     console.log('[Zephyr] wterm 终端初始化完成');
 }
 
+// --- WebSocket 连接 ---
 function connectWebSocket() {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
