@@ -1,4 +1,3 @@
-```markdown
 # 🌬️ Zephyr-SSH
 
 > A WebSSH client with smooth text selection and copy experience, just like selecting text on a normal webpage.
@@ -79,5 +78,3 @@ zephyr-ssh/
 · Terminal text can be selected by drag and drop – no extra steps required
 · Supports both password and private key authentication
 · Private key supports PEM format (-----BEGIN RSA PRIVATE KEY-----)
-
-```
