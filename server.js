@@ -7,10 +7,10 @@ const path = require('path');
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-// 静态文件服务
+// 提供静态文件，包括 public 目录下的所有资源
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 兜底路由：SPA 支持
+// 兜底路由：支持 SPA 或静态文件未命中时返回 index.html
 app.get('*', (req, res) => {
     if (req.url.startsWith('/vendor') || req.url.startsWith('/ssh')) {
         return res.status(404).end();
@@ -20,7 +20,7 @@ app.get('*', (req, res) => {
 
 const server = http.createServer(app);
 
-// WebSocket 服务
+// WebSocket 服务，路径为 /ssh
 const wss = new WebSocketServer({ server, path: '/ssh' });
 
 wss.on('connection', (ws, req) => {
@@ -50,7 +50,6 @@ wss.on('connection', (ws, req) => {
         try { msg = JSON.parse(raw.toString()); } catch { return; }
 
         if (msg.type === 'connect') {
-            // 建立 SSH 连接
             const { host, port, username, password, privateKey, init } = msg;
             sshClient = new Client();
 
@@ -96,7 +95,6 @@ wss.on('connection', (ws, req) => {
                         sendJSON({ type: 'data', data: data.toString('utf-8') });
                     });
 
-                    // 执行初始命令
                     if (init && typeof init === 'string' && init.trim().length > 0) {
                         stream.write(init + '\n');
                     }
@@ -147,7 +145,7 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// 健康检查
+// 健康检查端点
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 
 server.listen(PORT, () => {
