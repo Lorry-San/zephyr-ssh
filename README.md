@@ -79,7 +79,7 @@ zephyr-ssh/
 · Supports both password and private key authentication
 · Private key supports PEM format (-----BEGIN RSA PRIVATE KEY-----)
 
-## Acknowledgements
+## 🙏 Acknowledgements
 
-- [wterm](https://github.com/vercel-labs/wterm)
-- [ssh2](https://github.com/mscdex/ssh2)
+- 🖥️ [wterm](https://github.com/vercel-labs/wterm)
+- 🔐 [ssh2](https://github.com/mscdex/ssh2)
