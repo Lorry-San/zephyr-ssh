@@ -1,14 +1,33 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Zephyr-SSH Terminal</title>
-  <link rel="stylesheet" href="/vendor/@wterm/dom/css.css" />
-  <link rel="stylesheet" href="/style.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zephyr-SSH - 终端</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
+    <link rel="stylesheet" href="style.css">
 </head>
-<body class="terminal-body">
-  <div id="terminal"></div>
-  <script type="module" src="/terminal.js"></script>
+<body>
+    <div class="terminal-page">
+        <div class="terminal-topbar">
+            <div class="status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">连接中...</span>
+            </div>
+            <span class="info" id="connInfo"></span>
+            <div style="display:flex;gap:8px;">
+                <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
+                <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
+            </div>
+        </div>
+        <div class="terminal-container" id="terminalContainer">
+            <div class="terminal-overlay" id="terminalOverlay">
+                <div class="spinner"></div>
+                <span class="msg" id="overlayMsg">正在建立 SSH 连接...</span>
+            </div>
+            <div class="wterm-wrapper" id="wtermWrapper"></div>
+        </div>
+    </div>
+    <script src="terminal.js" type="module"></script>
 </body>
 </html>
