@@ -24,6 +24,7 @@ const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const cmdInput = $('#cmdInput');
+const cmdSendBtn = $('#cmdSendBtn');
 
 let term = null;
 let wsConnection = null;
@@ -68,13 +69,91 @@ function updateModifierUI() {
     });
 }
 
-function sendKeySequence(seq) {
+// 将字符按照当前激活的修饰键转换为对应序列
+function processModifiers(data) {
+    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
+        return data;
+    }
+
+    let result = '';
+    for (const ch of data) {
+        const code = ch.charCodeAt(0);
+        let transformed = ch;
+
+        if (modifierState.ctrl) {
+            // 处理字母 a-z (97-122) 和 A-Z (65-90)
+            if (code >= 65 && code <= 90) {
+                transformed = String.fromCharCode(code - 64); // A=1 -> Ctrl+A
+            } else if (code >= 97 && code <= 122) {
+                transformed = String.fromCharCode(code - 96); // a=1 -> Ctrl+A
+            }
+            // 可选：添加其他常用 CTRL 字符映射（如 2-8 等），这里只处理字母
+        }
+
+        if (modifierState.alt) {
+            // ALT 通常发送 ESC 前缀 + 字符
+            transformed = '\x1b' + transformed;
+        }
+
+        // Shift 通常不影响控制字符，如果同时激活 Ctrl+Shift 可能发送不一样，这里忽略
+        result += transformed;
+    }
+
+    // 修饰键保持 sticky，不清除
+    return result;
+}
+
+function sendData(data) {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        wsConnection.send(JSON.stringify({ type: 'input', data: seq }));
+        const processed = processModifiers(data);
+        wsConnection.send(JSON.stringify({ type: 'input', data: processed }));
     }
 }
 
-// 按键映射表（不带修饰）
+// 命令发送函数
+function sendCommand() {
+    const text = cmdInput.value;
+    if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+        sendData(text + '\r\n');
+    }
+    cmdInput.value = '';
+}
+
+// 命令输入框回车事件（移动端可能有兼容问题，也提供发送按钮）
+cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        sendCommand();
+    }
+});
+
+// 发送按钮点击
+cmdSendBtn.addEventListener('click', sendCommand);
+
+// 辅助键点击处理
+document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+
+        if (btn.classList.contains('modifier')) {
+            modifierState[key] = !modifierState[key];
+            updateModifierUI();
+            return;
+        }
+
+        if (keySequences[key]) {
+            sendData(keySequences[key]);
+            return;
+        }
+
+        if (comboSequences[key]) {
+            sendData(comboSequences[key]);
+            return;
+        }
+    });
+});
+
+// 按键映射表
 const keySequences = {
     esc: '\x1b',
     tab: '\t',
@@ -86,7 +165,6 @@ const keySequences = {
     right: '\x1b[C',
 };
 
-// 组合键映射（直接发送完整序列，不受sticky修饰键影响）
 const comboSequences = {
     'ctrl-c': '\x03',
     'ctrl-d': '\x04',
@@ -94,45 +172,7 @@ const comboSequences = {
     'ctrl-u': '\x15',
 };
 
-// 处理辅助按钮点击
-document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-
-        // 处理 sticky 修饰键
-        if (btn.classList.contains('modifier')) {
-            modifierState[key] = !modifierState[key];
-            updateModifierUI();
-            return;
-        }
-
-        // 普通功能键/方向键（发送直接序列，不受 sticky 修饰键影响）
-        if (keySequences[key]) {
-            sendKeySequence(keySequences[key]);
-            return;
-        }
-
-        // 快捷组合键（直接发送预设序列）
-        if (comboSequences[key]) {
-            sendKeySequence(comboSequences[key]);
-            return;
-        }
-    });
-});
-
-// 命令输入框：回车发送
-cmdInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        const text = cmdInput.value;
-        if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-            wsConnection.send(JSON.stringify({ type: 'input', data: text + '\r\n' }));
-        }
-        cmdInput.value = '';
-    }
-});
-
-// 当终端获得焦点时，自动失焦输入框，避免误触
+// 点击终端区域时聚焦终端
 wtermWrapper.addEventListener('click', () => {
     if (term && typeof term.focus === 'function') term.focus();
 });
@@ -195,9 +235,7 @@ async function initWTerm() {
             autoResize: true,
             cursorBlink: true,
             onData: (data) => {
-                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-                    wsConnection.send(JSON.stringify({ type: 'input', data }));
-                }
+                sendData(data);
             },
         });
     } catch (e) {
@@ -205,17 +243,9 @@ async function initWTerm() {
         term = new WTermClass(wtermWrapper);
         // 手动绑定数据回调
         if (typeof term.onData === 'function') {
-            term.onData((data) => {
-                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-                    wsConnection.send(JSON.stringify({ type: 'input', data }));
-                }
-            });
+            term.onData((data) => sendData(data));
         } else if (typeof term.on === 'function') {
-            term.on('data', (data) => {
-                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-                    wsConnection.send(JSON.stringify({ type: 'input', data }));
-                }
-            });
+            term.on('data', (data) => sendData(data));
         }
     }
 
