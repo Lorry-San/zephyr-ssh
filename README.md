@@ -7,6 +7,7 @@
 - 🌊 **Smooth Copy** – Based on wterm DOM rendering, terminal text can be selected and copied like a regular webpage
 - 📱 **Mobile Optimized** – Support long press and drag selection with native system copy menu
 - 🔐 **Full SSH Support** – Password/private key authentication, custom port, initial command
+- 📁 **SFTP Support** – File browsing, upload and download via built-in web file manager
 - 🐳 **One-click Deploy** – Docker image, ready to use
 
 ## 🚀 Quick Start
@@ -32,6 +33,7 @@ Open your browser and visit: http://your-server-ip:3000
 1. Fill in your server information (host, port, username, password or private key)
 2. Click 「Connect SSH」
 3. In the terminal, long press or drag to select text – just like on a normal webpage
+4. Use the file panel to browse, upload, or download files via SFTP (if supported by server)
 
 🔧 Environment Variables
 
