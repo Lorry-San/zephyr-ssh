@@ -5,13 +5,18 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "build": "vite build",
+    "dev": "vite"
   },
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.6.1",
-    "ssh2": "^1.15.0"
+    "ssh2": "^1.15.0",
+    "@wterm/dom": "^0.3.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
   },
   "keywords": ["ssh", "webssh", "terminal", "wterm"],
-  "license": "MIT"
+  "license": "GPL-3.0"
 }
