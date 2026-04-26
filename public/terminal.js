@@ -13,7 +13,7 @@ if (!params) {
     throw new Error('缺少连接参数');
 }
 
-// DOM 元素（已移除 clearBtn）
+// DOM 元素
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
 const connInfo = $('#connInfo');
@@ -189,7 +189,26 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// 渲染文件列表（整行点击，且操作按钮不触发行事件）
+// 事件委托：在 fmList 上统一处理行点击
+fmList.addEventListener('click', (e) => {
+    const item = e.target.closest('.fm-item');
+    if (!item) return; // 点击不在行内
+    const fileName = item.dataset.fileName;
+    const fileType = item.dataset.fileType;
+    if (!fileName) return;
+
+    // 如果点击的是操作按钮区域，不触发行操作
+    if (e.target.closest('.fm-item-actions')) return;
+
+    const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
+    if (fileType === 'd') {
+        navigateTo(fullPath);
+    } else {
+        openEditor(fullPath);
+    }
+});
+
+// 渲染文件列表（不再给每个 item 单独绑定事件，改由委托处理）
 function renderFileList(files) {
     allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
@@ -197,21 +216,12 @@ function renderFileList(files) {
     filtered.forEach(file => {
         const item = document.createElement('div');
         item.className = 'fm-item';
+        item.dataset.fileName = file.name;
+        item.dataset.fileType = file.type;
+
         const icon = file.type === 'd' ? '📁' : '📄';
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
-
-        // 整行点击
-        item.addEventListener('click', (e) => {
-            // 如果点击的是操作按钮区域，不触发
-            if (e.target.closest('.fm-item-actions')) return;
-            const fullPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
-            if (file.type === 'd') {
-                navigateTo(fullPath);
-            } else {
-                openEditor(fullPath);
-            }
-        });
 
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
@@ -476,11 +486,10 @@ const comboSequences = {
     'ctrl-u': '\x15',
 };
 
-// 优化：不再强制聚焦导致选区消失
-// 仅在终端无选区且点击时聚焦
-wtermWrapper.addEventListener('mousedown', (e) => {
+// 修复选区自动消失：仅在未选中文本时点击终端才聚焦
+wtermWrapper.addEventListener('mousedown', () => {
     const selection = window.getSelection();
-    if (selection && selection.toString().length === 0) {
+    if (!selection || selection.toString().length === 0) {
         if (term && typeof term.focus === 'function') {
             setTimeout(() => term.focus(), 0);
         }
