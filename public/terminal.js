@@ -26,7 +26,6 @@ const themeToggle = $('#themeToggle');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
-const terminalThemeSelect = $('#terminalThemeSelect');
 
 let term = null;
 let wsConnection = null;
@@ -34,21 +33,7 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// ---------- 官方主题切换 ----------
-function getSavedTerminalTheme() {
-    return localStorage.getItem('zephyr-terminal-theme') || 'default';
-}
-
-function applyTerminalTheme(themeName) {
-    // 移除所有主题类
-    const themeClasses = ['default', 'solarized-dark', 'monokai', 'light'];
-    themeClasses.forEach(cls => wtermWrapper.classList.remove(`wterm-theme-${cls}`));
-    // 添加新主题类
-    wtermWrapper.classList.add(`wterm-theme-${themeName}`);
-    localStorage.setItem('zephyr-terminal-theme', themeName);
-}
-
-// ---------- 页面 UI 亮/暗主题 ----------
+// --- 主题管理 ---
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
@@ -74,29 +59,40 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// ---------- 复制功能 ----------
+// --- 复制功能 ---
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
     const text = selection.toString().trim();
-    if (!text) return;
+    if (!text) {
+        // 无选中内容时不做任何操作（或短暂提示）
+        return;
+    }
     const originalText = copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(text);
         copyBtn.textContent = '✅ 已复制';
     } catch {
+        // 回退方案
         const textarea = document.createElement('textarea');
         textarea.value = text;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
         document.body.appendChild(textarea);
         textarea.select();
-        try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; } catch { copyBtn.textContent = '❌ 失败'; }
+        try {
+            document.execCommand('copy');
+            copyBtn.textContent = '✅ 已复制';
+        } catch (e) {
+            copyBtn.textContent = '❌ 失败';
+        }
         document.body.removeChild(textarea);
     }
-    setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
+    setTimeout(() => {
+        copyBtn.textContent = originalText;
+    }, 1500);
 });
 
-// ---------- 辅助键处理 ----------
+// --- 辅助键处理 ---
 const modifierState = { ctrl: false, alt: false, shift: false };
 const modifierButtons = document.querySelectorAll('.modifier');
 
@@ -108,16 +104,23 @@ function updateModifierUI() {
 }
 
 function processModifiers(data) {
-    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) return data;
+    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
+        return data;
+    }
     let result = '';
     for (const ch of data) {
         const code = ch.charCodeAt(0);
         let transformed = ch;
         if (modifierState.ctrl) {
-            if (code >= 65 && code <= 90) transformed = String.fromCharCode(code - 64);
-            else if (code >= 97 && code <= 122) transformed = String.fromCharCode(code - 96);
+            if (code >= 65 && code <= 90) {
+                transformed = String.fromCharCode(code - 64);
+            } else if (code >= 97 && code <= 122) {
+                transformed = String.fromCharCode(code - 96);
+            }
         }
-        if (modifierState.alt) transformed = '\x1b' + transformed;
+        if (modifierState.alt) {
+            transformed = '\x1b' + transformed;
+        }
         result += transformed;
     }
     return result;
@@ -144,6 +147,7 @@ cmdInput.addEventListener('keydown', (e) => {
         sendCommand();
     }
 });
+
 cmdSendBtn.addEventListener('click', sendCommand);
 
 document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
@@ -154,24 +158,40 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
             updateModifierUI();
             return;
         }
-        if (keySequences[key]) { sendData(keySequences[key]); return; }
-        if (comboSequences[key]) { sendData(comboSequences[key]); return; }
+        if (keySequences[key]) {
+            sendData(keySequences[key]);
+            return;
+        }
+        if (comboSequences[key]) {
+            sendData(comboSequences[key]);
+            return;
+        }
     });
 });
 
 const keySequences = {
-    esc: '\x1b', tab: '\t', home: '\x1b[1~', end: '\x1b[4~',
-    up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+    esc: '\x1b',
+    tab: '\t',
+    home: '\x1b[1~',
+    end: '\x1b[4~',
+    up: '\x1b[A',
+    down: '\x1b[B',
+    left: '\x1b[D',
+    right: '\x1b[C',
 };
+
 const comboSequences = {
-    'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15',
+    'ctrl-c': '\x03',
+    'ctrl-d': '\x04',
+    'ctrl-l': '\x0c',
+    'ctrl-u': '\x15',
 };
 
 wtermWrapper.addEventListener('click', () => {
     if (term && typeof term.focus === 'function') term.focus();
 });
 
-// ---------- 状态指示 ----------
+// --- 状态指示 ---
 function setStatus(state, msg) {
     statusDot.className = 'status-dot';
     if (state === 'connecting') {
@@ -200,7 +220,7 @@ function setStatus(state, msg) {
 
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
-// ---------- WTerm 初始化 ----------
+// --- WTerm 初始化 ---
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
     let WTermClass;
@@ -218,7 +238,8 @@ async function initWTerm() {
     }
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
-    // 容器已在 HTML 中预设，此处不再清空，直接使用已有 dom 元素
+    wtermWrapper.innerHTML = '';
+
     try {
         term = new WTermClass(wtermWrapper, {
             cols: 80,
@@ -242,11 +263,6 @@ async function initWTerm() {
         console.log('[Zephyr] WASM 初始化完成');
     }
 
-    // 应用保存的主题
-    const savedTheme = getSavedTerminalTheme();
-    terminalThemeSelect.value = savedTheme;
-    applyTerminalTheme(savedTheme);
-
     const observeResize = () => {
         if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
             const rect = wtermWrapper.getBoundingClientRect();
@@ -266,13 +282,16 @@ async function initWTerm() {
     console.log('[Zephyr] wterm 终端初始化完成');
 }
 
-// ---------- WebSocket 连接 ----------
+// --- WebSocket 连接 ---
 function connectWebSocket() {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${proto}//${location.host}/ssh`;
         const ws = new WebSocket(wsUrl);
-        const timeout = setTimeout(() => { ws.close(); reject(new Error('WebSocket 连接超时')); }, 10000);
+        const timeout = setTimeout(() => {
+            ws.close();
+            reject(new Error('WebSocket 连接超时'));
+        }, 10000);
 
         ws.addEventListener('open', () => {
             clearTimeout(timeout);
@@ -348,8 +367,7 @@ async function reconnect() {
     disconnect();
     cleanupWTerm();
     reconnectAttempts = 0;
-    // 重置容器类名（保留 wterm 基础类与当前主题）
-    wtermWrapper.className = 'wterm-wrapper wterm wterm-theme-' + getSavedTerminalTheme();
+    wtermWrapper.innerHTML = '';
     setStatus('connecting', '正在重新连接...');
     try {
         await initWTerm();
@@ -359,12 +377,6 @@ async function reconnect() {
     }
 }
 
-// ---------- 主题切换事件 ----------
-terminalThemeSelect.addEventListener('change', () => {
-    applyTerminalTheme(terminalThemeSelect.value);
-});
-
-// ---------- 启动 ----------
 async function main() {
     setStatus('connecting', '正在初始化终端...');
     try {
