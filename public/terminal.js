@@ -84,10 +84,10 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// --- 复制功能（移除 .trim() 保留原始内容） ---
+// --- 复制功能（保留原始内容） ---
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
-    const text = selection.toString();      // 不 trim，保留换行/空格
+    const text = selection.toString();
     if (!text) return;
     const originalText = copyBtn.textContent;
     try {
@@ -107,16 +107,12 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- Ctrl+C 智能判断 ---
+// --- Ctrl+C 智能判断（有选区复制，无选区发 SIGINT） ---
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'c') {
         const selection = window.getSelection();
         const text = selection.toString();
-        if (text) {
-            // 有选区：让浏览器执行默认复制行为，不拦截
-            return;
-        }
-        // 无选区：阻止默认，发送 SIGINT 给终端
+        if (text) return; // 交给浏览器复制
         e.preventDefault();
         sendData('\x03');
     }
@@ -192,9 +188,7 @@ fmSearchInput.addEventListener('input', () => {
 
 function sortFiles(files) {
     return [...files].sort((a, b) => {
-        if (a.type === b.type) {
-            return a.name.localeCompare(b.name);
-        }
+        if (a.type === b.type) return a.name.localeCompare(b.name);
         return a.type === 'd' ? -1 : 1;
     });
 }
@@ -204,7 +198,7 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// 事件委托：在 fmList 上统一处理行点击
+// 事件委托：整行点击，但按钮区不触发
 fmList.addEventListener('click', (e) => {
     const item = e.target.closest('.fm-item');
     if (!item) return;
@@ -212,6 +206,7 @@ fmList.addEventListener('click', (e) => {
     const fileType = item.dataset.fileType;
     if (!fileName) return;
 
+    // 如果点的是操作按钮区，什么都不做（按钮有自己的事件）
     if (e.target.closest('.fm-item-actions')) return;
 
     const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
@@ -240,6 +235,7 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
+        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -252,6 +248,7 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
+        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -265,6 +262,7 @@ function renderFileList(files) {
             }
         });
 
+        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -414,23 +412,16 @@ function updateModifierUI() {
 }
 
 function processModifiers(data) {
-    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
-        return data;
-    }
+    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) return data;
     let result = '';
     for (const ch of data) {
         const code = ch.charCodeAt(0);
         let transformed = ch;
         if (modifierState.ctrl) {
-            if (code >= 65 && code <= 90) {
-                transformed = String.fromCharCode(code - 64);
-            } else if (code >= 97 && code <= 122) {
-                transformed = String.fromCharCode(code - 96);
-            }
+            if (code >= 65 && code <= 90) transformed = String.fromCharCode(code - 64);
+            else if (code >= 97 && code <= 122) transformed = String.fromCharCode(code - 96);
         }
-        if (modifierState.alt) {
-            transformed = '\x1b' + transformed;
-        }
+        if (modifierState.alt) transformed = '\x1b' + transformed;
         result += transformed;
     }
     return result;
@@ -468,36 +459,21 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
             updateModifierUI();
             return;
         }
-        if (keySequences[key]) {
-            sendData(keySequences[key]);
-            return;
-        }
-        if (comboSequences[key]) {
-            sendData(comboSequences[key]);
-            return;
-        }
+        if (keySequences[key]) { sendData(keySequences[key]); return; }
+        if (comboSequences[key]) { sendData(comboSequences[key]); return; }
     });
 });
 
 const keySequences = {
-    esc: '\x1b',
-    tab: '\t',
-    home: '\x1b[1~',
-    end: '\x1b[4~',
-    up: '\x1b[A',
-    down: '\x1b[B',
-    left: '\x1b[D',
-    right: '\x1b[C',
+    esc: '\x1b', tab: '\t', home: '\x1b[1~', end: '\x1b[4~',
+    up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
 };
 
 const comboSequences = {
-    'ctrl-c': '\x03',
-    'ctrl-d': '\x04',
-    'ctrl-l': '\x0c',
-    'ctrl-u': '\x15',
+    'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15',
 };
 
-// ✅ 在 mouseup 时判断选区是否为空，为空才聚焦，避免选区消失
+// 修复选区消失：mouseup 无选区才聚焦
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) {
