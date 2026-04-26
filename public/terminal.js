@@ -26,6 +26,7 @@ const themeToggle = $('#themeToggle');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
+const terminalThemeSelect = $('#terminalThemeSelect');
 
 let term = null;
 let wsConnection = null;
@@ -33,7 +34,54 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// --- 主题管理 ---
+// ---------- 终端主题预设 ----------
+const TERMINAL_THEMES = {
+    default: {
+        background: '#0a0a0a',
+        foreground: '#e6edf3',
+        cursor: '#58a6ff',
+        selectionBackground: 'rgba(88,166,255,0.3)',
+    },
+    solarized: {
+        background: '#002b36',
+        foreground: '#839496',
+        cursor: '#93a1a1',
+        selectionBackground: 'rgba(131,148,150,0.3)',
+    },
+    monokai: {
+        background: '#272822',
+        foreground: '#f8f8f2',
+        cursor: '#f8f8f2',
+        selectionBackground: 'rgba(248,248,242,0.3)',
+    },
+    light: {
+        background: '#f6f8fa',
+        foreground: '#1f2328',
+        cursor: '#0969da',
+        selectionBackground: 'rgba(9,105,218,0.2)',
+    },
+};
+
+function getSavedTerminalTheme() {
+    return localStorage.getItem('zephyr-terminal-theme') || 'default';
+}
+
+function applyTerminalTheme(themeName) {
+    const theme = TERMINAL_THEMES[themeName] || TERMINAL_THEMES.default;
+    const root = wtermWrapper.querySelector('[data-wterm-root]');
+    if (root) {
+        root.style.backgroundColor = theme.background;
+        root.style.color = theme.foreground;
+        root.style.setProperty('--w-cursor-color', theme.cursor);
+        root.style.setProperty('--w-selection-bg', theme.selectionBackground);
+    }
+    if (term && typeof term.setTheme === 'function') {
+        term.setTheme(theme);
+    }
+    localStorage.setItem('zephyr-terminal-theme', themeName);
+}
+
+// ---------- 页面 UI 主题（亮/暗） ----------
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
@@ -59,40 +107,29 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// --- 复制功能 ---
+// ---------- 复制功能 ----------
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
     const text = selection.toString().trim();
-    if (!text) {
-        // 无选中内容时不做任何操作（或短暂提示）
-        return;
-    }
+    if (!text) return;
     const originalText = copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(text);
         copyBtn.textContent = '✅ 已复制';
     } catch {
-        // 回退方案
         const textarea = document.createElement('textarea');
         textarea.value = text;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
         document.body.appendChild(textarea);
         textarea.select();
-        try {
-            document.execCommand('copy');
-            copyBtn.textContent = '✅ 已复制';
-        } catch (e) {
-            copyBtn.textContent = '❌ 失败';
-        }
+        try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; } catch { copyBtn.textContent = '❌ 失败'; }
         document.body.removeChild(textarea);
     }
-    setTimeout(() => {
-        copyBtn.textContent = originalText;
-    }, 1500);
+    setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- 辅助键处理 ---
+// ---------- 辅助键处理 ----------
 const modifierState = { ctrl: false, alt: false, shift: false };
 const modifierButtons = document.querySelectorAll('.modifier');
 
@@ -104,23 +141,16 @@ function updateModifierUI() {
 }
 
 function processModifiers(data) {
-    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
-        return data;
-    }
+    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) return data;
     let result = '';
     for (const ch of data) {
         const code = ch.charCodeAt(0);
         let transformed = ch;
         if (modifierState.ctrl) {
-            if (code >= 65 && code <= 90) {
-                transformed = String.fromCharCode(code - 64);
-            } else if (code >= 97 && code <= 122) {
-                transformed = String.fromCharCode(code - 96);
-            }
+            if (code >= 65 && code <= 90) transformed = String.fromCharCode(code - 64);
+            else if (code >= 97 && code <= 122) transformed = String.fromCharCode(code - 96);
         }
-        if (modifierState.alt) {
-            transformed = '\x1b' + transformed;
-        }
+        if (modifierState.alt) transformed = '\x1b' + transformed;
         result += transformed;
     }
     return result;
@@ -147,7 +177,6 @@ cmdInput.addEventListener('keydown', (e) => {
         sendCommand();
     }
 });
-
 cmdSendBtn.addEventListener('click', sendCommand);
 
 document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
@@ -158,40 +187,24 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
             updateModifierUI();
             return;
         }
-        if (keySequences[key]) {
-            sendData(keySequences[key]);
-            return;
-        }
-        if (comboSequences[key]) {
-            sendData(comboSequences[key]);
-            return;
-        }
+        if (keySequences[key]) { sendData(keySequences[key]); return; }
+        if (comboSequences[key]) { sendData(comboSequences[key]); return; }
     });
 });
 
 const keySequences = {
-    esc: '\x1b',
-    tab: '\t',
-    home: '\x1b[1~',
-    end: '\x1b[4~',
-    up: '\x1b[A',
-    down: '\x1b[B',
-    left: '\x1b[D',
-    right: '\x1b[C',
+    esc: '\x1b', tab: '\t', home: '\x1b[1~', end: '\x1b[4~',
+    up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
 };
-
 const comboSequences = {
-    'ctrl-c': '\x03',
-    'ctrl-d': '\x04',
-    'ctrl-l': '\x0c',
-    'ctrl-u': '\x15',
+    'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15',
 };
 
 wtermWrapper.addEventListener('click', () => {
     if (term && typeof term.focus === 'function') term.focus();
 });
 
-// --- 状态指示 ---
+// ---------- 状态指示 ----------
 function setStatus(state, msg) {
     statusDot.className = 'status-dot';
     if (state === 'connecting') {
@@ -220,7 +233,7 @@ function setStatus(state, msg) {
 
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
-// --- WTerm 初始化 ---
+// ---------- WTerm 初始化 ----------
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
     let WTermClass;
@@ -239,6 +252,8 @@ async function initWTerm() {
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
+    const savedTermTheme = getSavedTerminalTheme();
+    const initialTheme = TERMINAL_THEMES[savedTermTheme] || TERMINAL_THEMES.default;
 
     try {
         term = new WTermClass(wtermWrapper, {
@@ -246,6 +261,7 @@ async function initWTerm() {
             rows: 24,
             autoResize: true,
             cursorBlink: true,
+            theme: initialTheme,
             onData: (data) => { sendData(data); },
         });
     } catch (e) {
@@ -262,6 +278,10 @@ async function initWTerm() {
         await term.init();
         console.log('[Zephyr] WASM 初始化完成');
     }
+
+    // 应用主题选择器初始值
+    terminalThemeSelect.value = savedTermTheme;
+    applyTerminalTheme(savedTermTheme);
 
     const observeResize = () => {
         if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
@@ -282,16 +302,13 @@ async function initWTerm() {
     console.log('[Zephyr] wterm 终端初始化完成');
 }
 
-// --- WebSocket 连接 ---
+// ---------- WebSocket 连接 ----------
 function connectWebSocket() {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${proto}//${location.host}/ssh`;
         const ws = new WebSocket(wsUrl);
-        const timeout = setTimeout(() => {
-            ws.close();
-            reject(new Error('WebSocket 连接超时'));
-        }, 10000);
+        const timeout = setTimeout(() => { ws.close(); reject(new Error('WebSocket 连接超时')); }, 10000);
 
         ws.addEventListener('open', () => {
             clearTimeout(timeout);
@@ -377,6 +394,12 @@ async function reconnect() {
     }
 }
 
+// ---------- 主题切换事件 ----------
+terminalThemeSelect.addEventListener('change', () => {
+    applyTerminalTheme(terminalThemeSelect.value);
+});
+
+// ---------- 启动 ----------
 async function main() {
     setStatus('connecting', '正在初始化终端...');
     try {
