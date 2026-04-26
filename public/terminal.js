@@ -1,6 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
 
-// 读取连接参数
 function getParams() {
     try {
         const raw = sessionStorage.getItem('zephyr_ssh_params');
@@ -14,7 +13,6 @@ if (!params) {
     throw new Error('缺少连接参数');
 }
 
-// DOM 元素
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
 const connInfo = $('#connInfo');
@@ -59,45 +57,62 @@ function setStatus(state, msg) {
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
 async function initWTerm() {
-    // 从 vendor 目录动态导入
+    console.log('[Zephyr] 开始加载 WTerm 模块...');
+
     let WTermClass;
+
     try {
-        const mod = await import('/vendor/@wterm/dom/dist/index.js');
-        WTermClass = mod.WTerm;
+        // 主入口（importmap 已解决 @wterm/core 路径）
+        const module = await import('/vendor/@wterm/dom/dist/index.js');
+        console.log('[Zephyr] 模块加载成功', Object.keys(module));
+        WTermClass = module.WTerm;
     } catch (e) {
-        throw new Error('无法加载 WTerm 模块，请检查 vendor 目录是否完整');
+        console.error('[Zephyr] 主入口加载失败，尝试直接导入 wterm.js:', e);
+        try {
+            const module = await import('/vendor/@wterm/dom/dist/wterm.js');
+            WTermClass = module.WTerm || module.default;
+        } catch (e2) {
+            throw new Error('无法加载 WTerm 模块：' + e2.message);
+        }
+    }
+
+    if (!WTermClass) {
+        throw new Error('WTerm 类未在模块中找到');
     }
 
     wtermWrapper.innerHTML = '';
 
-    // 创建 WTerm 实例
-    term = new WTermClass(wtermWrapper, {
-        cols: 80,
-        rows: 24,
-        autoResize: true,
-        cursorBlink: true,
-        // 用户输入时通过 WebSocket 发送到后端
-        onData: (data) => {
-            if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-                wsConnection.send(JSON.stringify({ type: 'input', data }));
-            }
-        },
-    });
+    try {
+        term = new WTermClass(wtermWrapper, {
+            cols: 80,
+            rows: 24,
+            autoResize: true,
+            cursorBlink: true,
+            onData: (data) => {
+                if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+                    wsConnection.send(JSON.stringify({ type: 'input', data }));
+                }
+            },
+        });
+    } catch (e) {
+        console.warn('[Zephyr] 完整配置失败，使用最小配置:', e);
+        term = new WTermClass(wtermWrapper);
+    }
 
-    // 初始化（加载 WASM）
-    await term.init();
+    if (typeof term.init === 'function') {
+        await term.init();
+        console.log('[Zephyr] WASM 初始化完成');
+    }
 
-    // 监听容器大小变化，实时调整终端尺寸
     const observeResize = () => {
         if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-            // 获取当前列数和行数
-            // 注意：wterm 0.1.9 暂未直接暴露 cols/rows 属性，可通过 ResizeObserver 计算
             const rect = wtermWrapper.getBoundingClientRect();
-            const cols = Math.floor(rect.width / 7.2);  // 等宽字体估算
+            const cols = Math.floor(rect.width / 7.2);
             const rows = Math.floor(rect.height / 17);
             wsConnection.send(JSON.stringify({ type: 'resize', rows, cols }));
         }
     };
+
     if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => {
             clearTimeout(ro._timer);
@@ -144,9 +159,7 @@ function connectWebSocket() {
                         resolve(ws);
                         break;
                     case 'data':
-                        if (term && typeof term.write === 'function') {
-                            term.write(msg.data);
-                        }
+                        if (term && typeof term.write === 'function') term.write(msg.data);
                         break;
                     case 'error':
                         setStatus('error', msg.message);
@@ -156,12 +169,10 @@ function connectWebSocket() {
                         setStatus('disconnected', msg.message || '会话已关闭');
                         break;
                     case 'banner':
-                        if (term && typeof term.write === 'function' && msg.data) {
-                            term.write(msg.data);
-                        }
+                        if (term && typeof term.write === 'function' && msg.data) term.write(msg.data);
                         break;
                 }
-            } catch { /* 忽略解析错误 */ }
+            } catch {}
         });
 
         ws.addEventListener('error', () => clearTimeout(timeout));
