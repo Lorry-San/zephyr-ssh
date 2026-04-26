@@ -34,22 +34,17 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// ---------- 官方主题切换（基于 wterm CSS 类名） ----------
+// ---------- 官方主题切换 ----------
 function getSavedTerminalTheme() {
     return localStorage.getItem('zephyr-terminal-theme') || 'default';
 }
 
 function applyTerminalTheme(themeName) {
-    // 所有官方内置主题类名
-    const themeClasses = ['solarized-dark', 'monokai', 'light'];
-    if (term && term.element) {
-        // 移除现有主题类
-        themeClasses.forEach(cls => term.element.classList.remove(`theme-${cls}`));
-        // 如果不是默认主题，则添加对应类
-        if (themeName !== 'default') {
-            term.element.classList.add(`theme-${themeName}`);
-        }
-    }
+    // 移除所有主题类
+    const themeClasses = ['default', 'solarized-dark', 'monokai', 'light'];
+    themeClasses.forEach(cls => wtermWrapper.classList.remove(`wterm-theme-${cls}`));
+    // 添加新主题类
+    wtermWrapper.classList.add(`wterm-theme-${themeName}`);
     localStorage.setItem('zephyr-terminal-theme', themeName);
 }
 
@@ -223,9 +218,7 @@ async function initWTerm() {
     }
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
-    wtermWrapper.innerHTML = '';
-
-    // 创建终端实例（无需传入 theme 属性，主题通过后续 class 控制）
+    // 容器已在 HTML 中预设，此处不再清空，直接使用已有 dom 元素
     try {
         term = new WTermClass(wtermWrapper, {
             cols: 80,
@@ -355,7 +348,8 @@ async function reconnect() {
     disconnect();
     cleanupWTerm();
     reconnectAttempts = 0;
-    wtermWrapper.innerHTML = '';
+    // 重置容器类名（保留 wterm 基础类与当前主题）
+    wtermWrapper.className = 'wterm-wrapper wterm wterm-theme-' + getSavedTerminalTheme();
     setStatus('connecting', '正在重新连接...');
     try {
         await initWTerm();
