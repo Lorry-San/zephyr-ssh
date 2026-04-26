@@ -1,35 +1,54 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Zephyr-SSH Login</title>
-  <link rel="stylesheet" href="/style.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zephyr-SSH - 登录</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="container">
-    <h2>Zephyr-SSH</h2>
-    <form id="ssh-form">
-      <label>主机地址</label>
-      <input id="host" placeholder="example.com" required />
-      <label>端口</label>
-      <input id="port" value="22" required />
-      <label>用户名</label>
-      <input id="username" required />
-      <label>密码（可选）</label>
-      <input id="password" type="password" />
-      <label>私钥（可选）</label>
-      <textarea id="privateKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-      <label>密钥口令（可选）</label>
-      <input id="passphrase" type="password" />
-      <label>初始命令（可选）</label>
-      <input id="init" placeholder="e.g. ls -al" />
-      <div class="btn-row">
-        <button type="reset" class="secondary">重置</button>
-        <button type="button" id="connect" class="primary">连接 SSH</button>
-      </div>
-    </form>
-  </div>
-  <script src="/client.js"></script>
+    <div class="login-card">
+        <div class="logo">🌬️</div>
+        <h1>Zephyr-SSH</h1>
+        <p class="subtitle">Web SSH Terminal · 流畅选择 · 即开即用</p>
+        <div id="errorBanner" class="error-banner"></div>
+        <form id="loginForm" autocomplete="off">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="host">主机地址</label>
+                    <input type="text" id="host" placeholder="192.168.1.1 或 example.com" required>
+                </div>
+                <div class="form-group port-group">
+                    <label for="port">端口</label>
+                    <input type="number" id="port" value="22" min="1" max="65535" required>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" placeholder="root" required>
+            </div>
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" placeholder="SSH 密码（或私钥短语）">
+            </div>
+            <div class="toggle-section">
+                <button type="button" class="toggle-link" id="toggleKeyBtn">🔑 使用私钥认证</button>
+            </div>
+            <div class="form-group key-section" id="keySection">
+                <label for="privateKey">私钥 (PEM格式)</label>
+                <textarea id="privateKey" placeholder="-----BEGIN RSA PRIVATE KEY-----
+        -----END RSA PRIVATE KEY-----"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="initCmd">初始命令 <span style="font-weight:400;color:var(--text-secondary)">（可选）</span></label>
+                <input type="text" id="initCmd" placeholder="例如: ls -la 或 screen -r">
+            </div>
+            <button type="submit" class="btn btn-primary" id="connectBtn">
+                ⚡ 连接 SSH
+            </button>
+        </form>
+    </div>
+    <script src="client.js" type="module"></script>
 </body>
 </html>
