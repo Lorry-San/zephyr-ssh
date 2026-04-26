@@ -1,23 +1,85 @@
-# zephyr-ssh
-A webssh tool
-Project Structure
+README.md
+
+```markdown
+# 🌬️ Zephyr-SSH
+
+> A WebSSH client with smooth text selection and copy experience, just like selecting text on a normal webpage.
+
+## ✨ Features
+
+- 🌊 **Smooth Copy** – Based on wterm DOM rendering, terminal text can be selected and copied like a regular webpage
+- 📱 **Mobile Optimized** – Support long press and drag selection with native system copy menu
+- 🔐 **Full SSH Support** – Password/private key authentication, custom port, initial command
+- 🐳 **One-click Deploy** – Docker image, ready to use
+
+## 🚀 Quick Start
+
+### Run with Docker
+
+```bash
+docker pull ghcr.io/lanlan13-14/zephyr-ssh:latest
+
+docker run -d \
+  --name zephyr-ssh \
+  -p 3000:3000 \
+  --restart unless-stopped \
+  ghcr.io/lanlan13-14/zephyr-ssh:latest
+```
+
+Access
+
+Open your browser and visit: http://your-server-ip:3000
+
+📱 Usage
+
+1. Fill in your server information (host, port, username, password or private key)
+2. Click 「Connect SSH」
+3. In the terminal, long press or drag to select text – just like on a normal webpage
+
+🔧 Environment Variables
+
+Variable Description Default
+PORT Server port 3000
+
+📦 Image
+
+```
+ghcr.io/lanlan13-14/zephyr-ssh:latest
+```
+
+🛠️ Local Development
+
+```bash
+# Install dependencies
+npm install
+
+# Start server
+npm start
+
+# Visit
+open http://localhost:3000
+```
+
+📂 Project Structure
+
 ```
 zephyr-ssh/
-│
-├── .github/
-│   └── workflows/
-│       └── docker-build.yml          # GitHub Action 自动构建镜像
-│
-├── public/
-│   ├── index.html                    # 登录界面（主机/端口/用户名/密码/私钥）
-│   ├── terminal.html                 # 终端界面（wterm 渲染）
-│   ├── style.css                     # 登录界面样式
-│   ├── client.js                     # 登录界面交互（收集配置、跳转）
-│   └── terminal.js                   # 终端核心（wterm + socket.io）
-│
-├── server.js                         # Express 后端 + Socket.IO + SSH2
-├── package.json                      # 依赖声明
-├── Dockerfile                        # 多阶段构建
-├── .gitignore                        # 忽略 node_modules 等
-└── README.md                         # 项目说明
+├── public/           # Frontend pages
+│   ├── index.html    # Login page
+│   ├── terminal.html # Terminal page
+│   ├── style.css     # Styles
+│   ├── client.js     # Login logic
+│   └── terminal.js   # Terminal core
+├── server.js         # Backend service
+├── package.json      # Dependencies
+├── Dockerfile        # Image build
+└── README.md         # Documentation
+```
+
+💡 Notes
+
+· Terminal text can be selected by drag and drop – no extra steps required
+· Supports both password and private key authentication
+· Private key supports PEM format (-----BEGIN RSA PRIVATE KEY-----)
+
 ```
