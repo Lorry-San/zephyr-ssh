@@ -472,28 +472,47 @@ body {
     overflow-y: auto;
     padding: 8px;
 }
+
+/* 关键：整行可点 */
 .fm-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
+    width: 100%;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
+    cursor: pointer;
     animation: fadeInItem 0.2s ease-out;
+    transition: background 0.1s;
+}
+.fm-item:hover {
+    background: var(--bg);
 }
 @keyframes fadeInItem {
     from { opacity: 0; transform: translateY(-5px); }
     to { opacity: 1; transform: translateY(0); }
 }
-.fm-item:hover {
-    background: var(--bg);
+
+/* 按钮容器（不占单独点击，用 flex 放右侧） */
+.fm-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
 }
+
 .fm-item-actions button {
     background: none;
     border: none;
     cursor: pointer;
-    margin-left: 8px;
     font-size: 16px;
-    padding: 2px;
+    padding: 4px;
+    line-height: 1;
+    opacity: 0.8;
+    transition: opacity 0.15s;
+}
+.fm-item-actions button:hover {
+    opacity: 1;
 }
 
 /* 编辑器模态框 */
