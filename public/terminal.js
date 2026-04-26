@@ -38,6 +38,7 @@ const fmCloseBtn = $('#fmCloseBtn');
 const fmNewFolderBtn = $('#fmNewFolderBtn');
 const fmNewFileBtn = $('#fmNewFileBtn');
 const fmUploadInput = $('#fmUploadInput');
+const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
 const fmEditorModal = $('#fmEditorModal');
 const fmEditorTitle = $('#fmEditorTitle');
@@ -51,6 +52,8 @@ let wsConnection = null;
 let isConnected = false;
 let sftpReady = false;
 let currentPath = '.';
+let allFiles = [];          // 存储当前目录的全部文件（未过滤）
+let searchQuery = '';
 let editorFilePath = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -104,111 +107,9 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- 辅助键处理 ---
-const modifierState = { ctrl: false, alt: false, shift: false };
-const modifierButtons = document.querySelectorAll('.modifier');
-
-function updateModifierUI() {
-    modifierButtons.forEach(btn => {
-        const key = btn.dataset.key;
-        btn.classList.toggle('active', modifierState[key]);
-    });
-}
-
-function processModifiers(data) {
-    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
-        return data;
-    }
-    let result = '';
-    for (const ch of data) {
-        const code = ch.charCodeAt(0);
-        let transformed = ch;
-        if (modifierState.ctrl) {
-            if (code >= 65 && code <= 90) {
-                transformed = String.fromCharCode(code - 64);
-            } else if (code >= 97 && code <= 122) {
-                transformed = String.fromCharCode(code - 96);
-            }
-        }
-        if (modifierState.alt) {
-            transformed = '\x1b' + transformed;
-        }
-        result += transformed;
-    }
-    return result;
-}
-
-function sendData(data) {
-    if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        const processed = processModifiers(data);
-        wsConnection.send(JSON.stringify({ type: 'input', data: processed }));
-    }
-}
-
-function sendCommand() {
-    const text = cmdInput.value;
-    if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        sendData(text + '\r\n');
-    }
-    cmdInput.value = '';
-}
-
-cmdInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        sendCommand();
-    }
-});
-
-cmdSendBtn.addEventListener('click', sendCommand);
-
-document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-
-        if (btn.classList.contains('modifier')) {
-            modifierState[key] = !modifierState[key];
-            updateModifierUI();
-            return;
-        }
-
-        if (keySequences[key]) {
-            sendData(keySequences[key]);
-            return;
-        }
-
-        if (comboSequences[key]) {
-            sendData(comboSequences[key]);
-            return;
-        }
-    });
-});
-
-const keySequences = {
-    esc: '\x1b',
-    tab: '\t',
-    home: '\x1b[1~',
-    end: '\x1b[4~',
-    up: '\x1b[A',
-    down: '\x1b[B',
-    left: '\x1b[D',
-    right: '\x1b[C',
-};
-
-const comboSequences = {
-    'ctrl-c': '\x03',
-    'ctrl-d': '\x04',
-    'ctrl-l': '\x0c',
-    'ctrl-u': '\x15',
-};
-
-wtermWrapper.addEventListener('click', () => {
-    if (term && typeof term.focus === 'function') term.focus();
-});
-
-// --- 文件管理器逻辑 ---
+// --- 文件管理器动画控制 ---
 function showFileManager() {
-    fileManager.style.display = 'flex';
+    fileManager.classList.add('open');
     if (!sftpReady) {
         initSFTP();
     } else {
@@ -217,19 +118,20 @@ function showFileManager() {
 }
 
 function hideFileManager() {
-    fileManager.style.display = 'none';
+    fileManager.classList.remove('open');
 }
 
 fileBtn.addEventListener('click', () => {
-    if (fileManager.style.display === 'none' || !fileManager.style.display) {
-        showFileManager();
-    } else {
+    if (fileManager.classList.contains('open')) {
         hideFileManager();
+    } else {
+        showFileManager();
     }
 });
 
 fmCloseBtn.addEventListener('click', hideFileManager);
 
+// --- SFTP 初始化与刷新 ---
 function initSFTP() {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
     wsConnection.send(JSON.stringify({ type: 'sftp-init' }));
@@ -243,8 +145,11 @@ function refreshFileList() {
 
 fmRefreshBtn.addEventListener('click', refreshFileList);
 
+// 路径跳转
 function navigateTo(path) {
     currentPath = path;
+    searchQuery = '';                  // 清空搜索
+    fmSearchInput.value = '';
     refreshFileList();
 }
 
@@ -260,6 +165,7 @@ fmPathInput.addEventListener('keydown', (e) => {
     }
 });
 
+// 返回上级
 fmBackBtn.addEventListener('click', () => {
     const parts = currentPath.replace(/\/+$/, '').split('/');
     parts.pop();
@@ -267,36 +173,34 @@ fmBackBtn.addEventListener('click', () => {
     navigateTo(parent);
 });
 
-fmNewFolderBtn.addEventListener('click', () => {
-    const name = prompt('请输入文件夹名称:');
-    if (!name) return;
-    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
-    wsConnection.send(JSON.stringify({ type: 'sftp-mkdir', path: fullPath }));
+// --- 搜索功能 ---
+fmSearchInput.addEventListener('input', () => {
+    searchQuery = fmSearchInput.value.trim();
+    renderFileList(allFiles);   // 重新渲染过滤后的列表
 });
 
-fmNewFileBtn.addEventListener('click', () => {
-    const name = prompt('请输入文件名:');
-    if (!name) return;
-    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
-    wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: fullPath }));
-});
+// --- 排序函数（先文件夹后文件，同类型按名称排序） ---
+function sortFiles(files) {
+    return [...files].sort((a, b) => {
+        if (a.type === b.type) {
+            return a.name.localeCompare(b.name);
+        }
+        return a.type === 'd' ? -1 : 1;   // 文件夹在前
+    });
+}
 
-fmUploadInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-        const base64 = ev.target.result.split(',')[1];
-        const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
-        wsConnection.send(JSON.stringify({ type: 'sftp-upload', path: targetPath, data: base64 }));
-    };
-    reader.readAsDataURL(file);
-    fmUploadInput.value = '';
-});
+// --- 过滤函数 ---
+function filterFiles(files, query) {
+    if (!query) return files;
+    return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
+}
 
+// 渲染文件列表（使用排序和过滤）
 function renderFileList(files) {
+    allFiles = sortFiles(files);   // 排序并缓存
+    const filtered = filterFiles(allFiles, searchQuery);
     fmList.innerHTML = '';
-    files.forEach(file => {
+    filtered.forEach(file => {
         const item = document.createElement('div');
         item.className = 'fm-item';
         const icon = file.type === 'd' ? '📁' : '📄';
@@ -315,6 +219,7 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
+        // 重命名按钮
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -327,6 +232,7 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
+        // 删除按钮
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -362,6 +268,34 @@ function renderFileList(files) {
     });
 }
 
+// --- 文件编辑相关（与原来一致） ---
+fmNewFolderBtn.addEventListener('click', () => {
+    const name = prompt('请输入文件夹名称:');
+    if (!name) return;
+    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
+    wsConnection.send(JSON.stringify({ type: 'sftp-mkdir', path: fullPath }));
+});
+
+fmNewFileBtn.addEventListener('click', () => {
+    const name = prompt('请输入文件名:');
+    if (!name) return;
+    const fullPath = currentPath.replace(/\/+$/, '') + '/' + name;
+    wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: fullPath }));
+});
+
+fmUploadInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1];
+        const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
+        wsConnection.send(JSON.stringify({ type: 'sftp-upload', path: targetPath, data: base64 }));
+    };
+    reader.readAsDataURL(file);
+    fmUploadInput.value = '';
+});
+
 function openEditor(filePath) {
     editorFilePath = filePath;
     fmEditorModal.style.display = 'flex';
@@ -379,6 +313,7 @@ fmEditorSaveBtn.addEventListener('click', () => {
     fmEditorModal.style.display = 'none';
 });
 
+// --- SFTP 消息处理 ---
 function handleSFTPMessage(msg) {
     switch (msg.type) {
         case 'sftp-ready':
@@ -445,6 +380,107 @@ function handleSFTPMessage(msg) {
     }
 }
 
+// ========== 以下为辅助键、终端、WebSocket 等原有逻辑（已精简注释） ==========
+
+// --- 辅助键处理 ---
+const modifierState = { ctrl: false, alt: false, shift: false };
+const modifierButtons = document.querySelectorAll('.modifier');
+
+function updateModifierUI() {
+    modifierButtons.forEach(btn => {
+        const key = btn.dataset.key;
+        btn.classList.toggle('active', modifierState[key]);
+    });
+}
+
+function processModifiers(data) {
+    if (!modifierState.ctrl && !modifierState.alt && !modifierState.shift) {
+        return data;
+    }
+    let result = '';
+    for (const ch of data) {
+        const code = ch.charCodeAt(0);
+        let transformed = ch;
+        if (modifierState.ctrl) {
+            if (code >= 65 && code <= 90) {
+                transformed = String.fromCharCode(code - 64);
+            } else if (code >= 97 && code <= 122) {
+                transformed = String.fromCharCode(code - 96);
+            }
+        }
+        if (modifierState.alt) {
+            transformed = '\x1b' + transformed;
+        }
+        result += transformed;
+    }
+    return result;
+}
+
+function sendData(data) {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+        const processed = processModifiers(data);
+        wsConnection.send(JSON.stringify({ type: 'input', data: processed }));
+    }
+}
+
+function sendCommand() {
+    const text = cmdInput.value;
+    if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+        sendData(text + '\r\n');
+    }
+    cmdInput.value = '';
+}
+
+cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        sendCommand();
+    }
+});
+
+cmdSendBtn.addEventListener('click', sendCommand);
+
+document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+        if (btn.classList.contains('modifier')) {
+            modifierState[key] = !modifierState[key];
+            updateModifierUI();
+            return;
+        }
+        if (keySequences[key]) {
+            sendData(keySequences[key]);
+            return;
+        }
+        if (comboSequences[key]) {
+            sendData(comboSequences[key]);
+            return;
+        }
+    });
+});
+
+const keySequences = {
+    esc: '\x1b',
+    tab: '\t',
+    home: '\x1b[1~',
+    end: '\x1b[4~',
+    up: '\x1b[A',
+    down: '\x1b[B',
+    left: '\x1b[D',
+    right: '\x1b[C',
+};
+
+const comboSequences = {
+    'ctrl-c': '\x03',
+    'ctrl-d': '\x04',
+    'ctrl-l': '\x0c',
+    'ctrl-u': '\x15',
+};
+
+wtermWrapper.addEventListener('click', () => {
+    if (term && typeof term.focus === 'function') term.focus();
+});
+
 // --- 状态指示 ---
 function setStatus(state, msg) {
     statusDot.className = 'status-dot';
@@ -478,7 +514,6 @@ connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 async function initWTerm() {
     console.log('[Zephyr] 开始加载 WTerm 模块...');
     let WTermClass;
-
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
         WTermClass = module.WTerm;
@@ -491,7 +526,6 @@ async function initWTerm() {
             throw new Error('无法加载 WTerm 模块：' + e2.message);
         }
     }
-
     if (!WTermClass) throw new Error('WTerm 类未找到');
 
     wtermWrapper.innerHTML = '';
@@ -565,7 +599,6 @@ function connectWebSocket() {
         ws.addEventListener('message', (event) => {
             try {
                 const msg = JSON.parse(event.data);
-                // SFTP 相关消息独立处理
                 if (msg.type && msg.type.startsWith('sftp-')) {
                     handleSFTPMessage(msg);
                     return;
