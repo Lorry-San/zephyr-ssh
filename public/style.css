@@ -27,7 +27,6 @@
     --danger: #cf222e;
     --success: #1a7f37;
     --warning: #9a6700;
-    --terminal-bg: #f6f8fa;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -66,7 +65,6 @@ body {
 .login-card .logo { text-align: center; margin-bottom: 8px; font-size: 40px; }
 .login-card h1 { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 20px; }
 
-/* 登录页主题切换按钮 */
 .theme-btn-login {
     position: absolute;
     top: 12px;
@@ -91,7 +89,6 @@ body {
     border-color: var(--text-secondary);
 }
 
-/* 表单元素 */
 .form-group { margin-bottom: 14px; }
 .form-group label {
     display: block; font-size: 12px; font-weight: 600;
@@ -176,19 +173,21 @@ body {
 .btn-sm.danger { border-color: rgba(248,81,73,0.4); color: var(--danger); }
 .btn-sm.danger:hover { background: rgba(248,81,73,0.1); }
 
-/* 终端主题选择下拉（确保与按钮圆角一致） */
+/* 主题选择下拉（与按钮圆角一致） */
 .theme-select {
     padding: 6px 10px;
     font-size: 12px;
     border: 1px solid var(--border);
-    border-radius: 6px;  /* 与.btn-sm圆角一致 */
+    border-radius: 6px;
     background: var(--surface);
     color: var(--text);
     font-family: var(--font-sans);
     cursor: pointer;
     outline: none;
-    height: 32px;  /* 与按钮高度近似对齐 */
+    height: 32px;
     line-height: 1;
+    -webkit-appearance: none;
+    appearance: none;
 }
 .theme-select:hover { border-color: var(--text-secondary); }
 
@@ -227,12 +226,18 @@ body {
 }
 .cmd-send-btn:hover { background: var(--accent-hover); }
 
-/* 终端容器 */
+/* 终端容器与主题过渡动画 */
 .terminal-container {
     flex: 1; overflow: hidden; position: relative; background: #0a0a0a;
 }
 :root[data-theme="light"] .terminal-container { background: #f6f8fa; }
-.terminal-container .wterm-wrapper { width: 100%; height: 100%; }
+.terminal-container .wterm-wrapper {
+    width: 100%; height: 100%;
+}
+/* wterm 容器在主题变化时有过渡动画 */
+.wterm {
+    transition: background 0.3s ease, color 0.3s ease;
+}
 .terminal-container .wterm-wrapper [data-wterm-root] {
     width: 100% !important; height: 100% !important;
     padding: 6px 10px; overflow-y: auto; -webkit-overflow-scrolling: touch;
