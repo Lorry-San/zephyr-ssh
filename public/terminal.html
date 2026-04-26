@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Zephyr-SSH · 终端</title>
-    <link rel="stylesheet" href="https://unpkg.com/@wterm/dom@latest/css" />
     <style>
         * {
             margin: 0;
@@ -110,15 +109,9 @@
     <div id="copyToast" class="copy-toast">✓ 已复制</div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script type="importmap">
-        {
-            "imports": {
-                "@wterm/dom": "https://unpkg.com/@wterm/dom@latest/index.js"
-            }
-        }
-    </script>
     <script type="module">
-        import { WTerm } from '@wterm/dom';
+        import { WTerm } from '/node_modules/@wterm/dom/index.js';
+        import '/node_modules/@wterm/dom/css/style.css';
         
         const socket = io();
         const container = document.getElementById('terminal-container');
@@ -147,7 +140,6 @@
         }
         
         async function initTerminal() {
-            // 获取配置
             const configStr = sessionStorage.getItem('zephyrConfig');
             if (!configStr) {
                 container.innerHTML = '<div style="color: #f85149; padding: 20px;">❌ 配置丢失，3秒后返回登录页</div>';
@@ -159,7 +151,6 @@
             
             const config = JSON.parse(configStr);
             
-            // 创建 wterm 实例（DOM 渲染 → 文字可自然选中）
             term = new WTerm(container, {
                 theme: 'dark',
                 fontSize: 14,
@@ -168,12 +159,10 @@
             
             await term.init();
             
-            // 监听终端输入
             term.onData((data) => {
                 socket.emit('ssh-input', data);
             });
             
-            // 监听选中复制（wterm DOM 渲染自带原生复制，这里只加提示）
             document.addEventListener('copy', () => {
                 const selection = window.getSelection().toString();
                 if (selection && selection.length > 0) {
@@ -181,17 +170,13 @@
                 }
             });
             
-            // 连接 SSH
             updateStatus(false, '正在连接...');
             term.writeln(`\x1b[36m🔌 正在连接 ${config.host}:${config.port || 22}...\x1b[0m`);
             
-            // 清除配置（安全）
             sessionStorage.removeItem('zephyrConfig');
-            
             socket.emit('ssh-connect', config);
         }
         
-        // Socket 事件
         socket.on('ssh-ready', (msg) => {
             updateStatus(true, msg || '已连接');
             if (term) term.writeln(`\x1b[32m✅ ${msg || '连接成功'}\x1b[0m`);
@@ -220,7 +205,6 @@
             if (term) term.writeln('\x1b[33m⚠️ 连接已断开，请刷新页面重试\x1b[0m');
         });
         
-        // 启动
         initTerminal();
     </script>
 </body>
