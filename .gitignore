@@ -6,3 +6,5 @@ npm-debug.log*
 Thumbs.db
 dist/
 build/
+# 如果希望将 vendor 提交到 Git，则不要将此行加入 .gitignore
+# !public/vendor/
