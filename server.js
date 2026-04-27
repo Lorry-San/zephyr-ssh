@@ -19,15 +19,13 @@ app.get('*', (req, res) => {
 });
 
 const server = http.createServer(app);
-
-// WebSocket 服务
 const wss = new WebSocketServer({ server, path: '/ssh' });
 
 wss.on('connection', (ws, req) => {
     console.log(`[WS] 客户端连接 ${req.socket.remoteAddress}`);
     let sshClient = null;
     let sshStream = null;
-    let sftpStream = null;   // 用于 SFTP 会话
+    let sftpStream = null;
 
     const sendJSON = (obj) => {
         if (ws.readyState === ws.OPEN) {
@@ -54,7 +52,7 @@ wss.on('connection', (ws, req) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
 
-        // ---------- 原有 SSH 连接逻辑 ----------
+        // ---------- SSH 连接 ----------
         if (msg.type === 'connect') {
             const { host, port, username, password, privateKey, init } = msg;
             sshClient = new Client();
@@ -121,32 +119,82 @@ wss.on('connection', (ws, req) => {
                 sendJSON({ type: 'error', message: `SSH 连接异常: ${err.message}` });
                 cleanup();
             }
-
             return;
         }
 
+        // 输入
         if (msg.type === 'input') {
-            if (sshStream && sshStream.writable) {
-                sshStream.write(msg.data);
-            }
+            if (sshStream && sshStream.writable) sshStream.write(msg.data);
             return;
         }
 
+        // 窗口大小调整
         if (msg.type === 'resize') {
-            if (sshStream && sshStream.setWindow) {
-                sshStream.setWindow(msg.rows, msg.cols, 0, 0);
-            }
+            if (sshStream && sshStream.setWindow) sshStream.setWindow(msg.rows, msg.cols, 0, 0);
             return;
         }
 
+        // 断开
         if (msg.type === 'disconnect') {
             cleanup();
             ws.close();
             return;
         }
 
-        // ---------- SFTP 相关操作 ----------
-        // 初始化 SFTP 会话
+        // ---------- 服务器信息 ----------
+        if (msg.type === 'server-info') {
+            if (!sshClient) {
+                sendJSON({ type: 'server-info-response', error: 'SSH 未连接' });
+                return;
+            }
+
+            const cmd = `bash -c '
+echo "---CPU_MODEL---"
+cat /proc/cpuinfo 2>/dev/null | grep "model name" | head -1 | cut -d: -f2 | xargs
+echo "---CPU_USAGE---"
+grep "cpu " /proc/stat | awk '\''{print ($2+$4)*100/($2+$4+$5)}'\'' 2>/dev/null || echo "N/A"
+echo "---MEMORY---"
+free -m 2>/dev/null | awk '\''NR==2{printf "%s/%s MB", $3,$2}'\''
+echo "---DISK---"
+df -h / 2>/dev/null | awk '\''NR==2{printf "%s/%s (%s)", $3,$2,$5}'\''
+echo "---IPV4---"
+ip -4 addr show 2>/dev/null | grep inet | grep -v 127.0.0.1 | awk '\''{print $2}'\'' | cut -d/ -f1 | head -1
+echo "---IPV6---"
+ip -6 addr show 2>/dev/null | grep inet6 | grep -v ::1 | grep global | awk '\''{print $2}'\'' | head -1
+echo "---END---"
+'`;
+
+            sshClient.exec(cmd, (err, stream) => {
+                if (err) {
+                    sendJSON({ type: 'server-info-response', error: '执行命令失败: ' + err.message });
+                    return;
+                }
+                let output = '';
+                stream.on('data', (data) => { output += data.toString(); });
+                stream.stderr.on('data', (data) => { /* 忽略错误输出 */ });
+                stream.on('close', () => {
+                    const info = {};
+                    const lines = output.split('\n');
+                    let currentKey = null;
+                    for (const line of lines) {
+                        if (line.startsWith('---') && line.endsWith('---')) {
+                            currentKey = line.replace(/---/g, '').toLowerCase();
+                            info[currentKey] = '';
+                        } else if (currentKey) {
+                            info[currentKey] += (info[currentKey] ? ' ' : '') + line.trim();
+                        }
+                    }
+                    // 清理空项
+                    for (const key in info) {
+                        if (!info[key]) info[key] = 'N/A';
+                    }
+                    sendJSON({ type: 'server-info-response', data: info });
+                });
+            });
+            return;
+        }
+
+        // ---------- SFTP 操作 ----------
         if (msg.type === 'sftp-init') {
             if (!sshClient) {
                 sendJSON({ type: 'sftp-error', message: 'SSH 未连接' });
@@ -163,7 +211,6 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 后续所有 SFTP 操作都需要 sftpStream 存在
         if (!sftpStream) {
             sendJSON({ type: 'sftp-error', message: 'SFTP 会话未建立' });
             return;
@@ -177,7 +224,6 @@ wss.on('connection', (ws, req) => {
                     sendJSON({ type: 'sftp-list', path: dir, error: err.message, files: [] });
                     return;
                 }
-                // 转换为统一格式，包含类型
                 const files = list.map(entry => ({
                     name: entry.filename,
                     type: entry.longname.startsWith('d') ? 'd' : '-',
@@ -200,21 +246,18 @@ wss.on('connection', (ws, req) => {
 
         // 创建空文件
         if (msg.type === 'sftp-touch') {
-            const { path: filePath } = msg;
-            // 创建一个写入流然后立刻关闭
-            const writeStream = sftpStream.createWriteStream(filePath);
+            const writeStream = sftpStream.createWriteStream(msg.path);
             writeStream.on('error', (err) => {
-                sendJSON({ type: 'sftp-touch', path: filePath, success: false, error: err.message });
+                sendJSON({ type: 'sftp-touch', path: msg.path, success: false, error: err.message });
             });
             writeStream.end('', () => {
-                sendJSON({ type: 'sftp-touch', path: filePath, success: true });
+                sendJSON({ type: 'sftp-touch', path: msg.path, success: true });
             });
             return;
         }
 
-        // 删除文件/目录 (注意 ssh2 sftp 没有直接 rmdir 递归，需要先清空，这里简单处理不支持删除非空目录)
+        // 删除
         if (msg.type === 'sftp-delete') {
-            // 先尝试 stat 判断是文件还是目录
             sftpStream.stat(msg.path, (err, stats) => {
                 if (err) {
                     sendJSON({ type: 'sftp-delete', path: msg.path, success: false, error: err.message });
@@ -241,7 +284,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 下载文件 (读取为 base64)
+        // 下载
         if (msg.type === 'sftp-download') {
             sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {
@@ -254,25 +297,20 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 上传文件 (base64 -> 写入)
+        // 上传
         if (msg.type === 'sftp-upload') {
-            const { path: uploadPath, data: base64 } = msg;
-            if (!base64) {
-                sendJSON({ type: 'sftp-upload', path: uploadPath, success: false, error: '缺少数据' });
-                return;
-            }
-            const buffer = Buffer.from(base64, 'base64');
-            const writeStream = sftpStream.createWriteStream(uploadPath);
+            const buffer = Buffer.from(msg.data, 'base64');
+            const writeStream = sftpStream.createWriteStream(msg.path);
             writeStream.on('error', (err) => {
-                sendJSON({ type: 'sftp-upload', path: uploadPath, success: false, error: err.message });
+                sendJSON({ type: 'sftp-upload', path: msg.path, success: false, error: err.message });
             });
             writeStream.end(buffer, () => {
-                sendJSON({ type: 'sftp-upload', path: uploadPath, success: true });
+                sendJSON({ type: 'sftp-upload', path: msg.path, success: true });
             });
             return;
         }
 
-        // 编辑文件：先读取内容
+        // 编辑文件：读取
         if (msg.type === 'sftp-readfile') {
             sftpStream.readFile(msg.path, { encoding: 'utf8' }, (err, data) => {
                 if (err) {
@@ -284,15 +322,14 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 编辑文件：保存内容
+        // 编辑文件：保存
         if (msg.type === 'sftp-writefile') {
-            const { path: filePath, data } = msg;
-            const writeStream = sftpStream.createWriteStream(filePath);
+            const writeStream = sftpStream.createWriteStream(msg.path);
             writeStream.on('error', (err) => {
-                sendJSON({ type: 'sftp-writefile', path: filePath, success: false, error: err.message });
+                sendJSON({ type: 'sftp-writefile', path: msg.path, success: false, error: err.message });
             });
-            writeStream.end(Buffer.from(data, 'utf8'), () => {
-                sendJSON({ type: 'sftp-writefile', path: filePath, success: true });
+            writeStream.end(Buffer.from(msg.data, 'utf8'), () => {
+                sendJSON({ type: 'sftp-writefile', path: msg.path, success: true });
             });
             return;
         }
