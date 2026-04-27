@@ -18,7 +18,7 @@
 </head>
 <body>
     <div class="terminal-page">
-        <!-- 顶栏（已移除清屏按钮） -->
+        <!-- 顶栏 -->
         <div class="terminal-topbar">
             <div class="status">
                 <span class="status-dot" id="statusDot"></span>
@@ -27,6 +27,7 @@
             <span class="info" id="connInfo"></span>
             <div style="display:flex;gap:8px;">
                 <button class="btn-sm" id="fileBtn" title="文件管理">📁 文件</button>
+                <button class="btn-sm" id="infoBtn" title="服务器信息">🖥️ 信息</button>
                 <button class="btn-sm" id="copyBtn" title="复制选中内容">📋 复制</button>
                 <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
@@ -55,7 +56,7 @@
                 <input type="file" id="fmUploadInput" style="display:none;">
             </div>
             <div class="fm-list" id="fmList"></div>
-            <!-- 编辑文件模态框（默认隐藏） -->
+            <!-- 编辑文件模态框 -->
             <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
                 <div class="fm-editor-header">
                     <span id="fmEditorTitle">编辑文件</span>
@@ -67,6 +68,15 @@
                     <button class="btn btn-secondary" id="fmEditorCancelBtn">取消</button>
                 </div>
             </div>
+        </div>
+
+        <!-- 服务器信息模态框 -->
+        <div class="info-modal" id="infoModal">
+            <div class="info-modal-header">
+                <span>🖥️ 服务器信息</span>
+                <button class="tool-btn" id="infoCloseBtn">✕</button>
+            </div>
+            <div class="info-modal-body" id="infoBody"></div>
         </div>
 
         <!-- 辅助工具栏 -->
