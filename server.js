@@ -8,7 +8,7 @@ const fs = require('fs');
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-// 提供静态文件
+// 静态文件服务
 app.use(express.static(path.join(__dirname, 'public')));
 
 // 兜底路由
@@ -27,11 +27,10 @@ wss.on('connection', (ws, req) => {
     let sshClient = null;
     let sshStream = null;
     let sftpStream = null;
-
-    // 监控相关
     let monitorTimer = null;
     let lastCpu = null;
     let lastNet = null;
+    let lastTime = null;
     let cpuModel = 'N/A';
     let cpuFreq = 'N/A';
 
@@ -41,7 +40,6 @@ wss.on('connection', (ws, req) => {
         }
     };
 
-    // 清理资源
     const cleanup = () => {
         if (monitorTimer) {
             clearInterval(monitorTimer);
@@ -76,22 +74,23 @@ wss.on('connection', (ws, req) => {
         if (!prev) return 0;
         const idle = curr.idle - prev.idle;
         const total = curr.total - prev.total;
-        return ((1 - idle / total) * 100).toFixed(1);
+        return total ? ((1 - idle / total) * 100).toFixed(1) : 0;
     }
 
-    // 读取本机网络统计
+    // 读取本机网络统计（排除虚拟网卡）
     function readNet() {
         try {
             const data = fs.readFileSync('/proc/net/dev', 'utf8');
             const lines = data.split('\n').slice(2);
             let rx = 0, tx = 0;
             lines.forEach(line => {
-                if (!line.includes(':')) return;
-                const [iface, stats] = line.split(':');
-                if (iface.trim() === 'lo') return;
-                const p = stats.trim().split(/\s+/).map(Number);
-                rx += p[0];
-                tx += p[8];
+                const i = line.indexOf(':');
+                if (i === -1) return;
+                const iface = line.substring(0, i).trim();
+                if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) return;
+                const parts = line.substring(i+1).trim().split(/\s+/).map(Number);
+                rx += parts[0];
+                tx += parts[8];
             });
             return { rx, tx };
         } catch (e) {
@@ -99,12 +98,11 @@ wss.on('connection', (ws, req) => {
         }
     }
 
-    function calcNet(prev, curr) {
-        if (!prev) return { rx: 0, tx: 0 };
-        return {
-            rx: (((curr.rx - prev.rx) * 8) / 1024 / 1024).toFixed(2),
-            tx: (((curr.tx - prev.tx) * 8) / 1024 / 1024).toFixed(2),
-        };
+    function calcNet(prev, curr, timeDiffSec) {
+        if (!prev || !timeDiffSec) return { rx: 0, tx: 0 };
+        const r = ((curr.rx - prev.rx) * 8) / timeDiffSec / 1024 / 1024;
+        const t = ((curr.tx - prev.tx) * 8) / timeDiffSec / 1024 / 1024;
+        return { rx: r.toFixed(2), tx: t.toFixed(2) };
     }
 
     ws.on('message', (raw) => {
@@ -136,20 +134,19 @@ wss.on('connection', (ws, req) => {
             sshClient.on('ready', () => {
                 console.log(`[SSH] 已连接到 ${host}:${port}`);
 
-                // 获取 CPU 型号和频率（仅一次）
+                // 获取 CPU 型号和频率（仅一次，去除频率重复）
                 sshClient.exec(`sh -c "
-                    cat /proc/cpuinfo 2>/dev/null | grep 'model name' | head -1 | cut -d: -f2
+                    cat /proc/cpuinfo 2>/dev/null | grep 'model name' | head -1 | cut -d: -f2 | sed 's/ @.*//'
                     cat /proc/cpuinfo 2>/dev/null | grep 'cpu MHz' | head -1 | cut -d: -f2
                 "`, (err, stream) => {
-                    if (!err) {
-                        let out = '';
-                        stream.on('data', d => out += d.toString());
-                        stream.on('close', () => {
-                            const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
-                            cpuModel = lines[0] || 'N/A';
-                            cpuFreq = lines[1] ? (parseFloat(lines[1]).toFixed(0) + ' MHz') : 'N/A';
-                        });
-                    }
+                    if (err) return;
+                    let out = '';
+                    stream.on('data', d => out += d.toString());
+                    stream.on('close', () => {
+                        const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+                        cpuModel = lines[0] ? lines[0].replace(/\s*@.*$/, '').trim() : 'N/A';
+                        cpuFreq = lines[1] ? (parseFloat(lines[1]).toFixed(0) + ' MHz') : 'N/A';
+                    });
                 });
 
                 // 打开 shell
@@ -205,7 +202,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 调整窗口大小
+        // 窗口大小调整
         if (msg.type === 'resize') {
             if (sshStream && sshStream.setWindow) sshStream.setWindow(msg.rows, msg.cols, 0, 0);
             return;
@@ -223,44 +220,52 @@ wss.on('connection', (ws, req) => {
             if (!sshClient) return;
             if (monitorTimer) return; // 已启动
 
-            // 初始化基准值
             lastCpu = readCPU();
             lastNet = readNet();
+            lastTime = Date.now();
 
             monitorTimer = setInterval(() => {
+                const now = Date.now();
+                const timeDiffSec = (now - lastTime) / 1000;
+                lastTime = now;
+
                 const currCpu = readCPU();
                 const cpu = calcCPU(lastCpu, currCpu);
                 lastCpu = currCpu;
 
                 const currNet = readNet();
-                const net = calcNet(lastNet, currNet);
+                const net = calcNet(lastNet, currNet, timeDiffSec);
                 lastNet = currNet;
 
-                // 通过 SSH 执行内存和磁盘命令
+                // 通过 SSH 执行内存、磁盘、IP 命令
                 sshClient.exec(`sh -c "
-                    echo MEM:; free -m 2>/dev/null | awk 'NR==2{print \$3\"/\"\$2}'
-                    echo DISK:; df -h / 2>/dev/null | awk 'NR==2{print \$3\"/\"\$2\" (\"\$5\")\"}'
+                    echo IPV4: hostname -I 2>/dev/null | awk '{print \\$1}'
+                    echo IPV6: ip -6 addr show 2>/dev/null | grep global | awk '{print \\$2}' | head -1
+                    echo RAM: awk '/MemTotal/{t=\\$2}/MemAvailable/{a=\\$2} END{printf \"%.0f/%.0f MB\", (t-a)/1024, t/1024}' /proc/meminfo
+                    echo SWAP: awk '/SwapTotal/{t=\\$2}/SwapFree/{f=\\$2} END{printf \"%.0f/%.0f MB\", (t-f)/1024, t/1024}' /proc/meminfo
+                    echo DISK: df -h / 2>/dev/null | awk 'NR==2{print \$3\"/\"\$2\" (\"\$5\")\"}'
                 "`, (err, stream) => {
                     if (err) return;
                     let out = '';
                     stream.on('data', d => out += d.toString());
                     stream.on('close', () => {
                         const lines = out.split('\n');
-                        let mem = 'N/A', disk = 'N/A';
+                        let ipv4 = 'N/A', ipv6 = 'N/A', ram = 'N/A', swap = 'N/A', disk = 'N/A';
                         for (let i = 0; i < lines.length; i++) {
-                            if (lines[i] === 'MEM:') mem = lines[i + 1] || 'N/A';
-                            if (lines[i] === 'DISK:') disk = lines[i + 1] || 'N/A';
+                            const line = lines[i];
+                            if (line.startsWith('IPV4:')) ipv4 = line.substring(5).trim() || 'N/A';
+                            if (line.startsWith('IPV6:')) ipv6 = line.substring(5).trim() || 'N/A';
+                            if (line.startsWith('RAM:')) ram = line.substring(4).trim() || 'N/A';
+                            if (line.startsWith('SWAP:')) swap = line.substring(5).trim() || 'N/A';
+                            if (line.startsWith('DISK:')) disk = line.substring(5).trim() || 'N/A';
                         }
                         sendJSON({
                             type: 'monitor-data',
                             data: {
-                                cpu,
-                                cpuModel,
-                                cpuFreq,
-                                memory: mem,
-                                disk,
-                                rx: net.rx,
-                                tx: net.tx,
+                                cpu, cpuModel, cpuFreq,
+                                ram, swap, disk,
+                                ipv4, ipv6,
+                                rx: net.rx, tx: net.tx,
                             }
                         });
                     });
@@ -277,59 +282,8 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // ---------- 服务器信息（静态） ----------
-        if (msg.type === 'server-info') {
-            if (!sshClient) {
-                sendJSON({ type: 'server-info-response', error: 'SSH 未连接' });
-                return;
-            }
-
-            const cmd = `bash -c '
-echo "---CPU_MODEL---"
-cat /proc/cpuinfo 2>/dev/null | grep "model name" | head -1 | cut -d: -f2 | xargs
-echo "---CPU_USAGE---"
-grep "cpu " /proc/stat | awk '"'"'{print ($2+$4)*100/($2+$4+$5)}'"'"' 2>/dev/null || echo "N/A"
-echo "---MEMORY---"
-free -m 2>/dev/null | awk '"'"'NR==2{printf "%s/%s MB", $3,$2}'"'"'
-echo "---DISK---"
-df -h / 2>/dev/null | awk '"'"'NR==2{printf "%s/%s (%s)", $3,$2,$5}'"'"'
-echo "---IPV4---"
-ip -4 addr show 2>/dev/null | grep inet | grep -v 127.0.0.1 | awk '"'"'{print $2}'"'"' | cut -d/ -f1 | head -1
-echo "---IPV6---"
-ip -6 addr show 2>/dev/null | grep inet6 | grep -v ::1 | grep global | awk '"'"'{print $2}'"'"' | head -1
-echo "---END---"
-'`;
-
-            sshClient.exec(cmd, (err, stream) => {
-                if (err) {
-                    sendJSON({ type: 'server-info-response', error: '执行命令失败: ' + err.message });
-                    return;
-                }
-                let output = '';
-                stream.on('data', (data) => { output += data.toString(); });
-                stream.stderr.on('data', () => {});
-                stream.on('close', () => {
-                    const info = {};
-                    const lines = output.split('\n');
-                    let currentKey = null;
-                    for (const line of lines) {
-                        if (line.startsWith('---') && line.endsWith('---')) {
-                            currentKey = line.replace(/---/g, '').toLowerCase();
-                            info[currentKey] = '';
-                        } else if (currentKey) {
-                            info[currentKey] += (info[currentKey] ? ' ' : '') + line.trim();
-                        }
-                    }
-                    for (const key in info) {
-                        if (!info[key]) info[key] = 'N/A';
-                    }
-                    sendJSON({ type: 'server-info-response', data: info });
-                });
-            });
-            return;
-        }
-
         // ---------- SFTP 操作 ----------
+        // 初始化 SFTP
         if (msg.type === 'sftp-init') {
             if (!sshClient) {
                 sendJSON({ type: 'sftp-error', message: 'SSH 未连接' });
@@ -419,7 +373,7 @@ echo "---END---"
             return;
         }
 
-        // 下载
+        // 下载文件
         if (msg.type === 'sftp-download') {
             sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {
@@ -432,7 +386,7 @@ echo "---END---"
             return;
         }
 
-        // 上传
+        // 上传文件
         if (msg.type === 'sftp-upload') {
             const buffer = Buffer.from(msg.data, 'base64');
             const writeStream = sftpStream.createWriteStream(msg.path);
