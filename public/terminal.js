@@ -48,10 +48,12 @@ const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
 
-// 服务器信息 DOM
+// 监控相关
 const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
 const infoBody = $('#infoBody');
+const cpuChartCanvas = $('#cpuChart');
+const netChartCanvas = $('#netChart');
 
 let term = null;
 let wsConnection = null;
@@ -63,6 +65,14 @@ let searchQuery = '';
 let editorFilePath = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
+
+// 图表变量
+let cpuChart = null;
+let netChart = null;
+const cpuData = [];
+const netRxData = [];
+const netTxData = [];
+const chartLabels = [];
 
 // --- 主题管理 ---
 function getPreferredTheme() {
@@ -229,11 +239,9 @@ function renderFileList(files) {
         item.className = 'fm-item';
         item.dataset.fileName = file.name;
         item.dataset.fileType = file.type;
-
         const icon = file.type === 'd' ? '📁' : '📄';
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
-
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
@@ -332,65 +340,95 @@ fmEditorSaveBtn.addEventListener('click', () => {
     fmEditorModal.style.display = 'none';
 });
 
-// --- 服务器信息 ---
+// --- 实时监控 ---
+function initCharts() {
+    if (cpuChart) return;
+    cpuChart = new Chart(cpuChartCanvas, {
+        type: 'line',
+        data: {
+            labels: chartLabels,
+            datasets: [{
+                label: 'CPU %',
+                data: cpuData,
+                borderColor: '#58a6ff',
+                backgroundColor: 'rgba(88,166,255,0.1)',
+                tension: 0.3,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, max: 100 }
+            }
+        }
+    });
+
+    netChart = new Chart(netChartCanvas, {
+        type: 'line',
+        data: {
+            labels: chartLabels,
+            datasets: [
+                {
+                    label: '↓ Mbps',
+                    data: netRxData,
+                    borderColor: '#3fb950',
+                    tension: 0.3,
+                },
+                {
+                    label: '↑ Mbps',
+                    data: netTxData,
+                    borderColor: '#f85149',
+                    tension: 0.3,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+        }
+    });
+}
+
 infoBtn.addEventListener('click', () => {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
         alert('请先连接 SSH');
         return;
     }
     infoModal.style.display = 'flex';
-    infoBody.innerHTML = '<div style="text-align:center;padding:20px;">正在获取信息...</div>';
-    wsConnection.send(JSON.stringify({ type: 'server-info' }));
+    initCharts();
+    wsConnection.send(JSON.stringify({ type: 'start-monitor' }));
 });
 
 infoCloseBtn.addEventListener('click', () => {
     infoModal.style.display = 'none';
+    wsConnection.send(JSON.stringify({ type: 'stop-monitor' }));
+    // 不清除图表数据，下次打开可继续
 });
 
-function handleServerInfo(msg) {
-    if (msg.error) {
-        infoBody.innerHTML = `<div class="info-error">错误: ${msg.error}</div>`;
-        return;
-    }
-    const d = msg.data;
-    const fields = [
-        { label: 'CPU 型号', value: d.cpu_model || 'N/A' },
-        { label: 'CPU 使用率', value: (d.cpu_usage || 'N/A') + '%' },
-        { label: '内存', value: d.memory || 'N/A' },
-        { label: '硬盘 (/)', value: d.disk || 'N/A' },
-        { label: 'IPv4', value: d.ipv4 || 'N/A', copy: true },
-        { label: 'IPv6', value: d.ipv6 || 'N/A', copy: true },
-    ];
-    let html = '';
-    fields.forEach(f => {
-        html += `<div class="info-row">
-            <span class="info-label">${f.label}:</span>
-            <span class="info-value">${f.value}</span>
-            ${f.copy ? `<button class="info-copy-btn" data-text="${f.value}" title="复制">📋</button>` : ''}
-        </div>`;
-    });
-    infoBody.innerHTML = html;
+function renderMonitorData(d) {
+    infoBody.innerHTML = `
+        <div class="info-row"><span>CPU:</span> ${d.cpu}% (${d.cpuModel} @ ${d.cpuFreq})</div>
+        <div class="info-row"><span>内存:</span> ${d.memory}</div>
+        <div class="info-row"><span>硬盘:</span> ${d.disk}</div>
+        <div class="info-row"><span>网络:</span> ↓ ${d.rx} Mbps ↑ ${d.tx} Mbps</div>
+    `;
 
-    infoBody.querySelectorAll('.info-copy-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const text = btn.dataset.text;
-            if (!text) return;
-            try {
-                await navigator.clipboard.writeText(text);
-                btn.textContent = '✅';
-                setTimeout(() => { btn.textContent = '📋'; }, 1000);
-            } catch {
-                const area = document.createElement('textarea');
-                area.value = text;
-                document.body.appendChild(area);
-                area.select();
-                document.execCommand('copy');
-                document.body.removeChild(area);
-                btn.textContent = '✅';
-                setTimeout(() => { btn.textContent = '📋'; }, 1000);
-            }
-        });
-    });
+    const now = new Date().toLocaleTimeString();
+    chartLabels.push(now);
+    cpuData.push(parseFloat(d.cpu));
+    netRxData.push(parseFloat(d.rx));
+    netTxData.push(parseFloat(d.tx));
+
+    if (chartLabels.length > 30) {
+        chartLabels.shift();
+        cpuData.shift();
+        netRxData.shift();
+        netTxData.shift();
+    }
+
+    cpuChart.update();
+    netChart.update();
 }
 
 // --- SFTP 消息处理 ---
@@ -663,8 +701,8 @@ function connectWebSocket() {
                     handleSFTPMessage(msg);
                     return;
                 }
-                if (msg.type === 'server-info-response') {
-                    handleServerInfo(msg);
+                if (msg.type === 'monitor-data') {
+                    renderMonitorData(msg.data);
                     return;
                 }
                 switch (msg.type) {
