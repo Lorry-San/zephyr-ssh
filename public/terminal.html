@@ -7,6 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script type="importmap">
         {
             "imports": {
@@ -27,7 +28,7 @@
             <span class="info" id="connInfo"></span>
             <div style="display:flex;gap:8px;">
                 <button class="btn-sm" id="fileBtn" title="文件管理">📁 文件</button>
-                <button class="btn-sm" id="infoBtn" title="服务器信息">🖥️ 信息</button>
+                <button class="btn-sm" id="infoBtn" title="服务器实时监控">🖥️ 监控</button>
                 <button class="btn-sm" id="copyBtn" title="复制选中内容">📋 复制</button>
                 <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
@@ -70,13 +71,17 @@
             </div>
         </div>
 
-        <!-- 服务器信息模态框 -->
-        <div class="info-modal" id="infoModal">
+        <!-- 实时监控模态框 -->
+        <div class="info-modal" id="infoModal" style="display:none;">
             <div class="info-modal-header">
-                <span>🖥️ 服务器信息</span>
+                <span>🖥️ 服务器实时监控</span>
                 <button class="tool-btn" id="infoCloseBtn">✕</button>
             </div>
             <div class="info-modal-body" id="infoBody"></div>
+            <div class="chart-container">
+                <canvas id="cpuChart" height="100"></canvas>
+                <canvas id="netChart" height="100"></canvas>
+            </div>
         </div>
 
         <!-- 辅助工具栏 -->
