@@ -48,7 +48,7 @@ const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
 
-// 监控相关
+// 监控相关 DOM
 const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
 const infoBody = $('#infoBody');
@@ -245,6 +245,7 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
+        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -257,6 +258,7 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
+        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -270,6 +272,7 @@ function renderFileList(files) {
             }
         });
 
+        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -340,7 +343,7 @@ fmEditorSaveBtn.addEventListener('click', () => {
     fmEditorModal.style.display = 'none';
 });
 
-// --- 实时监控 ---
+// --- 实时监控功能 ---
 function initCharts() {
     if (cpuChart) return;
     cpuChart = new Chart(cpuChartCanvas, {
@@ -358,35 +361,19 @@ function initCharts() {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            scales: {
-                y: { beginAtZero: true, max: 100 }
-            }
+            scales: { y: { beginAtZero: true, max: 100 } },
         }
     });
-
     netChart = new Chart(netChartCanvas, {
         type: 'line',
         data: {
             labels: chartLabels,
             datasets: [
-                {
-                    label: '↓ Mbps',
-                    data: netRxData,
-                    borderColor: '#3fb950',
-                    tension: 0.3,
-                },
-                {
-                    label: '↑ Mbps',
-                    data: netTxData,
-                    borderColor: '#f85149',
-                    tension: 0.3,
-                }
+                { label: '↓ Mbps', data: netRxData, borderColor: '#3fb950', tension: 0.3 },
+                { label: '↑ Mbps', data: netTxData, borderColor: '#f85149', tension: 0.3 },
             ]
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-        }
+        options: { responsive: true, maintainAspectRatio: false },
     });
 }
 
@@ -403,30 +390,81 @@ infoBtn.addEventListener('click', () => {
 infoCloseBtn.addEventListener('click', () => {
     infoModal.style.display = 'none';
     wsConnection.send(JSON.stringify({ type: 'stop-monitor' }));
-    // 不清除图表数据，下次打开可继续
 });
 
+// 复制 IP 工具函数
+function copyTextToClipboard(text) {
+    navigator.clipboard.writeText(text).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    });
+}
+
 function renderMonitorData(d) {
+    const ipv4 = d.ipv4 || 'N/A';
+    const ipv6 = d.ipv6 || 'N/A';
     infoBody.innerHTML = `
-        <div class="info-row"><span>CPU:</span> ${d.cpu}% (${d.cpuModel} @ ${d.cpuFreq})</div>
-        <div class="info-row"><span>内存:</span> ${d.memory}</div>
-        <div class="info-row"><span>硬盘:</span> ${d.disk}</div>
-        <div class="info-row"><span>网络:</span> ↓ ${d.rx} Mbps ↑ ${d.tx} Mbps</div>
+        <div class="card">
+            <div class="card-title">🖥️ CPU <span style="float:right">${d.cpu}%</span></div>
+            <div class="card-sub">${d.cpuModel} @ ${d.cpuFreq}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <div class="card" style="flex:1">
+                <div class="card-title">🧠 RAM</div>
+                <div>${d.ram || 'N/A'}</div>
+            </div>
+            <div class="card" style="flex:1">
+                <div class="card-title">💾 Swap</div>
+                <div>${d.swap || 'N/A'}</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-title">📦 磁盘</div>
+            <div>${d.disk || 'N/A'}</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <div class="card" style="flex:1">
+                <div class="card-title">🌐 IPv4</div>
+                <div class="ip-row">
+                    <span>${ipv4}</span>
+                    <button class="copy-ip-btn" onclick="copyTextToClipboard('${ipv4}')">📋</button>
+                </div>
+            </div>
+            <div class="card" style="flex:1">
+                <div class="card-title">🌐 IPv6</div>
+                <div class="ip-row">
+                    <span>${ipv6}</span>
+                    <button class="copy-ip-btn" onclick="copyTextToClipboard('${ipv6}')">📋</button>
+                </div>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <div class="card" style="flex:1">
+                <div class="card-title">⬇️ 下载</div>
+                <div>${d.rx} Mbps</div>
+            </div>
+            <div class="card" style="flex:1">
+                <div class="card-title">⬆️ 上传</div>
+                <div>${d.tx} Mbps</div>
+            </div>
+        </div>
     `;
 
     const now = new Date().toLocaleTimeString();
     chartLabels.push(now);
-    cpuData.push(parseFloat(d.cpu));
-    netRxData.push(parseFloat(d.rx));
-    netTxData.push(parseFloat(d.tx));
-
+    cpuData.push(parseFloat(d.cpu) || 0);
+    netRxData.push(parseFloat(d.rx) || 0);
+    netTxData.push(parseFloat(d.tx) || 0);
     if (chartLabels.length > 30) {
         chartLabels.shift();
         cpuData.shift();
         netRxData.shift();
         netTxData.shift();
     }
-
     cpuChart.update();
     netChart.update();
 }
