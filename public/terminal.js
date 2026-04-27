@@ -27,6 +27,7 @@ const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
+const infoBtn = $('#infoBtn');
 
 // 文件管理器 DOM
 const fileManager = $('#fileManager');
@@ -46,6 +47,11 @@ const fmEditorTextarea = $('#fmEditorTextarea');
 const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
+
+// 服务器信息 DOM
+const infoModal = $('#infoModal');
+const infoCloseBtn = $('#infoCloseBtn');
+const infoBody = $('#infoBody');
 
 let term = null;
 let wsConnection = null;
@@ -84,7 +90,7 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
     }
 });
 
-// --- 复制功能（保留完整文本，不 trim） ---
+// --- 复制功能 ---
 copyBtn.addEventListener('click', async () => {
     const selection = window.getSelection();
     const text = selection.toString();
@@ -107,12 +113,12 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
-// --- Ctrl+C 智能判断：有选区交给浏览器复制，无选区发送 SIGINT ---
+// --- Ctrl+C 智能判断 ---
 document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'c') {
         const selection = window.getSelection();
         const text = selection.toString();
-        if (text) return;                // 有选中文本，让浏览器复制
+        if (text) return;
         e.preventDefault();
         sendData('\x03');
     }
@@ -198,19 +204,14 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
-// ========== 点击整行逻辑 ==========
+// 文件列表点击委托
 fmList.addEventListener('click', (e) => {
-    // ① 如果点击的是按钮区域，完全忽略
     if (e.target.closest('.fm-item-actions')) return;
-
-    // ② 找到所在行
     const item = e.target.closest('.fm-item');
     if (!item) return;
-
     const fileName = item.dataset.fileName;
     const fileType = item.dataset.fileType;
     if (!fileName) return;
-
     const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
     if (fileType === 'd') {
         navigateTo(fullPath);
@@ -219,7 +220,6 @@ fmList.addEventListener('click', (e) => {
     }
 });
 
-// 渲染文件列表
 function renderFileList(files) {
     allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
@@ -237,7 +237,6 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
-        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -250,7 +249,6 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
-        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -264,7 +262,6 @@ function renderFileList(files) {
             }
         });
 
-        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -334,6 +331,67 @@ fmEditorSaveBtn.addEventListener('click', () => {
     wsConnection.send(JSON.stringify({ type: 'sftp-writefile', path: editorFilePath, data: content }));
     fmEditorModal.style.display = 'none';
 });
+
+// --- 服务器信息 ---
+infoBtn.addEventListener('click', () => {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
+        alert('请先连接 SSH');
+        return;
+    }
+    infoModal.style.display = 'flex';
+    infoBody.innerHTML = '<div style="text-align:center;padding:20px;">正在获取信息...</div>';
+    wsConnection.send(JSON.stringify({ type: 'server-info' }));
+});
+
+infoCloseBtn.addEventListener('click', () => {
+    infoModal.style.display = 'none';
+});
+
+function handleServerInfo(msg) {
+    if (msg.error) {
+        infoBody.innerHTML = `<div class="info-error">错误: ${msg.error}</div>`;
+        return;
+    }
+    const d = msg.data;
+    const fields = [
+        { label: 'CPU 型号', value: d.cpu_model || 'N/A' },
+        { label: 'CPU 使用率', value: (d.cpu_usage || 'N/A') + '%' },
+        { label: '内存', value: d.memory || 'N/A' },
+        { label: '硬盘 (/)', value: d.disk || 'N/A' },
+        { label: 'IPv4', value: d.ipv4 || 'N/A', copy: true },
+        { label: 'IPv6', value: d.ipv6 || 'N/A', copy: true },
+    ];
+    let html = '';
+    fields.forEach(f => {
+        html += `<div class="info-row">
+            <span class="info-label">${f.label}:</span>
+            <span class="info-value">${f.value}</span>
+            ${f.copy ? `<button class="info-copy-btn" data-text="${f.value}" title="复制">📋</button>` : ''}
+        </div>`;
+    });
+    infoBody.innerHTML = html;
+
+    infoBody.querySelectorAll('.info-copy-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const text = btn.dataset.text;
+            if (!text) return;
+            try {
+                await navigator.clipboard.writeText(text);
+                btn.textContent = '✅';
+                setTimeout(() => { btn.textContent = '📋'; }, 1000);
+            } catch {
+                const area = document.createElement('textarea');
+                area.value = text;
+                document.body.appendChild(area);
+                area.select();
+                document.execCommand('copy');
+                document.body.removeChild(area);
+                btn.textContent = '✅';
+                setTimeout(() => { btn.textContent = '📋'; }, 1000);
+            }
+        });
+    });
+}
 
 // --- SFTP 消息处理 ---
 function handleSFTPMessage(msg) {
@@ -475,7 +533,7 @@ const comboSequences = {
     'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15',
 };
 
-// 保留选区：mouseup 且无选中文本时才聚焦
+// 保留选区
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) {
@@ -603,6 +661,10 @@ function connectWebSocket() {
                 const msg = JSON.parse(event.data);
                 if (msg.type && msg.type.startsWith('sftp-')) {
                     handleSFTPMessage(msg);
+                    return;
+                }
+                if (msg.type === 'server-info-response') {
+                    handleServerInfo(msg);
                     return;
                 }
                 switch (msg.type) {
