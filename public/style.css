@@ -578,3 +578,62 @@ body {
     .tool-btn { padding: 3px 6px; font-size: 10px; min-width: 30px; }
     .cmd-send-btn { padding: 4px 8px; font-size: 11px; }
 }
+
+/* 实时监控模态框 */
+.info-modal {
+    position: absolute;
+    top: 40px;
+    right: 10px;
+    width: 400px;
+    max-width: 95vw;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    z-index: 30;
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    animation: slideDown 0.2s ease-out;
+}
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.info-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+.info-modal-body {
+    padding: 10px 14px;
+    font-size: 13px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+.info-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.info-row span:first-child {
+    font-weight: 500;
+    min-width: 60px;
+    color: var(--text-secondary);
+}
+.chart-container {
+    padding: 0 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.chart-container canvas {
+    height: 150px !important;
+    width: 100% !important;
+    background: var(--bg);
+    border-radius: 6px;
+}
