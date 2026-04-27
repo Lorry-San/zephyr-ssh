@@ -28,7 +28,7 @@
             <span class="info" id="connInfo"></span>
             <div style="display:flex;gap:8px;">
                 <button class="btn-sm" id="fileBtn" title="文件管理">📁 文件</button>
-                <button class="btn-sm" id="infoBtn" title="服务器实时监控">🖥️ 监控</button>
+                <button class="btn-sm" id="infoBtn" title="实时监控">📊 监控</button>
                 <button class="btn-sm" id="copyBtn" title="复制选中内容">📋 复制</button>
                 <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
@@ -57,7 +57,6 @@
                 <input type="file" id="fmUploadInput" style="display:none;">
             </div>
             <div class="fm-list" id="fmList"></div>
-            <!-- 编辑文件模态框 -->
             <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
                 <div class="fm-editor-header">
                     <span id="fmEditorTitle">编辑文件</span>
@@ -74,13 +73,13 @@
         <!-- 实时监控模态框 -->
         <div class="info-modal" id="infoModal" style="display:none;">
             <div class="info-modal-header">
-                <span>🖥️ 服务器实时监控</span>
+                <span>📊 服务器实时监控</span>
                 <button class="tool-btn" id="infoCloseBtn">✕</button>
             </div>
             <div class="info-modal-body" id="infoBody"></div>
             <div class="chart-container">
-                <canvas id="cpuChart" height="100"></canvas>
-                <canvas id="netChart" height="100"></canvas>
+                <canvas id="cpuChart"></canvas>
+                <canvas id="netChart"></canvas>
             </div>
         </div>
 
