@@ -565,12 +565,12 @@ body {
     cursor: pointer;
 }
 
-/* ===== 实时监控面板 ===== */
+/* ===== 实时监控面板（全新圆环+曲线） ===== */
 .info-modal {
     position: absolute;
     top: 40px;
     right: 10px;
-    width: 400px;
+    width: 420px;
     max-width: 95vw;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -579,8 +579,9 @@ body {
     z-index: 30;
     display: none;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
     animation: slideDown 0.2s ease-out;
+    max-height: 90vh;
 }
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
@@ -594,64 +595,115 @@ body {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 .info-modal-body {
-    padding: 10px 14px;
-    font-size: 13px;
-    max-height: 200px;
+    padding: 12px;
     overflow-y: auto;
 }
 
-/* 卡片样式（监控数据） */
-.card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
+/* 圆环卡片网格 */
+.stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
     margin-bottom: 10px;
-    color: var(--text);
-    font-size: 13px;
 }
-.card-title {
+
+.stat-circle {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 8px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+.stat-circle:hover {
+    border-color: var(--accent);
+}
+
+.circle-title {
+    font-size: 11px;
     font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
     margin-bottom: 6px;
-    color: var(--text-secondary);
 }
-.card-sub {
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 2px;
+
+.circle-value {
+    font-size: 24px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    margin-bottom: 4px;
 }
-.ip-row {
+
+.circle-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+/* IP 区块 */
+.ip-block {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
     font-family: var(--font-mono);
     font-size: 12px;
+}
+.ip-block span {
+    flex: 1;
+    margin-right: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .copy-ip-btn {
     background: none;
     border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
-    padding: 2px 6px;
+    padding: 2px 8px;
     font-size: 14px;
     color: var(--text);
-    margin-left: 8px;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.copy-ip-btn:hover {
+    background: var(--surface);
+}
+
+/* 网速摘要 */
+.net-summary {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    margin: 8px 0 4px;
+    color: var(--text-secondary);
 }
 
 /* 图表容器 */
 .chart-container {
-    padding: 0 10px 10px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    padding: 0 2px 8px;
 }
 .chart-container canvas {
-    height: 150px !important;
+    height: 130px !important;
     width: 100% !important;
     background: var(--bg);
-    border-radius: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
 }
 
 /* ===== 响应式调整 ===== */
@@ -671,5 +723,9 @@ body {
         right: 0;
         top: 40px;
         border-radius: 0;
+        max-height: 80vh;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
     }
 }
