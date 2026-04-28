@@ -3,7 +3,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
 const path = require('path');
-const fs = require('fs');
+const getStats = require('./stats');   // 引入实时采集模块
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -27,12 +27,7 @@ wss.on('connection', (ws, req) => {
     let sshClient = null;
     let sshStream = null;
     let sftpStream = null;
-    let monitorTimer = null;
-    let lastCpu = null;
-    let lastNet = null;
-    let lastTime = null;
-    let cpuModel = 'N/A';
-    let cpuFreq = 'N/A';
+    let statsTimer = null;          // 用于实时推送stats数据
 
     const sendJSON = (obj) => {
         if (ws.readyState === ws.OPEN) {
@@ -40,11 +35,27 @@ wss.on('connection', (ws, req) => {
         }
     };
 
-    const cleanup = () => {
-        if (monitorTimer) {
-            clearInterval(monitorTimer);
-            monitorTimer = null;
+    // 启动实时监控推送
+    function startStatsPush() {
+        if (statsTimer) return;
+        statsTimer = setInterval(() => {
+            if (ws.readyState !== ws.OPEN) return;
+            try {
+                ws.send(JSON.stringify({ type: 'stats', data: getStats() }));
+            } catch (_) {}
+        }, 1000);
+    }
+
+    // 停止实时推送
+    function stopStatsPush() {
+        if (statsTimer) {
+            clearInterval(statsTimer);
+            statsTimer = null;
         }
+    }
+
+    const cleanup = () => {
+        stopStatsPush();
         if (sftpStream) {
             try { sftpStream.end(); } catch {}
             sftpStream = null;
@@ -58,52 +69,6 @@ wss.on('connection', (ws, req) => {
             sshClient = null;
         }
     };
-
-    // 读取本机 CPU 统计
-    function readCPU() {
-        try {
-            const stat = fs.readFileSync('/proc/stat', 'utf8');
-            const parts = stat.split('\n')[0].trim().split(/\s+/).slice(1).map(Number);
-            return { idle: parts[3], total: parts.reduce((a, b) => a + b, 0) };
-        } catch (e) {
-            return { idle: 0, total: 0 };
-        }
-    }
-
-    function calcCPU(prev, curr) {
-        if (!prev) return 0;
-        const idle = curr.idle - prev.idle;
-        const total = curr.total - prev.total;
-        return total ? ((1 - idle / total) * 100).toFixed(1) : 0;
-    }
-
-    // 读取本机网络统计（排除虚拟网卡）
-    function readNet() {
-        try {
-            const data = fs.readFileSync('/proc/net/dev', 'utf8');
-            const lines = data.split('\n').slice(2);
-            let rx = 0, tx = 0;
-            lines.forEach(line => {
-                const i = line.indexOf(':');
-                if (i === -1) return;
-                const iface = line.substring(0, i).trim();
-                if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) return;
-                const parts = line.substring(i+1).trim().split(/\s+/).map(Number);
-                rx += parts[0];
-                tx += parts[8];
-            });
-            return { rx, tx };
-        } catch (e) {
-            return { rx: 0, tx: 0 };
-        }
-    }
-
-    function calcNet(prev, curr, timeDiffSec) {
-        if (!prev || !timeDiffSec) return { rx: 0, tx: 0 };
-        const r = ((curr.rx - prev.rx) * 8) / timeDiffSec / 1024 / 1024;
-        const t = ((curr.tx - prev.tx) * 8) / timeDiffSec / 1024 / 1024;
-        return { rx: r.toFixed(2), tx: t.toFixed(2) };
-    }
 
     ws.on('message', (raw) => {
         let msg;
@@ -134,21 +99,6 @@ wss.on('connection', (ws, req) => {
             sshClient.on('ready', () => {
                 console.log(`[SSH] 已连接到 ${host}:${port}`);
 
-                // 获取 CPU 型号和频率（仅一次，去除频率重复）
-                sshClient.exec(`sh -c "
-                    cat /proc/cpuinfo 2>/dev/null | grep 'model name' | head -1 | cut -d: -f2 | sed 's/ @.*//'
-                    cat /proc/cpuinfo 2>/dev/null | grep 'cpu MHz' | head -1 | cut -d: -f2
-                "`, (err, stream) => {
-                    if (err) return;
-                    let out = '';
-                    stream.on('data', d => out += d.toString());
-                    stream.on('close', () => {
-                        const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
-                        cpuModel = lines[0] ? lines[0].replace(/\s*@.*$/, '').trim() : 'N/A';
-                        cpuFreq = lines[1] ? (parseFloat(lines[1]).toFixed(0) + ' MHz') : 'N/A';
-                    });
-                });
-
                 // 打开 shell
                 sshClient.shell({ term: 'xterm-256color', rows: 24, cols: 80 }, (err, stream) => {
                     if (err) {
@@ -158,6 +108,9 @@ wss.on('connection', (ws, req) => {
                     }
                     sshStream = stream;
                     sendJSON({ type: 'ready' });
+
+                    // SSH 连接就绪后，启动实时监控推送
+                    startStatsPush();
 
                     stream.on('data', (data) => {
                         sendJSON({ type: 'data', data: data.toString('utf-8') });
@@ -212,73 +165,6 @@ wss.on('connection', (ws, req) => {
         if (msg.type === 'disconnect') {
             cleanup();
             ws.close();
-            return;
-        }
-
-        // ---------- 实时监控 ----------
-        if (msg.type === 'start-monitor') {
-            if (!sshClient) return;
-            if (monitorTimer) return; // 已启动
-
-            lastCpu = readCPU();
-            lastNet = readNet();
-            lastTime = Date.now();
-
-            monitorTimer = setInterval(() => {
-                const now = Date.now();
-                const timeDiffSec = (now - lastTime) / 1000;
-                lastTime = now;
-
-                const currCpu = readCPU();
-                const cpu = calcCPU(lastCpu, currCpu);
-                lastCpu = currCpu;
-
-                const currNet = readNet();
-                const net = calcNet(lastNet, currNet, timeDiffSec);
-                lastNet = currNet;
-
-                // 通过 SSH 执行内存、磁盘、IP 命令
-                sshClient.exec(`sh -c "
-                    echo IPV4: hostname -I 2>/dev/null | awk '{print \\$1}'
-                    echo IPV6: ip -6 addr show 2>/dev/null | grep global | awk '{print \\$2}' | head -1
-                    echo RAM: awk '/MemTotal/{t=\\$2}/MemAvailable/{a=\\$2} END{printf \"%.0f/%.0f MB\", (t-a)/1024, t/1024}' /proc/meminfo
-                    echo SWAP: awk '/SwapTotal/{t=\\$2}/SwapFree/{f=\\$2} END{printf \"%.0f/%.0f MB\", (t-f)/1024, t/1024}' /proc/meminfo
-                    echo DISK: df -h / 2>/dev/null | awk 'NR==2{print \$3\"/\"\$2\" (\"\$5\")\"}'
-                "`, (err, stream) => {
-                    if (err) return;
-                    let out = '';
-                    stream.on('data', d => out += d.toString());
-                    stream.on('close', () => {
-                        const lines = out.split('\n');
-                        let ipv4 = 'N/A', ipv6 = 'N/A', ram = 'N/A', swap = 'N/A', disk = 'N/A';
-                        for (let i = 0; i < lines.length; i++) {
-                            const line = lines[i];
-                            if (line.startsWith('IPV4:')) ipv4 = line.substring(5).trim() || 'N/A';
-                            if (line.startsWith('IPV6:')) ipv6 = line.substring(5).trim() || 'N/A';
-                            if (line.startsWith('RAM:')) ram = line.substring(4).trim() || 'N/A';
-                            if (line.startsWith('SWAP:')) swap = line.substring(5).trim() || 'N/A';
-                            if (line.startsWith('DISK:')) disk = line.substring(5).trim() || 'N/A';
-                        }
-                        sendJSON({
-                            type: 'monitor-data',
-                            data: {
-                                cpu, cpuModel, cpuFreq,
-                                ram, swap, disk,
-                                ipv4, ipv6,
-                                rx: net.rx, tx: net.tx,
-                            }
-                        });
-                    });
-                });
-            }, 1000);
-            return;
-        }
-
-        if (msg.type === 'stop-monitor') {
-            if (monitorTimer) {
-                clearInterval(monitorTimer);
-                monitorTimer = null;
-            }
             return;
         }
 
