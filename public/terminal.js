@@ -52,8 +52,8 @@ const fmEditorCloseBtn = $('#fmEditorCloseBtn');
 const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
 const infoBody = $('#infoBody');
-const cpuChartCanvas = $('#cpuChart');
-const netChartCanvas = $('#netChart');
+const rxCanvas = $('#rxChart');
+const txCanvas = $('#txChart');
 
 let term = null;
 let wsConnection = null;
@@ -67,12 +67,8 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表变量
-let cpuChart = null;
-let netChart = null;
-const cpuData = [];
-const netRxData = [];
-const netTxData = [];
-const chartLabels = [];
+let rxChart = null, txChart = null;
+const rxData = [], txData = [], chartLabels = [];
 
 // --- 主题管理 ---
 function getPreferredTheme() {
@@ -245,7 +241,6 @@ function renderFileList(files) {
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
-        // 重命名
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏️';
         renameBtn.title = '重命名';
@@ -258,7 +253,6 @@ function renderFileList(files) {
             wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath, newPath }));
         });
 
-        // 删除
         const deleteBtn = document.createElement('button');
         deleteBtn.textContent = '🗑️';
         deleteBtn.title = '删除';
@@ -272,7 +266,6 @@ function renderFileList(files) {
             }
         });
 
-        // 下载（仅文件）
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
@@ -343,56 +336,80 @@ fmEditorSaveBtn.addEventListener('click', () => {
     fmEditorModal.style.display = 'none';
 });
 
-// --- 实时监控功能 ---
+// ===== 全新的实时监控面板 =====
+
+// 初始化双曲线图
 function initCharts() {
-    if (cpuChart) return;
-    cpuChart = new Chart(cpuChartCanvas, {
+    if (rxChart) return;
+    rxChart = new Chart(rxCanvas, {
         type: 'line',
         data: {
             labels: chartLabels,
             datasets: [{
-                label: 'CPU %',
-                data: cpuData,
-                borderColor: '#58a6ff',
-                backgroundColor: 'rgba(88,166,255,0.1)',
+                label: '↓ Mbps',
+                data: rxData,
+                borderColor: '#3fb950',
+                backgroundColor: 'rgba(63,185,80,0.1)',
                 tension: 0.3,
+                pointRadius: 0
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            scales: { y: { beginAtZero: true, max: 100 } },
+            scales: { y: { beginAtZero: true } },
+            plugins: { legend: { display: false } }
         }
     });
-    netChart = new Chart(netChartCanvas, {
+    txChart = new Chart(txCanvas, {
         type: 'line',
         data: {
             labels: chartLabels,
-            datasets: [
-                { label: '↓ Mbps', data: netRxData, borderColor: '#3fb950', tension: 0.3 },
-                { label: '↑ Mbps', data: netTxData, borderColor: '#f85149', tension: 0.3 },
-            ]
+            datasets: [{
+                label: '↑ Mbps',
+                data: txData,
+                borderColor: '#f85149',
+                backgroundColor: 'rgba(248,81,73,0.1)',
+                tension: 0.3,
+                pointRadius: 0
+            }]
         },
-        options: { responsive: true, maintainAspectRatio: false },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true } },
+            plugins: { legend: { display: false } }
+        }
     });
 }
 
-infoBtn.addEventListener('click', () => {
-    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
-        alert('请先连接 SSH');
-        return;
+// 更新曲线数据
+function updateCharts(rx, tx) {
+    const now = new Date().toLocaleTimeString();
+    chartLabels.push(now);
+    rxData.push(Number(rx) || 0);
+    txData.push(Number(tx) || 0);
+    if (chartLabels.length > 20) {
+        chartLabels.shift();
+        rxData.shift();
+        txData.shift();
     }
-    infoModal.style.display = 'flex';
-    initCharts();
-    wsConnection.send(JSON.stringify({ type: 'start-monitor' }));
-});
+    rxChart.update();
+    txChart.update();
+}
 
-infoCloseBtn.addEventListener('click', () => {
-    infoModal.style.display = 'none';
-    wsConnection.send(JSON.stringify({ type: 'stop-monitor' }));
-});
+// 圆环卡片生成
+function circle(p, title, sub) {
+    const color = p < 50 ? '#3fb950' : p < 80 ? '#d2991d' : '#f85149';
+    return `
+        <div class="stat-circle">
+            <div class="circle-title">${title}</div>
+            <div class="circle-value" style="color:${color}">${p.toFixed(1)}%</div>
+            <div class="circle-sub">${sub}</div>
+        </div>`;
+}
 
-// 复制 IP 工具函数
+// 复制文本辅助函数
 function copyTextToClipboard(text) {
     navigator.clipboard.writeText(text).catch(() => {
         const ta = document.createElement('textarea');
@@ -404,70 +421,49 @@ function copyTextToClipboard(text) {
     });
 }
 
-function renderMonitorData(d) {
-    const ipv4 = d.ipv4 || 'N/A';
-    const ipv6 = d.ipv6 || 'N/A';
+// 渲染实时监控数据
+function renderStats(d) {
+    const cpu = circle(d.cpu.usage, 'CPU', `${d.cpu.model} @ ${d.cpu.freq}`);
+    const mem = circle((d.memUsed / d.memTotal) * 100, '内存', `${d.memUsed.toFixed(0)} / ${d.memTotal.toFixed(0)} MB`);
+    const swap = circle(d.swapTotal === 0 ? 0 : (d.swapUsed / d.swapTotal) * 100, 'Swap', `${d.swapUsed.toFixed(0)} / ${d.swapTotal.toFixed(0)} MB`);
+    const disk = circle((d.disk.used / d.disk.total) * 100, '磁盘', `${d.disk.used.toFixed(1)} / ${d.disk.total.toFixed(1)} GB`);
+
     infoBody.innerHTML = `
-        <div class="card">
-            <div class="card-title">🖥️ CPU <span style="float:right">${d.cpu}%</span></div>
-            <div class="card-sub">${d.cpuModel} @ ${d.cpuFreq}</div>
+        <div class="stats-grid">
+            ${cpu} ${mem} ${swap} ${disk}
         </div>
-        <div style="display:flex;gap:8px">
-            <div class="card" style="flex:1">
-                <div class="card-title">🧠 RAM</div>
-                <div>${d.ram || 'N/A'}</div>
-            </div>
-            <div class="card" style="flex:1">
-                <div class="card-title">💾 Swap</div>
-                <div>${d.swap || 'N/A'}</div>
-            </div>
+        <div class="ip-block">
+            <span>🌐 IPv4: ${d.ip.ipv4}</span>
+            <button class="copy-ip-btn" onclick="copyTextToClipboard('${d.ip.ipv4}')">📋</button>
         </div>
-        <div class="card">
-            <div class="card-title">📦 磁盘</div>
-            <div>${d.disk || 'N/A'}</div>
+        <div class="ip-block">
+            <span>🌐 IPv6: ${d.ip.ipv6}</span>
+            <button class="copy-ip-btn" onclick="copyTextToClipboard('${d.ip.ipv6}')">📋</button>
         </div>
-        <div style="display:flex;gap:8px">
-            <div class="card" style="flex:1">
-                <div class="card-title">🌐 IPv4</div>
-                <div class="ip-row">
-                    <span>${ipv4}</span>
-                    <button class="copy-ip-btn" onclick="copyTextToClipboard('${ipv4}')">📋</button>
-                </div>
-            </div>
-            <div class="card" style="flex:1">
-                <div class="card-title">🌐 IPv6</div>
-                <div class="ip-row">
-                    <span>${ipv6}</span>
-                    <button class="copy-ip-btn" onclick="copyTextToClipboard('${ipv6}')">📋</button>
-                </div>
-            </div>
-        </div>
-        <div style="display:flex;gap:8px">
-            <div class="card" style="flex:1">
-                <div class="card-title">⬇️ 下载</div>
-                <div>${d.rx} Mbps</div>
-            </div>
-            <div class="card" style="flex:1">
-                <div class="card-title">⬆️ 上传</div>
-                <div>${d.tx} Mbps</div>
-            </div>
+        <div class="net-summary">
+            ⬇ 下载 ${d.net.rx.toFixed(2)} Mbps &nbsp;·&nbsp; ⬆ 上传 ${d.net.tx.toFixed(2)} Mbps
         </div>
     `;
 
-    const now = new Date().toLocaleTimeString();
-    chartLabels.push(now);
-    cpuData.push(parseFloat(d.cpu) || 0);
-    netRxData.push(parseFloat(d.rx) || 0);
-    netTxData.push(parseFloat(d.tx) || 0);
-    if (chartLabels.length > 30) {
-        chartLabels.shift();
-        cpuData.shift();
-        netRxData.shift();
-        netTxData.shift();
-    }
-    cpuChart.update();
-    netChart.update();
+    updateCharts(d.net.rx, d.net.tx);
 }
+
+// 显示监控面板
+infoBtn.addEventListener('click', () => {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
+        alert('请先连接 SSH');
+        return;
+    }
+    infoModal.style.display = 'flex';
+    initCharts();
+    // 不再需要发送 start-monitor，后端已自动推送 stats
+});
+
+// 关闭监控面板
+infoCloseBtn.addEventListener('click', () => {
+    infoModal.style.display = 'none';
+    // 无需停止，后端持续推送直到连接断开
+});
 
 // --- SFTP 消息处理 ---
 function handleSFTPMessage(msg) {
@@ -735,12 +731,14 @@ function connectWebSocket() {
         ws.addEventListener('message', (event) => {
             try {
                 const msg = JSON.parse(event.data);
-                if (msg.type && msg.type.startsWith('sftp-')) {
-                    handleSFTPMessage(msg);
+                // 处理 stats 实时消息
+                if (msg.type === 'stats') {
+                    renderStats(msg.data);
                     return;
                 }
-                if (msg.type === 'monitor-data') {
-                    renderMonitorData(msg.data);
+                // 处理 SFTP 消息
+                if (msg.type && msg.type.startsWith('sftp-')) {
+                    handleSFTPMessage(msg);
                     return;
                 }
                 switch (msg.type) {
