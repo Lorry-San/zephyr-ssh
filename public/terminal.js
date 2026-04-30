@@ -52,7 +52,6 @@ const fmEditorCloseBtn = $('#fmEditorCloseBtn');
 const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
 const infoBody = $('#infoBody');
-const chartContainer = $('#chartContainer');
 
 // ---------- 全局变量 ----------
 let term = null;
@@ -66,8 +65,8 @@ let editorFilePath = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
-// 图表实例
-let charts = {};
+// 图表实例管理
+let chartInstances = {};
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -337,137 +336,159 @@ function handleSFTPMessage(msg) {
 }
 
 // ---------- 监控面板 ----------
-function initCharts() {
-    if (Object.keys(charts).length) return;
-
-    const commonOptions = {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-        elements: { point: { radius: 0 }, line: { tension: 0.2 } },
-        scales: { x: { display: false }, y: { display: false } }
-    };
-
-    function createDoughnut(canvasId) {
-        const ctx = $(`#${canvasId}`).getContext('2d');
-        return new Chart(ctx, {
-            type: 'doughnut',
-            data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.05)'], borderWidth: 0 }] },
-            options: { circumference: 270, rotation: 225, cutout: '80%', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } } }
-        });
-    }
-
-    function createLine(canvasId, color) {
-        const ctx = $(`#${canvasId}`).getContext('2d');
-        return new Chart(ctx, {
-            type: 'line',
-            data: { labels: Array(20).fill(''), datasets: [{ data: Array(20).fill(0), borderColor: color, borderWidth: 1.5, fill: false }] },
-            options: { ...commonOptions }
-        });
-    }
-
-    charts = {
-        cpu: createDoughnut('cpuDoughnut'),
-        ram: createDoughnut('ramDoughnut'),
-        swap: createDoughnut('swapDoughnut'),
-        disk: createDoughnut('diskDoughnut'),
-        rxLine: createLine('rxLine', '#3fb950'),
-        txLine: createLine('txLine', '#58a6ff'),
-        diskReadLine: createLine('diskReadLine', '#f0883e'),
-        diskWriteLine: createLine('diskWriteLine', '#d2991d'),
-    };
+function safeVal(val, fallback = 0) {
+    return (val != null && !isNaN(val)) ? val : fallback;
 }
 
-function updateDoughnut(chart, value) {
-    chart.data.datasets[0].data = [value, 100 - value];
-    const color = value < 50 ? '#3fb950' : value < 80 ? '#d2991d' : '#f85149';
+function destroyCharts() {
+    Object.values(chartInstances).forEach(chart => {
+        try { chart.destroy(); } catch (_) {}
+    });
+    chartInstances = {};
+}
+
+function initCharts() {
+    destroyCharts();
+
+    const commonDoughnut = {
+        type: 'doughnut',
+        data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.05)'], borderWidth: 0 }] },
+        options: { circumference: 270, rotation: 225, cutout: '80%', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } } }
+    };
+
+    const commonLine = {
+        type: 'line',
+        data: { labels: Array(20).fill(''), datasets: [{ data: Array(20).fill(0), borderWidth: 1.5, pointRadius: 0, tension: 0.2 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } } }
+    };
+
+    document.querySelectorAll('.doughnut-wrap canvas').forEach(canvas => {
+        const id = canvas.id;
+        if (!id) return;
+        chartInstances[id] = new Chart(canvas, commonDoughnut);
+    });
+
+    document.querySelectorAll('.sparkline-row canvas, .line-canvas').forEach(canvas => {
+        const id = canvas.id;
+        if (!id) return;
+        const color = canvas.dataset.color || '#3fb950';
+        const config = JSON.parse(JSON.stringify(commonLine));
+        config.data.datasets[0].borderColor = color;
+        chartInstances[id] = new Chart(canvas, config);
+    });
+}
+
+function updateDoughnut(id, value) {
+    const chart = chartInstances[id];
+    if (!chart) return;
+    const p = Math.min(100, Math.max(0, safeVal(value)));
+    chart.data.datasets[0].data = [p, 100 - p];
+    const color = p < 50 ? '#3fb950' : p < 80 ? '#d2991d' : '#f85149';
     chart.data.datasets[0].backgroundColor = [color, 'rgba(255,255,255,0.05)'];
     chart.update();
 }
 
-function updateLine(chart, value) {
+function updateLine(id, value) {
+    const chart = chartInstances[id];
+    if (!chart) return;
     const data = chart.data.datasets[0].data;
-    data.push(value);
+    data.push(safeVal(value));
     if (data.length > 20) data.shift();
     chart.update();
 }
 
 function renderStats(d) {
-    // 初始化图表（首次）
-    initCharts();
+    const cpuUsage = safeVal(d.cpu?.usage);
+    const cpuText = `${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'} · ${d.cpu?.cores || 0}核`;
+    const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
+    const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
+    const swapUsedGB = (safeVal(d.swapUsed) / 1024).toFixed(1);
+    const swapTotalGB = (safeVal(d.swapTotal) / 1024).toFixed(1);
+    const diskUsed = safeVal(d.disk?.used).toFixed(1);
+    const diskTotal = safeVal(d.disk?.total).toFixed(1);
+    const readKBps = safeVal(d.disk?.readKBps).toFixed(0);
+    const writeKBps = safeVal(d.disk?.writeKBps).toFixed(0);
+    const rxMbps = safeVal(d.net?.rx).toFixed(1);
+    const txMbps = safeVal(d.net?.tx).toFixed(1);
+    const ipv4 = d.ip?.ipv4 || 'N/A';
+    const ipv6 = d.ip?.ipv6 || 'N/A';
 
-    // 更新环形图
-    updateDoughnut(charts.cpu, d.cpu.usage);
-    updateDoughnut(charts.ram, (d.memUsed / d.memTotal) * 100);
-    updateDoughnut(charts.swap, d.swapTotal ? (d.swapUsed / d.swapTotal) * 100 : 0);
-    updateDoughnut(charts.disk, (d.disk.used / d.disk.total) * 100);
-
-    // 更新折线图
-    updateLine(charts.rxLine, d.net.rx);
-    updateLine(charts.txLine, d.net.tx);
-    updateLine(charts.diskReadLine, d.disk.readKBps);
-    updateLine(charts.diskWriteLine, d.disk.writeKBps);
-
-    // 生成 HTML 布局
     infoBody.innerHTML = `
         <div class="doughnut-row">
-            <div class="doughnut-item">
+            <div class="doughnut-item full-width">
                 <div class="doughnut-label">CPU</div>
                 <div class="doughnut-wrap"><canvas id="cpuDoughnut"></canvas></div>
-                <div class="doughnut-text">${d.cpu.usage.toFixed(1)}%</div>
-                <div class="doughnut-sub">${d.cpu.model} @ ${d.cpu.freq} · ${d.cpu.cores}核</div>
+                <div class="doughnut-text">${cpuUsage.toFixed(1)}%</div>
+                <div class="doughnut-sub">${cpuText}</div>
             </div>
         </div>
         <div class="doughnut-row two-col">
             <div class="doughnut-item">
                 <div class="doughnut-label">内存</div>
                 <div class="doughnut-wrap"><canvas id="ramDoughnut"></canvas></div>
-                <div class="doughnut-text">${(d.memUsed / 1024).toFixed(1)} / ${(d.memTotal / 1024).toFixed(1)} GB</div>
+                <div class="doughnut-text">${memUsedGB} / ${memTotalGB} GB</div>
             </div>
             <div class="doughnut-item">
                 <div class="doughnut-label">Swap</div>
                 <div class="doughnut-wrap"><canvas id="swapDoughnut"></canvas></div>
-                <div class="doughnut-text">${(d.swapUsed / 1024).toFixed(1)} / ${(d.swapTotal / 1024).toFixed(1)} GB</div>
+                <div class="doughnut-text">${swapUsedGB} / ${swapTotalGB} GB</div>
             </div>
         </div>
         <div class="doughnut-row">
-            <div class="doughnut-item">
+            <div class="doughnut-item full-width">
                 <div class="doughnut-label">磁盘</div>
                 <div class="doughnut-wrap"><canvas id="diskDoughnut"></canvas></div>
-                <div class="doughnut-text">${d.disk.used.toFixed(1)} / ${d.disk.total.toFixed(1)} GB</div>
-                <div class="doughnut-sub">读 ${d.disk.readKBps.toFixed(0)} KB/s · 写 ${d.disk.writeKBps.toFixed(0)} KB/s</div>
-                <div class="sparkline-row"><canvas id="diskReadLine" height="30"></canvas><canvas id="diskWriteLine" height="30"></canvas></div>
+                <div class="doughnut-text">${diskUsed} / ${diskTotal} GB</div>
+                <div class="doughnut-sub">读 ${readKBps} KB/s · 写 ${writeKBps} KB/s</div>
+                <div class="sparkline-row">
+                    <canvas id="diskReadLine" data-color="#f0883e" class="line-canvas" height="30"></canvas>
+                    <canvas id="diskWriteLine" data-color="#d2991d" class="line-canvas" height="30"></canvas>
+                </div>
             </div>
         </div>
         <div class="doughnut-row two-col">
             <div class="doughnut-item">
                 <div class="doughnut-label">下载</div>
-                <div class="doughnut-wrap"><canvas id="rxLine" height="30"></canvas></div>
-                <div class="doughnut-text">${d.net.rx.toFixed(1)} Mbps</div>
+                <div class="doughnut-text">${rxMbps} Mbps</div>
+                <div class="sparkline-row">
+                    <canvas id="rxLine" data-color="#3fb950" class="line-canvas" height="30"></canvas>
+                </div>
             </div>
             <div class="doughnut-item">
                 <div class="doughnut-label">上传</div>
-                <div class="doughnut-wrap"><canvas id="txLine" height="30"></canvas></div>
-                <div class="doughnut-text">${d.net.tx.toFixed(1)} Mbps</div>
+                <div class="doughnut-text">${txMbps} Mbps</div>
+                <div class="sparkline-row">
+                    <canvas id="txLine" data-color="#58a6ff" class="line-canvas" height="30"></canvas>
+                </div>
             </div>
         </div>
         <div class="ip-section">
-            <div class="ip-box"><span>IPv4</span><code>${d.ip.ipv4}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${d.ip.ipv4}')">📋</button></div>
-            <div class="ip-box"><span>IPv6</span><code>${d.ip.ipv6}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${d.ip.ipv6}')">📋</button></div>
+            <div class="ip-box"><span>IPv4</span><code>${ipv4}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${ipv4}')">📋</button></div>
+            <div class="ip-box"><span>IPv6</span><code>${ipv6}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${ipv6}')">📋</button></div>
         </div>
     `;
 
-    // 重新绑定图表 canvas，因为 innerHTML 会清除原有 canvas
     initCharts();
+
+    updateDoughnut('cpuDoughnut', cpuUsage);
+    updateDoughnut('ramDoughnut', (safeVal(d.memUsed) / safeVal(d.memTotal)) * 100);
+    updateDoughnut('swapDoughnut', safeVal(d.swapTotal) ? (safeVal(d.swapUsed) / safeVal(d.swapTotal)) * 100 : 0);
+    updateDoughnut('diskDoughnut', (safeVal(d.disk?.used) / safeVal(d.disk?.total)) * 100);
+
+    updateLine('rxLine', rxMbps);
+    updateLine('txLine', txMbps);
+    updateLine('diskReadLine', readKBps);
+    updateLine('diskWriteLine', writeKBps);
 }
 
 infoBtn.addEventListener('click', () => {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
-        alert('请先连接 SSH'); return;
+        alert('请先连接 SSH');
+        return;
     }
     infoModal.style.display = 'flex';
-    initCharts();
 });
+
 infoCloseBtn.addEventListener('click', () => { infoModal.style.display = 'none'; });
 
 // ---------- 辅助键 / 终端输入 ----------
@@ -591,29 +612,59 @@ async function initWTerm() {
     window.addEventListener('resize', observeResize);
 }
 
-// ---------- WebSocket ----------
+// ---------- WebSocket 连接 ----------
 function connectWebSocket() {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/ssh`);
-        const timeout = setTimeout(() => { ws.close(); reject(new Error('超时')); }, 10000);
+        const timeout = setTimeout(() => { ws.close(); reject(new Error('连接超时')); }, 10000);
 
         ws.addEventListener('open', () => {
             clearTimeout(timeout);
-            ws.send(JSON.stringify({ type: 'connect', host: params.host, port: params.port, username: params.username, password: params.password || '', privateKey: params.privateKey || '', init: params.init || '' }));
+            ws.send(JSON.stringify({
+                type: 'connect',
+                host: params.host,
+                port: params.port,
+                username: params.username,
+                password: params.password || '',
+                privateKey: params.privateKey || '',
+                init: params.init || ''
+            }));
         });
 
         ws.addEventListener('message', (event) => {
             try {
                 const msg = JSON.parse(event.data);
-                if (msg.type === 'stats') { renderStats(msg.data); return; }
-                if (msg.type?.startsWith('sftp-')) { handleSFTPMessage(msg); return; }
+                // 实时监控数据
+                if (msg.type === 'stats') {
+                    renderStats(msg.data);
+                    return;
+                }
+                // SFTP 消息
+                if (msg.type?.startsWith('sftp-')) {
+                    handleSFTPMessage(msg);
+                    return;
+                }
                 switch (msg.type) {
-                    case 'ready': setStatus('connected'); if (term?.focus) term.focus(); reconnectAttempts = 0; resolve(ws); break;
-                    case 'data': if (term?.write) term.write(msg.data); break;
-                    case 'error': setStatus('error', msg.message); reject(new Error(msg.message)); break;
-                    case 'close': setStatus('disconnected', msg.message || '会话关闭'); break;
-                    case 'banner': if (term?.write) term.write(msg.data); break;
+                    case 'ready':
+                        setStatus('connected', '已连接');
+                        if (term?.focus) term.focus();
+                        reconnectAttempts = 0;
+                        resolve(ws);
+                        break;
+                    case 'data':
+                        if (term?.write) term.write(msg.data);
+                        break;
+                    case 'error':
+                        setStatus('error', msg.message);
+                        reject(new Error(msg.message));
+                        break;
+                    case 'close':
+                        setStatus('disconnected', msg.message || '会话已关闭');
+                        break;
+                    case 'banner':
+                        if (term?.write) term.write(msg.data);
+                        break;
                 }
             } catch (_) {}
         });
@@ -622,7 +673,7 @@ function connectWebSocket() {
         ws.addEventListener('close', (e) => {
             clearTimeout(timeout);
             wsConnection = null;
-            if (isConnected) setStatus('disconnected', `连接断开 (${e.code})`);
+            if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
             if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
         });
 
@@ -631,29 +682,48 @@ function connectWebSocket() {
 }
 
 function disconnect() {
-    if (wsConnection) { try { wsConnection.send(JSON.stringify({ type: 'disconnect' })); } catch {} wsConnection.close(1000, '用户断连'); wsConnection = null; }
-    if (term) { try { term.destroy?.(); } catch {} term = null; }
+    if (wsConnection) {
+        try { wsConnection.send(JSON.stringify({ type: 'disconnect' })); } catch (_) {}
+        wsConnection.close(1000, '用户主动断开');
+        wsConnection = null;
+    }
+    if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
     setStatus('disconnected', '已断开');
     isConnected = false;
 }
+
 async function reconnect() {
     disconnect();
     wtermWrapper.innerHTML = '';
     reconnectAttempts = 0;
     setStatus('connecting', '正在重连...');
-    try { await initWTerm(); await connectWebSocket(); } catch (err) { setStatus('error', err.message); }
+    try {
+        await initWTerm();
+        await connectWebSocket();
+    } catch (err) {
+        setStatus('error', err.message);
+    }
 }
 
 async function main() {
-    setStatus('connecting');
-    try { await initWTerm(); await connectWebSocket(); } catch (err) {
+    setStatus('connecting', '正在初始化终端...');
+    try {
+        await initWTerm();
+        await connectWebSocket();
+    } catch (err) {
         setStatus('error', err.message);
-        if (reconnectAttempts++ < MAX_RECONNECT_ATTEMPTS) setTimeout(() => { if (!isConnected) main(); }, 2000);
+        if (reconnectAttempts++ < MAX_RECONNECT_ATTEMPTS) {
+            setTimeout(() => { if (!isConnected) main(); }, 2000);
+        }
     }
 }
 
 reconnectBtn.addEventListener('click', reconnect);
-disconnectBtn.addEventListener('click', () => { disconnect(); sessionStorage.removeItem('zephyr_ssh_params'); window.location.href = '/'; });
+disconnectBtn.addEventListener('click', () => {
+    disconnect();
+    sessionStorage.removeItem('zephyr_ssh_params');
+    window.location.href = '/';
+});
 window.addEventListener('beforeunload', disconnect);
 
 main();
