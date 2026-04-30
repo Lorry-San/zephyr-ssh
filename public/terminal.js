@@ -437,6 +437,8 @@ function updateLine(id, value) {
 function renderStats(d) {
     const cpuUsage = safeVal(d.cpu?.usage);
     const cpuText = `${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'} · ${d.cpu?.cores || 0}核`;
+    const hostName = d.host?.hostname || 'N/A';
+    const hostOS = d.host?.os || 'N/A';
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
     const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
     const swapUsedGB = (safeVal(d.swapUsed) / 1024).toFixed(1);
@@ -469,6 +471,7 @@ function renderStats(d) {
                 <div class="doughnut-wrap"><canvas id="cpuDoughnut"></canvas></div>
                 <div class="doughnut-text">${cpuUsage.toFixed(1)}%</div>
                 <div class="doughnut-sub">${cpuText}</div>
+                <div class="doughnut-sub">${hostName} · ${hostOS}</div>
             </div>
         </div>
         <div class="doughnut-row two-col">

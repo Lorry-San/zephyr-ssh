@@ -1,273 +1,209 @@
-const fs = require('fs');
-const os = require('os');
-const https = require('https');
-const { execSync } = require('child_process');
+const STAT_COMMAND = [
+  'cat /proc/stat || true',
+  "printf '\n__END_CPU__\n'",
+  'cat /proc/meminfo || true',
+  "printf '\n__END_MEM__\n'",
+  'df -kP -x tmpfs -x devtmpfs -x squashfs -x overlay || true',
+  "printf '\n__END_DISK__\n'",
+  'cat /proc/net/dev || true',
+  "printf '\n__END_NET__\n'",
+  'ip -4 -o addr show scope global 2>/dev/null || true',
+  "printf '\n__END_IP4__\n'",
+  'ip -6 -o addr show scope global 2>/dev/null || true',
+  "printf '\n__END_IP6__\n'",
+  'cat /proc/cpuinfo || true',
+  "printf '\n__END_CPUINFO__\n'",
+  'uname -srmo 2>/dev/null || true',
+  "printf '\n__END_UNAME__\n'",
+  'hostname 2>/dev/null || true'
+].join(' && ');
 
-// ================= 配置项 =================
-const PUBLIC_IPV4_URL = 'https://api.ipify.org?format=json';
-const PUBLIC_IPV6_URL = 'https://api64.ipify.org?format=json';
-const PUBLIC_IP_CACHE_TTL_MS = 60 * 1000;
-// ==========================================
-
-let lastCPU = null;
-let lastNet = null;
-let lastDisk = null;
-let lastTime = Date.now();
-let cachedIP = { ...getLocalIPs(), updatedAt: 0 };
-
-function readCPUStat() {
-    try {
-        const stat = fs.readFileSync('/proc/stat', 'utf8')
-            .split('\n')[0]
-            .split(/\s+/)
-            .slice(1)
-            .map(Number);
-        const idle = stat[3];
-        const total = stat.reduce((a, b) => a + b, 0);
-        if (!lastCPU) {
-            lastCPU = { idle, total };
-            return 0;
+function execRemote(sshClient, command) {
+  return new Promise((resolve, reject) => {
+    sshClient.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
+      if (err) return reject(err);
+      let stdout = '';
+      let stderr = '';
+      stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+      stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+      stream.on('close', (code) => {
+        if (code !== 0 && stdout.trim().length === 0) {
+          return reject(new Error(`Remote command failed: ${stderr.trim()}`));
         }
-        const idleDiff = idle - lastCPU.idle;
-        const totalDiff = total - lastCPU.total;
-        lastCPU = { idle, total };
-        return totalDiff === 0 ? 0 : ((1 - idleDiff / totalDiff) * 100);
-    } catch (e) {
-        return 0;
-    }
-}
-
-function readCPUInfo() {
-    let model = 'N/A', freq = 'N/A';
-    try {
-        const data = fs.readFileSync('/proc/cpuinfo', 'utf8');
-        const lines = data.split('\n');
-        for (const line of lines) {
-            if (line.startsWith('model name') && model === 'N/A') {
-                model = line.split(':')[1].trim();
-            }
-            if (line.startsWith('cpu MHz') && freq === 'N/A') {
-                freq = Math.round(parseFloat(line.split(':')[1])) + ' MHz';
-            }
-        }
-    } catch (e) {}
-    // 核心数改用 Node.js os 模块获取，确保准确
-    const cores = os.cpus().length;
-    return { model, freq, cores };
-}
-
-function readMem() {
-    try {
-        const data = fs.readFileSync('/proc/meminfo', 'utf8');
-        let mt = 0, ma = 0, st = 0, sf = 0;
-        const lines = data.split('\n');
-        for (const line of lines) {
-            if (line.startsWith('MemTotal')) mt = parseInt(line.split(/\s+/)[1]);
-            if (line.startsWith('MemAvailable')) ma = parseInt(line.split(/\s+/)[1]);
-            if (line.startsWith('SwapTotal')) st = parseInt(line.split(/\s+/)[1]);
-            if (line.startsWith('SwapFree')) sf = parseInt(line.split(/\s+/)[1]);
-        }
-        return {
-            memUsed: (mt - ma) / 1024,
-            memTotal: mt / 1024,
-            swapUsed: (st - sf) / 1024,
-            swapTotal: st / 1024
-        };
-    } catch (e) {
-        return { memUsed: 0, memTotal: 0, swapUsed: 0, swapTotal: 0 };
-    }
-}
-
-function parseDiskDevices() {
-    try {
-        const output = execSync('df -kP -x tmpfs -x devtmpfs -x squashfs -x overlay', { encoding: 'utf8', timeout: 2000 });
-        const lines = output.trim().split('\n');
-        lines.shift();
-        return lines.map((line, index) => {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length < 6) return null;
-            const [filesystem, blocks, used, available, usePercent, mountpoint] = parts;
-            const totalGB = Number(blocks) / 1024 / 1024;
-            const usedGB = Number(used) / 1024 / 1024;
-            const percent = parseInt(usePercent.replace('%', ''), 10) || 0;
-            return {
-                id: `disk-${index}`,
-                filesystem,
-                mountpoint,
-                usedGB: Number(usedGB.toFixed(1)),
-                totalGB: Number(totalGB.toFixed(1)),
-                percent,
-                usageLabel: `${percent}%`
-            };
-        }).filter(Boolean);
-    } catch (e) {
-        return [];
-    }
-}
-
-function readDisk() {
-    try {
-        const devices = parseDiskDevices();
-        const total = devices.reduce((sum, device) => sum + device.totalGB, 0);
-        const used = devices.reduce((sum, device) => sum + device.usedGB, 0);
-
-        let readKBps = 0, writeKBps = 0;
-        try {
-            const data = fs.readFileSync('/proc/diskstats', 'utf8');
-            const lines = data.split('\n');
-            let rs = 0, ws = 0;
-            for (const line of lines) {
-                const p = line.trim().split(/\s+/);
-                if (p.length > 13 && (p[2].startsWith('sd') || p[2].startsWith('vd') || p[2].startsWith('nvme'))) {
-                    rs += Number(p[5]) || 0;
-                    ws += Number(p[9]) || 0;
-                }
-            }
-            const now = Date.now();
-            if (!lastDisk) {
-                lastDisk = { rs, ws, time: now };
-            } else {
-                const dt = (now - lastDisk.time) / 1000;
-                if (dt > 0) {
-                    readKBps = ((rs - lastDisk.rs) * 512) / 1024 / dt;
-                    writeKBps = ((ws - lastDisk.ws) * 512) / 1024 / dt;
-                }
-                lastDisk = { rs, ws, time: now };
-            }
-        } catch (_) {}
-        return { used, total, readKBps, writeKBps, devices };
-    } catch (e) {
-        return { used: 0, total: 0, readKBps: 0, writeKBps: 0, devices: [] };
-    }
-}
-
-function readNet() {
-    try {
-        const now = Date.now();
-        const data = fs.readFileSync('/proc/net/dev', 'utf8');
-        let rx = 0, tx = 0;
-        const lines = data.split('\n');
-        for (const line of lines) {
-            const cleaned = line.replace(':', ' ');
-            const parts = cleaned.trim().split(/\s+/);
-            if (parts.length < 17) continue;
-            const iface = parts[0];
-            if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) continue;
-            const rxBytes = Number(parts[1]) || 0;
-            const txBytes = Number(parts[9]) || 0;
-            rx += rxBytes;
-            tx += txBytes;
-        }
-        if (!lastNet) {
-            lastNet = { rx, tx };
-            lastTime = now;
-            return { rx: 0, tx: 0 };
-        }
-        const dt = (now - lastTime) / 1000;
-        const prevNet = lastNet;
-        lastNet = { rx, tx };
-        lastTime = now;
-        if (dt <= 0) return { rx: 0, tx: 0 };
-        const rxRate = ((rx - prevNet.rx) * 8) / dt / 1024 / 1024;
-        const txRate = ((tx - prevNet.tx) * 8) / dt / 1024 / 1024;
-        return {
-            rx: Math.max(rxRate, 0),
-            tx: Math.max(txRate, 0)
-        };
-    } catch (e) {
-        return { rx: 0, tx: 0 };
-    }
-}
-
-function fetchJson(url, timeout = 3000) {
-    return new Promise((resolve, reject) => {
-        const req = https.get(url, { timeout }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(body));
-                } catch (err) {
-                    reject(err);
-                }
-            });
-        });
-        req.on('error', reject);
-        req.on('timeout', () => {
-            req.destroy(new Error('Request timed out'));
-        });
+        resolve(stdout);
+      });
     });
+  });
 }
 
-function getLocalIPs() {
-    const nets = os.networkInterfaces();
-    const result = { ipv4: 'N/A', ipv6: 'N/A' };
-    for (const iface of Object.values(nets)) {
-        if (!iface) continue;
-        for (const entry of iface) {
-            if (entry.internal) continue;
-            if (entry.family === 'IPv4' && result.ipv4 === 'N/A') {
-                result.ipv4 = entry.address;
-            }
-            if (entry.family === 'IPv6' && result.ipv6 === 'N/A') {
-                result.ipv6 = entry.address;
-            }
-            if (result.ipv4 !== 'N/A' && result.ipv6 !== 'N/A') {
-                return result;
-            }
-        }
-    }
-    return result;
+function splitSections(raw) {
+  const parts = raw.split('\n__END_CPU__\n');
+  const cpu = parts[0] || '';
+  const rest1 = parts[1] || '';
+  const [mem, rest2] = rest1.split('\n__END_MEM__\n');
+  const [disk, rest3] = (rest2 || '').split('\n__END_DISK__\n');
+  const [net, rest4] = (rest3 || '').split('\n__END_NET__\n');
+  const [ip4, rest5] = (rest4 || '').split('\n__END_IP4__\n');
+  const [ip6, rest6] = (rest5 || '').split('\n__END_IP6__\n');
+  const [cpuinfo, rest7] = (rest6 || '').split('\n__END_CPUINFO__\n');
+  const [unameInfo, hostname] = (rest7 || '').split('\n__END_UNAME__\n');
+  return { cpu, mem, disk, net, ip4, ip6, cpuinfo, unameInfo, hostname };
 }
 
-async function refreshIPCache() {
-    const now = Date.now();
-    if (now - cachedIP.updatedAt < PUBLIC_IP_CACHE_TTL_MS) {
-        return cachedIP;
-    }
-    const local = getLocalIPs();
-    try {
-        const ipv4Res = await fetchJson(PUBLIC_IPV4_URL);
-        if (ipv4Res && ipv4Res.ip) cachedIP.ipv4 = ipv4Res.ip;
-    } catch (_) {
-        cachedIP.ipv4 = cachedIP.ipv4 || local.ipv4;
-    }
-    try {
-        const ipv6Res = await fetchJson(PUBLIC_IPV6_URL);
-        if (ipv6Res && ipv6Res.ip) cachedIP.ipv6 = ipv6Res.ip;
-    } catch (_) {
-        cachedIP.ipv6 = cachedIP.ipv6 || local.ipv6;
-    }
-    if (cachedIP.ipv4 === 'N/A') cachedIP.ipv4 = local.ipv4;
-    if (cachedIP.ipv6 === 'N/A') cachedIP.ipv6 = local.ipv6;
-    cachedIP.updatedAt = now;
-    return cachedIP;
+function parseCpuStat(raw) {
+  const line = raw.split('\n').find((l) => l.startsWith('cpu '));
+  if (!line) return null;
+  const parts = line.trim().split(/\s+/).slice(1).map(Number);
+  const idle = (parts[3] || 0) + (parts[4] || 0);
+  const total = parts.reduce((sum, value) => sum + (Number(value) || 0), 0);
+  return { idle, total };
 }
 
-function getIP() {
-    if (Date.now() - cachedIP.updatedAt > PUBLIC_IP_CACHE_TTL_MS) {
-        refreshIPCache().catch(() => {});
-    }
+function parseMemory(raw) {
+  const result = { memUsed: 0, memTotal: 0, swapUsed: 0, swapTotal: 0 };
+  raw.split('\n').forEach((line) => {
+    if (line.startsWith('MemTotal')) result.memTotal = Number(line.split(/\s+/)[1]) / 1024;
+    if (line.startsWith('MemAvailable')) result.memUsed = result.memTotal - (Number(line.split(/\s+/)[1]) / 1024);
+    if (line.startsWith('SwapTotal')) result.swapTotal = Number(line.split(/\s+/)[1]) / 1024;
+    if (line.startsWith('SwapFree')) result.swapUsed = result.swapTotal - (Number(line.split(/\s+/)[1]) / 1024);
+  });
+  if (result.memUsed < 0) result.memUsed = 0;
+  if (result.swapUsed < 0) result.swapUsed = 0;
+  return result;
+}
+
+function parseDisk(raw) {
+  const lines = raw.trim().split('\n');
+  if (lines.length <= 1) return { total: 0, used: 0, devices: [] };
+  const devices = lines.slice(1).map((line) => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 6) return null;
+    const [filesystem, blocks, used, available, usePercent, mountpoint] = parts;
+    const totalGB = Number(blocks) / 1024 / 1024;
+    const usedGB = Number(used) / 1024 / 1024;
+    const percent = parseInt(usePercent.replace('%', ''), 10) || 0;
     return {
-        ipv4: cachedIP.ipv4,
-        ipv6: cachedIP.ipv6
+      id: `disk-${filesystem.replace(/[^a-zA-Z0-9_-]/g, '')}-${mountpoint.replace(/[^a-zA-Z0-9_-]/g, '')}`,
+      filesystem,
+      mountpoint,
+      usedGB: Number(usedGB.toFixed(1)),
+      totalGB: Number(totalGB.toFixed(1)),
+      percent,
+      usageLabel: `${percent}%`
     };
+  }).filter(Boolean);
+  return {
+    devices,
+    total: devices.reduce((sum, device) => sum + device.totalGB, 0),
+    used: devices.reduce((sum, device) => sum + device.usedGB, 0)
+  };
 }
 
-refreshIPCache().catch(() => {});
+function parseNet(raw) {
+  const lines = raw.split('\n');
+  let rx = 0;
+  let tx = 0;
+  lines.forEach((line) => {
+    const cleaned = line.replace(':', ' ');
+    const parts = cleaned.trim().split(/\s+/);
+    if (parts.length < 17) return;
+    const iface = parts[0];
+    if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) return;
+    rx += Number(parts[1]) || 0;
+    tx += Number(parts[9]) || 0;
+  });
+  return { rx, tx };
+}
 
-module.exports = function getStats() {
-    const cpuInfo = readCPUInfo();
-    return {
-        cpu: {
-            usage: readCPUStat(),
-            model: cpuInfo.model,
-            freq: cpuInfo.freq,
-            cores: cpuInfo.cores
-        },
-        ...readMem(),
-        disk: readDisk(),
-        net: readNet(),
-        ip: getIP()
-    };
-};
+function parseIp(raw) {
+  const lines = raw.trim().split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 4) continue;
+    const addr = parts[3].split('/')[0];
+    if (addr) return addr;
+  }
+  return 'N/A';
+}
+
+function parseCPUInfo(raw) {
+  let model = 'N/A';
+  let freq = 'N/A';
+  let cores = 0;
+  raw.split('\n').forEach((line) => {
+    if (line.startsWith('model name') && model === 'N/A') {
+      model = line.split(':')[1]?.trim() || 'N/A';
+    }
+    if (line.startsWith('cpu MHz') && freq === 'N/A') {
+      freq = Math.round(Number(line.split(':')[1]) || 0) + ' MHz';
+    }
+    if (line.startsWith('processor')) {
+      cores += 1;
+    }
+  });
+  if (cores === 0 && model !== 'N/A') cores = 1;
+  return { model, freq, cores };
+}
+
+function parseUname(raw) {
+  return raw.trim() || 'N/A';
+}
+
+function computeCpuUsage(current, previous) {
+  if (!current || !previous || typeof previous.idle !== 'number' || typeof previous.total !== 'number') return 0;
+  const totalDiff = current.total - previous.total;
+  const idleDiff = current.idle - previous.idle;
+  if (totalDiff <= 0) return 0;
+  return Number(((1 - idleDiff / totalDiff) * 100).toFixed(1));
+}
+
+function computeNetRates(current, previous, elapsedSeconds) {
+  if (!previous || elapsedSeconds <= 0) return { rx: 0, tx: 0 };
+  return {
+    rx: Math.max(((current.rx - previous.rx) * 8) / elapsedSeconds / 1024 / 1024, 0),
+    tx: Math.max(((current.tx - previous.tx) * 8) / elapsedSeconds / 1024 / 1024, 0)
+  };
+}
+
+async function getRemoteStats(sshClient, previous = {}) {
+  const raw = await execRemote(sshClient, STAT_COMMAND);
+  const sections = splitSections(raw);
+  const cpuStat = parseCpuStat(sections.cpu);
+  const mem = parseMemory(sections.mem);
+  const disk = parseDisk(sections.disk);
+  const netValues = parseNet(sections.net);
+  const ipv4 = parseIp(sections.ip4);
+  const ipv6 = parseIp(sections.ip6);
+  const cpuInfo = parseCPUInfo(sections.cpuinfo);
+  const osInfo = parseUname(sections.unameInfo);
+  const hostname = sections.hostname.trim() || 'N/A';
+  const now = Date.now();
+  const elapsed = previous.timestamp ? (now - previous.timestamp) / 1000 : 0;
+  const cpuUsage = computeCpuUsage(cpuStat, previous.cpuStat);
+  const net = computeNetRates(netValues, previous.netValues, elapsed);
+
+  return {
+    stats: {
+      cpu: {
+        usage: cpuUsage,
+        model: cpuInfo.model,
+        freq: cpuInfo.freq,
+        cores: cpuInfo.cores
+      },
+      ...mem,
+      disk,
+      net,
+      ip: { ipv4, ipv6 },
+      host: { hostname, os: osInfo }
+    },
+    state: {
+      cpuStat,
+      netValues,
+      timestamp: now
+    }
+  };
+}
+
+module.exports = { getRemoteStats };

@@ -3,7 +3,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
 const path = require('path');
-const getStats = require('./stats');
+const { getRemoteStats } = require('./stats');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -28,6 +28,8 @@ wss.on('connection', (ws, req) => {
     let sshStream = null;
     let sftpStream = null;
     let statsTimer = null;
+    let statsRunning = false;
+    let remoteStatsState = {};
 
     const sendJSON = (obj) => {
         if (ws.readyState === ws.OPEN) {
@@ -38,11 +40,18 @@ wss.on('connection', (ws, req) => {
     // 启动实时监控推送
     function startStatsPush() {
         if (statsTimer) return;
-        statsTimer = setInterval(() => {
-            if (ws.readyState !== ws.OPEN) return;
+        statsTimer = setInterval(async () => {
+            if (ws.readyState !== ws.OPEN || !sshClient || statsRunning) return;
+            statsRunning = true;
             try {
-                ws.send(JSON.stringify({ type: 'stats', data: getStats() }));
-            } catch (_) {}
+                const result = await getRemoteStats(sshClient, remoteStatsState);
+                remoteStatsState = result.state;
+                sendJSON({ type: 'stats', data: result.stats });
+            } catch (err) {
+                console.error('[STATS] 读取远程统计失败:', err.message);
+            } finally {
+                statsRunning = false;
+            }
         }, 1000);
     }
 
@@ -52,6 +61,8 @@ wss.on('connection', (ws, req) => {
             clearInterval(statsTimer);
             statsTimer = null;
         }
+        statsRunning = false;
+        remoteStatsState = {};
     }
 
     const cleanup = () => {
