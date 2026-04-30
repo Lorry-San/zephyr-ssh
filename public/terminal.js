@@ -46,6 +46,7 @@ const fmList = $('#fmList');
 const fmEditorModal = $('#fmEditorModal');
 const fmEditorTitle = $('#fmEditorTitle');
 const fmEditorTextarea = $('#fmEditorTextarea');
+const fmEditorMinimap = $('#fmEditorMinimap');
 const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
@@ -488,11 +489,51 @@ function updateEditorStatus() {
     const text = fmEditorTextarea.value || '';
     const lines = text.length ? text.split(/\r\n|\r|\n/).length : 1;
     fmEditorStatus.textContent = `${lines} 行 · ${text.length} 字符 · ${editorRawBytes?.length || 0} bytes`;
+    updateEditorMinimap();
+}
+
+function classifyMinimapLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return 'blank';
+    if (/^(\/\/|#|\/\*|\*|<!--)/.test(trimmed)) return 'comment';
+    if (/^(class|function|const|let|var|import|export|def|async|if|for|while|switch|try|catch)\b/.test(trimmed)) return 'keyword';
+    if (/[{}()[\]]/.test(trimmed)) return 'structure';
+    return 'text';
+}
+
+function updateEditorMinimap() {
+    if (!fmEditorMinimap) return;
+    const lines = (fmEditorTextarea.value || '').split(/\r\n|\r|\n/);
+    const maxLines = 220;
+    const step = Math.max(1, Math.ceil(lines.length / maxLines));
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i += step) {
+        const sample = lines.slice(i, i + step).find(Boolean) || '';
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = `fm-minimap-line ${classifyMinimapLine(sample)}`;
+        row.dataset.line = String(i);
+        row.style.width = `${Math.min(100, Math.max(12, sample.trim().length * 2.2))}%`;
+        row.setAttribute('aria-label', `跳转到第 ${i + 1} 行`);
+        frag.appendChild(row);
+    }
+    fmEditorMinimap.replaceChildren(frag);
+    updateEditorMinimapViewport();
+}
+
+function updateEditorMinimapViewport() {
+    if (!fmEditorMinimap || !fmEditorTextarea) return;
+    const maxScroll = Math.max(1, fmEditorTextarea.scrollHeight - fmEditorTextarea.clientHeight);
+    const ratio = fmEditorTextarea.scrollTop / maxScroll;
+    const viewportRatio = Math.min(1, fmEditorTextarea.clientHeight / Math.max(fmEditorTextarea.scrollHeight, 1));
+    fmEditorMinimap.style.setProperty('--minimap-view-top', `${ratio * 100}%`);
+    fmEditorMinimap.style.setProperty('--minimap-view-height', `${Math.max(10, viewportRatio * 100)}%`);
 }
 
 function applyEditorOptions() {
     fmEditorTextarea.wrap = fmEditorWrap.checked ? 'soft' : 'off';
     fmEditorTextarea.style.tabSize = fmEditorTabSize.value;
+    updateEditorMinimap();
 }
 
 function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
@@ -511,6 +552,7 @@ function openEditor(filePath) {
     fmEditorTitle.textContent = `编辑: ${filePath}`;
     fmEditorStatus.textContent = '读取中...';
     fmEditorTextarea.value = '';
+    updateEditorMinimap();
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
 }
 fmEditorCloseBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
@@ -544,6 +586,17 @@ fmEditorLineEnding.addEventListener('change', updateEditorStatus);
 fmEditorTabSize.addEventListener('change', applyEditorOptions);
 fmEditorWrap.addEventListener('change', applyEditorOptions);
 fmEditorTextarea.addEventListener('input', updateEditorStatus);
+fmEditorTextarea.addEventListener('scroll', updateEditorMinimapViewport, { passive: true });
+fmEditorMinimap?.addEventListener('click', (e) => {
+    const lineButton = e.target.closest('.fm-minimap-line');
+    if (!lineButton) return;
+    const lines = (fmEditorTextarea.value || '').split(/\r\n|\r|\n/).length || 1;
+    const line = Number(lineButton.dataset.line) || 0;
+    const ratio = Math.min(1, Math.max(0, line / Math.max(1, lines - 1)));
+    fmEditorTextarea.scrollTop = ratio * Math.max(0, fmEditorTextarea.scrollHeight - fmEditorTextarea.clientHeight);
+    fmEditorTextarea.focus();
+    updateEditorMinimapViewport();
+});
 fmEditorTextarea.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
     e.preventDefault();
@@ -553,6 +606,11 @@ fmEditorTextarea.addEventListener('keydown', (e) => {
     fmEditorTextarea.selectionStart = fmEditorTextarea.selectionEnd = selectionStart + tab.length;
     updateEditorStatus();
 });
+
+if (window.ResizeObserver && fmEditorTextarea) {
+    const editorResizeObserver = new ResizeObserver(updateEditorMinimapViewport);
+    editorResizeObserver.observe(fmEditorTextarea);
+}
 
 // ---------- SFTP 消息处理 ----------
 function handleSFTPMessage(msg) {
