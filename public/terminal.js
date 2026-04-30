@@ -372,7 +372,7 @@ function initCharts() {
 
     const commonDoughnut = {
         type: 'doughnut',
-        data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.05)'], borderWidth: 0 }] },
+        data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.12)'], borderWidth: 0 }] },
         options: {
             circumference: 270,
             rotation: 225,
@@ -421,7 +421,7 @@ function updateDoughnut(id, value) {
     if (chart.data.datasets[0].data[0] === p) return; // 无变化不更新
     chart.data.datasets[0].data = [p, 100 - p];
     const color = p < 50 ? '#3fb950' : p < 80 ? '#d2991d' : '#f85149';
-    chart.data.datasets[0].backgroundColor = [color, 'rgba(255,255,255,0.05)'];
+    chart.data.datasets[0].backgroundColor = [color, 'rgba(255,255,255,0.12)'];
     chart.update('none');
 }
 
@@ -437,16 +437,10 @@ function updateLine(id, value) {
 function renderStats(d) {
     const cpuUsage = safeVal(d.cpu?.usage);
     const cpuText = `${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'} · ${d.cpu?.cores || 0}核`;
-    const hostName = d.host?.hostname || 'N/A';
-    const hostOS = d.host?.os || 'N/A';
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
     const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
     const swapUsedGB = (safeVal(d.swapUsed) / 1024).toFixed(1);
     const swapTotalGB = (safeVal(d.swapTotal) / 1024).toFixed(1);
-    const diskUsed = safeVal(d.disk?.used).toFixed(1);
-    const diskTotal = safeVal(d.disk?.total).toFixed(1);
-    const readKBps = safeVal(d.disk?.readKBps).toFixed(0);
-    const writeKBps = safeVal(d.disk?.writeKBps).toFixed(0);
     const rxMbps = safeVal(d.net?.rx).toFixed(1);
     const txMbps = safeVal(d.net?.tx).toFixed(1);
     const ipv4 = d.ip?.ipv4 || 'N/A';
@@ -459,6 +453,7 @@ function renderStats(d) {
                 <div class="doughnut-text">${device.usedGB} / ${device.totalGB} GB</div>
                 <div class="doughnut-sub">${device.filesystem}</div>
                 <div class="doughnut-sub">已用 ${device.usageLabel}</div>
+                <div class="doughnut-sub">读 ${device.readKBps} KB/s · 写 ${device.writeKBps} KB/s</div>
             </div>
             <div class="doughnut-wrap"><canvas id="${device.id}"></canvas></div>
         </div>
@@ -466,12 +461,16 @@ function renderStats(d) {
 
     infoBody.innerHTML = `
         <div class="doughnut-row">
-            <div class="doughnut-item full-width">
-                <div class="doughnut-label">CPU</div>
+            <div class="doughnut-item disk-card full-width">
+                <div class="disk-card-meta">
+                    <div class="doughnut-label">CPU</div>
+                    <div class="doughnut-text">${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'}</div>
+                    <div class="doughnut-sub">${d.cpu?.cores || 0} 核心</div>
+                    <div class="doughnut-sub">${hostName} · ${hostOS}</div>
+                </div>
                 <div class="doughnut-wrap"><canvas id="cpuDoughnut"></canvas></div>
                 <div class="doughnut-text">${cpuUsage.toFixed(1)}%</div>
                 <div class="doughnut-sub">${cpuText}</div>
-                <div class="doughnut-sub">${hostName} · ${hostOS}</div>
             </div>
         </div>
         <div class="doughnut-row two-col">
@@ -486,19 +485,9 @@ function renderStats(d) {
                 <div class="doughnut-text">${swapUsedGB} / ${swapTotalGB} GB</div>
             </div>
         </div>
-        <div class="doughnut-row">
-            <div class="doughnut-item full-width">
-                <div class="doughnut-label">磁盘</div>
-                <div class="doughnut-wrap"><canvas id="diskDoughnut"></canvas></div>
-                <div class="doughnut-text">${diskUsed} / ${diskTotal} GB</div>
-                <div class="doughnut-sub">读 ${readKBps} KB/s · 写 ${writeKBps} KB/s</div>
-                <div class="sparkline-row">
-                    <canvas id="diskReadLine" data-color="#f0883e" class="line-canvas" height="30"></canvas>
-                    <canvas id="diskWriteLine" data-color="#d2991d" class="line-canvas" height="30"></canvas>
-                </div>
-            </div>
+        <div class="doughnut-row disk-card-row">
+            ${diskDeviceCards}
         </div>
-        ${diskDeviceCards ? `<div class="doughnut-row disk-card-row">${diskDeviceCards}</div>` : ''}
         <div class="doughnut-row two-col">
             <div class="doughnut-item">
                 <div class="doughnut-label">下载</div>
@@ -526,13 +515,10 @@ function renderStats(d) {
     updateDoughnut('cpuDoughnut', cpuUsage);
     updateDoughnut('ramDoughnut', (safeVal(d.memUsed) / safeVal(d.memTotal)) * 100);
     updateDoughnut('swapDoughnut', safeVal(d.swapTotal) ? (safeVal(d.swapUsed) / safeVal(d.swapTotal)) * 100 : 0);
-    updateDoughnut('diskDoughnut', (safeVal(d.disk?.used) / safeVal(d.disk?.total)) * 100);
     diskDevices.forEach(device => updateDoughnut(device.id, device.percent));
 
     updateLine('rxLine', rxMbps);
     updateLine('txLine', txMbps);
-    updateLine('diskReadLine', readKBps);
-    updateLine('diskWriteLine', writeKBps);
 }
 
 infoBtn.addEventListener('click', () => {

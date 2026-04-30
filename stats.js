@@ -5,11 +5,13 @@ const STAT_COMMAND = [
   "printf '\n__END_MEM__\n'",
   'df -kP -x tmpfs -x devtmpfs -x squashfs -x overlay || true',
   "printf '\n__END_DISK__\n'",
+  'cat /proc/diskstats || true',
+  "printf '\n__END_DISKSTATS__\n'",
   'cat /proc/net/dev || true',
   "printf '\n__END_NET__\n'",
-  'ip -4 -o addr show scope global 2>/dev/null || true',
+  'curl -4fsS --connect-timeout 3 https://api.ipify.org || true',
   "printf '\n__END_IP4__\n'",
-  'ip -6 -o addr show scope global 2>/dev/null || true',
+  'curl -6fsS --connect-timeout 3 https://api.ipify.org || true',
   "printf '\n__END_IP6__\n'",
   'cat /proc/cpuinfo || true',
   "printf '\n__END_CPUINFO__\n'",
@@ -42,12 +44,13 @@ function splitSections(raw) {
   const rest1 = parts[1] || '';
   const [mem, rest2] = rest1.split('\n__END_MEM__\n');
   const [disk, rest3] = (rest2 || '').split('\n__END_DISK__\n');
-  const [net, rest4] = (rest3 || '').split('\n__END_NET__\n');
-  const [ip4, rest5] = (rest4 || '').split('\n__END_IP4__\n');
-  const [ip6, rest6] = (rest5 || '').split('\n__END_IP6__\n');
-  const [cpuinfo, rest7] = (rest6 || '').split('\n__END_CPUINFO__\n');
-  const [unameInfo, hostname] = (rest7 || '').split('\n__END_UNAME__\n');
-  return { cpu, mem, disk, net, ip4, ip6, cpuinfo, unameInfo, hostname };
+  const [diskstats, rest4] = (rest3 || '').split('\n__END_DISKSTATS__\n');
+  const [net, rest5] = (rest4 || '').split('\n__END_NET__\n');
+  const [ip4, rest6] = (rest5 || '').split('\n__END_IP4__\n');
+  const [ip6, rest7] = (rest6 || '').split('\n__END_IP6__\n');
+  const [cpuinfo, rest8] = (rest7 || '').split('\n__END_CPUINFO__\n');
+  const [unameInfo, hostname] = (rest8 || '').split('\n__END_UNAME__\n');
+  return { cpu, mem, disk, diskstats, net, ip4, ip6, cpuinfo, unameInfo, hostname };
 }
 
 function parseCpuStat(raw) {
@@ -72,6 +75,14 @@ function parseMemory(raw) {
   return result;
 }
 
+function getDiskBaseName(filesystem) {
+  if (!filesystem) return null;
+  const name = filesystem.replace(/^\/dev\//, '').replace(/^mapper\//, '');
+  if (/^nvme\d+n\d+p\d+$/.test(name)) return name.replace(/p\d+$/, '');
+  if (/^mmcblk\d+p\d+$/.test(name)) return name.replace(/p\d+$/, '');
+  return name.replace(/\d+$/, '');
+}
+
 function parseDisk(raw) {
   const lines = raw.trim().split('\n');
   if (lines.length <= 1) return { total: 0, used: 0, devices: [] };
@@ -86,16 +97,53 @@ function parseDisk(raw) {
       id: `disk-${filesystem.replace(/[^a-zA-Z0-9_-]/g, '')}-${mountpoint.replace(/[^a-zA-Z0-9_-]/g, '')}`,
       filesystem,
       mountpoint,
+      diskName: getDiskBaseName(filesystem),
       usedGB: Number(usedGB.toFixed(1)),
       totalGB: Number(totalGB.toFixed(1)),
       percent,
-      usageLabel: `${percent}%`
+      usageLabel: `${percent}%`,
+      readKBps: 0,
+      writeKBps: 0
     };
   }).filter(Boolean);
   return {
     devices,
     total: devices.reduce((sum, device) => sum + device.totalGB, 0),
     used: devices.reduce((sum, device) => sum + device.usedGB, 0)
+  };
+}
+
+function parseDiskStats(raw) {
+  const stats = {};
+  raw.split('\n').forEach((line) => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 14) return;
+    const dev = parts[2];
+    const reads = Number(parts[5]) || 0;
+    const writes = Number(parts[9]) || 0;
+    stats[dev] = { reads, writes };
+  });
+  return stats;
+}
+
+function computeDiskRates(current, diskStats, previousDiskStats = {}, elapsedSeconds) {
+  const devices = current.devices.map((device) => {
+    const stats = device.diskName ? diskStats[device.diskName] : null;
+    const prevStats = device.diskName ? previousDiskStats[device.diskName] : null;
+    const readDiff = Math.max(0, (stats?.reads || 0) - (prevStats?.reads || 0));
+    const writeDiff = Math.max(0, (stats?.writes || 0) - (prevStats?.writes || 0));
+    const readKBps = elapsedSeconds > 0 ? readDiff / 2 / elapsedSeconds : 0;
+    const writeKBps = elapsedSeconds > 0 ? writeDiff / 2 / elapsedSeconds : 0;
+    return {
+      ...device,
+      readKBps: Number(readKBps.toFixed(1)),
+      writeKBps: Number(writeKBps.toFixed(1))
+    };
+  });
+  return {
+    devices,
+    total: current.total,
+    used: current.used
   };
 }
 
@@ -116,14 +164,19 @@ function parseNet(raw) {
 }
 
 function parseIp(raw) {
-  const lines = raw.trim().split('\n');
+  const value = raw.trim();
+  if (!value) return 'N/A';
+  const lines = value.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed) || /:/g.test(trimmed)) {
+      return trimmed;
+    }
     const parts = trimmed.split(/\s+/);
-    if (parts.length < 4) continue;
-    const addr = parts[3].split('/')[0];
-    if (addr) return addr;
+    if (parts.length >= 4 && parts[3] && parts[3].includes('/')) {
+      return parts[3].split('/')[0];
+    }
   }
   return 'N/A';
 }
@@ -172,7 +225,8 @@ async function getRemoteStats(sshClient, previous = {}) {
   const sections = splitSections(raw);
   const cpuStat = parseCpuStat(sections.cpu);
   const mem = parseMemory(sections.mem);
-  const disk = parseDisk(sections.disk);
+  const rawDisk = parseDisk(sections.disk);
+  const diskStats = parseDiskStats(sections.diskstats);
   const netValues = parseNet(sections.net);
   const ipv4 = parseIp(sections.ip4);
   const ipv6 = parseIp(sections.ip6);
@@ -181,6 +235,7 @@ async function getRemoteStats(sshClient, previous = {}) {
   const hostname = sections.hostname.trim() || 'N/A';
   const now = Date.now();
   const elapsed = previous.timestamp ? (now - previous.timestamp) / 1000 : 0;
+  const disk = computeDiskRates(rawDisk, diskStats, previous.diskStats, elapsed);
   const cpuUsage = computeCpuUsage(cpuStat, previous.cpuStat);
   const net = computeNetRates(netValues, previous.netValues, elapsed);
 
@@ -201,6 +256,7 @@ async function getRemoteStats(sshClient, previous = {}) {
     state: {
       cpuStat,
       netValues,
+      diskStats,
       timestamp: now
     }
   };
