@@ -67,7 +67,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表实例管理
 let chartInstances = {};
-let terminalAutoScrollObserver = null;
+let shouldAutoScroll = true;
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -444,8 +444,15 @@ function getTerminalScrollElement() {
     return wtermWrapper;
 }
 
+function isTerminalAtBottom() {
+    const el = getTerminalScrollElement();
+    if (!el) return true;
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 16;
+}
+
 function scrollTerminalToBottom() {
     try {
+        if (!shouldAutoScroll) return;
         if (typeof term?.scrollToBottom === 'function') {
             term.scrollToBottom();
             return;
@@ -461,45 +468,23 @@ function scrollTerminalToBottom() {
     } catch (_) {}
 }
 
-function startTerminalAutoScrollObserver() {
-    stopTerminalAutoScrollObserver();
-    const el = getTerminalScrollElement();
-    if (!el || typeof MutationObserver === 'undefined') return;
-    terminalAutoScrollObserver = new MutationObserver(() => {
-        requestAnimationFrame(() => scrollTerminalToBottom());
+function setupTerminalScrollHooks() {
+    const scrollTargets = [getTerminalScrollElement(), wtermWrapper];
+    scrollTargets.forEach((el) => {
+        if (!el) return;
+        el.addEventListener('scroll', () => {
+            shouldAutoScroll = isTerminalAtBottom();
+        }, { passive: true });
     });
-    terminalAutoScrollObserver.observe(el, { childList: true, subtree: true, characterData: true });
 }
 
-function stopTerminalAutoScrollObserver() {
-    if (terminalAutoScrollObserver) {
-        terminalAutoScrollObserver.disconnect();
-        terminalAutoScrollObserver = null;
-    }
-}
-
-function autoScrollTerminal() {
-    try {
-        if (typeof term?.scrollToBottom === 'function') {
-            term.scrollToBottom();
-            return;
-        }
-        if (term?._core?.viewport?.scrollToBottom) {
-            term._core.viewport.scrollToBottom();
-            return;
-        }
-        if (term?._core?.viewport?.element) {
-            const el = term._core.viewport.element;
-            el.scrollTop = el.scrollHeight;
-            return;
-        }
-        const root = wtermWrapper.querySelector('[data-wterm-root]');
-        if (root) {
-            root.scrollTop = root.scrollHeight;
-            return;
-        }
-        wtermWrapper.scrollTop = wtermWrapper.scrollHeight;
-    } catch (_) {}
+function scheduleTerminalScrollToBottom() {
+    if (!shouldAutoScroll) return;
+    if (terminalScrollTimeout) return;
+    terminalScrollTimeout = window.setTimeout(() => {
+        terminalScrollTimeout = null;
+        scrollTerminalToBottom();
+    }, 25);
 }
 
 function renderStats(d) {
@@ -717,7 +702,7 @@ async function initWTerm() {
         ro.observe(wtermWrapper);
     }
     window.addEventListener('resize', observeResize);
-    startTerminalAutoScrollObserver();
+    setupTerminalScrollHooks();
 }
 
 // ---------- WebSocket 连接 ----------
@@ -753,7 +738,11 @@ function connectWebSocket() {
                         resolve(ws);
                         break;
                     case 'data':
-                        if (term?.write) term.write(msg.data);
+                        if (term?.write) {
+                            const nearBottom = isTerminalAtBottom();
+                            term.write(msg.data);
+                            if (nearBottom) scheduleTerminalScrollToBottom();
+                        }
                         break;
                     case 'error':
                         setStatus('error', msg.message);
@@ -773,7 +762,6 @@ function connectWebSocket() {
         ws.addEventListener('close', (e) => {
             clearTimeout(timeout);
             wsConnection = null;
-            stopTerminalAutoScrollObserver();
             if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
             if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
         });
