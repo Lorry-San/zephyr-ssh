@@ -854,7 +854,7 @@ function resumeTerminalAutoScrollAfterInputIdle() {
     isTerminalInputActive = false;
 
     const atBottom = isTerminalAtBottom();
-    shouldAutoScroll = terminalUserScrolledDuringInput ? atBottom : (terminalAutoScrollResumeWanted || atBottom);
+    shouldAutoScroll = terminalUserScrolledDuringInput ? atBottom : terminalAutoScrollResumeWanted;
     terminalAutoScrollResumeWanted = shouldAutoScroll;
     terminalUserScrolledDuringInput = false;
 
@@ -1501,19 +1501,28 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) {
+                            const scrollEl = getTerminalScrollElement();
+                            const savedScrollTop = scrollEl?.scrollTop ?? 0;
                             const nearBottom = isTerminalAtBottom();
+                            
                             isTerminalRenderingOutput = true;
                             try {
                                 term.write(msg.data);
                             } finally {
                                 requestAnimationFrame(() => { isTerminalRenderingOutput = false; });
                             }
+                            
+                            // 如果正在输入，保持滚动位置不变
+                            if (isTerminalInputActive && scrollEl) {
+                                scrollEl.scrollTop = savedScrollTop;
+                            }
+                            
                             const hasLineBreak = /[\r\n]/.test(msg.data || '');
                             const isInputEcho = terminalPendingScrollAfterInput && msg.data && msg.data.length <= 8;
-                            const shouldFollowOutput = nearBottom && !isInputEcho;
+                            const shouldFollowOutput = nearBottom && !isInputEcho && !isTerminalInputActive;
                             if (terminalPendingScrollAfterInput && hasLineBreak) {
                                 terminalPendingScrollAfterInput = false;
-                                terminalAutoScrollResumeWanted = terminalAutoScrollResumeWanted || nearBottom;
+                                terminalAutoScrollResumeWanted = nearBottom;
                             }
                             if (shouldFollowOutput) scheduleTerminalScrollToBottom();
                         }
