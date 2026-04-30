@@ -372,7 +372,7 @@ function initCharts() {
 
     const commonDoughnut = {
         type: 'doughnut',
-        data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.12)'], borderWidth: 0 }] },
+        data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(139,148,158,0.25)'], borderWidth: 0 }] },
         options: {
             circumference: 270,
             rotation: 225,
@@ -436,7 +436,6 @@ function updateLine(id, value) {
 
 function renderStats(d) {
     const cpuUsage = safeVal(d.cpu?.usage);
-    const cpuText = `${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'} · ${d.cpu?.cores || 0}核`;
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
     const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
     const swapUsedGB = (safeVal(d.swapUsed) / 1024).toFixed(1);
@@ -466,13 +465,11 @@ function renderStats(d) {
             <div class="doughnut-item disk-card full-width">
                 <div class="disk-card-meta">
                     <div class="doughnut-label">CPU</div>
-                    <div class="doughnut-text">${d.cpu?.model || 'N/A'} @ ${d.cpu?.freq || 'N/A'}</div>
+                    <div class="doughnut-text">${d.cpu?.model || 'N/A'}</div>
+                    <div class="doughnut-sub">${d.cpu?.freq || 'N/A'}</div>
                     <div class="doughnut-sub">${d.cpu?.cores || 0} 核心</div>
-                    <div class="doughnut-sub">${hostName} · ${hostOS}</div>
                 </div>
                 <div class="doughnut-wrap"><canvas id="cpuDoughnut"></canvas></div>
-                <div class="doughnut-text">${cpuUsage.toFixed(1)}%</div>
-                <div class="doughnut-sub">${cpuText}</div>
             </div>
         </div>
         <div class="doughnut-row two-col">
@@ -688,6 +685,7 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) term.write(msg.data);
+                        if (term?._core?.viewport) { term._core.viewport.scrollToBottom?.(); }
                         break;
                     case 'error':
                         setStatus('error', msg.message);
