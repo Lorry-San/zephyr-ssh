@@ -135,13 +135,17 @@ document.addEventListener('keydown', (e) => {
 // ---------- 文件管理器 ----------
 function showFileManager() {
     fileManager.classList.add('open');
+    fileBtn.classList.add('active');
     if (!sftpReady) {
         initSFTP();
     } else {
         refreshFileList();
     }
 }
-function hideFileManager() { fileManager.classList.remove('open'); }
+function hideFileManager() {
+    fileManager.classList.remove('open');
+    fileBtn.classList.remove('active');
+}
 fileBtn.addEventListener('click', () => {
     if (fileManager.classList.contains('open')) hideFileManager();
     else showFileManager();
@@ -640,15 +644,37 @@ function renderStats(d) {
     updateLine('txLine', txMbps);
 }
 
-infoBtn.addEventListener('click', () => {
+function showInfoModal() {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
         alert('请先连接 SSH');
         return;
     }
     infoModal.style.display = 'flex';
-});
+    // display 从 none 切换为 flex 后，下一帧再加 open，确保浏览器能播放开启动画。
+    requestAnimationFrame(() => {
+        infoModal.classList.add('open');
+        infoBtn.classList.add('active');
+    });
+}
 
-infoCloseBtn.addEventListener('click', () => { infoModal.style.display = 'none'; });
+function hideInfoModal() {
+    infoModal.classList.remove('open');
+    infoBtn.classList.remove('active');
+    window.setTimeout(() => {
+        if (!infoModal.classList.contains('open')) {
+            infoModal.style.display = 'none';
+        }
+    }, 280);
+}
+
+function toggleInfoModal() {
+    if (infoModal.classList.contains('open')) hideInfoModal();
+    else showInfoModal();
+}
+
+infoBtn.addEventListener('click', toggleInfoModal);
+
+infoCloseBtn.addEventListener('click', hideInfoModal);
 
 // ---------- 辅助键 / 终端输入 ----------
 const modifierState = { ctrl: false, alt: false, shift: false };
