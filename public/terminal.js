@@ -134,9 +134,9 @@ function updateFontSizeButtons() {
 }
 
 function getTerminalCharMetrics() {
-    const root = wtermWrapper.querySelector('[data-wterm-root]') || wtermWrapper;
+    const root = getTerminalScrollElement?.() || wtermWrapper;
     const computed = getComputedStyle(root);
-    const fontSize = parseFloat(computed.fontSize) || terminalFontSize;
+    const fontSize = terminalFontSize || parseFloat(computed.fontSize) || 14;
     const lineHeight = parseFloat(computed.lineHeight) || fontSize * 1.25;
     return {
         lineHeight,
@@ -163,6 +163,13 @@ function scheduleTerminalResize() {
 function applyTerminalFontSize(size, { persist = true } = {}) {
     terminalFontSize = clampTerminalFontSize(size);
     document.documentElement.style.setProperty('--terminal-font-size', `${terminalFontSize}px`);
+    wtermWrapper.style.fontSize = `${terminalFontSize}px`;
+    wtermWrapper.querySelectorAll('[data-wterm-root], [data-wterm-root] *').forEach((el) => {
+        el.style.fontSize = `${terminalFontSize}px`;
+        el.style.lineHeight = '1.25';
+    });
+    try { term?.setOption?.('fontSize', terminalFontSize); } catch (_) {}
+    try { term?.options && (term.options.fontSize = terminalFontSize); } catch (_) {}
     if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
     updateFontSizeButtons();
     scheduleTerminalResize();
@@ -177,10 +184,11 @@ function getTouchDistance(touches) {
 function setupTerminalPinchZoom() {
     wtermWrapper.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 2) return;
+        e.preventDefault();
         pinchStartDistance = getTouchDistance(e.touches);
         pinchStartFontSize = terminalFontSize;
         pinchLastAppliedFontSize = terminalFontSize;
-    }, { passive: true });
+    }, { passive: false });
 
     wtermWrapper.addEventListener('touchmove', (e) => {
         if (e.touches.length !== 2 || !pinchStartDistance) return;
@@ -238,6 +246,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- 文件管理器 ----------
 function showFileManager() {
+    ensureFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
     fileManager.classList.add('open');
     fileBtn.classList.add('active');
     if (!sftpReady) {
@@ -886,6 +895,7 @@ function showInfoModal() {
         alert('请先连接 SSH');
         return;
     }
+    ensureFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
     infoModal.style.display = 'flex';
     // display 从 none 切换为 flex 后，下一帧再加 open，确保浏览器能播放开启动画。
     requestAnimationFrame(() => {
@@ -935,14 +945,124 @@ function ensureFloatingPanel(panel, defaults = {}) {
     panelState.set(panel, { left, top, width, height });
 }
 
+function isCompactScreen() {
+    return window.matchMedia('(max-width: 700px), (pointer: coarse)').matches;
+}
+
+function getDefaultPanelOptions(panel) {
+    const parentRect = panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+    if (isCompactScreen()) {
+        return {
+            left: 8,
+            top: 44,
+            width: Math.max(280, parentRect.width - 16),
+            height: Math.max(300, parentRect.height - 58),
+        };
+    }
+    if (panel === fileManager) {
+        return { width: Math.min(parentRect.width * 0.72, 820), height: Math.min(parentRect.height * 0.68, 620), left: 16, top: 52 };
+    }
+    return { width: Math.min(480, parentRect.width - 24), height: Math.min(parentRect.height * 0.72, 620), top: 52 };
+}
+
 function clampPanel(panel) {
     const rect = panel.getBoundingClientRect();
     const parentRect = panel.parentElement.getBoundingClientRect();
-    const minVisible = 80;
+    const minVisible = isCompactScreen() ? 140 : 80;
     const left = Math.min(Math.max(rect.left - parentRect.left, -rect.width + minVisible), parentRect.width - minVisible);
     const top = Math.min(Math.max(rect.top - parentRect.top, 8), parentRect.height - minVisible);
     panel.style.left = `${left}px`;
     panel.style.top = `${top}px`;
+}
+
+function applyPanelLayout(panel, layout) {
+    if (!panel) return;
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const margin = isCompactScreen() ? 6 : 12;
+    const topbar = isCompactScreen() ? 38 : 52;
+    let left = margin;
+    let top = topbar;
+    let width = parentRect.width - margin * 2;
+    let height = parentRect.height - topbar - margin;
+
+    if (layout === 'half') {
+        width = parentRect.width;
+        height = Math.max(260, parentRect.height / 2);
+        left = 0;
+        top = parentRect.height - height;
+    } else if (layout === 'left-quarter') {
+        width = Math.max(260, parentRect.width / 4);
+        height = parentRect.height - topbar;
+        left = 0;
+        top = topbar;
+    } else if (layout === 'right-quarter') {
+        width = Math.max(260, parentRect.width / 4);
+        height = parentRect.height - topbar;
+        left = parentRect.width - width;
+        top = topbar;
+    }
+
+    Object.assign(panel.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        right: 'auto',
+        bottom: 'auto',
+        width: `${width}px`,
+        height: `${height}px`,
+    });
+    bringPanelToFront(panel);
+    clampPanel(panel);
+}
+
+let panelLayoutMenu = null;
+function closePanelLayoutMenu() {
+    panelLayoutMenu?.remove();
+    panelLayoutMenu = null;
+}
+
+function openPanelLayoutMenu(button, panel) {
+    closePanelLayoutMenu();
+    const menu = document.createElement('div');
+    menu.className = 'panel-layout-menu';
+    menu.innerHTML = `
+        <button data-layout="full">🟩 充满整个页面</button>
+        <button data-layout="half">⬛ 下半个页面</button>
+        <button data-layout="left-quarter">◧ 左侧 1/4</button>
+        <button data-layout="right-quarter">◨ 右侧 1/4</button>
+    `;
+    document.body.appendChild(menu);
+    const rect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2), window.innerWidth - menuRect.width - 8)}px`;
+    menu.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - menuRect.height - 8)}px`;
+    menu.addEventListener('click', (e) => {
+        const item = e.target.closest('[data-layout]');
+        if (!item) return;
+        applyPanelLayout(panel, item.dataset.layout);
+        closePanelLayoutMenu();
+    });
+    panelLayoutMenu = menu;
+}
+
+function setupPanelLayoutMenu() {
+    document.querySelectorAll('[data-layout-panel]').forEach((button) => {
+        const panel = document.getElementById(button.dataset.layoutPanel);
+        if (!panel) return;
+        button.addEventListener('pointerdown', (e) => e.stopPropagation());
+        button.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            bringPanelToFront(panel);
+            if (panelLayoutMenu) closePanelLayoutMenu();
+            else openPanelLayoutMenu(button, panel);
+        });
+    });
+    document.addEventListener('pointerdown', (e) => {
+        if (panelLayoutMenu && !e.target.closest('.panel-layout-menu') && !e.target.closest('[data-layout-panel]')) {
+            closePanelLayoutMenu();
+        }
+    });
+    window.addEventListener('resize', closePanelLayoutMenu);
 }
 
 function bringPanelToFront(panel) {
@@ -971,6 +1091,7 @@ function setupPanelDrag() {
             const startTop = panel.offsetTop;
 
             const onMove = (ev) => {
+                ev.preventDefault();
                 panel.style.left = `${startLeft + ev.clientX - startX}px`;
                 panel.style.top = `${startTop + ev.clientY - startY}px`;
                 panel.style.right = 'auto';
@@ -1004,10 +1125,12 @@ function setupPanelResize() {
             const startLeft = panel.offsetLeft;
             const edge = handle.dataset.resizeEdge || 'right';
             const parentRect = panel.parentElement.getBoundingClientRect();
-            const minWidth = Number(getComputedStyle(panel).minWidth.replace('px', '')) || 420;
-            const minHeight = Number(getComputedStyle(panel).minHeight.replace('px', '')) || 320;
+            const compact = isCompactScreen();
+            const minWidth = compact ? 260 : (Number(getComputedStyle(panel).minWidth.replace('px', '')) || 420);
+            const minHeight = compact ? 240 : (Number(getComputedStyle(panel).minHeight.replace('px', '')) || 320);
 
             const onMove = (ev) => {
+                ev.preventDefault();
                 let nextLeft = startLeft;
                 let nextWidth = startWidth + ev.clientX - startX;
                 if (edge === 'left') {
@@ -1041,8 +1164,9 @@ function setupPanelResize() {
     });
 }
 
-setupFloatingPanel(fileManager, { width: Math.min(window.innerWidth * 0.72, 820), height: Math.min(window.innerHeight * 0.68, 620), left: 16, top: 52 });
-setupFloatingPanel(infoModal, { width: 480, height: Math.min(window.innerHeight * 0.72, 620), top: 52 });
+setupFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
+setupFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
+setupPanelLayoutMenu();
 setupPanelDrag();
 setupPanelResize();
 window.addEventListener('resize', () => {
@@ -1156,6 +1280,7 @@ async function initWTerm() {
         else if (typeof term.on === 'function') term.on('data', data => sendData(data));
     }
     if (typeof term.init === 'function') await term.init();
+    applyTerminalFontSize(terminalFontSize, { persist: false });
 
     const observeResize = () => sendTerminalResize();
     if (window.ResizeObserver) {
