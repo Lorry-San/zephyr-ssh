@@ -565,12 +565,12 @@ body {
     cursor: pointer;
 }
 
-/* ===== 实时监控面板（全新圆环+曲线） ===== */
+/* ===== 实时监控面板 ===== */
 .info-modal {
     position: absolute;
     top: 40px;
     right: 10px;
-    width: 420px;
+    width: 480px;
     max-width: 95vw;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -580,8 +580,8 @@ body {
     display: none;
     flex-direction: column;
     overflow-y: auto;
-    animation: slideDown 0.2s ease-out;
     max-height: 90vh;
+    animation: slideDown 0.2s ease-out;
 }
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
@@ -597,80 +597,106 @@ body {
     font-weight: 600;
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 2;
 }
 .info-modal-body {
-    padding: 12px;
+    padding: 10px;
     overflow-y: auto;
 }
 
-/* 圆环卡片网格 */
-.stats-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 10px;
+/* 环形进度条行 */
+.doughnut-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
 }
-
-.stat-circle {
+.doughnut-row.two-col .doughnut-item {
+    flex: 1 1 calc(50% - 10px);
+    min-width: 140px;
+}
+.doughnut-item {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 14px 8px;
+    border-radius: 10px;
+    padding: 12px 10px;
     text-align: center;
-    transition: border-color 0.2s;
+    flex: 1;
+    position: relative;
 }
-.stat-circle:hover {
-    border-color: var(--accent);
-}
-
-.circle-title {
-    font-size: 11px;
+.doughnut-label {
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
-    text-transform: uppercase;
     margin-bottom: 6px;
 }
-
-.circle-value {
-    font-size: 24px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    margin-bottom: 4px;
+.doughnut-wrap {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto 6px;
+    position: relative;
 }
-
-.circle-sub {
+.doughnut-text {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--text);
+}
+.doughnut-sub {
     font-size: 11px;
     color: var(--text-secondary);
-    word-break: break-all;
+    margin-top: 4px;
 }
 
-/* IP 区块 */
-.ip-block {
+/* 小折线图行 */
+.sparkline-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: center;
+}
+.sparkline-row canvas {
+    flex: 1;
+    height: 30px !important;
+    max-width: 120px;
+}
+
+/* IP 信息区块 */
+.ip-section {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ip-box {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 8px 10px;
-    margin-bottom: 6px;
     font-family: var(--font-mono);
     font-size: 12px;
+    gap: 8px;
 }
-.ip-block span {
+.ip-box span {
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 40px;
+}
+.ip-box code {
     flex: 1;
-    margin-right: 8px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: var(--text);
 }
 .copy-ip-btn {
     background: none;
     border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
-    padding: 2px 8px;
+    padding: 2px 6px;
     font-size: 14px;
     color: var(--text);
     flex-shrink: 0;
@@ -680,52 +706,22 @@ body {
     background: var(--surface);
 }
 
-/* 网速摘要 */
-.net-summary {
-    display: flex;
-    justify-content: center;
-    gap: 16px;
-    font-size: 13px;
-    font-weight: 500;
-    margin: 8px 0 4px;
-    color: var(--text-secondary);
-}
-
-/* 图表容器 */
-.chart-container {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 0 2px 8px;
-}
-.chart-container canvas {
-    height: 130px !important;
-    width: 100% !important;
-    background: var(--bg);
-    border-radius: 8px;
-    border: 1px solid var(--border);
-}
-
-/* ===== 响应式调整 ===== */
-@media (max-width: 480px) {
-    .login-card {
-        padding: 24px 16px 18px;
-        border-radius: 12px;
-    }
-    .login-card h1 { font-size: 19px; }
-    .form-row { flex-direction: column; gap: 0; }
-    .form-row .form-group.port-group { flex: 1; }
-    .terminal-topbar { padding: 6px 10px; font-size: 11px; }
-    .tool-btn { padding: 3px 6px; font-size: 10px; min-width: 30px; }
-    .cmd-send-btn { padding: 4px 8px; font-size: 11px; }
+/* 响应式调整 */
+@media (max-width: 600px) {
     .info-modal {
         width: 100%;
         right: 0;
-        top: 40px;
         border-radius: 0;
         max-height: 80vh;
     }
-    .stats-grid {
-        grid-template-columns: 1fr 1fr;
+    .doughnut-row.two-col {
+        flex-direction: column;
+    }
+    .doughnut-wrap {
+        width: 80px;
+        height: 80px;
+    }
+    .doughnut-text {
+        font-size: 14px;
     }
 }
