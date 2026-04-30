@@ -68,15 +68,12 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 // 图表实例管理
 let chartInstances = {};
 let shouldAutoScroll = true;
-<<<<<<< HEAD
-=======
 let terminalScrollRaf = 0;
 let terminalScrollRetryTimer = 0;
 let terminalScrollListeners = [];
 let terminalMutationObserver = null;
 let terminalResizeObserver = null;
 let isProgrammaticScroll = false;
->>>>>>> 3dc6c8c (更新 terminal.js)
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -455,12 +452,6 @@ function getTerminalScrollElement() {
     return wtermWrapper;
 }
 
-<<<<<<< HEAD
-function isTerminalAtBottom() {
-    const el = getTerminalScrollElement();
-    if (!el) return true;
-    return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 16;
-=======
 function getTerminalBottomDistance(el = getTerminalScrollElement()) {
     if (!el) return 0;
     return el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -469,51 +460,16 @@ function getTerminalBottomDistance(el = getTerminalScrollElement()) {
 function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
     if (!el) return true;
     return getTerminalBottomDistance(el) <= threshold;
->>>>>>> 3dc6c8c (更新 terminal.js)
 }
 
 function scrollTerminalToBottom() {
     if (!shouldAutoScroll) return;
     try {
-<<<<<<< HEAD
-        if (!shouldAutoScroll) return;
-        if (typeof term?.scrollToBottom === 'function') {
-            term.scrollToBottom();
-            return;
-        }
-        if (term?._core?.viewport?.scrollToBottom) {
-            term._core.viewport.scrollToBottom();
-            return;
-        }
-=======
->>>>>>> 3dc6c8c (更新 terminal.js)
         const el = getTerminalScrollElement();
         if (el) {
             isProgrammaticScroll = true;
             el.scrollTop = el.scrollHeight;
         }
-<<<<<<< HEAD
-    } catch (_) {}
-}
-
-function setupTerminalScrollHooks() {
-    const scrollTargets = [getTerminalScrollElement(), wtermWrapper];
-    scrollTargets.forEach((el) => {
-        if (!el) return;
-        el.addEventListener('scroll', () => {
-            shouldAutoScroll = isTerminalAtBottom();
-        }, { passive: true });
-    });
-}
-
-function scheduleTerminalScrollToBottom() {
-    if (!shouldAutoScroll) return;
-    if (terminalScrollTimeout) return;
-    terminalScrollTimeout = window.setTimeout(() => {
-        terminalScrollTimeout = null;
-        scrollTerminalToBottom();
-    }, 25);
-=======
     } catch (_) {
         // 兼容兜底：如果后续 wterm 暴露稳定的公开滚动 API，则仍可使用。
         try { term?.scrollToBottom?.(); } catch (_) {}
@@ -596,7 +552,6 @@ function setupTerminalScrollHooks() {
     }
 
     scheduleTerminalScrollToBottom();
->>>>>>> 3dc6c8c (更新 terminal.js)
 }
 
 function renderStats(d) {
