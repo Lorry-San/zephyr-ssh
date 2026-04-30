@@ -67,6 +67,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表实例管理
 let chartInstances = {};
+let terminalAutoScrollObserver = null;
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -351,8 +352,10 @@ function destroyCharts() {
 const centerTextPlugin = {
     id: 'centerText',
     afterDraw(chart) {
-        const { ctx, chartArea: { left, top, right, bottom }, config: { type } } = chart;
-        if (type !== 'doughnut') return;
+        const { ctx, chartArea, config: { type } } = chart;
+        if (type !== 'doughnut' || !chartArea) return;
+        const { left, top, right, bottom } = chartArea;
+        if ([left, top, right, bottom].some((v) => typeof v !== 'number' || isNaN(v))) return;
         const centerX = (left + right) / 2;
         const centerY = (top + bottom) / 2;
         const value = chart.data.datasets[0].data[0] || 0;
@@ -421,7 +424,7 @@ function updateDoughnut(id, value) {
     if (chart.data.datasets[0].data[0] === p) return; // 无变化不更新
     chart.data.datasets[0].data = [p, 100 - p];
     const color = p < 50 ? '#3fb950' : p < 80 ? '#d2991d' : '#f85149';
-    chart.data.datasets[0].backgroundColor = [color, 'rgba(255,255,255,0.12)'];
+    chart.data.datasets[0].backgroundColor = [color, 'rgba(139,148,158,0.25)'];
     chart.update('none');
 }
 
@@ -432,6 +435,71 @@ function updateLine(id, value) {
     data.push(safeVal(value));
     if (data.length > 20) data.shift();
     chart.update('none');
+}
+
+function getTerminalScrollElement() {
+    if (term?._core?.viewport?.element) return term._core.viewport.element;
+    const root = wtermWrapper.querySelector('[data-wterm-root]');
+    if (root) return root;
+    return wtermWrapper;
+}
+
+function scrollTerminalToBottom() {
+    try {
+        if (typeof term?.scrollToBottom === 'function') {
+            term.scrollToBottom();
+            return;
+        }
+        if (term?._core?.viewport?.scrollToBottom) {
+            term._core.viewport.scrollToBottom();
+            return;
+        }
+        const el = getTerminalScrollElement();
+        if (el) {
+            el.scrollTop = el.scrollHeight;
+        }
+    } catch (_) {}
+}
+
+function startTerminalAutoScrollObserver() {
+    stopTerminalAutoScrollObserver();
+    const el = getTerminalScrollElement();
+    if (!el || typeof MutationObserver === 'undefined') return;
+    terminalAutoScrollObserver = new MutationObserver(() => {
+        requestAnimationFrame(() => scrollTerminalToBottom());
+    });
+    terminalAutoScrollObserver.observe(el, { childList: true, subtree: true, characterData: true });
+}
+
+function stopTerminalAutoScrollObserver() {
+    if (terminalAutoScrollObserver) {
+        terminalAutoScrollObserver.disconnect();
+        terminalAutoScrollObserver = null;
+    }
+}
+
+function autoScrollTerminal() {
+    try {
+        if (typeof term?.scrollToBottom === 'function') {
+            term.scrollToBottom();
+            return;
+        }
+        if (term?._core?.viewport?.scrollToBottom) {
+            term._core.viewport.scrollToBottom();
+            return;
+        }
+        if (term?._core?.viewport?.element) {
+            const el = term._core.viewport.element;
+            el.scrollTop = el.scrollHeight;
+            return;
+        }
+        const root = wtermWrapper.querySelector('[data-wterm-root]');
+        if (root) {
+            root.scrollTop = root.scrollHeight;
+            return;
+        }
+        wtermWrapper.scrollTop = wtermWrapper.scrollHeight;
+    } catch (_) {}
 }
 
 function renderStats(d) {
@@ -649,6 +717,7 @@ async function initWTerm() {
         ro.observe(wtermWrapper);
     }
     window.addEventListener('resize', observeResize);
+    startTerminalAutoScrollObserver();
 }
 
 // ---------- WebSocket 连接 ----------
@@ -685,7 +754,6 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) term.write(msg.data);
-                        if (term?._core?.viewport) { term._core.viewport.scrollToBottom?.(); }
                         break;
                     case 'error':
                         setStatus('error', msg.message);
@@ -705,6 +773,7 @@ function connectWebSocket() {
         ws.addEventListener('close', (e) => {
             clearTimeout(timeout);
             wsConnection = null;
+            stopTerminalAutoScrollObserver();
             if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
             if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
         });
@@ -719,6 +788,7 @@ function disconnect() {
         wsConnection.close(1000, '用户主动断开');
         wsConnection = null;
     }
+    stopTerminalAutoScrollObserver();
     if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
     setStatus('disconnected', '已断开');
     isConnected = false;
