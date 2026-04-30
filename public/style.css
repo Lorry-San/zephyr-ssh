@@ -655,6 +655,27 @@ body {
 .fm-editor-modal {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
     background: var(--surface); display: flex; flex-direction: column; z-index: 25; padding: 12px;
+    opacity: 0;
+    transform: translate3d(0, 24px, 0) scale(0.975);
+    filter: blur(8px);
+    pointer-events: none;
+    transition:
+        opacity 0.24s ease,
+        transform 0.34s cubic-bezier(0.16, 1, 0.3, 1),
+        filter 0.26s ease;
+    will-change: opacity, transform, filter;
+}
+.fm-editor-modal.open {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+    pointer-events: auto;
+}
+.fm-editor-modal.closing {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(0.985);
+    filter: blur(6px);
+    pointer-events: none;
 }
 .fm-editor-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; min-width: 0; }
 .fm-editor-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -726,6 +747,8 @@ body {
     background: color-mix(in srgb, var(--surface) 66%, transparent);
     overflow: hidden;
     cursor: pointer;
+    touch-action: none;
+    transition: width 0.22s ease, flex-basis 0.22s ease, opacity 0.18s ease, margin 0.22s ease;
 }
 .fm-editor-minimap::after {
     content: '';
@@ -735,9 +758,10 @@ body {
     top: var(--minimap-view-top);
     height: var(--minimap-view-height);
     min-height: 18px;
-    border: 1px solid rgba(88,166,255,0.35);
+    border: 1.5px solid rgba(88,166,255,0.62);
     border-radius: var(--radius-sm);
-    background: rgba(88,166,255,0.1);
+    background: rgba(88,166,255,0.14);
+    box-shadow: 0 0 0 999px rgba(13,17,23,0.08), 0 6px 16px rgba(0,0,0,0.2);
     pointer-events: none;
 }
 .fm-minimap-line {
@@ -755,6 +779,15 @@ body {
 .fm-minimap-line.keyword { background: var(--accent); opacity: 0.86; }
 .fm-minimap-line.structure { background: var(--warning); opacity: 0.68; }
 .fm-minimap-line:hover { opacity: 1; }
+.fm-editor-modal.minimap-hidden .fm-editor-minimap {
+    width: 0;
+    flex-basis: 0;
+    padding-inline: 0;
+    margin-left: -10px;
+    opacity: 0;
+    pointer-events: none;
+}
+.fm-editor-modal.minimap-hidden .fm-editor-code-shell { gap: 0; }
 .fm-editor-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .btn-secondary {
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
@@ -844,7 +877,9 @@ body {
         filter: none;
     }
     .file-manager.open,
-    .info-modal.open {
+    .info-modal.open,
+    .fm-editor-modal.open,
+    .fm-editor-modal.closing {
         transform: none;
         filter: none;
     }

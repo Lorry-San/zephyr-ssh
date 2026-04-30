@@ -47,6 +47,7 @@ const fmEditorModal = $('#fmEditorModal');
 const fmEditorTitle = $('#fmEditorTitle');
 const fmEditorTextarea = $('#fmEditorTextarea');
 const fmEditorMinimap = $('#fmEditorMinimap');
+const fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
 const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
@@ -73,6 +74,7 @@ let allFiles = [];
 let searchQuery = '';
 let editorFilePath = null;
 let editorRawBytes = null;
+let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
@@ -86,6 +88,8 @@ let terminalMutationObserver = null;
 let terminalResizeObserver = null;
 let isProgrammaticScroll = false;
 let terminalScrollLockUntil = 0;
+let terminalInputFreezeUntil = 0;
+let terminalInputFreezeTimer = 0;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -503,8 +507,11 @@ function classifyMinimapLine(line) {
 
 function updateEditorMinimap() {
     if (!fmEditorMinimap) return;
+    fmEditorModal.classList.toggle('minimap-hidden', editorMinimapHidden);
+    fmEditorMinimapToggle?.classList.toggle('active', !editorMinimapHidden);
+    if (editorMinimapHidden) return;
     const lines = (fmEditorTextarea.value || '').split(/\r\n|\r|\n/);
-    const maxLines = 220;
+    const maxLines = 420;
     const step = Math.max(1, Math.ceil(lines.length / maxLines));
     const frag = document.createDocumentFragment();
     for (let i = 0; i < lines.length; i += step) {
@@ -523,11 +530,39 @@ function updateEditorMinimap() {
 
 function updateEditorMinimapViewport() {
     if (!fmEditorMinimap || !fmEditorTextarea) return;
+    if (editorMinimapHidden) return;
     const maxScroll = Math.max(1, fmEditorTextarea.scrollHeight - fmEditorTextarea.clientHeight);
     const ratio = fmEditorTextarea.scrollTop / maxScroll;
     const viewportRatio = Math.min(1, fmEditorTextarea.clientHeight / Math.max(fmEditorTextarea.scrollHeight, 1));
-    fmEditorMinimap.style.setProperty('--minimap-view-top', `${ratio * 100}%`);
-    fmEditorMinimap.style.setProperty('--minimap-view-height', `${Math.max(10, viewportRatio * 100)}%`);
+    const heightPercent = Math.max(10, viewportRatio * 100);
+    fmEditorMinimap.style.setProperty('--minimap-view-top', `${ratio * (100 - heightPercent)}%`);
+    fmEditorMinimap.style.setProperty('--minimap-view-height', `${heightPercent}%`);
+}
+
+function setEditorScrollFromMinimap(clientY) {
+    if (!fmEditorMinimap || editorMinimapHidden) return;
+    const rect = fmEditorMinimap.getBoundingClientRect();
+    const maxScroll = Math.max(0, fmEditorTextarea.scrollHeight - fmEditorTextarea.clientHeight);
+    const viewportRatio = Math.min(1, fmEditorTextarea.clientHeight / Math.max(fmEditorTextarea.scrollHeight, 1));
+    const thumbHeight = Math.max(18, rect.height * viewportRatio);
+    const ratio = Math.min(1, Math.max(0, (clientY - rect.top - thumbHeight / 2) / Math.max(1, rect.height - thumbHeight)));
+    fmEditorTextarea.scrollTop = ratio * maxScroll;
+    updateEditorMinimapViewport();
+}
+
+function closeEditor({ animated = true } = {}) {
+    if (!animated) {
+        fmEditorModal.style.display = 'none';
+        fmEditorModal.classList.remove('open', 'closing');
+        return;
+    }
+    fmEditorModal.classList.remove('open');
+    fmEditorModal.classList.add('closing');
+    window.clearTimeout(closeEditor._timer);
+    closeEditor._timer = window.setTimeout(() => {
+        fmEditorModal.style.display = 'none';
+        fmEditorModal.classList.remove('closing');
+    }, 260);
 }
 
 function applyEditorOptions() {
@@ -549,14 +584,16 @@ function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
 function openEditor(filePath) {
     editorFilePath = filePath;
     fmEditorModal.style.display = 'flex';
+    fmEditorModal.classList.remove('closing');
+    requestAnimationFrame(() => fmEditorModal.classList.add('open'));
     fmEditorTitle.textContent = `编辑: ${filePath}`;
     fmEditorStatus.textContent = '读取中...';
     fmEditorTextarea.value = '';
     updateEditorMinimap();
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
 }
-fmEditorCloseBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
-fmEditorCancelBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
+fmEditorCloseBtn.addEventListener('click', () => closeEditor());
+fmEditorCancelBtn.addEventListener('click', () => closeEditor());
 fmEditorUndoBtn.addEventListener('click', () => {
     fmEditorTextarea.focus();
     document.execCommand('undo');
@@ -577,7 +614,7 @@ fmEditorSaveBtn.addEventListener('click', () => {
         data: bytesToBase64(bytes),
         encoding: 'base64',
     }));
-    fmEditorModal.style.display = 'none';
+    closeEditor();
 });
 fmEditorEncoding.addEventListener('change', () => {
     if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value);
@@ -587,15 +624,23 @@ fmEditorTabSize.addEventListener('change', applyEditorOptions);
 fmEditorWrap.addEventListener('change', applyEditorOptions);
 fmEditorTextarea.addEventListener('input', updateEditorStatus);
 fmEditorTextarea.addEventListener('scroll', updateEditorMinimapViewport, { passive: true });
-fmEditorMinimap?.addEventListener('click', (e) => {
-    const lineButton = e.target.closest('.fm-minimap-line');
-    if (!lineButton) return;
-    const lines = (fmEditorTextarea.value || '').split(/\r\n|\r|\n/).length || 1;
-    const line = Number(lineButton.dataset.line) || 0;
-    const ratio = Math.min(1, Math.max(0, line / Math.max(1, lines - 1)));
-    fmEditorTextarea.scrollTop = ratio * Math.max(0, fmEditorTextarea.scrollHeight - fmEditorTextarea.clientHeight);
+fmEditorMinimap?.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    fmEditorMinimap.setPointerCapture?.(e.pointerId);
+    setEditorScrollFromMinimap(e.clientY);
     fmEditorTextarea.focus();
-    updateEditorMinimapViewport();
+    const onMove = (ev) => setEditorScrollFromMinimap(ev.clientY);
+    const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+});
+fmEditorMinimapToggle?.addEventListener('click', () => {
+    editorMinimapHidden = !editorMinimapHidden;
+    localStorage.setItem('zephyr-editor-minimap-hidden', editorMinimapHidden ? '1' : '0');
+    updateEditorMinimap();
 });
 fmEditorTextarea.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
@@ -646,7 +691,7 @@ function handleSFTPMessage(msg) {
             }
             break;
         case 'sftp-writefile':
-            if (msg.success) { refreshFileList(); fmEditorModal.style.display = 'none'; } else alert('保存失败: ' + (msg.error || '未知错误'));
+            if (msg.success) { refreshFileList(); closeEditor(); } else alert('保存失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-error': alert('SFTP 错误: ' + msg.message); sftpReady = false; break;
     }
@@ -772,6 +817,7 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
 
 function scrollTerminalToBottom() {
     if (!shouldAutoScroll) return;
+    if (isTerminalInputFreezeActive()) return;
     try {
         const el = getTerminalScrollElement();
         if (el) {
@@ -786,6 +832,23 @@ function scrollTerminalToBottom() {
     });
 }
 
+function isTerminalInputFreezeActive() {
+    return performance.now() < terminalInputFreezeUntil;
+}
+
+function markTerminalUserInput(data = '') {
+    const now = performance.now();
+    const hasSubmit = /[\r\n]/.test(data);
+    // 普通按键回显最容易触发 DOM renderer / 浏览器 scroll anchoring 的上下抖动，
+    // 因此输入后给一个很短的“滚动静默期”；回车提交命令则缩短静默期，让真实输出仍能跟随到底部。
+    terminalInputFreezeUntil = Math.max(terminalInputFreezeUntil, now + (hasSubmit ? 90 : 360));
+    window.clearTimeout(terminalInputFreezeTimer);
+    terminalInputFreezeTimer = window.setTimeout(() => {
+        terminalInputFreezeTimer = 0;
+        if (shouldAutoScroll) scheduleTerminalScrollToBottom({ force: true });
+    }, Math.max(32, terminalInputFreezeUntil - now + 16));
+}
+
 function clearTerminalAutoScrollTimers() {
     if (terminalScrollRaf) {
         cancelAnimationFrame(terminalScrollRaf);
@@ -795,10 +858,15 @@ function clearTerminalAutoScrollTimers() {
         clearTimeout(terminalScrollRetryTimer);
         terminalScrollRetryTimer = 0;
     }
+    if (terminalInputFreezeTimer) {
+        clearTimeout(terminalInputFreezeTimer);
+        terminalInputFreezeTimer = 0;
+    }
 }
 
-function scheduleTerminalScrollToBottom({ retry = false } = {}) {
+function scheduleTerminalScrollToBottom({ retry = false, force = false } = {}) {
     if (!shouldAutoScroll || terminalScrollRaf) return;
+    if (!force && isTerminalInputFreezeActive()) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         scrollTerminalToBottom();
@@ -844,11 +912,15 @@ function setupTerminalScrollHooks() {
         // wterm.write() 之后 DOM 渲染可能落在后续 frame。用观察器只在“用户本来就在底部”
         // 时补齐到底部，避免一边写入一边手动/内部滚动造成输入回显上下跳动。
         if (window.MutationObserver) {
-            terminalMutationObserver = new MutationObserver(() => scheduleTerminalScrollToBottom());
+            terminalMutationObserver = new MutationObserver(() => {
+                if (!isTerminalInputFreezeActive()) scheduleTerminalScrollToBottom();
+            });
             terminalMutationObserver.observe(scrollEl, { childList: true, subtree: true, characterData: true });
         }
         if (window.ResizeObserver) {
-            terminalResizeObserver = new ResizeObserver(() => scheduleTerminalScrollToBottom());
+            terminalResizeObserver = new ResizeObserver(() => {
+                if (!isTerminalInputFreezeActive()) scheduleTerminalScrollToBottom();
+            });
             terminalResizeObserver.observe(scrollEl);
         }
     }
@@ -1296,6 +1368,7 @@ function processModifiers(data) {
 }
 function sendData(data) {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+        markTerminalUserInput(data);
         wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(data) }));
     }
 }
