@@ -28,6 +28,8 @@ const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
 const infoBtn = $('#infoBtn');
+const fontDecreaseBtn = $('#fontDecreaseBtn');
+const fontIncreaseBtn = $('#fontIncreaseBtn');
 
 // 文件管理器 DOM
 const fileManager = $('#fileManager');
@@ -82,6 +84,15 @@ let terminalScrollListeners = [];
 let terminalMutationObserver = null;
 let terminalResizeObserver = null;
 let isProgrammaticScroll = false;
+let terminalFontSize = 14;
+let pinchStartDistance = 0;
+let pinchStartFontSize = 14;
+let pinchLastAppliedFontSize = 14;
+
+const TERMINAL_FONT_MIN = 10;
+const TERMINAL_FONT_MAX = 28;
+const TERMINAL_FONT_STEP = 1;
+const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -106,6 +117,91 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e
         applyTheme(e.matches ? 'light' : 'dark');
     }
 });
+
+// ---------- 终端字体缩放 ----------
+function clampTerminalFontSize(size) {
+    return Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(size)));
+}
+
+function getStoredTerminalFontSize() {
+    const saved = Number(localStorage.getItem(TERMINAL_FONT_STORAGE_KEY));
+    return Number.isFinite(saved) ? clampTerminalFontSize(saved) : terminalFontSize;
+}
+
+function updateFontSizeButtons() {
+    if (fontDecreaseBtn) fontDecreaseBtn.disabled = terminalFontSize <= TERMINAL_FONT_MIN;
+    if (fontIncreaseBtn) fontIncreaseBtn.disabled = terminalFontSize >= TERMINAL_FONT_MAX;
+}
+
+function getTerminalCharMetrics() {
+    const root = wtermWrapper.querySelector('[data-wterm-root]') || wtermWrapper;
+    const computed = getComputedStyle(root);
+    const fontSize = parseFloat(computed.fontSize) || terminalFontSize;
+    const lineHeight = parseFloat(computed.lineHeight) || fontSize * 1.25;
+    return {
+        lineHeight,
+        charWidth: fontSize * 0.62,
+    };
+}
+
+function sendTerminalResize() {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+    const rect = wtermWrapper.getBoundingClientRect();
+    const { lineHeight, charWidth } = getTerminalCharMetrics();
+    wsConnection.send(JSON.stringify({
+        type: 'resize',
+        rows: Math.max(2, Math.floor(rect.height / lineHeight)),
+        cols: Math.max(2, Math.floor(rect.width / charWidth)),
+    }));
+}
+
+function scheduleTerminalResize() {
+    window.clearTimeout(scheduleTerminalResize._timer);
+    scheduleTerminalResize._timer = window.setTimeout(sendTerminalResize, 120);
+}
+
+function applyTerminalFontSize(size, { persist = true } = {}) {
+    terminalFontSize = clampTerminalFontSize(size);
+    document.documentElement.style.setProperty('--terminal-font-size', `${terminalFontSize}px`);
+    if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
+    updateFontSizeButtons();
+    scheduleTerminalResize();
+    scheduleTerminalScrollToBottom();
+}
+
+function getTouchDistance(touches) {
+    const [a, b] = touches;
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function setupTerminalPinchZoom() {
+    wtermWrapper.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 2) return;
+        pinchStartDistance = getTouchDistance(e.touches);
+        pinchStartFontSize = terminalFontSize;
+        pinchLastAppliedFontSize = terminalFontSize;
+    }, { passive: true });
+
+    wtermWrapper.addEventListener('touchmove', (e) => {
+        if (e.touches.length !== 2 || !pinchStartDistance) return;
+        e.preventDefault();
+        const distance = getTouchDistance(e.touches);
+        const nextSize = clampTerminalFontSize(pinchStartFontSize * (distance / pinchStartDistance));
+        if (nextSize !== pinchLastAppliedFontSize) {
+            pinchLastAppliedFontSize = nextSize;
+            applyTerminalFontSize(nextSize);
+        }
+    }, { passive: false });
+
+    const endPinch = () => { pinchStartDistance = 0; };
+    wtermWrapper.addEventListener('touchend', endPinch, { passive: true });
+    wtermWrapper.addEventListener('touchcancel', endPinch, { passive: true });
+}
+
+applyTerminalFontSize(getStoredTerminalFontSize(), { persist: false });
+fontDecreaseBtn?.addEventListener('click', () => applyTerminalFontSize(terminalFontSize - TERMINAL_FONT_STEP));
+fontIncreaseBtn?.addEventListener('click', () => applyTerminalFontSize(terminalFontSize + TERMINAL_FONT_STEP));
+setupTerminalPinchZoom();
 
 // ---------- 复制功能 ----------
 copyBtn.addEventListener('click', async () => {
@@ -1061,12 +1157,7 @@ async function initWTerm() {
     }
     if (typeof term.init === 'function') await term.init();
 
-    const observeResize = () => {
-        if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-            const rect = wtermWrapper.getBoundingClientRect();
-            wsConnection.send(JSON.stringify({ type: 'resize', rows: Math.floor(rect.height / 17), cols: Math.floor(rect.width / 7.2) }));
-        }
-    };
+    const observeResize = () => sendTerminalResize();
     if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => { clearTimeout(ro._timer); ro._timer = setTimeout(observeResize, 150); });
         ro.observe(wtermWrapper);
