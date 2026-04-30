@@ -89,6 +89,7 @@ let isTerminalInputActive = false;
 let terminalInputIdleTimer = 0;
 let terminalAutoScrollResumeWanted = true;
 let terminalUserScrolledDuringInput = false;
+let isTerminalRenderingOutput = false;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -893,7 +894,7 @@ function setupTerminalScrollHooks() {
     const scrollEl = getTerminalScrollElement();
     if (scrollEl) {
         const handler = () => {
-            if (isProgrammaticScroll) return;
+            if (isProgrammaticScroll || isTerminalRenderingOutput) return;
             if (isTerminalInputActive) {
                 terminalUserScrolledDuringInput = true;
                 terminalAutoScrollResumeWanted = isTerminalAtBottom(scrollEl);
@@ -1501,11 +1502,18 @@ function connectWebSocket() {
                     case 'data':
                         if (term?.write) {
                             const nearBottom = isTerminalAtBottom();
-                            term.write(msg.data);
+                            isTerminalRenderingOutput = true;
+                            try {
+                                term.write(msg.data);
+                            } finally {
+                                requestAnimationFrame(() => { isTerminalRenderingOutput = false; });
+                            }
+                            const hasLineBreak = /[\r\n]/.test(msg.data || '');
                             const isInputEcho = terminalPendingScrollAfterInput && msg.data && msg.data.length <= 8;
                             const shouldFollowOutput = nearBottom && !isInputEcho;
-                            if (terminalPendingScrollAfterInput && /[\r\n]/.test(msg.data || '')) {
+                            if (terminalPendingScrollAfterInput && hasLineBreak) {
                                 terminalPendingScrollAfterInput = false;
+                                terminalAutoScrollResumeWanted = terminalAutoScrollResumeWanted || nearBottom;
                             }
                             if (shouldFollowOutput) scheduleTerminalScrollToBottom();
                         }
