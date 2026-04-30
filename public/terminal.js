@@ -84,6 +84,7 @@ let terminalScrollListeners = [];
 let terminalMutationObserver = null;
 let terminalResizeObserver = null;
 let isProgrammaticScroll = false;
+let terminalScrollLockUntil = 0;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -695,12 +696,10 @@ function updateLine(id, value) {
 }
 
 function getTerminalScrollElement() {
-    // @wterm/dom 的真实滚动容器是渲染后的 DOM 根节点。
-    // 优先使用它，避免混用内部 viewport API 造成高频输出时滚动抖动。
-    const root = wtermWrapper.querySelector('[data-wterm-root]');
-    if (root) return root;
-    if (term?._core?.viewport?.element) return term._core.viewport.element;
-    return wtermWrapper;
+    // @wterm/dom 0.1.x 文档只暴露 init/write/resize/focus/destroy 等公开方法，
+    // 没有稳定的 scrollToBottom API；滚动应当只控制 DOM renderer 生成的根节点，
+    // 避免触碰 _core.viewport 这类内部实现导致渲染/滚动状态来回打架。
+    return wtermWrapper.querySelector('[data-wterm-root]') || wtermWrapper;
 }
 
 function getTerminalBottomDistance(el = getTerminalScrollElement()) {
@@ -719,15 +718,14 @@ function scrollTerminalToBottom() {
         const el = getTerminalScrollElement();
         if (el) {
             isProgrammaticScroll = true;
-            el.scrollTop = el.scrollHeight;
+            terminalScrollLockUntil = performance.now() + 180;
+            const target = Math.max(0, el.scrollHeight - el.clientHeight);
+            if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
         }
-    } catch (_) {
-        // 兼容兜底：如果后续 wterm 暴露稳定的公开滚动 API，则仍可使用。
-        try { term?.scrollToBottom?.(); } catch (_) {}
-        try { term?._core?.viewport?.scrollToBottom?.(); } catch (_) {}
-    } finally {
+    } catch (_) {}
+    requestAnimationFrame(() => {
         requestAnimationFrame(() => { isProgrammaticScroll = false; });
-    }
+    });
 }
 
 function clearTerminalAutoScrollTimers() {
@@ -779,11 +777,22 @@ function setupTerminalScrollHooks() {
     const scrollEl = getTerminalScrollElement();
     if (scrollEl) {
         const handler = () => {
-            if (isProgrammaticScroll) return;
+            if (isProgrammaticScroll || performance.now() < terminalScrollLockUntil) return;
             shouldAutoScroll = isTerminalAtBottom(scrollEl);
         };
         scrollEl.addEventListener('scroll', handler, { passive: true });
         terminalScrollListeners.push({ el: scrollEl, handler });
+
+        // wterm.write() 之后 DOM 渲染可能落在后续 frame。用观察器只在“用户本来就在底部”
+        // 时补齐到底部，避免一边写入一边手动/内部滚动造成输入回显上下跳动。
+        if (window.MutationObserver) {
+            terminalMutationObserver = new MutationObserver(() => scheduleTerminalScrollToBottom());
+            terminalMutationObserver.observe(scrollEl, { childList: true, subtree: true, characterData: true });
+        }
+        if (window.ResizeObserver) {
+            terminalResizeObserver = new ResizeObserver(() => scheduleTerminalScrollToBottom());
+            terminalResizeObserver.observe(scrollEl);
+        }
     }
 
     scheduleTerminalScrollToBottom({ retry: false });
@@ -1047,6 +1056,7 @@ function setupPanelLayoutMenu() {
             e.stopPropagation();
             closePanelLayoutMenu();
             bringPanelToFront(panel);
+            button.classList.add('pressing');
             panel.classList.add('dragging');
             button.setPointerCapture?.(e.pointerId);
             const startX = e.clientX;
@@ -1069,6 +1079,7 @@ function setupPanelLayoutMenu() {
             };
             const onUp = () => {
                 panel.classList.remove('dragging');
+                window.setTimeout(() => button.classList.remove('pressing'), moved ? 0 : 140);
                 suppressNextLayoutClick = moved;
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
