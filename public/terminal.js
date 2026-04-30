@@ -68,6 +68,15 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 // 图表实例管理
 let chartInstances = {};
 let shouldAutoScroll = true;
+<<<<<<< HEAD
+=======
+let terminalScrollRaf = 0;
+let terminalScrollRetryTimer = 0;
+let terminalScrollListeners = [];
+let terminalMutationObserver = null;
+let terminalResizeObserver = null;
+let isProgrammaticScroll = false;
+>>>>>>> 3dc6c8c (更新 terminal.js)
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -438,20 +447,35 @@ function updateLine(id, value) {
 }
 
 function getTerminalScrollElement() {
-    if (term?._core?.viewport?.element) return term._core.viewport.element;
+    // @wterm/dom 的真实滚动容器是渲染后的 DOM 根节点。
+    // 优先使用它，避免混用内部 viewport API 造成高频输出时滚动抖动。
     const root = wtermWrapper.querySelector('[data-wterm-root]');
     if (root) return root;
+    if (term?._core?.viewport?.element) return term._core.viewport.element;
     return wtermWrapper;
 }
 
+<<<<<<< HEAD
 function isTerminalAtBottom() {
     const el = getTerminalScrollElement();
     if (!el) return true;
     return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 16;
+=======
+function getTerminalBottomDistance(el = getTerminalScrollElement()) {
+    if (!el) return 0;
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+}
+
+function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
+    if (!el) return true;
+    return getTerminalBottomDistance(el) <= threshold;
+>>>>>>> 3dc6c8c (更新 terminal.js)
 }
 
 function scrollTerminalToBottom() {
+    if (!shouldAutoScroll) return;
     try {
+<<<<<<< HEAD
         if (!shouldAutoScroll) return;
         if (typeof term?.scrollToBottom === 'function') {
             term.scrollToBottom();
@@ -461,10 +485,14 @@ function scrollTerminalToBottom() {
             term._core.viewport.scrollToBottom();
             return;
         }
+=======
+>>>>>>> 3dc6c8c (更新 terminal.js)
         const el = getTerminalScrollElement();
         if (el) {
+            isProgrammaticScroll = true;
             el.scrollTop = el.scrollHeight;
         }
+<<<<<<< HEAD
     } catch (_) {}
 }
 
@@ -485,6 +513,90 @@ function scheduleTerminalScrollToBottom() {
         terminalScrollTimeout = null;
         scrollTerminalToBottom();
     }, 25);
+=======
+    } catch (_) {
+        // 兼容兜底：如果后续 wterm 暴露稳定的公开滚动 API，则仍可使用。
+        try { term?.scrollToBottom?.(); } catch (_) {}
+        try { term?._core?.viewport?.scrollToBottom?.(); } catch (_) {}
+    } finally {
+        requestAnimationFrame(() => { isProgrammaticScroll = false; });
+    }
+}
+
+function clearTerminalAutoScrollTimers() {
+    if (terminalScrollRaf) {
+        cancelAnimationFrame(terminalScrollRaf);
+        terminalScrollRaf = 0;
+    }
+    if (terminalScrollRetryTimer) {
+        clearTimeout(terminalScrollRetryTimer);
+        terminalScrollRetryTimer = 0;
+    }
+}
+
+function scheduleTerminalScrollToBottom({ retry = true } = {}) {
+    if (!shouldAutoScroll || terminalScrollRaf) return;
+    terminalScrollRaf = requestAnimationFrame(() => {
+        terminalScrollRaf = 0;
+        scrollTerminalToBottom();
+
+        // wterm 写 DOM 可能分批完成，补一次短延迟即可覆盖边界换行/大量输出，
+        // 不使用 setInterval 或 smooth scroll，避免“一抽一抽”。
+        if (retry && shouldAutoScroll && !terminalScrollRetryTimer) {
+            terminalScrollRetryTimer = window.setTimeout(() => {
+                terminalScrollRetryTimer = 0;
+                scrollTerminalToBottom();
+            }, 32);
+        }
+    });
+}
+
+function stopTerminalAutoScrollObserver() {
+    clearTerminalAutoScrollTimers();
+    terminalScrollListeners.forEach(({ el, handler }) => el.removeEventListener('scroll', handler));
+    terminalScrollListeners = [];
+
+    if (terminalMutationObserver) {
+        terminalMutationObserver.disconnect();
+        terminalMutationObserver = null;
+    }
+    if (terminalResizeObserver) {
+        terminalResizeObserver.disconnect();
+        terminalResizeObserver = null;
+    }
+}
+
+function setupTerminalScrollHooks() {
+    stopTerminalAutoScrollObserver();
+    shouldAutoScroll = true;
+
+    const scrollEl = getTerminalScrollElement();
+    const scrollTargets = [...new Set([scrollEl, wtermWrapper].filter(Boolean))];
+    scrollTargets.forEach((el) => {
+        const handler = () => {
+            if (isProgrammaticScroll) return;
+            shouldAutoScroll = isTerminalAtBottom(scrollEl);
+        };
+        el.addEventListener('scroll', handler, { passive: true });
+        terminalScrollListeners.push({ el, handler });
+    });
+
+    if (window.MutationObserver && scrollEl) {
+        terminalMutationObserver = new MutationObserver(() => scheduleTerminalScrollToBottom({ retry: false }));
+        terminalMutationObserver.observe(scrollEl, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+        });
+    }
+
+    if (window.ResizeObserver && scrollEl) {
+        terminalResizeObserver = new ResizeObserver(() => scheduleTerminalScrollToBottom());
+        terminalResizeObserver.observe(scrollEl);
+    }
+
+    scheduleTerminalScrollToBottom();
+>>>>>>> 3dc6c8c (更新 terminal.js)
 }
 
 function renderStats(d) {
