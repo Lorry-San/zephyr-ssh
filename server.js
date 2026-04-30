@@ -298,12 +298,18 @@ wss.on('connection', (ws, req) => {
 
         // 编辑文件：读取内容
         if (msg.type === 'sftp-readfile') {
-            sftpStream.readFile(msg.path, { encoding: 'utf8' }, (err, data) => {
+            sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {
                     sendJSON({ type: 'sftp-readfile', path: msg.path, error: err.message });
                     return;
                 }
-                sendJSON({ type: 'sftp-readfile', path: msg.path, data: data });
+                sendJSON({
+                    type: 'sftp-readfile',
+                    path: msg.path,
+                    data: Buffer.isBuffer(data) ? data.toString('base64') : '',
+                    encoding: 'base64',
+                    size: Buffer.isBuffer(data) ? data.length : 0,
+                });
             });
             return;
         }
@@ -314,7 +320,10 @@ wss.on('connection', (ws, req) => {
             writeStream.on('error', (err) => {
                 sendJSON({ type: 'sftp-writefile', path: msg.path, success: false, error: err.message });
             });
-            writeStream.end(Buffer.from(msg.data, 'utf8'), () => {
+            const buffer = msg.encoding === 'base64'
+                ? Buffer.from(msg.data || '', 'base64')
+                : Buffer.from(msg.data || '', 'utf8');
+            writeStream.end(buffer, () => {
                 sendJSON({ type: 'sftp-writefile', path: msg.path, success: true });
             });
             return;

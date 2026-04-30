@@ -38,7 +38,8 @@
 
         <!-- 文件管理器覆盖层 -->
         <div class="file-manager" id="fileManager">
-            <div class="fm-header">
+            <div class="panel-drag-handle" data-drag-panel="fileManager" title="拖动移动窗口"><span></span></div>
+            <div class="fm-header panel-titlebar" data-drag-panel="fileManager">
                 <button class="tool-btn fm-back-btn" id="fmBackBtn" title="返回上级">⬆️ 上级</button>
                 <div class="fm-path-box">
                     <input type="text" class="fm-path-input" id="fmPathInput" placeholder="输入路径">
@@ -60,7 +61,36 @@
             <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
                 <div class="fm-editor-header">
                     <span id="fmEditorTitle">编辑文件</span>
-                    <button class="tool-btn" id="fmEditorCloseBtn">关闭</button>
+                    <div class="fm-editor-header-actions">
+                        <button class="tool-btn" id="fmEditorUndoBtn" title="撤回">↶</button>
+                        <button class="tool-btn" id="fmEditorRedoBtn" title="前进">↷</button>
+                        <button class="tool-btn" id="fmEditorCloseBtn">关闭</button>
+                    </div>
+                </div>
+                <div class="fm-editor-toolbar">
+                    <label>编码
+                        <select id="fmEditorEncoding" class="fm-editor-select">
+                            <option value="utf-8">UTF-8</option>
+                            <option value="utf-16le">UTF-16 LE</option>
+                            <option value="utf-16be">UTF-16 BE</option>
+                            <option value="latin1">Latin-1 / ISO-8859-1</option>
+                        </select>
+                    </label>
+                    <label>换行
+                        <select id="fmEditorLineEnding" class="fm-editor-select">
+                            <option value="lf">LF</option>
+                            <option value="crlf">CRLF</option>
+                        </select>
+                    </label>
+                    <label>Tab
+                        <select id="fmEditorTabSize" class="fm-editor-select">
+                            <option value="2">2</option>
+                            <option value="4" selected>4</option>
+                            <option value="8">8</option>
+                        </select>
+                    </label>
+                    <label class="fm-editor-check"><input type="checkbox" id="fmEditorWrap" checked> 自动换行</label>
+                    <span class="fm-editor-status" id="fmEditorStatus">Ready</span>
                 </div>
                 <textarea class="fm-editor-textarea" id="fmEditorTextarea" rows="15"></textarea>
                 <div class="fm-editor-actions">
@@ -68,11 +98,14 @@
                     <button class="btn btn-secondary" id="fmEditorCancelBtn">取消</button>
                 </div>
             </div>
+            <div class="panel-resize-handle left" data-resize-panel="fileManager" data-resize-edge="left" title="拖动调整大小"></div>
+            <div class="panel-resize-handle right" data-resize-panel="fileManager" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
         <!-- 实时监控覆盖层 -->
         <div class="info-modal" id="infoModal" style="display:none;">
-            <div class="info-modal-header">
+            <div class="panel-drag-handle" data-drag-panel="infoModal" title="拖动移动窗口"><span></span></div>
+            <div class="info-modal-header panel-titlebar" data-drag-panel="infoModal">
                 <span>📊 服务器实时监控</span>
                 <button class="tool-btn" id="infoCloseBtn">✕</button>
             </div>
@@ -82,6 +115,8 @@
             <div class="chart-container" id="chartContainer">
                 <!-- 小折线图将由 JS 插入 -->
             </div>
+            <div class="panel-resize-handle left" data-resize-panel="infoModal" data-resize-edge="left" title="拖动调整大小"></div>
+            <div class="panel-resize-handle right" data-resize-panel="infoModal" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
         <!-- 辅助工具栏 -->

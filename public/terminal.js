@@ -47,6 +47,13 @@ const fmEditorTextarea = $('#fmEditorTextarea');
 const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
 const fmEditorCloseBtn = $('#fmEditorCloseBtn');
+const fmEditorUndoBtn = $('#fmEditorUndoBtn');
+const fmEditorRedoBtn = $('#fmEditorRedoBtn');
+const fmEditorEncoding = $('#fmEditorEncoding');
+const fmEditorLineEnding = $('#fmEditorLineEnding');
+const fmEditorTabSize = $('#fmEditorTabSize');
+const fmEditorWrap = $('#fmEditorWrap');
+const fmEditorStatus = $('#fmEditorStatus');
 
 // 监控相关 DOM
 const infoModal = $('#infoModal');
@@ -62,6 +69,7 @@ let currentPath = '.';
 let allFiles = [];
 let searchQuery = '';
 let editorFilePath = null;
+let editorRawBytes = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 
@@ -299,18 +307,144 @@ fmUploadInput.addEventListener('change', (e) => {
     fmUploadInput.value = '';
 });
 // 编辑器
+function base64ToBytes(base64) {
+    const binary = atob(base64 || '');
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+
+function bytesToBase64(bytes) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
+
+function decodeBytes(bytes, encoding) {
+    if (!bytes) return '';
+    if (encoding === 'utf-16be') {
+        const swapped = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i += 2) {
+            swapped[i] = bytes[i + 1] || 0;
+            swapped[i + 1] = bytes[i] || 0;
+        }
+        return new TextDecoder('utf-16le').decode(swapped);
+    }
+    const decoderEncoding = encoding === 'latin1' ? 'iso-8859-1' : encoding;
+    return new TextDecoder(decoderEncoding).decode(bytes);
+}
+
+function encodeText(text, encoding) {
+    if (encoding === 'utf-16le' || encoding === 'utf-16be') {
+        const bytes = new Uint8Array(text.length * 2);
+        for (let i = 0; i < text.length; i++) {
+            const code = text.charCodeAt(i);
+            const offset = i * 2;
+            if (encoding === 'utf-16le') {
+                bytes[offset] = code & 0xff;
+                bytes[offset + 1] = code >> 8;
+            } else {
+                bytes[offset] = code >> 8;
+                bytes[offset + 1] = code & 0xff;
+            }
+        }
+        return bytes;
+    }
+    if (encoding === 'latin1') {
+        const bytes = new Uint8Array(text.length);
+        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+        return bytes;
+    }
+    return new TextEncoder().encode(text);
+}
+
+function detectEncoding(bytes) {
+    if (!bytes || bytes.length < 2) return 'utf-8';
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+    return 'utf-8';
+}
+
+function detectLineEnding(text) {
+    return /\r\n/.test(text) ? 'crlf' : 'lf';
+}
+
+function normalizeLineEnding(text, lineEnding) {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return lineEnding === 'crlf' ? normalized.replace(/\n/g, '\r\n') : normalized;
+}
+
+function updateEditorStatus() {
+    const text = fmEditorTextarea.value || '';
+    const lines = text.length ? text.split(/\r\n|\r|\n/).length : 1;
+    fmEditorStatus.textContent = `${lines} 行 · ${text.length} 字符 · ${editorRawBytes?.length || 0} bytes`;
+}
+
+function applyEditorOptions() {
+    fmEditorTextarea.wrap = fmEditorWrap.checked ? 'soft' : 'off';
+    fmEditorTextarea.style.tabSize = fmEditorTabSize.value;
+}
+
+function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
+    editorRawBytes = bytes;
+    let text = decodeBytes(bytes, encoding);
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    fmEditorTextarea.value = text;
+    fmEditorLineEnding.value = detectLineEnding(text);
+    applyEditorOptions();
+    updateEditorStatus();
+}
+
 function openEditor(filePath) {
     editorFilePath = filePath;
     fmEditorModal.style.display = 'flex';
     fmEditorTitle.textContent = `编辑: ${filePath}`;
+    fmEditorStatus.textContent = '读取中...';
+    fmEditorTextarea.value = '';
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
 }
 fmEditorCloseBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
 fmEditorCancelBtn.addEventListener('click', () => { fmEditorModal.style.display = 'none'; });
+fmEditorUndoBtn.addEventListener('click', () => {
+    fmEditorTextarea.focus();
+    document.execCommand('undo');
+    updateEditorStatus();
+});
+fmEditorRedoBtn.addEventListener('click', () => {
+    fmEditorTextarea.focus();
+    document.execCommand('redo');
+    updateEditorStatus();
+});
 fmEditorSaveBtn.addEventListener('click', () => {
     if (!editorFilePath) return;
-    wsConnection.send(JSON.stringify({ type: 'sftp-writefile', path: editorFilePath, data: fmEditorTextarea.value }));
+    const text = normalizeLineEnding(fmEditorTextarea.value, fmEditorLineEnding.value);
+    const bytes = encodeText(text, fmEditorEncoding.value);
+    wsConnection.send(JSON.stringify({
+        type: 'sftp-writefile',
+        path: editorFilePath,
+        data: bytesToBase64(bytes),
+        encoding: 'base64',
+    }));
     fmEditorModal.style.display = 'none';
+});
+fmEditorEncoding.addEventListener('change', () => {
+    if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value);
+});
+fmEditorLineEnding.addEventListener('change', updateEditorStatus);
+fmEditorTabSize.addEventListener('change', applyEditorOptions);
+fmEditorWrap.addEventListener('change', applyEditorOptions);
+fmEditorTextarea.addEventListener('input', updateEditorStatus);
+fmEditorTextarea.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const tab = ' '.repeat(Number(fmEditorTabSize.value) || 4);
+    const { selectionStart, selectionEnd, value } = fmEditorTextarea;
+    fmEditorTextarea.value = value.slice(0, selectionStart) + tab + value.slice(selectionEnd);
+    fmEditorTextarea.selectionStart = fmEditorTextarea.selectionEnd = selectionStart + tab.length;
+    updateEditorStatus();
 });
 
 // ---------- SFTP 消息处理 ----------
@@ -337,7 +471,14 @@ function handleSFTPMessage(msg) {
             }
             break;
         case 'sftp-readfile':
-            if (msg.error) alert('读取失败: ' + msg.error); else fmEditorTextarea.value = msg.data;
+            if (msg.error) {
+                alert('读取失败: ' + msg.error);
+                fmEditorStatus.textContent = '读取失败';
+            } else {
+                const bytes = msg.encoding === 'base64' ? base64ToBytes(msg.data) : new TextEncoder().encode(msg.data || '');
+                fmEditorEncoding.value = detectEncoding(bytes);
+                loadEditorFromBytes(bytes, fmEditorEncoding.value);
+            }
             break;
         case 'sftp-writefile':
             if (msg.success) { refreshFileList(); fmEditorModal.style.display = 'none'; } else alert('保存失败: ' + (msg.error || '未知错误'));
@@ -675,6 +816,142 @@ function toggleInfoModal() {
 infoBtn.addEventListener('click', toggleInfoModal);
 
 infoCloseBtn.addEventListener('click', hideInfoModal);
+
+// ---------- 浮动面板拖动 / 缩放 ----------
+const panelState = new WeakMap();
+
+function ensureFloatingPanel(panel, defaults = {}) {
+    if (!panel || panelState.has(panel)) return;
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const width = defaults.width || Math.min(parentRect.width * 0.72, 760);
+    const height = defaults.height || Math.min(parentRect.height * 0.72, 560);
+    const left = defaults.left ?? Math.max(12, (parentRect.width - width) / 2);
+    const top = defaults.top ?? 52;
+
+    Object.assign(panel.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        right: 'auto',
+        bottom: 'auto',
+        width: `${width}px`,
+        height: `${height}px`,
+    });
+    panelState.set(panel, { left, top, width, height });
+}
+
+function clampPanel(panel) {
+    const rect = panel.getBoundingClientRect();
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const minVisible = 80;
+    const left = Math.min(Math.max(rect.left - parentRect.left, -rect.width + minVisible), parentRect.width - minVisible);
+    const top = Math.min(Math.max(rect.top - parentRect.top, 8), parentRect.height - minVisible);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
+
+function bringPanelToFront(panel) {
+    document.querySelectorAll('.file-manager, .info-modal').forEach((p) => p.classList.remove('front'));
+    panel.classList.add('front');
+}
+
+function setupFloatingPanel(panel, options) {
+    ensureFloatingPanel(panel, options);
+    panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+}
+
+function setupPanelDrag() {
+    document.querySelectorAll('[data-drag-panel]').forEach((handle) => {
+        const panel = document.getElementById(handle.dataset.dragPanel);
+        if (!panel) return;
+        handle.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('button,input,select,textarea,label')) return;
+            e.preventDefault();
+            bringPanelToFront(panel);
+            panel.classList.add('dragging');
+            handle.setPointerCapture?.(e.pointerId);
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+
+            const onMove = (ev) => {
+                panel.style.left = `${startLeft + ev.clientX - startX}px`;
+                panel.style.top = `${startTop + ev.clientY - startY}px`;
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
+    });
+}
+
+function setupPanelResize() {
+    document.querySelectorAll('[data-resize-panel]').forEach((handle) => {
+        const panel = document.getElementById(handle.dataset.resizePanel);
+        if (!panel) return;
+        handle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            bringPanelToFront(panel);
+            panel.classList.add('resizing');
+            handle.setPointerCapture?.(e.pointerId);
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startWidth = panel.offsetWidth;
+            const startHeight = panel.offsetHeight;
+            const startLeft = panel.offsetLeft;
+            const edge = handle.dataset.resizeEdge || 'right';
+            const parentRect = panel.parentElement.getBoundingClientRect();
+            const minWidth = Number(getComputedStyle(panel).minWidth.replace('px', '')) || 420;
+            const minHeight = Number(getComputedStyle(panel).minHeight.replace('px', '')) || 320;
+
+            const onMove = (ev) => {
+                let nextLeft = startLeft;
+                let nextWidth = startWidth + ev.clientX - startX;
+                if (edge === 'left') {
+                    nextWidth = startWidth - (ev.clientX - startX);
+                    nextLeft = startLeft + (ev.clientX - startX);
+                    if (nextWidth < minWidth) {
+                        nextLeft -= minWidth - nextWidth;
+                        nextWidth = minWidth;
+                    }
+                    if (nextLeft < 8) {
+                        nextWidth += nextLeft - 8;
+                        nextLeft = 8;
+                    }
+                    panel.style.left = `${nextLeft}px`;
+                }
+                const maxWidth = edge === 'left' ? startLeft + startWidth - 8 : parentRect.width - panel.offsetLeft - 12;
+                const maxHeight = parentRect.height - panel.offsetTop - 12;
+                const width = Math.min(Math.max(minWidth, nextWidth), maxWidth);
+                const height = Math.min(Math.max(minHeight, startHeight + ev.clientY - startY), maxHeight);
+                panel.style.width = `${width}px`;
+                panel.style.height = `${height}px`;
+            };
+            const onUp = () => {
+                panel.classList.remove('resizing');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+            };
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
+    });
+}
+
+setupFloatingPanel(fileManager, { width: Math.min(window.innerWidth * 0.72, 820), height: Math.min(window.innerHeight * 0.68, 620), left: 16, top: 52 });
+setupFloatingPanel(infoModal, { width: 480, height: Math.min(window.innerHeight * 0.72, 620), top: 52 });
+setupPanelDrag();
+setupPanelResize();
+window.addEventListener('resize', () => {
+    [fileManager, infoModal].forEach((panel) => panel && clampPanel(panel));
+});
 
 // ---------- 辅助键 / 终端输入 ----------
 const modifierState = { ctrl: false, alt: false, shift: false };

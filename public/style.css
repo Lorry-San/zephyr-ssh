@@ -377,12 +377,18 @@ body {
 /* ===== 文件管理器样式 ===== */
 .file-manager {
     position: absolute;
-    top: 40px; left: 0; right: 0; bottom: 0;
+    top: 52px; left: 16px;
+    width: min(820px, 72vw);
+    height: min(620px, 68vh);
+    min-width: 460px;
+    min-height: 360px;
     background: var(--surface);
     z-index: 20;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
     visibility: hidden;
     opacity: 0;
     transform: scale(0.88) translateY(34px);
@@ -396,11 +402,67 @@ body {
         visibility 0.36s;
     will-change: transform, opacity, filter;
 }
+.file-manager.front { z-index: 45; }
+.file-manager.dragging,
+.file-manager.resizing,
+.info-modal.dragging,
+.info-modal.resizing { transition: none; user-select: none; }
 .file-manager.open {
     visibility: visible;
     opacity: 1;
     transform: scale(1) translateY(0);
     filter: blur(0);
+}
+
+.panel-drag-handle {
+    height: 12px;
+    flex-shrink: 0;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, rgba(255,255,255,0.035), transparent);
+    opacity: 0.55;
+}
+.panel-drag-handle span,
+.panel-drag-handle span::before,
+.panel-drag-handle span::after {
+    display: block;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+}
+.panel-drag-handle span { position: relative; }
+.panel-drag-handle span::before,
+.panel-drag-handle span::after { content: ''; position: absolute; top: 0; }
+.panel-drag-handle span::before { left: -7px; }
+.panel-drag-handle span::after { left: 7px; }
+.panel-drag-handle:active,
+.panel-titlebar:active { cursor: grabbing; }
+.panel-titlebar { cursor: grab; user-select: none; }
+.panel-resize-handle {
+    position: absolute;
+    bottom: 6px;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    z-index: 5;
+    opacity: 0.5;
+}
+.panel-resize-handle.right { right: 6px; }
+.panel-resize-handle.left { left: 6px; cursor: nesw-resize; }
+.panel-resize-handle::before {
+    content: '';
+    position: absolute;
+    inset: 3px;
+    border-right: 2px solid var(--text-secondary);
+    border-bottom: 2px solid var(--text-secondary);
+    border-radius: 2px;
+}
+.panel-resize-handle.left::before {
+    border-right: none;
+    border-left: 2px solid var(--text-secondary);
 }
 
 .fm-header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border); }
@@ -433,10 +495,39 @@ body {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
     background: var(--surface); display: flex; flex-direction: column; z-index: 25; padding: 12px;
 }
-.fm-editor-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.fm-editor-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; min-width: 0; }
+.fm-editor-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-editor-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.fm-editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px;
+    margin-bottom: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.fm-editor-toolbar label { display: inline-flex; align-items: center; gap: 5px; }
+.fm-editor-select {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    max-width: 150px;
+}
+.fm-editor-check input { accent-color: var(--accent); }
+.fm-editor-status { margin-left: auto; font-family: var(--font-mono); color: var(--text-secondary); }
 .fm-editor-textarea {
     flex: 1; resize: vertical; font-family: var(--font-mono); font-size: 13px;
-    padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text);
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+    line-height: 1.55; tab-size: 4; white-space: pre-wrap;
 }
 .fm-editor-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 .btn-secondary {
@@ -447,8 +538,10 @@ body {
 /* ===== 实时监控面板 ===== */
 .info-modal {
     position: absolute;
-    top: 40px; right: 10px;
-    width: 480px; max-width: 95vw;
+    top: 52px; left: calc(100% - 500px);
+    width: 480px; height: min(620px, 72vh); max-width: 95vw;
+    min-width: 430px;
+    min-height: 340px;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -456,8 +549,7 @@ body {
     z-index: 30;
     display: none;
     flex-direction: column;
-    overflow-y: auto;
-    max-height: 90vh;
+    overflow: hidden;
     opacity: 0;
     transform: scale(0.86) translateY(-18px);
     transform-origin: top right;
@@ -468,6 +560,7 @@ body {
         filter 0.28s ease;
     will-change: transform, opacity, filter;
 }
+.info-modal.front { z-index: 46; }
 .info-modal.open {
     opacity: 1;
     transform: scale(1) translateY(0);
