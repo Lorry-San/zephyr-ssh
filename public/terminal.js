@@ -99,7 +99,7 @@ const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
 const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
-const TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS = 450;
+const TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS = 500;
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -837,7 +837,7 @@ function markTerminalUserInput(data = '') {
 
 function pauseTerminalAutoScrollForInput() {
     if (!isTerminalInputActive) {
-        terminalAutoScrollResumeWanted = shouldAutoScroll && isTerminalAtBottom();
+        terminalAutoScrollResumeWanted = isTerminalAtBottom();
         terminalUserScrolledDuringInput = false;
     }
     isTerminalInputActive = true;
@@ -857,7 +857,7 @@ function resumeTerminalAutoScrollAfterInputIdle() {
     terminalAutoScrollResumeWanted = shouldAutoScroll;
     terminalUserScrolledDuringInput = false;
 
-    if (shouldAutoScroll) scheduleTerminalScrollToBottom();
+    if (shouldAutoScroll) scrollTerminalToBottom();
 }
 
 function clearTerminalAutoScrollTimers() {
@@ -906,6 +906,27 @@ function setupTerminalScrollHooks() {
     }
 
     scheduleTerminalScrollToBottom();
+}
+
+function isModifierOnlyKeyEvent(e) {
+    return ['Alt', 'Control', 'Meta', 'Shift', 'CapsLock'].includes(e.key);
+}
+
+function setupTerminalInputActivityHooks() {
+    const markActivity = () => pauseTerminalAutoScrollForInput();
+    const markKeyboardActivity = (e) => {
+        if (isModifierOnlyKeyEvent(e)) return;
+        pauseTerminalAutoScrollForInput();
+    };
+
+    wtermWrapper.addEventListener('keydown', markKeyboardActivity, true);
+    wtermWrapper.addEventListener('beforeinput', markActivity, true);
+    wtermWrapper.addEventListener('input', markActivity, true);
+    wtermWrapper.addEventListener('compositionstart', markActivity, true);
+    wtermWrapper.addEventListener('compositionupdate', markActivity, true);
+
+    cmdInput.addEventListener('keydown', markKeyboardActivity, true);
+    cmdInput.addEventListener('input', markActivity, true);
 }
 
 function renderStats(d) {
@@ -1321,6 +1342,7 @@ setupFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
 setupPanelLayoutMenu();
 setupPanelDrag();
 setupPanelResize();
+setupTerminalInputActivityHooks();
 window.addEventListener('resize', () => {
     [fileManager, infoModal].forEach((panel) => panel && clampPanel(panel));
 });
