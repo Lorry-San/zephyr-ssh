@@ -85,6 +85,10 @@ let terminalScrollRaf = 0;
 let terminalScrollListeners = [];
 let isProgrammaticScroll = false;
 let terminalPendingScrollAfterInput = false;
+let isTerminalInputActive = false;
+let terminalInputIdleTimer = 0;
+let terminalAutoScrollResumeWanted = true;
+let terminalUserScrolledDuringInput = false;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -95,6 +99,7 @@ const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
 const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
+const TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS = 450;
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -811,7 +816,7 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
 }
 
 function scrollTerminalToBottom() {
-    if (!shouldAutoScroll) return;
+    if (!shouldAutoScroll || isTerminalInputActive) return;
     try {
         const el = getTerminalScrollElement();
         if (el) {
@@ -827,6 +832,32 @@ function scrollTerminalToBottom() {
 
 function markTerminalUserInput(data = '') {
     terminalPendingScrollAfterInput = /[\r\n]/.test(data);
+    pauseTerminalAutoScrollForInput();
+}
+
+function pauseTerminalAutoScrollForInput() {
+    if (!isTerminalInputActive) {
+        terminalAutoScrollResumeWanted = shouldAutoScroll && isTerminalAtBottom();
+        terminalUserScrolledDuringInput = false;
+    }
+    isTerminalInputActive = true;
+    shouldAutoScroll = false;
+    clearTerminalAutoScrollTimers();
+
+    window.clearTimeout(terminalInputIdleTimer);
+    terminalInputIdleTimer = window.setTimeout(resumeTerminalAutoScrollAfterInputIdle, TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS);
+}
+
+function resumeTerminalAutoScrollAfterInputIdle() {
+    terminalInputIdleTimer = 0;
+    isTerminalInputActive = false;
+
+    const atBottom = isTerminalAtBottom();
+    shouldAutoScroll = terminalUserScrolledDuringInput ? atBottom : (terminalAutoScrollResumeWanted || atBottom);
+    terminalAutoScrollResumeWanted = shouldAutoScroll;
+    terminalUserScrolledDuringInput = false;
+
+    if (shouldAutoScroll) scheduleTerminalScrollToBottom();
 }
 
 function clearTerminalAutoScrollTimers() {
@@ -837,7 +868,7 @@ function clearTerminalAutoScrollTimers() {
 }
 
 function scheduleTerminalScrollToBottom() {
-    if (!shouldAutoScroll || terminalScrollRaf) return;
+    if (!shouldAutoScroll || isTerminalInputActive || terminalScrollRaf) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         scrollTerminalToBottom();
@@ -846,6 +877,10 @@ function scheduleTerminalScrollToBottom() {
 
 function stopTerminalAutoScrollObserver() {
     clearTerminalAutoScrollTimers();
+    window.clearTimeout(terminalInputIdleTimer);
+    terminalInputIdleTimer = 0;
+    isTerminalInputActive = false;
+    terminalUserScrolledDuringInput = false;
     terminalScrollListeners.forEach(({ el, handler }) => el.removeEventListener('scroll', handler));
     terminalScrollListeners = [];
 
@@ -859,6 +894,11 @@ function setupTerminalScrollHooks() {
     if (scrollEl) {
         const handler = () => {
             if (isProgrammaticScroll) return;
+            if (isTerminalInputActive) {
+                terminalUserScrolledDuringInput = true;
+                terminalAutoScrollResumeWanted = isTerminalAtBottom(scrollEl);
+                return;
+            }
             shouldAutoScroll = isTerminalAtBottom(scrollEl);
         };
         scrollEl.addEventListener('scroll', handler, { passive: true });
