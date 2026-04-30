@@ -88,6 +88,7 @@ let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
+let suppressNextLayoutClick = false;
 
 const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
@@ -740,14 +741,13 @@ function clearTerminalAutoScrollTimers() {
     }
 }
 
-function scheduleTerminalScrollToBottom({ retry = true } = {}) {
+function scheduleTerminalScrollToBottom({ retry = false } = {}) {
     if (!shouldAutoScroll || terminalScrollRaf) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         scrollTerminalToBottom();
 
-        // wterm 写 DOM 可能分批完成，补一次短延迟即可覆盖边界换行/大量输出，
-        // 不使用 setInterval 或 smooth scroll，避免“一抽一抽”。
+        // 默认不再做二次补滚，避免高频输出/输入回显时出现上下跳动。
         if (retry && shouldAutoScroll && !terminalScrollRetryTimer) {
             terminalScrollRetryTimer = window.setTimeout(() => {
                 terminalScrollRetryTimer = 0;
@@ -777,31 +777,16 @@ function setupTerminalScrollHooks() {
     shouldAutoScroll = true;
 
     const scrollEl = getTerminalScrollElement();
-    const scrollTargets = [...new Set([scrollEl, wtermWrapper].filter(Boolean))];
-    scrollTargets.forEach((el) => {
+    if (scrollEl) {
         const handler = () => {
             if (isProgrammaticScroll) return;
             shouldAutoScroll = isTerminalAtBottom(scrollEl);
         };
-        el.addEventListener('scroll', handler, { passive: true });
-        terminalScrollListeners.push({ el, handler });
-    });
-
-    if (window.MutationObserver && scrollEl) {
-        terminalMutationObserver = new MutationObserver(() => scheduleTerminalScrollToBottom({ retry: false }));
-        terminalMutationObserver.observe(scrollEl, {
-            childList: true,
-            subtree: true,
-            characterData: true,
-        });
+        scrollEl.addEventListener('scroll', handler, { passive: true });
+        terminalScrollListeners.push({ el: scrollEl, handler });
     }
 
-    if (window.ResizeObserver && scrollEl) {
-        terminalResizeObserver = new ResizeObserver(() => scheduleTerminalScrollToBottom());
-        terminalResizeObserver.observe(scrollEl);
-    }
-
-    scheduleTerminalScrollToBottom();
+    scheduleTerminalScrollToBottom({ retry: false });
 }
 
 function renderStats(d) {
@@ -1002,6 +987,8 @@ function applyPanelLayout(panel, layout) {
         top = topbar;
     }
 
+    panel.classList.add('layout-animating');
+    window.clearTimeout(panel._layoutAnimationTimer);
     Object.assign(panel.style, {
         left: `${left}px`,
         top: `${top}px`,
@@ -1011,7 +998,10 @@ function applyPanelLayout(panel, layout) {
         height: `${height}px`,
     });
     bringPanelToFront(panel);
-    clampPanel(panel);
+    panel._layoutAnimationTimer = window.setTimeout(() => {
+        panel.classList.remove('layout-animating');
+        clampPanel(panel);
+    }, 480);
 }
 
 let panelLayoutMenu = null;
@@ -1024,17 +1014,21 @@ function openPanelLayoutMenu(button, panel) {
     closePanelLayoutMenu();
     const menu = document.createElement('div');
     menu.className = 'panel-layout-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '窗口布局');
     menu.innerHTML = `
-        <button data-layout="full">🟩 充满整个页面</button>
-        <button data-layout="half">⬛ 下半个页面</button>
-        <button data-layout="left-quarter">◧ 左侧 1/4</button>
-        <button data-layout="right-quarter">◨ 右侧 1/4</button>
+        <button data-layout="full" title="全屏" aria-label="全屏"><span class="panel-layout-icon full"></span></button>
+        <button data-layout="half" title="半屏" aria-label="半屏"><span class="panel-layout-icon half"></span></button>
+        <button data-layout="left-quarter" title="左侧四分之一" aria-label="左侧四分之一"><span class="panel-layout-icon left"></span></button>
+        <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
     `;
     document.body.appendChild(menu);
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    menu.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2), window.innerWidth - menuRect.width - 8)}px`;
+    const left = Math.min(Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
+    menu.style.left = `${left}px`;
     menu.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - menuRect.height - 8)}px`;
+    menu.style.setProperty('--menu-origin-x', `${rect.left + rect.width / 2 - left}px`);
     menu.addEventListener('click', (e) => {
         const item = e.target.closest('[data-layout]');
         if (!item) return;
@@ -1048,10 +1042,47 @@ function setupPanelLayoutMenu() {
     document.querySelectorAll('[data-layout-panel]').forEach((button) => {
         const panel = document.getElementById(button.dataset.layoutPanel);
         if (!panel) return;
-        button.addEventListener('pointerdown', (e) => e.stopPropagation());
+        button.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closePanelLayoutMenu();
+            bringPanelToFront(panel);
+            panel.classList.add('dragging');
+            button.setPointerCapture?.(e.pointerId);
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+            let moved = false;
+
+            const onMove = (ev) => {
+                ev.preventDefault();
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+                if (!moved) return;
+                panel.style.left = `${startLeft + dx}px`;
+                panel.style.top = `${startTop + dy}px`;
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                suppressNextLayoutClick = moved;
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
         button.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (suppressNextLayoutClick) {
+                suppressNextLayoutClick = false;
+                return;
+            }
             bringPanelToFront(panel);
             if (panelLayoutMenu) closePanelLayoutMenu();
             else openPanelLayoutMenu(button, panel);

@@ -276,6 +276,8 @@ body {
     transition: all 0.1s;
     -webkit-tap-highlight-color: transparent;
     user-select: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .tool-btn:active {
     transform: scale(0.95);
@@ -425,6 +427,18 @@ body {
 .file-manager.resizing,
 .info-modal.dragging,
 .info-modal.resizing { transition: none; user-select: none; touch-action: none; }
+.file-manager.layout-animating,
+.info-modal.layout-animating {
+    transition:
+        left 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        top 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        width 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        height 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        border-radius 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        transform 0.46s cubic-bezier(0.2, 0.9, 0.18, 1),
+        opacity 0.28s ease,
+        filter 0.32s ease;
+}
 .file-manager.open {
     visibility: visible;
     opacity: 1;
@@ -435,7 +449,7 @@ body {
 .panel-drag-handle {
     height: 24px;
     flex-shrink: 0;
-    cursor: grab;
+    cursor: default;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -444,8 +458,8 @@ body {
     touch-action: none;
 }
 .panel-traffic-btn {
-    width: 58px;
-    height: 20px;
+    width: 74px;
+    height: 24px;
     border: 0;
     border-radius: 999px;
     background: transparent;
@@ -453,7 +467,7 @@ body {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    touch-action: manipulation;
+    touch-action: none;
 }
 .panel-traffic-btn:hover { background: rgba(139,148,158,0.12); }
 .panel-traffic-btn span,
@@ -471,43 +485,82 @@ body {
 .panel-traffic-btn span::before { left: -11px; }
 .panel-traffic-btn span::after { left: 11px; }
 .panel-drag-handle:active,
-.panel-titlebar:active { cursor: grabbing; }
-.panel-titlebar { cursor: grab; user-select: none; }
+.panel-titlebar:active { cursor: default; }
+.panel-titlebar { cursor: default; user-select: none; }
 .panel-layout-menu {
     position: fixed;
     z-index: 100;
-    min-width: 190px;
-    padding: 8px;
+    width: 210px;
+    height: 74px;
+    padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--surface) 92%, transparent);
-    box-shadow: 0 18px 55px rgba(0,0,0,0.35);
-    backdrop-filter: blur(18px);
-    transform-origin: top center;
-    animation: panelMenuIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--surface) 76%, transparent);
+    box-shadow: 0 22px 70px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.08) inset;
+    backdrop-filter: blur(28px) saturate(1.65);
+    -webkit-backdrop-filter: blur(28px) saturate(1.65);
+    transform-origin: var(--menu-origin-x, 50%) -8px;
+    animation: panelMenuIn 0.32s cubic-bezier(0.2, 0.9, 0.18, 1);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
 }
 @keyframes panelMenuIn {
-    from { opacity: 0; transform: scale(0.92) translateY(-8px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
+    0% { opacity: 0; transform: translateY(-10px) scale(0.76); filter: blur(8px); }
+    62% { opacity: 1; transform: translateY(1px) scale(1.035); filter: blur(0); }
+    100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
 .panel-layout-menu button {
     width: 100%;
+    height: 52px;
     border: 0;
-    border-radius: 10px;
-    padding: 10px 12px;
+    border-radius: 14px;
+    padding: 0;
     background: transparent;
     color: var(--text);
-    text-align: left;
-    font: 600 13px var(--font-sans);
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .panel-layout-menu button:hover,
 .panel-layout-menu button:active { background: rgba(88,166,255,0.16); }
+.panel-layout-icon {
+    width: 32px;
+    height: 24px;
+    border: 2px solid var(--text-secondary);
+    border-radius: 6px;
+    display: block;
+    position: relative;
+    opacity: 0.95;
+    overflow: hidden;
+}
+.panel-layout-icon.full { background: rgba(88,166,255,0.16); }
+.panel-layout-icon.half::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 50%;
+    border-top: 2px solid var(--accent);
+    border-radius: 0 0 4px 4px;
+    background: rgba(88,166,255,0.2);
+}
+.panel-layout-icon.left::after,
+.panel-layout-icon.right::after {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 25%;
+    border-inline-end: 2px solid var(--accent);
+    background: rgba(88,166,255,0.2);
+}
+.panel-layout-icon.left::after { left: 0; border-radius: 4px 0 0 4px; }
+.panel-layout-icon.right::after { right: 0; border-inline-end: 0; border-inline-start: 2px solid var(--accent); border-radius: 0 4px 4px 0; }
 .panel-resize-handle {
     position: absolute;
     bottom: 6px;
-    width: 38px;
-    height: 38px;
+    width: 28px;
+    height: 28px;
     cursor: nwse-resize;
     z-index: 5;
     opacity: 0.5;
@@ -518,7 +571,7 @@ body {
 .panel-resize-handle::before {
     content: '';
     position: absolute;
-    inset: 11px;
+    inset: 8px;
     border-right: 2px solid var(--text-secondary);
     border-bottom: 2px solid var(--text-secondary);
     border-radius: 2px;
@@ -694,7 +747,12 @@ body {
     .form-row { flex-direction: column; gap: 0; }
     .form-row .form-group.port-group { flex: 1; }
     .terminal-topbar { padding: 6px 10px; font-size: 11px; }
-    .tool-btn { padding: 3px 6px; font-size: 10px; min-width: 30px; }
+    .toolbar { padding: 5px 8px; }
+    .toolbar-row { gap: 3px; }
+    .tool-btn { padding: 3px 5px; font-size: 10px; min-width: 28px; max-width: 58px; }
+    .tool-btn.combo { max-width: 54px; }
+    .tool-btn.modifier { max-width: 42px; }
+    .font-size-btn { max-width: 32px; min-width: 30px; }
     .cmd-send-btn { padding: 4px 8px; font-size: 11px; }
     .file-manager,
     .info-modal {
@@ -702,7 +760,7 @@ body {
         min-height: 240px;
         max-width: none;
     }
-    .panel-resize-handle { width: 48px; height: 48px; }
+    .panel-resize-handle { width: 34px; height: 34px; }
 }
 
 @media (pointer: coarse), (max-width: 700px) {
@@ -712,5 +770,5 @@ body {
         min-height: 240px;
         max-width: none;
     }
-    .panel-resize-handle { width: 48px; height: 48px; }
+    .panel-resize-handle { width: 34px; height: 34px; }
 }
