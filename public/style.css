@@ -362,6 +362,7 @@ body {
     font-family: var(--font-mono) !important;
     line-height: 1.25 !important;
     overflow-y: auto;
+    overflow-anchor: none;
     -webkit-overflow-scrolling: touch;
     user-select: text !important;
     -webkit-user-select: text !important;
@@ -374,6 +375,7 @@ body {
     user-select: text !important;
     -webkit-user-select: text !important;
     -webkit-touch-callout: default !important;
+    overflow-anchor: none;
 }
 
 /* 连接状态覆盖层 */

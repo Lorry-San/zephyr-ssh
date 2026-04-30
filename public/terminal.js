@@ -82,14 +82,9 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 let chartInstances = {};
 let shouldAutoScroll = true;
 let terminalScrollRaf = 0;
-let terminalScrollRetryTimer = 0;
 let terminalScrollListeners = [];
-let terminalMutationObserver = null;
-let terminalResizeObserver = null;
 let isProgrammaticScroll = false;
-let terminalScrollLockUntil = 0;
-let terminalInputFreezeUntil = 0;
-let terminalInputFreezeTimer = 0;
+let terminalPendingScrollAfterInput = false;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -817,12 +812,10 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
 
 function scrollTerminalToBottom() {
     if (!shouldAutoScroll) return;
-    if (isTerminalInputFreezeActive()) return;
     try {
         const el = getTerminalScrollElement();
         if (el) {
             isProgrammaticScroll = true;
-            terminalScrollLockUntil = performance.now() + 180;
             const target = Math.max(0, el.scrollHeight - el.clientHeight);
             if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
         }
@@ -832,21 +825,8 @@ function scrollTerminalToBottom() {
     });
 }
 
-function isTerminalInputFreezeActive() {
-    return performance.now() < terminalInputFreezeUntil;
-}
-
 function markTerminalUserInput(data = '') {
-    const now = performance.now();
-    const hasSubmit = /[\r\n]/.test(data);
-    // 普通按键回显最容易触发 DOM renderer / 浏览器 scroll anchoring 的上下抖动，
-    // 因此输入后给一个很短的“滚动静默期”；回车提交命令则缩短静默期，让真实输出仍能跟随到底部。
-    terminalInputFreezeUntil = Math.max(terminalInputFreezeUntil, now + (hasSubmit ? 90 : 360));
-    window.clearTimeout(terminalInputFreezeTimer);
-    terminalInputFreezeTimer = window.setTimeout(() => {
-        terminalInputFreezeTimer = 0;
-        if (shouldAutoScroll) scheduleTerminalScrollToBottom({ force: true });
-    }, Math.max(32, terminalInputFreezeUntil - now + 16));
+    terminalPendingScrollAfterInput = /[\r\n]/.test(data);
 }
 
 function clearTerminalAutoScrollTimers() {
@@ -854,30 +834,13 @@ function clearTerminalAutoScrollTimers() {
         cancelAnimationFrame(terminalScrollRaf);
         terminalScrollRaf = 0;
     }
-    if (terminalScrollRetryTimer) {
-        clearTimeout(terminalScrollRetryTimer);
-        terminalScrollRetryTimer = 0;
-    }
-    if (terminalInputFreezeTimer) {
-        clearTimeout(terminalInputFreezeTimer);
-        terminalInputFreezeTimer = 0;
-    }
 }
 
-function scheduleTerminalScrollToBottom({ retry = false, force = false } = {}) {
+function scheduleTerminalScrollToBottom() {
     if (!shouldAutoScroll || terminalScrollRaf) return;
-    if (!force && isTerminalInputFreezeActive()) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         scrollTerminalToBottom();
-
-        // 默认不再做二次补滚，避免高频输出/输入回显时出现上下跳动。
-        if (retry && shouldAutoScroll && !terminalScrollRetryTimer) {
-            terminalScrollRetryTimer = window.setTimeout(() => {
-                terminalScrollRetryTimer = 0;
-                scrollTerminalToBottom();
-            }, 32);
-        }
     });
 }
 
@@ -886,14 +849,6 @@ function stopTerminalAutoScrollObserver() {
     terminalScrollListeners.forEach(({ el, handler }) => el.removeEventListener('scroll', handler));
     terminalScrollListeners = [];
 
-    if (terminalMutationObserver) {
-        terminalMutationObserver.disconnect();
-        terminalMutationObserver = null;
-    }
-    if (terminalResizeObserver) {
-        terminalResizeObserver.disconnect();
-        terminalResizeObserver = null;
-    }
 }
 
 function setupTerminalScrollHooks() {
@@ -903,29 +858,14 @@ function setupTerminalScrollHooks() {
     const scrollEl = getTerminalScrollElement();
     if (scrollEl) {
         const handler = () => {
-            if (isProgrammaticScroll || performance.now() < terminalScrollLockUntil) return;
+            if (isProgrammaticScroll) return;
             shouldAutoScroll = isTerminalAtBottom(scrollEl);
         };
         scrollEl.addEventListener('scroll', handler, { passive: true });
         terminalScrollListeners.push({ el: scrollEl, handler });
-
-        // wterm.write() 之后 DOM 渲染可能落在后续 frame。用观察器只在“用户本来就在底部”
-        // 时补齐到底部，避免一边写入一边手动/内部滚动造成输入回显上下跳动。
-        if (window.MutationObserver) {
-            terminalMutationObserver = new MutationObserver(() => {
-                if (!isTerminalInputFreezeActive()) scheduleTerminalScrollToBottom();
-            });
-            terminalMutationObserver.observe(scrollEl, { childList: true, subtree: true, characterData: true });
-        }
-        if (window.ResizeObserver) {
-            terminalResizeObserver = new ResizeObserver(() => {
-                if (!isTerminalInputFreezeActive()) scheduleTerminalScrollToBottom();
-            });
-            terminalResizeObserver.observe(scrollEl);
-        }
     }
 
-    scheduleTerminalScrollToBottom({ retry: false });
+    scheduleTerminalScrollToBottom();
 }
 
 function renderStats(d) {
@@ -1500,7 +1440,12 @@ function connectWebSocket() {
                         if (term?.write) {
                             const nearBottom = isTerminalAtBottom();
                             term.write(msg.data);
-                            if (nearBottom) scheduleTerminalScrollToBottom();
+                            const isInputEcho = terminalPendingScrollAfterInput && msg.data && msg.data.length <= 8;
+                            const shouldFollowOutput = nearBottom && !isInputEcho;
+                            if (terminalPendingScrollAfterInput && /[\r\n]/.test(msg.data || '')) {
+                                terminalPendingScrollAfterInput = false;
+                            }
+                            if (shouldFollowOutput) scheduleTerminalScrollToBottom();
                         }
                         break;
                     case 'error':
