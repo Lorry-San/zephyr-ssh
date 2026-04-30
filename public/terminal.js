@@ -357,7 +357,7 @@ const centerTextPlugin = {
         const { left, top, right, bottom } = chartArea;
         if ([left, top, right, bottom].some((v) => typeof v !== 'number' || isNaN(v))) return;
         const centerX = (left + right) / 2;
-        const centerY = (top + bottom) / 2;
+        const centerY = (top + bottom) / 2 + (bottom - top) * 0.05;
         const value = chart.data.datasets[0].data[0] || 0;
         ctx.save();
         const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e6edf3';
