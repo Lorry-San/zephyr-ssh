@@ -3,12 +3,12 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
 const path = require('path');
-const getStats = require('./stats');   // 引入实时采集模块
+const getStats = require('./stats');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
 
-// 静态文件服务
+// 提供静态文件
 app.use(express.static(path.join(__dirname, 'public')));
 
 // 兜底路由
@@ -27,7 +27,7 @@ wss.on('connection', (ws, req) => {
     let sshClient = null;
     let sshStream = null;
     let sftpStream = null;
-    let statsTimer = null;          // 用于实时推送stats数据
+    let statsTimer = null;
 
     const sendJSON = (obj) => {
         if (ws.readyState === ws.OPEN) {
@@ -74,7 +74,7 @@ wss.on('connection', (ws, req) => {
         let msg;
         try { msg = JSON.parse(raw.toString()); } catch { return; }
 
-        // ---------- SSH 连接 ----------
+        // ------------------------- SSH 连接 -------------------------
         if (msg.type === 'connect') {
             const { host, port, username, password, privateKey, init } = msg;
             sshClient = new Client();
@@ -168,7 +168,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // ---------- SFTP 操作 ----------
+        // ------------------------- SFTP 操作 -------------------------
         // 初始化 SFTP
         if (msg.type === 'sftp-init') {
             if (!sshClient) {
@@ -231,7 +231,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 删除
+        // 删除（文件或空目录）
         if (msg.type === 'sftp-delete') {
             sftpStream.stat(msg.path, (err, stats) => {
                 if (err) {
@@ -259,7 +259,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 下载文件
+        // 下载文件（返回 base64）
         if (msg.type === 'sftp-download') {
             sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {
@@ -272,7 +272,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 上传文件
+        // 上传文件（base64）
         if (msg.type === 'sftp-upload') {
             const buffer = Buffer.from(msg.data, 'base64');
             const writeStream = sftpStream.createWriteStream(msg.path);
@@ -285,7 +285,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 编辑文件：读取
+        // 编辑文件：读取内容
         if (msg.type === 'sftp-readfile') {
             sftpStream.readFile(msg.path, { encoding: 'utf8' }, (err, data) => {
                 if (err) {
@@ -297,7 +297,7 @@ wss.on('connection', (ws, req) => {
             return;
         }
 
-        // 编辑文件：保存
+        // 编辑文件：保存内容
         if (msg.type === 'sftp-writefile') {
             const writeStream = sftpStream.createWriteStream(msg.path);
             writeStream.on('error', (err) => {
@@ -321,6 +321,7 @@ wss.on('connection', (ws, req) => {
     });
 });
 
+// 健康检查
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
 
 server.listen(PORT, () => {
