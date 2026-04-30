@@ -347,19 +347,54 @@ function destroyCharts() {
     chartInstances = {};
 }
 
+// 自定义插件：环形图中心显示百分比
+const centerTextPlugin = {
+    id: 'centerText',
+    afterDraw(chart) {
+        const { ctx, chartArea: { left, top, right, bottom }, config: { type } } = chart;
+        if (type !== 'doughnut') return;
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const value = chart.data.datasets[0].data[0] || 0;
+        ctx.save();
+        const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e6edf3';
+        ctx.font = 'bold 18px "JetBrains Mono", "Fira Code", monospace';
+        ctx.fillStyle = textColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(value)}%`, centerX, centerY);
+        ctx.restore();
+    }
+};
+
 function initCharts() {
     destroyCharts();
 
     const commonDoughnut = {
         type: 'doughnut',
         data: { datasets: [{ data: [0, 100], backgroundColor: ['#3fb950', 'rgba(255,255,255,0.05)'], borderWidth: 0 }] },
-        options: { circumference: 270, rotation: 225, cutout: '80%', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } } }
+        options: {
+            circumference: 270,
+            rotation: 225,
+            cutout: '80%',
+            responsive: true,
+            maintainAspectRatio: true,
+            animation: { duration: 0 },
+            plugins: { legend: { display: false }, tooltip: { enabled: false } }
+        },
+        plugins: [centerTextPlugin]
     };
 
     const commonLine = {
         type: 'line',
         data: { labels: Array(20).fill(''), datasets: [{ data: Array(20).fill(0), borderWidth: 1.5, pointRadius: 0, tension: 0.2 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } } }
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 0 },
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: { x: { display: false }, y: { display: false } }
+        }
     };
 
     document.querySelectorAll('.doughnut-wrap canvas').forEach(canvas => {
@@ -374,6 +409,7 @@ function initCharts() {
         const color = canvas.dataset.color || '#3fb950';
         const config = JSON.parse(JSON.stringify(commonLine));
         config.data.datasets[0].borderColor = color;
+        config.data.datasets[0].fill = false;
         chartInstances[id] = new Chart(canvas, config);
     });
 }
@@ -382,10 +418,11 @@ function updateDoughnut(id, value) {
     const chart = chartInstances[id];
     if (!chart) return;
     const p = Math.min(100, Math.max(0, safeVal(value)));
+    if (chart.data.datasets[0].data[0] === p) return; // 无变化不更新
     chart.data.datasets[0].data = [p, 100 - p];
     const color = p < 50 ? '#3fb950' : p < 80 ? '#d2991d' : '#f85149';
     chart.data.datasets[0].backgroundColor = [color, 'rgba(255,255,255,0.05)'];
-    chart.update();
+    chart.update('none');
 }
 
 function updateLine(id, value) {
@@ -394,7 +431,7 @@ function updateLine(id, value) {
     const data = chart.data.datasets[0].data;
     data.push(safeVal(value));
     if (data.length > 20) data.shift();
-    chart.update();
+    chart.update('none');
 }
 
 function renderStats(d) {
@@ -635,16 +672,8 @@ function connectWebSocket() {
         ws.addEventListener('message', (event) => {
             try {
                 const msg = JSON.parse(event.data);
-                // 实时监控数据
-                if (msg.type === 'stats') {
-                    renderStats(msg.data);
-                    return;
-                }
-                // SFTP 消息
-                if (msg.type?.startsWith('sftp-')) {
-                    handleSFTPMessage(msg);
-                    return;
-                }
+                if (msg.type === 'stats') { renderStats(msg.data); return; }
+                if (msg.type?.startsWith('sftp-')) { handleSFTPMessage(msg); return; }
                 switch (msg.type) {
                     case 'ready':
                         setStatus('connected', '已连接');
