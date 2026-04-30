@@ -445,6 +445,8 @@ function renderStats(d) {
     const txMbps = safeVal(d.net?.tx).toFixed(1);
     const ipv4 = d.ip?.ipv4 || 'N/A';
     const ipv6 = d.ip?.ipv6 || 'N/A';
+    const hostName = d.host?.hostname || 'N/A';
+    const hostOS = d.host?.os || 'N/A';
     const diskDevices = Array.isArray(d.disk?.devices) ? d.disk.devices : [];
     const diskDeviceCards = diskDevices.map(device => `
         <div class="doughnut-item disk-card">
