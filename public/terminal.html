@@ -70,16 +70,17 @@
             </div>
         </div>
 
-        <!-- 实时监控面板 -->
+        <!-- 实时监控覆盖层 -->
         <div class="info-modal" id="infoModal" style="display:none;">
             <div class="info-modal-header">
                 <span>📊 服务器实时监控</span>
                 <button class="tool-btn" id="infoCloseBtn">✕</button>
             </div>
-            <div class="info-modal-body" id="infoBody"></div>
-            <div class="chart-container">
-                <canvas id="rxChart"></canvas>
-                <canvas id="txChart"></canvas>
+            <div class="info-modal-body" id="infoBody">
+                <!-- 内容由 JS 动态生成 -->
+            </div>
+            <div class="chart-container" id="chartContainer">
+                <!-- 小折线图将由 JS 插入 -->
             </div>
         </div>
 
