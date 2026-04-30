@@ -449,6 +449,18 @@ function renderStats(d) {
     const txMbps = safeVal(d.net?.tx).toFixed(1);
     const ipv4 = d.ip?.ipv4 || 'N/A';
     const ipv6 = d.ip?.ipv6 || 'N/A';
+    const diskDevices = Array.isArray(d.disk?.devices) ? d.disk.devices : [];
+    const diskDeviceCards = diskDevices.map(device => `
+        <div class="doughnut-item disk-card">
+            <div class="disk-card-meta">
+                <div class="doughnut-label">${device.mountpoint}</div>
+                <div class="doughnut-text">${device.usedGB} / ${device.totalGB} GB</div>
+                <div class="doughnut-sub">${device.filesystem}</div>
+                <div class="doughnut-sub">已用 ${device.usageLabel}</div>
+            </div>
+            <div class="doughnut-wrap"><canvas id="${device.id}"></canvas></div>
+        </div>
+    `).join('');
 
     infoBody.innerHTML = `
         <div class="doughnut-row">
@@ -483,6 +495,7 @@ function renderStats(d) {
                 </div>
             </div>
         </div>
+        ${diskDeviceCards ? `<div class="doughnut-row disk-card-row">${diskDeviceCards}</div>` : ''}
         <div class="doughnut-row two-col">
             <div class="doughnut-item">
                 <div class="doughnut-label">下载</div>
@@ -511,6 +524,7 @@ function renderStats(d) {
     updateDoughnut('ramDoughnut', (safeVal(d.memUsed) / safeVal(d.memTotal)) * 100);
     updateDoughnut('swapDoughnut', safeVal(d.swapTotal) ? (safeVal(d.swapUsed) / safeVal(d.swapTotal)) * 100 : 0);
     updateDoughnut('diskDoughnut', (safeVal(d.disk?.used) / safeVal(d.disk?.total)) * 100);
+    diskDevices.forEach(device => updateDoughnut(device.id, device.percent));
 
     updateLine('rxLine', rxMbps);
     updateLine('txLine', txMbps);

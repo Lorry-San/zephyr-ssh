@@ -1,18 +1,19 @@
 const fs = require('fs');
 const os = require('os');
+const https = require('https');
 const { execSync } = require('child_process');
 
 // ================= 配置项 =================
-// 使用 DNS over HTTPS (DoH) 获取公网 IP，相比 curl 外部服务更稳定、更快。
-// 可以自行更换为其他 DoH 服务商。
-const IPV4_DOH_URL = 'https://1.1.1.1/dns-query?name=myip.opendns.com&type=A';
-const IPV6_DOH_URL = 'https://1.1.1.1/dns-query?name=myip.opendns.com&type=AAAA';
+const PUBLIC_IPV4_URL = 'https://api.ipify.org?format=json';
+const PUBLIC_IPV6_URL = 'https://api64.ipify.org?format=json';
+const PUBLIC_IP_CACHE_TTL_MS = 60 * 1000;
 // ==========================================
 
 let lastCPU = null;
 let lastNet = null;
 let lastDisk = null;
 let lastTime = Date.now();
+let cachedIP = { ...getLocalIPs(), updatedAt: 0 };
 
 function readCPUStat() {
     try {
@@ -77,13 +78,38 @@ function readMem() {
     }
 }
 
+function parseDiskDevices() {
+    try {
+        const output = execSync('df -kP -x tmpfs -x devtmpfs -x squashfs -x overlay', { encoding: 'utf8', timeout: 2000 });
+        const lines = output.trim().split('\n');
+        lines.shift();
+        return lines.map((line, index) => {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length < 6) return null;
+            const [filesystem, blocks, used, available, usePercent, mountpoint] = parts;
+            const totalGB = Number(blocks) / 1024 / 1024;
+            const usedGB = Number(used) / 1024 / 1024;
+            const percent = parseInt(usePercent.replace('%', ''), 10) || 0;
+            return {
+                id: `disk-${index}`,
+                filesystem,
+                mountpoint,
+                usedGB: Number(usedGB.toFixed(1)),
+                totalGB: Number(totalGB.toFixed(1)),
+                percent,
+                usageLabel: `${percent}%`
+            };
+        }).filter(Boolean);
+    } catch (e) {
+        return [];
+    }
+}
+
 function readDisk() {
     try {
-        const stat = fs.statfsSync('/');
-        const total = stat.blocks * stat.bsize;
-        const free = stat.bfree * stat.bsize;
-        const usedGB = (total - free) / 1024 / 1024 / 1024;
-        const totalGB = total / 1024 / 1024 / 1024;
+        const devices = parseDiskDevices();
+        const total = devices.reduce((sum, device) => sum + device.totalGB, 0);
+        const used = devices.reduce((sum, device) => sum + device.usedGB, 0);
 
         let readKBps = 0, writeKBps = 0;
         try {
@@ -93,8 +119,8 @@ function readDisk() {
             for (const line of lines) {
                 const p = line.trim().split(/\s+/);
                 if (p.length > 13 && (p[2].startsWith('sd') || p[2].startsWith('vd') || p[2].startsWith('nvme'))) {
-                    rs += parseInt(p[5]) || 0;
-                    ws += parseInt(p[9]) || 0;
+                    rs += Number(p[5]) || 0;
+                    ws += Number(p[9]) || 0;
                 }
             }
             const now = Date.now();
@@ -109,9 +135,9 @@ function readDisk() {
                 lastDisk = { rs, ws, time: now };
             }
         } catch (_) {}
-        return { used: usedGB, total: totalGB, readKBps, writeKBps };
+        return { used, total, readKBps, writeKBps, devices };
     } catch (e) {
-        return { used: 0, total: 0, readKBps: 0, writeKBps: 0 };
+        return { used: 0, total: 0, readKBps: 0, writeKBps: 0, devices: [] };
     }
 }
 
@@ -122,12 +148,15 @@ function readNet() {
         let rx = 0, tx = 0;
         const lines = data.split('\n');
         for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length < 10) continue;
-            const iface = parts[0].replace(':', '');
+            const cleaned = line.replace(':', ' ');
+            const parts = cleaned.trim().split(/\s+/);
+            if (parts.length < 17) continue;
+            const iface = parts[0];
             if (iface === 'lo' || iface.startsWith('docker') || iface.startsWith('veth') || iface.startsWith('br-')) continue;
-            rx += parseInt(parts[1]);
-            tx += parseInt(parts[9]);
+            const rxBytes = Number(parts[1]) || 0;
+            const txBytes = Number(parts[9]) || 0;
+            rx += rxBytes;
+            tx += txBytes;
         }
         if (!lastNet) {
             lastNet = { rx, tx };
@@ -135,10 +164,12 @@ function readNet() {
             return { rx: 0, tx: 0 };
         }
         const dt = (now - lastTime) / 1000;
-        const rxRate = ((rx - lastNet.rx) * 8) / dt / 1024 / 1024;
-        const txRate = ((tx - lastNet.tx) * 8) / dt / 1024 / 1024;
+        const prevNet = lastNet;
         lastNet = { rx, tx };
         lastTime = now;
+        if (dt <= 0) return { rx: 0, tx: 0 };
+        const rxRate = ((rx - prevNet.rx) * 8) / dt / 1024 / 1024;
+        const txRate = ((tx - prevNet.tx) * 8) / dt / 1024 / 1024;
         return {
             rx: Math.max(rxRate, 0),
             tx: Math.max(txRate, 0)
@@ -148,24 +179,82 @@ function readNet() {
     }
 }
 
-// 使用 DNS over HTTPS 获取公网 IP，更稳定、快速
-function getIPViaDoH(url) {
-    try {
-        const result = execSync(`curl -s -H "Accept: application/dns-json" "${url}"`, { timeout: 3000 }).toString().trim();
-        const json = JSON.parse(result);
-        if (json.Answer && json.Answer.length > 0) {
-            return json.Answer[0].data || 'N/A';
+function fetchJson(url, timeout = 3000) {
+    return new Promise((resolve, reject) => {
+        const req = https.get(url, { timeout }, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(body));
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy(new Error('Request timed out'));
+        });
+    });
+}
+
+function getLocalIPs() {
+    const nets = os.networkInterfaces();
+    const result = { ipv4: 'N/A', ipv6: 'N/A' };
+    for (const iface of Object.values(nets)) {
+        if (!iface) continue;
+        for (const entry of iface) {
+            if (entry.internal) continue;
+            if (entry.family === 'IPv4' && result.ipv4 === 'N/A') {
+                result.ipv4 = entry.address;
+            }
+            if (entry.family === 'IPv6' && result.ipv6 === 'N/A') {
+                result.ipv6 = entry.address;
+            }
+            if (result.ipv4 !== 'N/A' && result.ipv6 !== 'N/A') {
+                return result;
+            }
         }
-    } catch (_) {}
-    return 'N/A';
+    }
+    return result;
+}
+
+async function refreshIPCache() {
+    const now = Date.now();
+    if (now - cachedIP.updatedAt < PUBLIC_IP_CACHE_TTL_MS) {
+        return cachedIP;
+    }
+    const local = getLocalIPs();
+    try {
+        const ipv4Res = await fetchJson(PUBLIC_IPV4_URL);
+        if (ipv4Res && ipv4Res.ip) cachedIP.ipv4 = ipv4Res.ip;
+    } catch (_) {
+        cachedIP.ipv4 = cachedIP.ipv4 || local.ipv4;
+    }
+    try {
+        const ipv6Res = await fetchJson(PUBLIC_IPV6_URL);
+        if (ipv6Res && ipv6Res.ip) cachedIP.ipv6 = ipv6Res.ip;
+    } catch (_) {
+        cachedIP.ipv6 = cachedIP.ipv6 || local.ipv6;
+    }
+    if (cachedIP.ipv4 === 'N/A') cachedIP.ipv4 = local.ipv4;
+    if (cachedIP.ipv6 === 'N/A') cachedIP.ipv6 = local.ipv6;
+    cachedIP.updatedAt = now;
+    return cachedIP;
 }
 
 function getIP() {
+    if (Date.now() - cachedIP.updatedAt > PUBLIC_IP_CACHE_TTL_MS) {
+        refreshIPCache().catch(() => {});
+    }
     return {
-        ipv4: getIPViaDoH(IPV4_DOH_URL),
-        ipv6: getIPViaDoH(IPV6_DOH_URL)
+        ipv4: cachedIP.ipv4,
+        ipv6: cachedIP.ipv6
     };
 }
+
+refreshIPCache().catch(() => {});
 
 module.exports = function getStats() {
     const cpuInfo = readCPUInfo();
