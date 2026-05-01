@@ -36,6 +36,13 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
 body {
     background: var(--bg);
     color: var(--text);
@@ -345,6 +352,8 @@ body {
     overflow: hidden;
     position: relative;
     background: #0a0a0a;
+    overscroll-behavior: contain;
+    contain: layout paint;
 }
 :root[data-theme="light"] .terminal-container { background: #f6f8fa; }
 .terminal-container .wterm-wrapper {
@@ -356,8 +365,31 @@ body {
 .terminal-container .wterm-wrapper [data-wterm-root] {
     width: 100%;
     height: 100%;
+    padding-bottom: 16px;
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+    scrollbar-width: none;
     user-select: text;
     -webkit-user-select: text;
+}
+.terminal-container .wterm-wrapper [data-wterm-root]::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+.terminal-container::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 12px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, #0a0a0a 72%);
+    z-index: 2;
+}
+:root[data-theme="light"] .terminal-container::after {
+    background: linear-gradient(to bottom, transparent, #f6f8fa 72%);
 }
 
 /* 连接状态覆盖层 */
