@@ -415,7 +415,7 @@ body {
 .file-manager.front { z-index: 45; }
 .file-manager.front-switching,
 .info-modal.front-switching {
-    animation: panelFrontSwitch 0.36s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: panelFrontSwitch 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .file-manager.dragging,
 .file-manager.resizing,
@@ -442,17 +442,14 @@ body {
 
 @keyframes panelFrontSwitch {
     0% {
-        transform: translate3d(0, 0, 0) scale(0.985);
-        filter: brightness(0.92) saturate(0.96);
-        box-shadow: 0 16px 52px rgba(0,0,0,0.26);
-    }
-    58% {
-        transform: translate3d(0, -7px, 0) scale(1.018);
-        filter: brightness(1.06) saturate(1.08);
+        transform: translate3d(0, 2px, 0) scale(0.996);
+        filter: brightness(0.96);
+        box-shadow: 0 18px 58px rgba(0,0,0,0.28);
     }
     100% {
         transform: translate3d(0, 0, 0) scale(1);
-        filter: brightness(1) saturate(1);
+        filter: brightness(1);
+        box-shadow: 0 28px 90px rgba(0,0,0,0.38);
     }
 }
 

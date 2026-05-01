@@ -80,6 +80,10 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表实例管理
 let chartInstances = {};
+let shouldFollowTerminalOutput = true;
+let terminalScrollRaf = 0;
+let isProgrammaticTerminalScroll = false;
+let terminalScrollCleanup = null;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -808,7 +812,11 @@ function scrollTerminalToBottom() {
         if (el) {
             const maxScroll = el.scrollHeight - el.clientHeight;
             if (maxScroll > 0) {
+                isProgrammaticTerminalScroll = true;
                 el.scrollTop = maxScroll;
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+                });
             }
         }
     } catch (_) {}
@@ -820,16 +828,35 @@ function markTerminalUserInput(data = '') {
 }
 
 function scheduleTerminalScrollToBottom() {
-    // 空函数 - 让 wterm 完全自主处理滚动
+    if (terminalScrollRaf) return;
+    terminalScrollRaf = requestAnimationFrame(() => {
+        terminalScrollRaf = 0;
+        scrollTerminalToBottom();
+    });
 }
 
 function stopTerminalAutoScrollObserver() {
-    // 空函数 - 不需要特殊的滚动管理
+    if (terminalScrollRaf) {
+        cancelAnimationFrame(terminalScrollRaf);
+        terminalScrollRaf = 0;
+    }
+    terminalScrollCleanup?.();
+    terminalScrollCleanup = null;
+    isProgrammaticTerminalScroll = false;
 }
 
 function setupTerminalScrollHooks() {
-    // 完全不干预 wterm 的滚动，让它自己处理
-    // 这样可以避免我们的控制与 wterm 内部逻辑冲突导致的抖动
+    stopTerminalAutoScrollObserver();
+    const scrollEl = getTerminalScrollElement();
+    if (!scrollEl) return;
+
+    shouldFollowTerminalOutput = isTerminalAtBottom(scrollEl, 96);
+    const onScroll = () => {
+        if (isProgrammaticTerminalScroll) return;
+        shouldFollowTerminalOutput = isTerminalAtBottom(scrollEl, 96);
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    terminalScrollCleanup = () => scrollEl.removeEventListener('scroll', onScroll);
 }
 
 function isModifierOnlyKeyEvent(e) {
@@ -1426,8 +1453,9 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) {
-                            // 完全不干预 wterm 的滚动逻辑，简单地写入数据
+                            const followOutput = shouldFollowTerminalOutput || isTerminalAtBottom(getTerminalScrollElement(), 96);
                             term.write(msg.data);
+                            if (followOutput) scheduleTerminalScrollToBottom();
                         }
                         break;
                     case 'error':
