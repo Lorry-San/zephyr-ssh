@@ -1951,16 +1951,20 @@ function updateViewportInsets() {
     if (!viewport) return;
     const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
     const roundedInset = Math.round(keyboardInset);
-    document.documentElement.style.setProperty('--keyboard-inset', `${roundedInset}px`);
-    document.documentElement.classList.toggle('keyboard-open', roundedInset > 80);
+    if (Math.abs((updateViewportInsets._lastInset ?? -1) - roundedInset) < 2) return;
+    updateViewportInsets._lastInset = roundedInset;
+    cancelAnimationFrame(updateViewportInsets._raf);
+    updateViewportInsets._raf = requestAnimationFrame(() => {
+        document.documentElement.style.setProperty('--keyboard-inset', `${roundedInset}px`);
+        document.documentElement.classList.toggle('keyboard-open', roundedInset > 80);
+    });
     if (roundedInset > 80) {
         window.setTimeout(() => {
-            cmdInput?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             scheduleTerminalScrollToBottom();
             scheduleTerminalResize();
-        }, 40);
+        }, 180);
     } else {
-        scheduleTerminalResize();
+        window.setTimeout(scheduleTerminalResize, 180);
     }
 }
 
@@ -1974,6 +1978,7 @@ function setupMobileKeyboardAvoidance() {
 }
 
 function renderStats(d) {
+    if (!infoBody || !d) return;
     const cpuUsage = safeVal(d.cpu?.usage);
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
     const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
@@ -2000,6 +2005,15 @@ function renderStats(d) {
     `).join('');
 
     infoBody.innerHTML = `
+        <div class="doughnut-row">
+            <div class="doughnut-item disk-card full-width">
+                <div class="disk-card-meta">
+                    <div class="doughnut-label">主机</div>
+                    <div class="doughnut-text">${hostName}</div>
+                    <div class="doughnut-sub">${hostOS}</div>
+                </div>
+            </div>
+        </div>
         <div class="doughnut-row">
             <div class="doughnut-item disk-card full-width">
                 <div class="disk-card-meta">
@@ -2048,15 +2062,17 @@ function renderStats(d) {
         </div>
     `;
 
-    initCharts();
-
-    updateDoughnut('cpuDoughnut', cpuUsage);
-    updateDoughnut('ramDoughnut', (safeVal(d.memUsed) / safeVal(d.memTotal)) * 100);
-    updateDoughnut('swapDoughnut', safeVal(d.swapTotal) ? (safeVal(d.swapUsed) / safeVal(d.swapTotal)) * 100 : 0);
-    diskDevices.forEach(device => updateDoughnut(device.id, device.percent));
-
-    updateLine('rxLine', rxMbps);
-    updateLine('txLine', txMbps);
+    try {
+        initCharts();
+        updateDoughnut('cpuDoughnut', cpuUsage);
+        updateDoughnut('ramDoughnut', (safeVal(d.memUsed) / safeVal(d.memTotal)) * 100);
+        updateDoughnut('swapDoughnut', safeVal(d.swapTotal) ? (safeVal(d.swapUsed) / safeVal(d.swapTotal)) * 100 : 0);
+        diskDevices.forEach(device => updateDoughnut(device.id, device.percent));
+        updateLine('rxLine', rxMbps);
+        updateLine('txLine', txMbps);
+    } catch (err) {
+        console.warn('[Stats] 图表初始化失败:', err);
+    }
 }
 
 function showInfoModal() {
@@ -2065,6 +2081,9 @@ function showInfoModal() {
         return;
     }
     ensureFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
+    if (infoBody && !infoBody.children.length) {
+        infoBody.innerHTML = '<div class="info-loading">正在加载服务器实时监控数据...</div>';
+    }
     infoModal.style.display = 'flex';
     // display 从 none 切换为 flex 后，下一帧再加 open，确保浏览器能播放开启动画。
     requestAnimationFrame(() => {
@@ -2237,7 +2256,7 @@ function openPanelLayoutMenu(button, panel) {
         const rect = button.getBoundingClientRect();
         const menuRect = menu.getBoundingClientRect();
         const anchorX = rect.left + rect.width / 2;
-        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
+        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2 - 16), window.innerWidth - menuRect.width - 8);
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
         const opensBelow = belowTop + menuRect.height <= window.innerHeight - 8;
@@ -2828,17 +2847,13 @@ reconnectBtn.addEventListener('click', reconnect);
 
 // ---------- 移动端软键盘处理 ----------
 function handleKeyboardShow() {
-    const vvTop = visualViewport?.offsetTop || 0;
-    const vvHeight = visualViewport?.height || window.innerHeight;
-    const bottomSpace = window.innerHeight - (vvTop + vvHeight);
-    if (bottomSpace > 20) {
-        // 软键盘弹出，调整页面
-        document.documentElement.style.setProperty('--keyboard-inset', `${bottomSpace + 4}px`);
-    }
+    updateViewportInsets();
 }
 
 function handleKeyboardHide() {
+    updateViewportInsets._lastInset = -1;
     document.documentElement.style.setProperty('--keyboard-inset', '0px');
+    document.documentElement.classList.remove('keyboard-open');
 }
 
 if (typeof visualViewport !== 'undefined') {

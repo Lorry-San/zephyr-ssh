@@ -837,7 +837,8 @@ body:has(.terminal-page) {
     will-change: transform, opacity, filter;
 }
 .panel-layout-menu::before {
-    content: '';
+    content: none;
+    display: none;
     position: absolute;
     top: -7px;
     left: var(--menu-origin-x, 50%);
@@ -1519,6 +1520,12 @@ body:has(.terminal-page) {
     position: sticky; top: 0; z-index: 2;
 }
 .info-modal-body { padding: 10px; overflow-y: auto; }
+.info-loading {
+    padding: 24px 14px;
+    color: var(--text-secondary);
+    text-align: center;
+    font-size: 13px;
+}
 
 /* 环形进度条行 */
 .doughnut-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }

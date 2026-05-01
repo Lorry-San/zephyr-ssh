@@ -85,7 +85,7 @@ wss.on('connection', (ws, req) => {
     // 启动实时监控推送
     function startStatsPush() {
         if (statsTimer) return;
-        statsTimer = setInterval(async () => {
+        const pushStats = async () => {
             if (ws.readyState !== ws.OPEN || !sshClient || statsRunning) return;
             statsRunning = true;
             try {
@@ -97,7 +97,9 @@ wss.on('connection', (ws, req) => {
             } finally {
                 statsRunning = false;
             }
-        }, 1000);
+        };
+        pushStats();
+        statsTimer = setInterval(pushStats, 1000);
     }
 
     // 停止实时推送
