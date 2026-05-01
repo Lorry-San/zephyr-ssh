@@ -5,6 +5,7 @@ let connections = [], activities = [], proxies = [], jumpHosts = [], settings = 
 let editingId = null;
 let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
+let fullscreenLoadingTimer = 0;
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
 function api(path, options = {}) {
@@ -82,14 +83,54 @@ function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     else $$('#terminalWorkspace [data-frame]').forEach((el) => el.classList.toggle('active', el.dataset.frame === activeTerminalTab));
 }
 
+function ensureFullscreenLoader() {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return null;
+    let loader = workspace.querySelector('.terminal-fullscreen-loader');
+    if (!loader) {
+        loader = document.createElement('div');
+        loader.className = 'terminal-fullscreen-loader';
+        loader.setAttribute('aria-live', 'polite');
+        loader.innerHTML = '<div class="terminal-fullscreen-spinner"></div><span>正在切换全屏...</span>';
+        workspace.appendChild(loader);
+    }
+    return loader;
+}
+
+function showFullscreenLoading(text = '正在切换全屏...') {
+    const workspace = $('#terminalWorkspace');
+    const loader = ensureFullscreenLoader();
+    if (!workspace || !loader) return;
+    loader.querySelector('span').textContent = text;
+    workspace.classList.add('fullscreen-loading');
+    window.clearTimeout(fullscreenLoadingTimer);
+    fullscreenLoadingTimer = window.setTimeout(() => hideFullscreenLoading(), 1800);
+}
+
+function hideFullscreenLoading({ delay = 260 } = {}) {
+    window.clearTimeout(fullscreenLoadingTimer);
+    fullscreenLoadingTimer = window.setTimeout(() => {
+        $('#terminalWorkspace')?.classList.remove('fullscreen-loading');
+    }, delay);
+}
+
 async function fullscreenTerminalTab(tabId) {
     activeTerminalTab = tabId;
     renderTerminalTabs({ rebuildWorkspace: false });
-    const frame = $(`#terminalWorkspace [data-frame="${CSS.escape(tabId)}"]`) || $('#terminalWorkspace');
-    const target = frame.classList.contains('terminal-placeholder') ? $('#terminalWorkspace') : frame;
-    if (target.requestFullscreen) await target.requestFullscreen();
-    else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
-    else toast('当前浏览器不支持全屏 API');
+    const target = $('#terminalWorkspace');
+    if (!target) return;
+    showFullscreenLoading('正在进入全屏...');
+    try {
+        if (target.requestFullscreen) await target.requestFullscreen();
+        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
+        else {
+            hideFullscreenLoading({ delay: 0 });
+            toast('当前浏览器不支持全屏 API');
+        }
+    } catch (err) {
+        hideFullscreenLoading({ delay: 0 });
+        throw err;
+    }
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
@@ -104,7 +145,7 @@ async function loadSettings() {
     await loadSecurityStatus(); await loadSecurityLists();
 }
 async function saveBeian(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ beian: { icp: $('#icpInput').value, policeBeian: $('#policeInput').value, policeBeianUrl: $('#policeUrlInput').value, show: $('#showBeianInput').checked } }) }); toast('备案信息已保存'); }
-async function loadSecurityStatus() { securityStatus = await api('/api/security/status').catch(() => ({ user: {}, passkeys: [] })); $('#profileEmail').value = securityStatus.user.email || ''; renderTotp(); renderPasskeys(); }
+async function loadSecurityStatus() { securityStatus = await api('/api/security/status').catch(() => ({ user: {}, passkeys: [] })); $('#profileUsername').value = securityStatus.user.username || ''; $('#profileEmail').value = securityStatus.user.email || ''; renderTotp(); renderPasskeys(); }
 async function loadSecurityLists() { ipBans = (await api('/api/security/ip-bans').catch(() => ({ bans: [] }))).bans || []; loginEvents = (await api('/api/security/login-events').catch(() => ({ events: [] }))).events || []; renderSecurityLists(); }
 function renderTotp() { $('#totpBox').innerHTML = `<div class="mini-item"><b>TOTP 状态</b><span>${securityStatus.user.totpEnabled ? '已开启' : '未开启'}</span><button id="setupTotpBtn">${securityStatus.user.totpEnabled ? '重新绑定' : '开启 TOTP'}</button></div>`; $('#totpDisableForm').classList.toggle('force-hidden', !securityStatus.user.totpEnabled); }
 function renderPasskeys() { $('#passkeyList').innerHTML = (securityStatus.passkeys || []).map((p) => `<div class="mini-item"><b>Passkey</b><span>${fmtTime(p.createdAt)}</span><button data-del-passkey="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无 Passkey</p>'; }
@@ -128,12 +169,17 @@ function bindEvents() {
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
     $('#sessionTabs').addEventListener('click', (e) => { const full = e.target.closest('[data-fullscreen-tab]')?.dataset.fullscreenTab; const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (full) { e.stopPropagation(); fullscreenTerminalTab(full).catch((err) => toast(err.message)); return; } if (close) { terminalTabs = terminalTabs.filter((t) => t.id !== close); sessionStorage.removeItem(`zephyr_ssh_params_${close}`); if (activeTerminalTab === close) activeTerminalTab = terminalTabs[0]?.id || null; renderTerminalTabs(); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
+    ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
+        const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+        if (fullscreenElement === $('#terminalWorkspace')) hideFullscreenLoading({ delay: 360 });
+        else showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 420 });
+    }));
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpForm').addEventListener('submit', saveJump);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
-    $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
+    $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
     $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail);
     $('#totpBox').addEventListener('click', (e) => { if (e.target.id === 'setupTotpBtn') setupTotp().catch((err) => toast(err.message)); });
     $('#totpEnableForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/totp/enable', { method: 'POST', body: JSON.stringify({ code: $('#totpEnableCode').value }) }); toast('TOTP 已开启'); $('#totpEnableForm').classList.add('force-hidden'); await loadSecurityStatus(); });

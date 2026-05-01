@@ -24,9 +24,12 @@
                 <label for="password">密码</label>
                 <input type="password" id="password" placeholder="admin" autocomplete="current-password" required>
             </div>
+            <div class="auth-options">
+                <label class="remember-me"><input type="checkbox" id="rememberMe"> 记住我</label>
+                <a href="#" id="forgotLink">忘记密码？</a>
+            </div>
             <button type="submit" class="btn btn-primary" id="loginBtn">登录</button>
             <button type="button" class="btn" id="passkeyLoginBtn">使用 Passkey 登录</button>
-            <p class="auth-link"><a href="#" id="forgotLink">忘记密码？</a></p>
             <p class="auth-hint">默认账号：admin / admin。首次登录需修改密码。</p>
         </form>
     </div>

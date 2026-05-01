@@ -199,6 +199,19 @@ function saveUsersStore(store) {
 function getUser(username) { const u = db.prepare('SELECT * FROM users WHERE username=?').get(username); return u ? normalizeUser(u) : null; }
 function getFirstUser() { const u = db.prepare('SELECT * FROM users ORDER BY createdAt LIMIT 1').get(); return u ? normalizeUser(u) : null; }
 function updateUser(username, values) { const old = getUser(username); if (!old) return null; const next = { ...old, ...values, updatedAt: now(), defaultPassword: values.defaultPassword ?? old.defaultPassword ? 1 : 0, totpEnabled: values.totpEnabled ?? old.totpEnabled ? 1 : 0 }; db.prepare('UPDATE users SET passwordHash=@passwordHash, defaultPassword=@defaultPassword, updatedAt=@updatedAt, email=@email, totpEnabled=@totpEnabled, totpSecret=@totpSecret, failedLoginCount=@failedLoginCount, lockedUntil=@lockedUntil WHERE username=@username').run({ ...next, email: next.email || '', totpSecret: next.totpSecret || null, failedLoginCount: Number(next.failedLoginCount) || 0, lockedUntil: next.lockedUntil || null }); return getUser(username); }
+function renameUser(oldUsername, newUsername) {
+    const old = getUser(oldUsername);
+    if (!old) return null;
+    if (!newUsername || oldUsername === newUsername) return old;
+    if (getUser(newUsername)) throw new Error('用户名已存在');
+    const tx = db.transaction(() => {
+        db.prepare('UPDATE users SET username=?, updatedAt=? WHERE username=?').run(newUsername, now(), oldUsername);
+        db.prepare('UPDATE passkeys SET username=? WHERE username=?').run(newUsername, oldUsername);
+        db.prepare('UPDATE password_reset_codes SET username=? WHERE username=?').run(newUsername, oldUsername);
+    });
+    tx();
+    return getUser(newUsername);
+}
 function getConnectionsStore() { return { connections: db.prepare('SELECT * FROM connections ORDER BY createdAt DESC').all().map(rowToConnection), activities: getActivities() }; }
 function saveConnectionsStore(store) {
     const tx = db.transaction(() => {
@@ -240,4 +253,4 @@ function updatePasskeyCounter(id, counter) { db.prepare('UPDATE passkeys SET cou
 function deletePasskey(username, id) { db.prepare('DELETE FROM passkeys WHERE username=? AND id=?').run(username, id); }
 function rawDb() { return db; }
 
-module.exports = { init, getUsersStore, saveUsersStore, getUser, getFirstUser, updateUser, getConnectionsStore, saveConnectionsStore, getSettings, updateSettings, addActivity, clearActivities, listProxies, getProxyRaw, saveProxy, deleteProxy, listJumpHosts, saveJumpHost, deleteJumpHost, addLoginEvent, listLoginEvents, clearLoginEvents, getIpBan, saveIpBan, clearIpBan, listIpBans, createResetCode, findResetCode, markResetCodeUsed, listPasskeys, savePasskey, getPasskeyByCredentialId, updatePasskeyCounter, deletePasskey, rawDb };
+module.exports = { init, getUsersStore, saveUsersStore, getUser, getFirstUser, updateUser, renameUser, getConnectionsStore, saveConnectionsStore, getSettings, updateSettings, addActivity, clearActivities, listProxies, getProxyRaw, saveProxy, deleteProxy, listJumpHosts, saveJumpHost, deleteJumpHost, addLoginEvent, listLoginEvents, clearLoginEvents, getIpBan, saveIpBan, clearIpBan, listIpBans, createResetCode, findResetCode, markResetCodeUsed, listPasskeys, savePasskey, getPasskeyByCredentialId, updatePasskeyCounter, deletePasskey, rawDb };

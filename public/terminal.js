@@ -152,6 +152,7 @@ let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
+let keyboardViewportBaseline = 0;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
@@ -182,7 +183,7 @@ function getViewportKeyboardMetrics() {
     const viewport = window.visualViewport;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
     const stableHeight = Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stable-vh')) || 0);
-    const baselineHeight = Math.max(layoutHeight, stableHeight || 0);
+    const baselineHeight = Math.max(layoutHeight, stableHeight || 0, keyboardViewportBaseline || 0);
     const viewportHeight = Math.round(viewport?.height || layoutHeight || 0);
     const offsetTop = Math.round(viewport?.offsetTop || 0);
     const keyboardInset = viewport ? Math.max(0, baselineHeight - viewportHeight - offsetTop) : 0;
@@ -230,13 +231,15 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
     viewportAnimationState.currentOffsetTop = targetY;
     viewportAnimationState.targetHeight = targetH;
     viewportAnimationState.targetOffsetTop = targetY;
+    document.documentElement.classList.toggle('viewport-updating', !immediate);
     setViewportCssMetrics(targetH, targetY);
     window.clearTimeout(viewportAnimationResizeTimer);
     viewportAnimationResizeTimer = window.setTimeout(() => {
+        document.documentElement.classList.remove('viewport-updating');
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
         scheduleTerminalResize();
-    }, immediate ? 40 : 90);
+    }, immediate ? 40 : 220);
 }
 
 function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate = false } = {}) {
@@ -2260,25 +2263,39 @@ function setupTerminalCustomScrollbar() {
 function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport) return;
+    if (!isKeyboardAvoidanceTarget()) return;
     const metrics = getViewportKeyboardMetrics();
-    const signature = `${metrics.keyboardOpen}:${metrics.keyboardInset}:${metrics.viewportHeight}:${metrics.offsetTop}`;
+    if (!mobileKeyboardOpen && metrics.keyboardOpen) {
+        keyboardViewportBaseline = Math.max(metrics.layoutHeight, keyboardViewportBaseline || 0);
+    }
+    const heightDelta = Math.abs(metrics.viewportHeight - (updateViewportInsets._lastViewportHeight || 0));
+    const insetDelta = Math.abs(metrics.keyboardInset - (updateViewportInsets._lastKeyboardInset || 0));
+    const signature = `${metrics.keyboardOpen}:${Math.round(metrics.keyboardInset / 4) * 4}:${Math.round(metrics.viewportHeight / 4) * 4}:${Math.round(metrics.offsetTop / 2) * 2}`;
     if (updateViewportInsets._lastSignature === signature) return;
     updateViewportInsets._lastSignature = signature;
+    updateViewportInsets._lastViewportHeight = metrics.viewportHeight;
+    updateViewportInsets._lastKeyboardInset = metrics.keyboardInset;
     const wasKeyboardOpen = mobileKeyboardOpen;
     mobileKeyboardOpen = metrics.keyboardOpen;
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', mobileKeyboardOpen ? `${metrics.keyboardInset}px` : '0px');
         document.documentElement.classList.toggle('keyboard-open', mobileKeyboardOpen);
-        animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
+        const tinyNoise = heightDelta < 3 && insetDelta < 3;
+        if (!tinyNoise) {
+            animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
+        }
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
-        if (!mobileKeyboardOpen) setStableViewportHeight();
+        if (!mobileKeyboardOpen) {
+            keyboardViewportBaseline = 0;
+            setStableViewportHeight();
+        }
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
         scheduleTerminalResize();
-    }, mobileKeyboardOpen ? 280 : 180);
+    }, mobileKeyboardOpen ? 360 : 220);
     if (mobileKeyboardOpen) {
         window.setTimeout(() => {
             shouldFollowTerminalOutput = true;
@@ -2286,6 +2303,7 @@ function updateViewportInsets() {
         }, 180);
     } else if (wasKeyboardOpen) {
         window.setTimeout(() => {
+            keyboardViewportBaseline = 0;
             setStableViewportHeight();
             scheduleTerminalScrollToBottom();
             scheduleTerminalResize();
@@ -2318,11 +2336,26 @@ function setupMobileKeyboardAvoidance() {
     window.visualViewport.addEventListener('resize', updateViewportInsets, { passive: true });
     window.visualViewport.addEventListener('scroll', updateViewportInsets, { passive: true });
     cmdInput?.addEventListener('focus', () => {
+        keyboardViewportBaseline = Math.max(
+            window.innerHeight || 0,
+            document.documentElement.clientHeight || 0,
+            window.visualViewport?.height || 0,
+            parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stable-vh')) || 0,
+        );
         updateViewportInsets();
         window.setTimeout(updateViewportInsets, 80);
         window.setTimeout(updateViewportInsets, 260);
     });
-    cmdInput?.addEventListener('blur', () => window.setTimeout(updateViewportInsets, 120));
+    cmdInput?.addEventListener('blur', () => {
+        window.setTimeout(() => {
+            updateViewportInsets._lastSignature = '';
+            mobileKeyboardOpen = false;
+            keyboardViewportBaseline = 0;
+            document.documentElement.style.setProperty('--keyboard-inset', '0px');
+            document.documentElement.classList.remove('keyboard-open');
+            setStableViewportHeight();
+        }, 160);
+    });
     updateViewportInsets();
 }
 
@@ -2610,12 +2643,17 @@ function openPanelLayoutMenu(button, panel) {
     const placeMenu = () => {
         const rect = button.getBoundingClientRect();
         const menuRect = menu.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const vvLeft = viewport?.offsetLeft || 0;
+        const vvTop = viewport?.offsetTop || 0;
+        const vvWidth = viewport?.width || window.innerWidth;
+        const vvHeight = viewport?.height || window.innerHeight;
         const anchorX = rect.left + rect.width / 2;
-        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2 - 32), window.innerWidth - menuRect.width - 8);
+        const left = Math.min(Math.max(vvLeft + 8, anchorX - menuRect.width / 2), vvLeft + vvWidth - menuRect.width - 8);
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
-        const opensBelow = belowTop + menuRect.height <= window.innerHeight - 8;
-        const top = opensBelow ? belowTop : Math.max(8, aboveTop);
+        const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
+        const top = opensBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));

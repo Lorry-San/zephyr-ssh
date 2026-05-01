@@ -217,10 +217,11 @@ function normalizeSettingsInput(body) {
     return next;
 }
 
-function createSession(res, user) {
+function createSession(res, user, { remember = false } = {}) {
     const sid = crypto.randomUUID();
     sessions.set(sid, { username: user.username, createdAt: Date.now(), mustChangePassword: !!user.defaultPassword });
-    res.setHeader('Set-Cookie', `zephyr_sid=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax`);
+    const maxAge = remember ? '; Max-Age=2592000' : '';
+    res.setHeader('Set-Cookie', `zephyr_sid=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax${maxAge}`);
     return sid;
 }
 
@@ -302,7 +303,7 @@ initData();
 app.use(express.json({ limit: '1mb' }));
 
 app.post('/api/auth/login', async (req, res) => {
-    const { username, password, captchaToken } = req.body || {};
+    const { username, password, captchaToken, remember } = req.body || {};
     const guard = checkLoginGuards(req);
     const ua = req.headers['user-agent'] || '';
     if (!guard.ok) { await notifyLogin({ username, ip: guard.ip, userAgent: ua, success: false, reason: guard.reason }); return res.status(403).json({ error: guard.reason }); }
@@ -316,11 +317,11 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (user.totpEnabled) {
         const tempToken = crypto.randomUUID();
-        tempTotpTokens.set(tempToken, { username: user.username, createdAt: Date.now(), ip: guard.ip, userAgent: ua });
+        tempTotpTokens.set(tempToken, { username: user.username, createdAt: Date.now(), ip: guard.ip, userAgent: ua, remember: !!remember });
         return res.json({ ok: true, requireTotp: true, tempToken });
     }
     recordLoginSuccess(guard.ip);
-    createSession(res, user);
+    createSession(res, user, { remember: !!remember });
     addActivity(`用户登录：${user.username}`);
     await notifyLogin({ username: user.username, ip: guard.ip, userAgent: ua, success: true, reason: '' });
     res.json({ ok: true, user: { username: user.username }, mustChangePassword: !!user.defaultPassword });
@@ -332,7 +333,7 @@ app.post('/api/auth/totp/verify', async (req, res) => {
     if (!tmp || Date.now() - tmp.createdAt > 5 * 60000) return res.status(400).json({ error: '验证会话已过期' });
     const user = storage.getUser(tmp.username);
     if (!user?.totpSecret || !authenticator.check(String(code || ''), user.totpSecret)) { recordLoginFailure(tmp.ip); await notifyLogin({ username: tmp.username, ip: tmp.ip, userAgent: tmp.userAgent, success: false, reason: 'TOTP 错误' }); return res.status(401).json({ error: '动态验证码错误' }); }
-    tempTotpTokens.delete(tempToken); recordLoginSuccess(tmp.ip); createSession(res, user); addActivity(`用户登录：${user.username}`); await notifyLogin({ username: user.username, ip: tmp.ip, userAgent: tmp.userAgent, success: true, reason: '' });
+    tempTotpTokens.delete(tempToken); recordLoginSuccess(tmp.ip); createSession(res, user, { remember: !!tmp.remember }); addActivity(`用户登录：${user.username}`); await notifyLogin({ username: user.username, ip: tmp.ip, userAgent: tmp.userAgent, success: true, reason: '' });
     res.json({ ok: true, user: { username: user.username }, mustChangePassword: !!user.defaultPassword });
 });
 
@@ -402,7 +403,22 @@ app.post('/api/security/totp/disable', requireAuth, (req, res) => {
     storage.updateUser(user.username, { totpEnabled: false, totpSecret: null }); addActivity('关闭 TOTP 两步验证'); res.json({ ok: true });
 });
 app.get('/api/security/status', requireAuth, (req, res) => { const u = storage.getUser(req.session.username); res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled }, passkeys: storage.listPasskeys(u.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }); });
-app.put('/api/security/profile', requireAuth, (req, res) => { const u = storage.updateUser(req.session.username, { email: String(req.body?.email || '') }); res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled } }); });
+app.put('/api/security/profile', requireAuth, (req, res) => {
+    const nextUsername = String(req.body?.username || '').trim();
+    if (!nextUsername) return res.status(400).json({ error: '用户名不能为空' });
+    if (!/^[A-Za-z0-9_.@-]{2,32}$/.test(nextUsername)) return res.status(400).json({ error: '用户名需为 2-32 位字母、数字或 ._@-' });
+    try {
+        let u = storage.updateUser(req.session.username, { email: String(req.body?.email || '') });
+        if (nextUsername !== req.session.username) {
+            u = storage.renameUser(req.session.username, nextUsername);
+            req.session.username = nextUsername;
+            addActivity(`修改登录用户名：${nextUsername}`);
+        }
+        res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled } });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '修改资料失败' });
+    }
+});
 
 app.get('/api/connections', requireAuth, (req, res) => {
     const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
@@ -500,7 +516,8 @@ app.delete('/api/activities', requireAuth, (req, res) => { storage.clearActiviti
 
 app.get('/api/public/settings', (req, res) => {
     const s = storage.getSettings();
-    res.json({ icp: s.icp || s.beian?.icp || '', policeBeian: s.policeBeian || s.beian?.policeBeian || '', policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '', showBeian: s.showBeian !== false && s.beian?.show !== false, captcha: { enabled: !!s.captcha?.enabled, provider: s.captcha?.provider || 'turnstile', siteKey: s.captcha?.siteKey || '', tencentCaptchaAppId: s.captcha?.tencentCaptchaAppId || '' } });
+    const user = storage.getFirstUser();
+    res.json({ defaultUsername: user?.username || 'admin', icp: s.icp || s.beian?.icp || '', policeBeian: s.policeBeian || s.beian?.policeBeian || '', policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '', showBeian: s.showBeian !== false && s.beian?.show !== false, captcha: { enabled: !!s.captcha?.enabled, provider: s.captcha?.provider || 'turnstile', siteKey: s.captcha?.siteKey || '', tencentCaptchaAppId: s.captcha?.tencentCaptchaAppId || '' } });
 });
 
 app.get('/api/passkeys', requireAuth, (req, res) => res.json({ passkeys: storage.listPasskeys(req.session.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }));

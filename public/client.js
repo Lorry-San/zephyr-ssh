@@ -17,7 +17,9 @@ const changeErrorBanner = $('#changeErrorBanner');
 const totpErrorBanner = $('#totpErrorBanner');
 const forgotErrorBanner = $('#forgotErrorBanner');
 const beianFooter = $('#beianFooter');
+const REMEMBER_USERNAME_KEY = 'zephyr-remember-username';
 let tempTotpToken = '';
+let defaultUsername = 'admin';
 
 // ===== 主题管理 (登录页) =====
 function getPreferredTheme() {
@@ -87,6 +89,12 @@ function bufferToBase64url(buffer) { return btoa(String.fromCharCode(...new Uint
 async function loadBeian() {
     try {
         const s = await api('/api/public/settings');
+        defaultUsername = s.defaultUsername || 'admin';
+        const usernameInput = $('#username');
+        if (usernameInput) usernameInput.placeholder = defaultUsername;
+        const hint = $('.auth-hint');
+        if (hint) hint.textContent = `默认账号：${defaultUsername} / admin。首次登录需修改密码。`;
+        initRememberMe();
         if (!s.showBeian || (!s.icp && !s.policeBeian)) { beianFooter.innerHTML = ''; return; }
         const parts = [];
         if (s.icp) parts.push(`<a href="https://beian.miit.gov.cn" target="_blank" rel="noreferrer">${s.icp}</a>`);
@@ -101,12 +109,23 @@ api('/api/auth/me').then((data) => {
 }).catch(() => {});
 loadBeian();
 
+function initRememberMe() {
+    const remembered = localStorage.getItem(REMEMBER_USERNAME_KEY) || '';
+    const usernameInput = $('#username');
+    if (!usernameInput) return;
+    usernameInput.value = remembered || defaultUsername;
+    $('#rememberMe').checked = !!remembered;
+    (remembered ? $('#password') : usernameInput)?.focus();
+}
+
 loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = $('#username').value.trim();
     const password = $('#password').value;
+    if ($('#rememberMe')?.checked) localStorage.setItem(REMEMBER_USERNAME_KEY, username);
+    else localStorage.removeItem(REMEMBER_USERNAME_KEY);
     try {
-        const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+        const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, remember: !!$('#rememberMe')?.checked }) });
         if (data.requireTotp) return showTotp(data.tempToken);
         if (data.mustChangePassword) showChangePassword();
         else window.location.href = '/app.html';
