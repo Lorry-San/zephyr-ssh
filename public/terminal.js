@@ -80,13 +80,6 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表实例管理
 let chartInstances = {};
-
-// 终端滚动状态（按照官方 wterm 方案）
-let terminalShouldScrollToBottom = true;  // 记录是否应该滚动的意图
-let terminalScrollRaf = 0;
-let terminalScrollListeners = [];
-let isProgrammaticScroll = false;
-let isTerminalRenderingOutput = false;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -169,10 +162,6 @@ function applyTerminalFontSize(size, { persist = true } = {}) {
     terminalFontSize = clampTerminalFontSize(size);
     document.documentElement.style.setProperty('--terminal-font-size', `${terminalFontSize}px`);
     wtermWrapper.style.fontSize = `${terminalFontSize}px`;
-    wtermWrapper.querySelectorAll('[data-wterm-root], [data-wterm-root] *').forEach((el) => {
-        el.style.fontSize = `${terminalFontSize}px`;
-        el.style.lineHeight = '1.25';
-    });
     try { term?.setOption?.('fontSize', terminalFontSize); } catch (_) {}
     try { term?.options && (term.options.fontSize = terminalFontSize); } catch (_) {}
     if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
@@ -817,61 +806,30 @@ function scrollTerminalToBottom() {
     try {
         const el = getTerminalScrollElement();
         if (el) {
-            isProgrammaticScroll = true;
-            const target = Math.max(0, el.scrollHeight - el.clientHeight);
-            if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
+            const maxScroll = el.scrollHeight - el.clientHeight;
+            if (maxScroll > 0) {
+                el.scrollTop = maxScroll;
+            }
         }
     } catch (_) {}
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => { isProgrammaticScroll = false; });
-    });
 }
 
 function markTerminalUserInput(data = '') {
-    // 用户输入时记录当前是否在底部（官方 wterm 做法）
-    terminalShouldScrollToBottom = isTerminalAtBottom();
-    
-    // 立即滚动到底部，这样输入过程中不会抖
-    if (terminalShouldScrollToBottom) {
-        scrollTerminalToBottom();
-    }
+    // 不在输入过程中手动控制滚动。@wterm/dom 内部已经实现了与官方演示一致的
+    // 输入、光标和滚动同步；外部 scrollTop 干预会和它的渲染循环打架导致电脑端抖动。
 }
 
 function scheduleTerminalScrollToBottom() {
-    if (terminalScrollRaf) return;
-    terminalScrollRaf = requestAnimationFrame(() => {
-        terminalScrollRaf = 0;
-        if (terminalShouldScrollToBottom) {
-            scrollTerminalToBottom();
-        }
-    });
+    // 空函数 - 让 wterm 完全自主处理滚动
 }
 
 function stopTerminalAutoScrollObserver() {
-    if (terminalScrollRaf) {
-        cancelAnimationFrame(terminalScrollRaf);
-        terminalScrollRaf = 0;
-    }
-    terminalScrollListeners.forEach(({ el, handler }) => el.removeEventListener('scroll', handler));
-    terminalScrollListeners = [];
+    // 空函数 - 不需要特殊的滚动管理
 }
 
 function setupTerminalScrollHooks() {
-    stopTerminalAutoScrollObserver();
-    terminalShouldScrollToBottom = true;
-
-    const scrollEl = getTerminalScrollElement();
-    if (scrollEl) {
-        const handler = () => {
-            if (isProgrammaticScroll || isTerminalRenderingOutput) return;
-            // 用户手动滚动时，记录当前位置是否在底部
-            terminalShouldScrollToBottom = isTerminalAtBottom(scrollEl);
-        };
-        scrollEl.addEventListener('scroll', handler, { passive: true });
-        terminalScrollListeners.push({ el: scrollEl, handler });
-    }
-
-    scrollTerminalToBottom();
+    // 完全不干预 wterm 的滚动，让它自己处理
+    // 这样可以避免我们的控制与 wterm 内部逻辑冲突导致的抖动
 }
 
 function isModifierOnlyKeyEvent(e) {
@@ -879,20 +837,7 @@ function isModifierOnlyKeyEvent(e) {
 }
 
 function setupTerminalInputActivityHooks() {
-    const markActivity = () => pauseTerminalAutoScrollForInput();
-    const markKeyboardActivity = (e) => {
-        if (isModifierOnlyKeyEvent(e)) return;
-        pauseTerminalAutoScrollForInput();
-    };
-
-    wtermWrapper.addEventListener('keydown', markKeyboardActivity, true);
-    wtermWrapper.addEventListener('beforeinput', markActivity, true);
-    wtermWrapper.addEventListener('input', markActivity, true);
-    wtermWrapper.addEventListener('compositionstart', markActivity, true);
-    wtermWrapper.addEventListener('compositionupdate', markActivity, true);
-
-    cmdInput.addEventListener('keydown', markKeyboardActivity, true);
-    cmdInput.addEventListener('input', markActivity, true);
+    // 官方用法不需要额外监听输入活动来控制滚动。
 }
 
 function renderStats(d) {
@@ -1205,8 +1150,23 @@ function setupPanelLayoutMenu() {
 }
 
 function bringPanelToFront(panel) {
-    document.querySelectorAll('.file-manager, .info-modal').forEach((p) => p.classList.remove('front'));
+    if (!panel) return;
+    const wasFront = panel.classList.contains('front');
+    document.querySelectorAll('.file-manager, .info-modal').forEach((p) => {
+        p.classList.remove('front');
+        if (p !== panel) p.classList.remove('front-switching');
+    });
     panel.classList.add('front');
+    if (!wasFront) {
+        panel.classList.remove('front-switching');
+        // 重新触发布局动画：模拟 iPadOS 窗口切到前台时的轻微弹性抬起感。
+        void panel.offsetWidth;
+        panel.classList.add('front-switching');
+        window.clearTimeout(panel._frontSwitchTimer);
+        panel._frontSwitchTimer = window.setTimeout(() => {
+            panel.classList.remove('front-switching');
+        }, 360);
+    }
 }
 
 function setupFloatingPanel(panel, options) {
@@ -1466,18 +1426,8 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) {
-                            // 在写入前记录当前滚动状态（官方 wterm 做法）
-                            terminalShouldScrollToBottom = isTerminalAtBottom();
-                            
-                            isTerminalRenderingOutput = true;
-                            try {
-                                term.write(msg.data);
-                            } finally {
-                                requestAnimationFrame(() => { isTerminalRenderingOutput = false; });
-                            }
-                            
-                            // 调度滚动（下一帧根据 terminalShouldScrollToBottom 决定是否滚动）
-                            scheduleTerminalScrollToBottom();
+                            // 完全不干预 wterm 的滚动逻辑，简单地写入数据
+                            term.write(msg.data);
                         }
                         break;
                     case 'error':
