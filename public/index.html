@@ -3,53 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zephyr-SSH - 登录</title>
+    <title>Zephyr - 登录</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="login-card">
+    <div class="login-card auth-card" id="loginCard">
         <!-- 主题切换按钮 -->
         <button class="theme-btn-login" id="themeToggleLogin" title="切换主题">🌓</button>
         <div class="logo">🌬️</div>
-        <h1>Zephyr-SSH</h1>
+        <h1>Zephyr</h1>
+        <p class="auth-subtitle">终端管理系统</p>
         <div id="errorBanner" class="error-banner"></div>
         <form id="loginForm" autocomplete="off">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="host">主机地址</label>
-                    <input type="text" id="host" placeholder="192.168.1.1 或 example.com" required>
-                </div>
-                <div class="form-group port-group">
-                    <label for="port">端口</label>
-                    <input type="number" id="port" value="22" min="1" max="65535" required>
-                </div>
-            </div>
             <div class="form-group">
-                <label for="username">用户名</label>
-                <input type="text" id="username" placeholder="root" required>
+                <label for="username">账号</label>
+                <input type="text" id="username" placeholder="admin" autocomplete="username" required>
             </div>
             <div class="form-group">
                 <label for="password">密码</label>
-                <input type="password" id="password" placeholder="SSH 密码（或私钥短语）">
+                <input type="password" id="password" placeholder="admin" autocomplete="current-password" required>
             </div>
-            <div class="toggle-section">
-                <button type="button" class="toggle-link" id="toggleKeyBtn">🔑 使用私钥认证</button>
-            </div>
-            <div class="form-group key-section" id="keySection">
-                <label for="privateKey">私钥 (PEM格式)</label>
-                <textarea id="privateKey" placeholder="-----BEGIN RSA PRIVATE KEY-----
-        -----END RSA PRIVATE KEY-----"></textarea>
-            </div>
-            <div class="form-group">
-                <label for="initCmd">初始命令 <span style="font-weight:400;color:var(--text-secondary)">（可选）</span></label>
-                <input type="text" id="initCmd" placeholder="例如: ls -la 或 screen -r">
-            </div>
-            <button type="submit" class="btn btn-primary" id="connectBtn">
-                ⚡ 连接 SSH
-            </button>
+            <button type="submit" class="btn btn-primary" id="loginBtn">登录</button>
+            <button type="button" class="btn" id="passkeyLoginBtn">使用 Passkey 登录</button>
+            <p class="auth-link"><a href="#" id="forgotLink">忘记密码？</a></p>
+            <p class="auth-hint">默认账号：admin / admin。首次登录需修改密码。</p>
         </form>
     </div>
+
+    <div class="login-card auth-card force-hidden" id="totpCard">
+        <button class="theme-btn-login" id="themeToggleTotp" title="切换主题">🌓</button>
+        <div class="logo">🌬️</div><h1>两步验证</h1><p class="auth-subtitle">请输入 6 位动态验证码</p>
+        <div id="totpErrorBanner" class="error-banner"></div>
+        <form id="totpForm"><div class="form-group"><label for="totpCode">动态验证码</label><input id="totpCode" inputmode="numeric" maxlength="6" required></div><button class="btn btn-primary" type="submit">验证并登录</button></form>
+    </div>
+
+    <div class="login-card auth-card force-hidden" id="forgotCard">
+        <button class="theme-btn-login" id="themeToggleForgot" title="切换主题">🌓</button>
+        <div class="logo">🌬️</div><h1>重置密码</h1><p class="auth-subtitle">通过管理员邮箱验证码重置</p>
+        <div id="forgotErrorBanner" class="error-banner"></div>
+        <form id="forgotRequestForm"><div class="form-group"><label>管理员邮箱</label><input type="email" id="forgotEmail" required></div><button class="btn btn-primary" type="submit">发送验证码</button></form>
+        <form id="forgotResetForm" class="force-hidden"><div class="form-group"><label>验证码</label><input id="resetCode" inputmode="numeric" maxlength="6" required></div><div class="form-group"><label>新密码</label><input type="password" id="resetPassword" minlength="4" required></div><button class="btn btn-primary" type="submit">重置密码</button></form>
+        <p class="auth-link"><a href="#" id="backLoginLink">返回登录</a></p>
+    </div>
+
+    <div class="login-card auth-card force-hidden" id="changePasswordCard">
+        <button class="theme-btn-login" id="themeToggleChange" title="切换主题">🌓</button>
+        <div class="logo">🌬️</div>
+        <h1>修改默认密码</h1>
+        <p class="auth-subtitle">为了安全，首次登录后必须修改密码</p>
+        <div id="changeErrorBanner" class="error-banner"></div>
+        <form id="changePasswordForm" autocomplete="off">
+            <div class="form-group">
+                <label for="currentPassword">当前密码</label>
+                <input type="password" id="currentPassword" value="admin" autocomplete="current-password" required>
+            </div>
+            <div class="form-group">
+                <label for="newPassword">新密码</label>
+                <input type="password" id="newPassword" minlength="4" autocomplete="new-password" required>
+            </div>
+            <div class="form-group">
+                <label for="confirmPassword">确认新密码</label>
+                <input type="password" id="confirmPassword" minlength="4" autocomplete="new-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary">保存并进入系统</button>
+        </form>
+    </div>
+    <div class="beian-footer" id="beianFooter"></div>
     <script src="client.js" type="module"></script>
 </body>
 </html>

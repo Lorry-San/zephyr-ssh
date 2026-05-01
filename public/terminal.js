@@ -2,14 +2,25 @@ const $ = (sel) => document.querySelector(sel);
 
 function getParams() {
     try {
-        const raw = sessionStorage.getItem('zephyr_ssh_params');
-        return raw ? JSON.parse(raw) : null;
+        const qs = new URLSearchParams(location.search);
+        const tabId = qs.get('tabId');
+        const key = tabId ? `zephyr_ssh_params_${tabId}` : 'zephyr_ssh_params';
+        const raw = sessionStorage.getItem(key);
+        const params = raw ? JSON.parse(raw) : null;
+        if (params && tabId) params.tabId = tabId;
+        return params;
     } catch { return null; }
 }
 
 const params = getParams();
+const embeddedMode = new URLSearchParams(location.search).get('embed') === '1' || !!params?.embedded;
+function notifyParentStatus(status) {
+    if (embeddedMode && window.parent && window.parent !== window) {
+        window.parent.postMessage({ source: 'zephyr-terminal', tabId: params?.tabId, status }, '*');
+    }
+}
 if (!params) {
-    window.location.href = '/';
+    if (!embeddedMode) window.location.href = '/';
     throw new Error('缺少连接参数');
 }
 
@@ -2881,6 +2892,7 @@ wtermWrapper.addEventListener('mouseup', () => {
 
 // ---------- 状态指示 ----------
 function setStatus(state, msg) {
+    notifyParentStatus(state === 'connected' ? 'connected' : state === 'error' ? 'error' : state === 'disconnected' ? 'closed' : 'connecting');
     statusDot.className = 'status-dot';
     if (state === 'connecting') {
         statusText.textContent = msg || '连接中...';
@@ -3223,8 +3235,13 @@ window.addEventListener('orientationchange', () => {
 });
 disconnectBtn.addEventListener('click', () => {
     disconnect({ userInitiated: true });
-    sessionStorage.removeItem('zephyr_ssh_params');
-    window.location.href = '/';
+    sessionStorage.removeItem(params?.tabId ? `zephyr_ssh_params_${params.tabId}` : 'zephyr_ssh_params');
+    if (embeddedMode) {
+        notifyParentStatus('closed');
+        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">会话已断开，可关闭此标签。</div>';
+    } else {
+        window.location.href = '/';
+    }
 });
 window.addEventListener('beforeunload', () => disconnect({ userInitiated: true, updateStatus: false }));
 

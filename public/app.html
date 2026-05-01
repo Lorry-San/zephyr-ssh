@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zephyr</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="app-body">
+    <div class="app-shell">
+        <header class="main-nav">
+            <a class="brand" href="#dashboard"><span>🌬️</span><strong>Zephyr</strong></a>
+            <nav class="nav-tabs" aria-label="主导航">
+                <button class="nav-tab active" data-view="dashboard">仪表盘</button>
+                <button class="nav-tab" data-view="terminal">终端</button>
+                <button class="nav-tab" data-view="remote">远程执行</button>
+                <button class="nav-tab" data-view="settings">设置</button>
+            </nav>
+            <div class="nav-actions">
+                <button class="btn-sm" id="appThemeToggle" title="切换深浅色">🌓</button>
+                <button class="btn-sm danger" id="logoutBtn">登出</button>
+            </div>
+        </header>
+
+        <main class="app-main">
+            <section class="view active" id="view-dashboard">
+                <div class="section-head">
+                    <div>
+                        <p class="eyebrow">Dashboard</p>
+                        <h1 id="connectionTitle">连接列表 (0)</h1>
+                    </div>
+                    <button class="btn add-btn" id="addConnectionBtn">＋ 添加新连接</button>
+                </div>
+                <div class="action-bar">
+                    <input class="search-input" id="searchInput" placeholder="搜索名称、IP、备注...">
+                    <select id="protocolFilter"><option value="all">全部协议</option><option value="SSH">SSH</option><option value="RDP">RDP</option><option value="VNC">VNC</option></select>
+                    <select id="tagFilter"><option value="all">全部标签</option></select>
+                    <select id="sortSelect"><option value="createdAt">按创建时间</option><option value="name">按名称</option><option value="lastConnectedAt">按最近连接</option><option value="protocol">按协议</option></select>
+                </div>
+                <div class="connection-grid" id="connectionGrid"></div>
+                <div class="activity-panel">
+                    <h2>最近活动</h2>
+                    <div id="activityList" class="activity-list"></div>
+                </div>
+            </section>
+
+            <section class="view" id="view-terminal">
+                <div class="section-head"><div><p class="eyebrow">Terminal</p><h1>多标签页工作区</h1></div></div>
+                <div class="browser-tabs" id="sessionTabs"><div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div></div>
+                <div class="terminal-workspace" id="terminalWorkspace"><div class="terminal-placeholder">暂无会话。SSH 会话将在后台内以多标签方式打开，RDP/VNC 暂为占位。</div></div>
+            </section>
+
+            <section class="view" id="view-remote">
+                <div class="section-head"><div><p class="eyebrow">Remote Execution</p><h1>远程执行</h1></div></div>
+                <div class="remote-layout">
+                    <div class="remote-servers" id="remoteServerList"></div>
+                    <form class="remote-command" id="remoteExecForm">
+                        <label>命令</label><textarea id="remoteCommand" placeholder="例如：uname -a && uptime" required></textarea>
+                        <label>超时（秒）</label><input id="remoteTimeout" type="number" value="30" min="1" max="300">
+                        <button class="btn btn-primary" type="submit">批量执行</button>
+                    </form>
+                </div>
+                <div class="remote-results" id="remoteResults"></div>
+            </section>
+
+            <section class="view" id="view-settings">
+                <div class="section-head"><div><p class="eyebrow">Settings</p><h1>设置</h1></div></div>
+                <div class="settings-layout">
+                    <div class="settings-menu">
+                        <button class="settings-tab active" data-settings="security">安全设置</button>
+                        <button class="settings-tab" data-settings="beian">备案信息</button>
+                        <button class="settings-tab" data-settings="network">代理与跳板机</button>
+                        <button class="settings-tab" data-settings="data">数据管理</button>
+                        <button class="settings-tab" data-settings="appearance">外观设置</button>
+                        <button class="settings-tab" data-settings="mail">邮件通知</button>
+                        <button class="settings-tab" data-settings="about">关于/系统信息</button>
+                    </div>
+                    <div class="settings-content">
+                        <div class="settings-panel active" id="settings-security">
+                            <h2>修改密码</h2>
+                            <form id="passwordForm" class="settings-form">
+                                <input type="password" id="settingsCurrentPassword" placeholder="当前密码" required>
+                                <input type="password" id="settingsNewPassword" placeholder="新密码" minlength="4" required>
+                                <input type="password" id="settingsConfirmPassword" placeholder="确认新密码" minlength="4" required>
+                                <button class="btn btn-primary" type="submit">保存密码</button>
+                            </form>
+                            <h2>账号资料</h2><form id="profileForm" class="settings-form"><input id="profileEmail" type="email" placeholder="管理员邮箱（用于重置密码）"><button class="btn btn-primary">保存资料</button></form>
+                            <h2>TOTP 两步验证</h2><div class="mini-list" id="totpBox"></div><form id="totpEnableForm" class="settings-form force-hidden"><div id="totpQrBox"></div><input id="totpEnableCode" placeholder="输入 6 位验证码"><button class="btn btn-primary">确认开启</button></form><form id="totpDisableForm" class="settings-form"><input type="password" id="totpDisablePassword" placeholder="当前密码"><input id="totpDisableCode" placeholder="TOTP 验证码"><button class="btn danger">关闭 TOTP</button></form>
+                            <h2>Passkey</h2><button class="btn" id="addPasskeyBtn">添加 Passkey</button><div class="mini-list" id="passkeyList"></div>
+                            <h2>IP 白名单与防爆破</h2><form id="securityPolicyForm" class="settings-form"><label class="check-line"><input type="checkbox" id="ipWhitelistEnabled"> 启用 IP 白名单</label><textarea id="ipWhitelist" placeholder="每行一个 IP 或 CIDR，例如 192.168.1.0/24"></textarea><label class="check-line"><input type="checkbox" id="bruteForceEnabled"> 启用防爆破封禁</label><input id="bruteForceMaxFailures" type="number" min="1" placeholder="失败次数"><input id="bruteForceBanMinutes" type="number" min="1" placeholder="封禁分钟"><button class="btn btn-primary">保存安全策略</button></form><div class="mini-list" id="ipBanList"></div>
+                            <h2>CAPTCHA</h2><form id="captchaForm" class="settings-form"><label class="check-line"><input type="checkbox" id="captchaEnabled"> 启用 CAPTCHA</label><select id="captchaProvider"><option value="turnstile">Cloudflare Turnstile</option><option value="hcaptcha">hCaptcha</option><option value="tencent">腾讯云验证码</option></select><input id="captchaSiteKey" placeholder="Site Key / AppId"><input id="captchaSecretKey" placeholder="Secret Key"><button class="btn btn-primary">保存 CAPTCHA</button></form>
+                        </div>
+                        <div class="settings-panel" id="settings-appearance">
+                            <h2>外观设置</h2>
+                            <button class="btn" id="settingsThemeToggle">切换深色/浅色模式</button>
+                        </div>
+                        <div class="settings-panel" id="settings-beian">
+                            <h2>备案信息设置</h2>
+                            <form id="beianForm" class="settings-form">
+                                <input id="icpInput" placeholder="ICP 备案号，例如：粤ICP备xxxx号">
+                                <input id="policeInput" placeholder="公安备案号，例如：粤公网安备 xxxx号">
+                                <input id="policeUrlInput" placeholder="公安备案链接">
+                                <label class="check-line"><input type="checkbox" id="showBeianInput" checked> 登录页显示备案信息</label>
+                                <button class="btn btn-primary" type="submit">保存备案信息</button>
+                            </form>
+                        </div>
+                        <div class="settings-panel" id="settings-network">
+                            <h2>代理池（SOCKS5）</h2>
+                            <form id="proxyForm" class="settings-form inline-form">
+                                <input type="hidden" id="proxyId"><input id="proxyName" placeholder="名称"><input id="proxyHost" placeholder="IP / 主机"><input id="proxyPort" type="number" value="1080"><input id="proxyUsername" placeholder="用户名"><input id="proxyPassword" placeholder="密码"><button class="btn btn-primary" type="submit">保存代理</button>
+                            </form>
+                            <div class="mini-list" id="proxyList"></div>
+                            <h2>跳板机</h2>
+                            <form id="jumpForm" class="settings-form inline-form"><input type="hidden" id="jumpId"><input id="jumpName" placeholder="名称"><select id="jumpConnection"></select><button class="btn btn-primary" type="submit">保存跳板机</button></form>
+                            <div class="mini-list" id="jumpList"></div>
+                        </div>
+                        <div class="settings-panel" id="settings-data"><h2>数据导入导出</h2><p class="muted">导出文件使用 data/.env 中 ENCRYPTION_KEY 加密。</p><button class="btn btn-primary" id="exportDataBtn">开始导出</button><form id="importDataForm" class="settings-form"><input type="file" id="backupFile" accept=".enc"><input type="password" id="importLoginPassword" placeholder="当前登录密码"><input type="password" id="backupPassword" placeholder="备份解密密码（ENCRYPTION_KEY）"><button class="btn danger">导入备份</button></form></div>
+                        <div class="settings-panel" id="settings-mail"><h2>邮件通知</h2><form id="mailForm" class="settings-form"><label class="check-line"><input type="checkbox" id="mailEnabled"> 启用邮件通知</label><input id="mailHost" placeholder="SMTP Host"><input id="mailPort" type="number" placeholder="SMTP Port"><label class="check-line"><input type="checkbox" id="mailSecure"> SSL/TLS</label><input id="mailUser" placeholder="SMTP 用户名"><input id="mailPass" type="password" placeholder="SMTP 密码"><input id="mailFrom" placeholder="发件人"><input id="mailAdminEmail" type="email" placeholder="后台管理员邮箱"><label class="check-line"><input type="checkbox" id="notifyLoginSuccess"> 登录成功通知</label><label class="check-line"><input type="checkbox" id="notifyLoginFailure"> 登录失败通知</label><label class="check-line"><input type="checkbox" id="geoLookupEnabled"> IP 地区查询</label><button class="btn btn-primary">保存邮件设置</button><button class="btn" type="button" id="testMailBtn">测试邮件</button></form><h2>登录事件</h2><div class="mini-list" id="loginEventList"></div></div>
+                        <div class="settings-panel" id="settings-about">
+                            <h2>关于 Zephyr</h2>
+                            <p>版本：<strong id="versionText">1.0.0</strong></p>
+                            <p class="muted">代码标识保持为 zephyr-ssh。</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="modal-backdrop" id="connectionModal" aria-hidden="true">
+        <form class="connection-modal" id="connectionForm">
+            <div class="modal-head"><h2 id="modalTitle">添加服务器</h2><button type="button" class="icon-btn" id="closeModalBtn">✕</button></div>
+            <input type="hidden" id="connectionId">
+            <div class="form-row"><div class="form-group"><label>名称</label><input id="connName" required></div><div class="form-group port-group"><label>协议</label><select id="connProtocol"><option>SSH</option><option>RDP</option><option>VNC</option></select></div></div>
+            <div class="form-row"><div class="form-group"><label>IP / 主机</label><input id="connHost" required></div><div class="form-group port-group"><label>端口</label><input id="connPort" type="number" value="22" min="1" max="65535"></div></div>
+            <div class="form-group"><label>用户名</label><input id="connUsername" required></div>
+            <div class="form-group"><label>标签（逗号分隔）</label><input id="connTags" placeholder="生产, 数据库, 海外"></div>
+            <div class="form-row"><div class="form-group"><label>连接方式</label><select id="connMode"><option value="direct">直连</option><option value="proxy">通过代理</option><option value="jump">通过跳板机</option></select></div><div class="form-group"><label>代理/跳板</label><select id="connRoute"><option value="">无</option></select></div></div>
+            <div class="form-group password-field"><label>密码</label><input id="connPassword" type="password"><button type="button" id="toggleConnPassword">👁️</button></div>
+            <div class="form-group"><label>私钥</label><textarea id="connPrivateKey" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></div>
+            <div class="form-group"><label>备注（支持 Markdown）</label><textarea id="connRemark" placeholder="例如：**生产环境**\n`docker ps`"></textarea></div>
+            <div class="modal-actions"><button type="button" class="btn" id="testConnectionBtn">测试连接</button><button type="button" class="btn" id="cancelModalBtn">取消</button><button class="btn btn-primary" type="submit">保存</button></div>
+        </form>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script src="app.js" type="module"></script>
+</body>
+</html>

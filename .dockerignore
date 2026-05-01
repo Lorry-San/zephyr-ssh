@@ -1,0 +1,10 @@
+node_modules/
+npm-debug.log*
+
+# Do not bake local runtime data or secrets into published images.
+data/
+
+.git/
+.gitignore
+.DS_Store
+.vscode/

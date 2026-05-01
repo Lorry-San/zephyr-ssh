@@ -3,10 +3,614 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const { authenticator } = require('otplib');
+const QRCode = require('qrcode');
+const multer = require('multer');
+const archiver = require('archiver');
+const unzipper = require('unzipper');
+const ipaddr = require('ipaddr.js');
+const {
+    generateRegistrationOptions,
+    verifyRegistrationResponse,
+    generateAuthenticationOptions,
+    verifyAuthenticationResponse,
+} = require('@simplewebauthn/server');
 const { getRemoteStats } = require('./stats');
+const storage = require('./storage');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
+
+const DATA_DIR = path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const sessions = new Map();
+const tempTotpTokens = new Map();
+const webauthnChallenges = new Map();
+const resetRequestHits = new Map();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+function loadDataEnv() {
+    const envFile = path.join(DATA_DIR, '.env');
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(envFile)) fs.writeFileSync(envFile, 'ENCRYPTION_KEY=please-change-this-key\nPUBLIC_ORIGIN=http://localhost:3000\n');
+    const raw = fs.readFileSync(envFile, 'utf8');
+    raw.split(/\r?\n/).forEach((line) => {
+        const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+    });
+}
+loadDataEnv();
+
+function ensureDataFile(file, fallback) {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
+}
+
+function readJSON(file, fallback) {
+    if (file === USERS_FILE) return storage.getUsersStore();
+    if (file === CONNECTIONS_FILE) return storage.getConnectionsStore();
+    if (file === SETTINGS_FILE) return storage.getSettings();
+    ensureDataFile(file, fallback);
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function writeJSON(file, data) {
+    if (file === USERS_FILE) return storage.saveUsersStore(data);
+    if (file === CONNECTIONS_FILE) return storage.saveConnectionsStore(data);
+    if (file === SETTINGS_FILE) return storage.updateSettings(data);
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
+    const hash = crypto.pbkdf2Sync(String(password), salt, 120000, 32, 'sha256').toString('hex');
+    return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+    if (!stored || !stored.includes(':')) return false;
+    const [salt] = stored.split(':');
+    return hashPassword(password, salt) === stored;
+}
+
+function initData() {
+    ensureDataFile(USERS_FILE, {
+        users: [{ username: 'admin', passwordHash: hashPassword('admin'), defaultPassword: true, createdAt: Date.now() }]
+    });
+    ensureDataFile(CONNECTIONS_FILE, { connections: [], activities: [] });
+    ensureDataFile(SETTINGS_FILE, { version: '1.0.0', icp: '', policeBeian: '' });
+}
+
+storage.init({ hashPassword });
+
+function parseCookies(req) {
+    return String(req.headers.cookie || '').split(';').reduce((acc, part) => {
+        const idx = part.indexOf('=');
+        if (idx > -1) acc[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1));
+        return acc;
+    }, {});
+}
+
+function currentSession(req) {
+    const sid = parseCookies(req).zephyr_sid;
+    return sid ? sessions.get(sid) : null;
+}
+
+function requireAuth(req, res, next) {
+    const session = currentSession(req);
+    if (!session) return res.status(401).json({ error: '未登录' });
+    req.session = session;
+    next();
+}
+
+function publicConnection(conn) {
+    const copy = { ...conn };
+    copy.password = conn.password ? '******' : '';
+    copy.privateKey = conn.privateKey ? '******' : '';
+    copy.hasPassword = Boolean(conn.password);
+    copy.hasPrivateKey = Boolean(conn.privateKey);
+    return copy;
+}
+
+function buildSSHConfig(conn, timeout = 10000) {
+    const cfg = { host: conn.host, port: Number(conn.port) || 22, username: conn.username, readyTimeout: timeout, keepaliveInterval: 10000 };
+    if (conn.privateKey && conn.privateKey.includes('-----BEGIN')) {
+        cfg.privateKey = conn.privateKey;
+        if (conn.password) cfg.passphrase = conn.password;
+    } else if (conn.password) cfg.password = conn.password;
+    else throw new Error('缺少认证凭据');
+    return cfg;
+}
+
+function classifySSHError(err) {
+    const msg = String(err?.message || err || '连接失败');
+    if (/timed out|timeout/i.test(msg)) return { code: 'timeout', message: '连接超时' };
+    if (/authentication|auth|All configured authentication methods failed/i.test(msg)) return { code: 'auth_failed', message: '认证失败' };
+    if (/ECONNREFUSED|refused/i.test(msg)) return { code: 'refused', message: '连接被拒绝' };
+    if (/ENOTFOUND|EHOSTUNREACH|ENETUNREACH|unreachable/i.test(msg)) return { code: 'unreachable', message: '网络不可达或主机不存在' };
+    return { code: 'unknown', message: msg };
+}
+
+function testSSHConnection(conn, timeout = 10000) {
+    return new Promise((resolve) => {
+        const client = new Client();
+        const started = Date.now();
+        let done = false;
+        const finish = (result) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            try { client.end(); } catch {}
+            resolve({ ...result, durationMs: Date.now() - started });
+        };
+        const timer = setTimeout(() => finish({ ok: false, ...classifySSHError(new Error('timeout')) }), timeout + 1000);
+        client.on('ready', () => finish({ ok: true, code: 'success', message: '连接成功' }));
+        client.on('error', (err) => finish({ ok: false, ...classifySSHError(err) }));
+        try { client.connect(buildSSHConfig(conn, timeout)); } catch (err) { finish({ ok: false, ...classifySSHError(err) }); }
+    });
+}
+
+function runRemoteCommand(conn, command, timeoutSeconds = 30) {
+    return new Promise((resolve) => {
+        const client = new Client();
+        const started = Date.now();
+        let settled = false;
+        let stdout = '';
+        let stderr = '';
+        const timeoutMs = Math.max(1, Math.min(Number(timeoutSeconds) || 30, 300)) * 1000;
+        const done = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { client.end(); } catch {}
+            resolve({ connectionId: conn.id, name: conn.name, host: conn.host, stdout, stderr, durationMs: Date.now() - started, ...result });
+        };
+        const timer = setTimeout(() => done({ status: 'timeout', success: false, error: `执行超时（${timeoutSeconds}s）` }), timeoutMs);
+        client.on('ready', () => {
+            client.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
+                if (err) return done({ status: 'failed', success: false, error: err.message });
+                stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+                stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+                stream.on('close', (code) => done({ status: code === 0 ? 'success' : 'failed', success: code === 0, exitCode: code, error: code === 0 ? '' : (stderr || stdout || `退出码 ${code}`).trim() }));
+            });
+        });
+        client.on('error', (err) => done({ status: 'failed', success: false, error: classifySSHError(err).message }));
+        try { client.connect(buildSSHConfig(conn, Math.min(timeoutMs, 15000))); } catch (err) { done({ status: 'failed', success: false, error: classifySSHError(err).message }); }
+    });
+}
+
+function addActivity(message) {
+    storage.addActivity({ id: crypto.randomUUID(), time: Date.now(), message, type: 'info' });
+}
+
+function clientIp(req) {
+    return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().replace(/^::ffff:/, '') || 'unknown';
+}
+
+function publicOrigin(req) { return process.env.PUBLIC_ORIGIN || `${req.protocol}://${req.get('host')}`; }
+function rpIdFromOrigin(origin) { try { return new URL(origin).hostname; } catch { return 'localhost'; } }
+function safeSettings(s = storage.getSettings()) {
+    const copy = JSON.parse(JSON.stringify(s || {}));
+    if (copy.mail?.pass) copy.mail.pass = '******';
+    if (copy.captcha?.secretKey) copy.captcha.secretKey = '******';
+    if (copy.captcha?.tencentAppSecretKey) copy.captcha.tencentAppSecretKey = '******';
+    return copy;
+}
+function mergeSecret(oldValue, newValue) { return newValue === '******' ? oldValue : (newValue ?? oldValue ?? ''); }
+function normalizeSettingsInput(body) {
+    const current = storage.getSettings();
+    const next = { ...body };
+    if (body.mail) next.mail = { ...(current.mail || {}), ...body.mail, pass: mergeSecret(current.mail?.pass, body.mail.pass) };
+    if (body.captcha) next.captcha = { ...(current.captcha || {}), ...body.captcha, secretKey: mergeSecret(current.captcha?.secretKey, body.captcha.secretKey), tencentAppSecretKey: mergeSecret(current.captcha?.tencentAppSecretKey, body.captcha.tencentAppSecretKey) };
+    if (body.beian) {
+        next.beian = { ...(current.beian || {}), ...body.beian };
+        next.icp = next.beian.icp || '';
+        next.policeBeian = next.beian.policeBeian || '';
+        next.policeBeianUrl = next.beian.policeBeianUrl || '';
+        next.showBeian = next.beian.show !== false;
+    }
+    return next;
+}
+
+function createSession(res, user) {
+    const sid = crypto.randomUUID();
+    sessions.set(sid, { username: user.username, createdAt: Date.now(), mustChangePassword: !!user.defaultPassword });
+    res.setHeader('Set-Cookie', `zephyr_sid=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax`);
+    return sid;
+}
+
+async function regionOf(ip) { return ip && ip !== 'unknown' ? '未查询' : ''; }
+function mailTransport(mail) { return nodemailer.createTransport({ host: mail.host, port: Number(mail.port) || 465, secure: mail.secure !== false, auth: mail.user ? { user: mail.user, pass: mail.pass || '' } : undefined }); }
+async function sendMail(subject, text, to) {
+    const mail = storage.getSettings().mail || {};
+    if (!mail.enabled || !mail.host || !(to || mail.adminEmail)) return false;
+    await mailTransport(mail).sendMail({ from: mail.from || mail.user, to: to || mail.adminEmail, subject, text });
+    return true;
+}
+async function notifyLogin({ username, ip, userAgent, success, reason }) {
+    const s = storage.getSettings();
+    const mail = s.mail || {};
+    const region = mail.geoLookupEnabled ? await regionOf(ip) : '';
+    storage.addLoginEvent({ id: crypto.randomUUID(), username, ip, region, userAgent, success, reason, time: Date.now() });
+    if (!mail.enabled || (success && !mail.notifyLoginSuccess) || (!success && !mail.notifyLoginFailure)) return;
+    const title = success ? 'Zephyr 登录成功通知' : 'Zephyr 登录失败通知';
+    const text = `${title}\n\n时间：${new Date().toLocaleString()}\n账号：${username || '-'}\nIP地址：${ip}\n地区：${region || '-'}\n${success ? '' : `失败原因：${reason || '-'}\n`}User-Agent：${userAgent || '-'}`;
+    sendMail(title, text).catch((err) => console.error('[MAIL] 登录通知失败:', err.message));
+}
+
+async function verifyCaptcha(provider, token, remoteIp) {
+    const captcha = storage.getSettings().captcha || {};
+    if (!captcha.enabled) return true;
+    if (!token) return false;
+    if (provider === 'turnstile' || provider === 'hcaptcha') {
+        const url = provider === 'turnstile' ? 'https://challenges.cloudflare.com/turnstile/v0/siteverify' : 'https://hcaptcha.com/siteverify';
+        const body = new URLSearchParams({ secret: captcha.secretKey || '', response: token, remoteip: remoteIp });
+        const r = await fetch(url, { method: 'POST', body });
+        const data = await r.json().catch(() => ({}));
+        return !!data.success;
+    }
+    if (provider === 'tencent') return !!token && !captcha.tencentAppSecretKey;
+    return false;
+}
+
+function ipAllowed(ip, listText) {
+    const rules = String(listText || '').split(/[\n,\s]+/).map((v) => v.trim()).filter(Boolean);
+    if (!rules.length) return true;
+    try {
+        const addr = ipaddr.parse(ip);
+        return rules.some((rule) => {
+            try { return rule.includes('/') ? addr.match(ipaddr.parseCIDR(rule)) : addr.toString() === ipaddr.parse(rule).toString(); } catch { return false; }
+        });
+    } catch { return false; }
+}
+function checkLoginGuards(req) {
+    const ip = clientIp(req), s = storage.getSettings(), sec = s.security || {};
+    if (sec.ipWhitelistEnabled && !ipAllowed(ip, sec.ipWhitelist)) return { ok: false, ip, reason: 'IP 不在白名单' };
+    const ban = storage.getIpBan(ip);
+    if (sec.bruteForceEnabled && ban?.bannedUntil && ban.bannedUntil > Date.now()) return { ok: false, ip, reason: 'IP 已被临时封禁' };
+    return { ok: true, ip };
+}
+function recordLoginFailure(ip) {
+    const sec = storage.getSettings().security || {};
+    if (!sec.bruteForceEnabled || !ip || ip === 'unknown') return;
+    const old = storage.getIpBan(ip) || { ip, failedCount: 0, bannedUntil: null };
+    const failedCount = Number(old.failedCount || 0) + 1;
+    const max = Number(sec.bruteForceMaxFailures) || 5;
+    const bannedUntil = failedCount >= max ? Date.now() + (Number(sec.bruteForceBanMinutes) || 15) * 60000 : old.bannedUntil;
+    storage.saveIpBan({ ip, failedCount, bannedUntil, updatedAt: Date.now() });
+}
+function recordLoginSuccess(ip) { if (ip && ip !== 'unknown') storage.clearIpBan(ip); }
+
+function sha256(v) { return crypto.createHash('sha256').update(String(v)).digest('hex'); }
+function encryptionKey(password = process.env.ENCRYPTION_KEY || 'please-change-this-key') { return crypto.createHash('sha256').update(String(password)).digest(); }
+function encryptBuffer(buffer, password) { const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(password), iv); const enc = Buffer.concat([cipher.update(buffer), cipher.final()]); return Buffer.concat([Buffer.from('ZEPHYR3'), iv, cipher.getAuthTag(), enc]); }
+function decryptBuffer(buffer, password) { const b = Buffer.from(buffer); if (b.slice(0, 7).toString() !== 'ZEPHYR3') throw new Error('备份格式不正确'); const iv = b.slice(7, 19), tag = b.slice(19, 35), enc = b.slice(35); const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(password), iv); decipher.setAuthTag(tag); return Buffer.concat([decipher.update(enc), decipher.final()]); }
+async function zipBuffer(files) {
+    return new Promise((resolve, reject) => {
+        const chunks = []; const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.on('data', (c) => chunks.push(c)); archive.on('error', reject); archive.on('end', () => resolve(Buffer.concat(chunks)));
+        Object.entries(files).forEach(([name, content]) => archive.append(content, { name })); archive.finalize();
+    });
+}
+
+initData();
+app.use(express.json({ limit: '1mb' }));
+
+app.post('/api/auth/login', async (req, res) => {
+    const { username, password, captchaToken } = req.body || {};
+    const guard = checkLoginGuards(req);
+    const ua = req.headers['user-agent'] || '';
+    if (!guard.ok) { await notifyLogin({ username, ip: guard.ip, userAgent: ua, success: false, reason: guard.reason }); return res.status(403).json({ error: guard.reason }); }
+    const s = storage.getSettings();
+    if (!(await verifyCaptcha(s.captcha?.provider, captchaToken, guard.ip))) { recordLoginFailure(guard.ip); await notifyLogin({ username, ip: guard.ip, userAgent: ua, success: false, reason: 'CAPTCHA 错误' }); return res.status(400).json({ error: '人机验证失败' }); }
+    const user = storage.getUser(username);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+        recordLoginFailure(guard.ip);
+        await notifyLogin({ username, ip: guard.ip, userAgent: ua, success: false, reason: '密码错误' });
+        return res.status(401).json({ error: '账号或密码错误' });
+    }
+    if (user.totpEnabled) {
+        const tempToken = crypto.randomUUID();
+        tempTotpTokens.set(tempToken, { username: user.username, createdAt: Date.now(), ip: guard.ip, userAgent: ua });
+        return res.json({ ok: true, requireTotp: true, tempToken });
+    }
+    recordLoginSuccess(guard.ip);
+    createSession(res, user);
+    addActivity(`用户登录：${user.username}`);
+    await notifyLogin({ username: user.username, ip: guard.ip, userAgent: ua, success: true, reason: '' });
+    res.json({ ok: true, user: { username: user.username }, mustChangePassword: !!user.defaultPassword });
+});
+
+app.post('/api/auth/totp/verify', async (req, res) => {
+    const { tempToken, code } = req.body || {};
+    const tmp = tempTotpTokens.get(tempToken);
+    if (!tmp || Date.now() - tmp.createdAt > 5 * 60000) return res.status(400).json({ error: '验证会话已过期' });
+    const user = storage.getUser(tmp.username);
+    if (!user?.totpSecret || !authenticator.check(String(code || ''), user.totpSecret)) { recordLoginFailure(tmp.ip); await notifyLogin({ username: tmp.username, ip: tmp.ip, userAgent: tmp.userAgent, success: false, reason: 'TOTP 错误' }); return res.status(401).json({ error: '动态验证码错误' }); }
+    tempTotpTokens.delete(tempToken); recordLoginSuccess(tmp.ip); createSession(res, user); addActivity(`用户登录：${user.username}`); await notifyLogin({ username: user.username, ip: tmp.ip, userAgent: tmp.userAgent, success: true, reason: '' });
+    res.json({ ok: true, user: { username: user.username }, mustChangePassword: !!user.defaultPassword });
+});
+
+app.post('/api/auth/forgot-password/request', async (req, res) => {
+    const ip = clientIp(req), nowTs = Date.now();
+    const hits = (resetRequestHits.get(ip) || []).filter((t) => nowTs - t < 10 * 60000);
+    if (hits.length >= 5) return res.json({ ok: true, message: '如果邮箱匹配，验证码将发送到邮箱' });
+    resetRequestHits.set(ip, [...hits, nowTs]);
+    const { email, captchaToken } = req.body || {}, s = storage.getSettings();
+    if (!(await verifyCaptcha(s.captcha?.provider, captchaToken, ip))) return res.json({ ok: true, message: '如果邮箱匹配，验证码将发送到邮箱' });
+    const user = storage.getFirstUser(); const adminEmail = s.mail?.adminEmail || user?.email || '';
+    if (user && adminEmail && String(email || '').trim().toLowerCase() === String(adminEmail).toLowerCase()) {
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        storage.createResetCode({ id: crypto.randomUUID(), username: user.username, email: adminEmail, codeHash: sha256(code), expiresAt: Date.now() + 10 * 60000, createdAt: Date.now() });
+        sendMail('Zephyr 密码重置验证码', `Zephyr 密码重置验证码：${code}\n有效期：10 分钟。`, adminEmail).catch((err) => console.error('[MAIL] 重置验证码发送失败:', err.message));
+    }
+    res.json({ ok: true, message: '如果邮箱匹配，验证码将发送到邮箱' });
+});
+
+app.post('/api/auth/forgot-password/reset', (req, res) => {
+    const { email, code, newPassword } = req.body || {};
+    if (!newPassword || String(newPassword).length < 4) return res.status(400).json({ error: '新密码至少 4 位' });
+    const user = storage.getFirstUser(); const adminEmail = storage.getSettings().mail?.adminEmail || user?.email || '';
+    const rec = user ? storage.findResetCode(user.username, adminEmail) : null;
+    if (!user || !adminEmail || String(email || '').toLowerCase() !== String(adminEmail).toLowerCase() || !rec || rec.expiresAt < Date.now() || rec.codeHash !== sha256(code)) return res.status(400).json({ error: '验证码无效或已过期' });
+    storage.updateUser(user.username, { passwordHash: hashPassword(newPassword), defaultPassword: false }); storage.markResetCodeUsed(rec.id); addActivity('通过邮箱验证码重置密码');
+    res.json({ ok: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    const sid = parseCookies(req).zephyr_sid;
+    if (sid) sessions.delete(sid);
+    res.setHeader('Set-Cookie', 'zephyr_sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+    res.json({ ok: true });
+});
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+    res.json({ user: { username: req.session.username }, mustChangePassword: !!req.session.mustChangePassword });
+});
+
+app.post('/api/auth/change-password', requireAuth, (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!newPassword || String(newPassword).length < 4) return res.status(400).json({ error: '新密码至少 4 位' });
+    const data = readJSON(USERS_FILE, { users: [] });
+    const user = data.users.find((u) => u.username === req.session.username);
+    if (!user || !verifyPassword(currentPassword, user.passwordHash)) return res.status(400).json({ error: '当前密码错误' });
+    user.passwordHash = hashPassword(newPassword);
+    user.defaultPassword = false;
+    user.updatedAt = Date.now();
+    writeJSON(USERS_FILE, data);
+    req.session.mustChangePassword = false;
+    res.json({ ok: true });
+});
+
+app.post('/api/security/totp/setup', requireAuth, async (req, res) => {
+    const user = storage.getUser(req.session.username); const secret = authenticator.generateSecret();
+    const otpauth = authenticator.keyuri(user.username, 'Zephyr', secret); const qr = await QRCode.toDataURL(otpauth);
+    req.session.pendingTotpSecret = secret; res.json({ secret, qr });
+});
+app.post('/api/security/totp/enable', requireAuth, (req, res) => {
+    const secret = req.session.pendingTotpSecret; if (!secret || !authenticator.check(String(req.body?.code || ''), secret)) return res.status(400).json({ error: '动态验证码错误' });
+    storage.updateUser(req.session.username, { totpEnabled: true, totpSecret: secret }); delete req.session.pendingTotpSecret; addActivity('开启 TOTP 两步验证'); res.json({ ok: true });
+});
+app.post('/api/security/totp/disable', requireAuth, (req, res) => {
+    const user = storage.getUser(req.session.username); const { currentPassword, code } = req.body || {};
+    if (!verifyPassword(currentPassword, user.passwordHash) || !authenticator.check(String(code || ''), user.totpSecret || '')) return res.status(400).json({ error: '密码或动态验证码错误' });
+    storage.updateUser(user.username, { totpEnabled: false, totpSecret: null }); addActivity('关闭 TOTP 两步验证'); res.json({ ok: true });
+});
+app.get('/api/security/status', requireAuth, (req, res) => { const u = storage.getUser(req.session.username); res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled }, passkeys: storage.listPasskeys(u.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }); });
+app.put('/api/security/profile', requireAuth, (req, res) => { const u = storage.updateUser(req.session.username, { email: String(req.body?.email || '') }); res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled } }); });
+
+app.get('/api/connections', requireAuth, (req, res) => {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
+    res.json({ connections: (store.connections || []).map(publicConnection), activities: store.activities || [] });
+});
+
+app.post('/api/connections', requireAuth, (req, res) => {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
+    const body = req.body || {};
+    if (!body.name || !body.host || !body.username) return res.status(400).json({ error: '名称、主机、用户名不能为空' });
+    const conn = {
+        id: crypto.randomUUID(),
+        name: String(body.name).trim(),
+        host: String(body.host).trim(),
+        port: Number(body.port) || 22,
+        protocol: String(body.protocol || 'SSH').toUpperCase(),
+        username: String(body.username).trim(),
+        password: String(body.password || ''),
+        privateKey: String(body.privateKey || ''),
+        remark: String(body.remark || ''),
+        tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : String(body.tags || '').split(',').map((v) => v.trim()).filter(Boolean),
+        connectionMode: ['direct', 'proxy', 'jump'].includes(body.connectionMode) ? body.connectionMode : 'direct',
+        proxyId: body.proxyId || null,
+        jumpHostId: body.jumpHostId || null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        lastConnectedAt: null,
+    };
+    store.connections.unshift(conn);
+    store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `新增连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
+    writeJSON(CONNECTIONS_FILE, store);
+    res.json({ connection: publicConnection(conn) });
+});
+
+app.put('/api/connections/:id', requireAuth, (req, res) => {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
+    const conn = (store.connections || []).find((c) => c.id === req.params.id);
+    if (!conn) return res.status(404).json({ error: '连接不存在' });
+    const body = req.body || {};
+    ['name', 'host', 'username', 'remark'].forEach((key) => { if (body[key] !== undefined) conn[key] = String(body[key]); });
+    if (body.port !== undefined) conn.port = Number(body.port) || 22;
+    if (body.protocol !== undefined) conn.protocol = String(body.protocol).toUpperCase();
+    if (body.tags !== undefined) conn.tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : String(body.tags || '').split(',').map((v) => v.trim()).filter(Boolean);
+    if (body.connectionMode !== undefined) conn.connectionMode = ['direct', 'proxy', 'jump'].includes(body.connectionMode) ? body.connectionMode : 'direct';
+    if (body.proxyId !== undefined) conn.proxyId = body.proxyId || null;
+    if (body.jumpHostId !== undefined) conn.jumpHostId = body.jumpHostId || null;
+    if (body.password !== undefined && body.password !== '******') conn.password = String(body.password || '');
+    if (body.privateKey !== undefined && body.privateKey !== '******') conn.privateKey = String(body.privateKey || '');
+    conn.updatedAt = Date.now();
+    store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `编辑连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
+    writeJSON(CONNECTIONS_FILE, store);
+    res.json({ connection: publicConnection(conn) });
+});
+
+app.delete('/api/connections/:id', requireAuth, (req, res) => {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
+    const target = (store.connections || []).find((c) => c.id === req.params.id);
+    store.connections = (store.connections || []).filter((c) => c.id !== req.params.id);
+    if (target) store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `删除连接：${target.name}` }, ...(store.activities || [])].slice(0, 20);
+    writeJSON(CONNECTIONS_FILE, store);
+    res.json({ ok: true });
+});
+
+app.post('/api/connections/:id/open', requireAuth, (req, res) => {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
+    const conn = (store.connections || []).find((c) => c.id === req.params.id);
+    if (!conn) return res.status(404).json({ error: '连接不存在' });
+    conn.lastConnectedAt = Date.now();
+    store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `打开连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
+    writeJSON(CONNECTIONS_FILE, store);
+    res.json({ connection: conn });
+});
+
+app.get('/api/settings', requireAuth, (req, res) => res.json(safeSettings(readJSON(SETTINGS_FILE, { version: '3.0.0' }))));
+
+app.put('/api/settings', requireAuth, (req, res) => {
+    const body = normalizeSettingsInput(req.body || {});
+    if (body.security?.ipWhitelistEnabled && !ipAllowed(clientIp(req), body.security.ipWhitelist)) return res.status(400).json({ error: '当前 IP 不在白名单内，已阻止启用以避免误锁' });
+    const settings = storage.updateSettings(body);
+    addActivity('更新系统设置');
+    res.json(safeSettings(settings));
+});
+
+app.post('/api/settings/test-mail', requireAuth, async (req, res) => {
+    const to = req.body?.to || storage.getSettings().mail?.adminEmail;
+    try { await sendMail('Zephyr 测试邮件', `这是一封 Zephyr 测试邮件。\n时间：${new Date().toLocaleString()}`, to); res.json({ ok: true }); }
+    catch (err) { res.status(400).json({ error: err.message || '测试邮件发送失败' }); }
+});
+
+app.get('/api/security/ip-bans', requireAuth, (req, res) => res.json({ bans: storage.listIpBans() }));
+app.delete('/api/security/ip-bans/:ip', requireAuth, (req, res) => { storage.clearIpBan(req.params.ip); res.json({ ok: true }); });
+app.get('/api/security/login-events', requireAuth, (req, res) => res.json({ events: storage.listLoginEvents(100) }));
+
+app.get('/api/public/settings', (req, res) => {
+    const s = storage.getSettings();
+    res.json({ icp: s.icp || s.beian?.icp || '', policeBeian: s.policeBeian || s.beian?.policeBeian || '', policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '', showBeian: s.showBeian !== false && s.beian?.show !== false, captcha: { enabled: !!s.captcha?.enabled, provider: s.captcha?.provider || 'turnstile', siteKey: s.captcha?.siteKey || '', tencentCaptchaAppId: s.captcha?.tencentCaptchaAppId || '' } });
+});
+
+app.get('/api/passkeys', requireAuth, (req, res) => res.json({ passkeys: storage.listPasskeys(req.session.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }));
+app.post('/api/passkeys/register/options', requireAuth, async (req, res) => {
+    const origin = publicOrigin(req), rpID = rpIdFromOrigin(origin), user = storage.getUser(req.session.username);
+    const options = await generateRegistrationOptions({ rpName: 'Zephyr', rpID, userID: Buffer.from(user.username), userName: user.username, attestationType: 'none', excludeCredentials: storage.listPasskeys(user.username).map((p) => ({ id: p.credentialId, transports: p.transports })) });
+    webauthnChallenges.set(`reg:${user.username}`, { challenge: options.challenge, origin, rpID }); res.json(options);
+});
+app.post('/api/passkeys/register/verify', requireAuth, async (req, res) => {
+    const state = webauthnChallenges.get(`reg:${req.session.username}`); if (!state) return res.status(400).json({ error: '注册会话已过期' });
+    try {
+        const result = await verifyRegistrationResponse({ response: req.body, expectedChallenge: state.challenge, expectedOrigin: state.origin, expectedRPID: state.rpID });
+        if (!result.verified) return res.status(400).json({ error: 'Passkey 验证失败' });
+        const info = result.registrationInfo;
+        storage.savePasskey({ id: crypto.randomUUID(), username: req.session.username, credentialId: info.credential.id, publicKey: Buffer.from(info.credential.publicKey).toString('base64'), counter: info.credential.counter || 0, transports: req.body?.response?.transports || [], createdAt: Date.now(), lastUsedAt: null });
+        webauthnChallenges.delete(`reg:${req.session.username}`); addActivity('绑定 Passkey'); res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err.message || 'Passkey 注册失败' }); }
+});
+app.delete('/api/passkeys/:id', requireAuth, (req, res) => { storage.deletePasskey(req.session.username, req.params.id); addActivity('删除 Passkey'); res.json({ ok: true }); });
+app.post('/api/passkeys/login/options', async (req, res) => {
+    const origin = publicOrigin(req), rpID = rpIdFromOrigin(origin), user = storage.getFirstUser(), passkeys = user ? storage.listPasskeys(user.username) : [];
+    const options = await generateAuthenticationOptions({ rpID, allowCredentials: passkeys.map((p) => ({ id: p.credentialId, transports: p.transports })) });
+    webauthnChallenges.set('login', { challenge: options.challenge, origin, rpID }); res.json(options);
+});
+app.post('/api/passkeys/login/verify', async (req, res) => {
+    const credId = req.body?.id; const passkey = storage.getPasskeyByCredentialId(credId); if (!passkey) return res.status(400).json({ error: 'Passkey 不存在' });
+    const state = webauthnChallenges.get('login');
+    const origin = publicOrigin(req), rpID = rpIdFromOrigin(origin);
+    try {
+        const result = await verifyAuthenticationResponse({ response: req.body, expectedChallenge: state?.challenge || req.body?.challenge, expectedOrigin: state?.origin || origin, expectedRPID: state?.rpID || rpID, credential: { id: passkey.credentialId, publicKey: Buffer.from(passkey.publicKey, 'base64'), counter: passkey.counter || 0, transports: passkey.transports } });
+        if (!result.verified) return res.status(400).json({ error: 'Passkey 登录失败' });
+        webauthnChallenges.delete('login'); storage.updatePasskeyCounter(passkey.id, result.authenticationInfo.newCounter); const user = storage.getUser(passkey.username); createSession(res, user); addActivity(`Passkey 登录：${user.username}`); res.json({ ok: true, mustChangePassword: !!user.defaultPassword });
+    } catch (err) { res.status(400).json({ error: err.message || 'Passkey 登录失败' }); }
+});
+
+app.get('/api/data/export', requireAuth, async (req, res) => {
+    const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: '3.0.0', exportedAt: Date.now() }, null, 2) };
+    const encrypted = encryptBuffer(await zipBuffer(files), process.env.ENCRYPTION_KEY);
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('Content-Disposition', `attachment; filename="zephyr-backup-${stamp}.zip.enc"`); res.end(encrypted);
+});
+app.post('/api/data/import', requireAuth, upload.single('backup'), async (req, res) => {
+    try {
+        const { loginPassword, backupPassword } = req.body || {}; const user = storage.getUser(req.session.username);
+        if (!verifyPassword(loginPassword, user.passwordHash)) return res.status(403).json({ error: '登录密码错误' });
+        if (!req.file?.buffer) return res.status(400).json({ error: '请上传备份文件' });
+        const zip = decryptBuffer(req.file.buffer, backupPassword || process.env.ENCRYPTION_KEY); const dir = await unzipper.Open.buffer(zip); const dbEntry = dir.files.find((f) => f.path === 'zephyr.db');
+        if (!dbEntry) return res.status(400).json({ error: '备份包缺少 zephyr.db' });
+        const backupName = path.join(DATA_DIR, `zephyr-before-import-${Date.now()}.db`); fs.copyFileSync(path.join(DATA_DIR, 'zephyr.db'), backupName);
+        fs.writeFileSync(path.join(DATA_DIR, 'zephyr.db'), await dbEntry.buffer()); addActivity('导入数据备份');
+        res.json({ ok: true, message: '导入完成，请重启服务使数据库连接重新加载' });
+    } catch (err) { res.status(400).json({ error: err.message || '导入失败' }); }
+});
+
+app.post('/api/connections/test', requireAuth, async (req, res) => {
+    const body = req.body || {};
+    const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+    let conn = body.connectionId ? (store.connections || []).find((c) => c.id === body.connectionId) : null;
+    if (!conn) conn = { ...body, port: Number(body.port) || 22 };
+    if (!conn.host || !conn.username) return res.status(400).json({ error: '主机和用户名不能为空' });
+    const result = await testSSHConnection(conn, Math.max(1000, Math.min(Number(body.timeoutSeconds || 10) * 1000, 30000)));
+    addActivity(`测试连接：${conn.name || conn.host} - ${result.message}`);
+    res.status(result.ok ? 200 : 400).json(result);
+});
+
+app.post('/api/remote-execute', requireAuth, async (req, res) => {
+    const { connectionIds, command, timeoutSeconds } = req.body || {};
+    if (!Array.isArray(connectionIds) || !connectionIds.length) return res.status(400).json({ error: '请选择服务器' });
+    if (!String(command || '').trim()) return res.status(400).json({ error: '请输入命令' });
+    const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+    const targets = (store.connections || []).filter((c) => connectionIds.includes(c.id) && c.protocol === 'SSH');
+    const started = Date.now();
+    const results = await Promise.all(targets.map((conn) => runRemoteCommand(conn, String(command), timeoutSeconds)));
+    addActivity(`远程执行：${targets.length} 台服务器，命令 ${String(command).slice(0, 40)}`);
+    res.json({ startedAt: started, durationMs: Date.now() - started, results });
+});
+
+app.get('/api/proxies', requireAuth, (req, res) => res.json({ proxies: storage.listProxies() }));
+app.post('/api/proxies', requireAuth, (req, res) => {
+    const b = req.body || {};
+    if (!b.name || !b.host || !b.port) return res.status(400).json({ error: '名称、IP、端口不能为空' });
+    const proxy = storage.saveProxy({ id: crypto.randomUUID(), name: String(b.name), host: String(b.host), port: Number(b.port) || 1080, username: String(b.username || ''), password: String(b.password || ''), createdAt: Date.now(), updatedAt: Date.now() });
+    addActivity(`新增代理：${proxy.name}`);
+    res.json({ proxy });
+});
+app.put('/api/proxies/:id', requireAuth, (req, res) => {
+    const old = storage.getProxyRaw(req.params.id);
+    if (!old) return res.status(404).json({ error: '代理不存在' });
+    const b = req.body || {};
+    const proxy = storage.saveProxy({ ...old, name: String(b.name ?? old.name), host: String(b.host ?? old.host), port: Number(b.port ?? old.port) || 1080, username: String(b.username ?? old.username ?? ''), password: b.password === '******' ? old.password : String(b.password ?? old.password ?? ''), updatedAt: Date.now() });
+    addActivity(`编辑代理：${proxy.name}`);
+    res.json({ proxy });
+});
+app.delete('/api/proxies/:id', requireAuth, (req, res) => { storage.deleteProxy(req.params.id); addActivity('删除代理'); res.json({ ok: true }); });
+
+app.get('/api/jump-hosts', requireAuth, (req, res) => res.json({ jumpHosts: storage.listJumpHosts() }));
+app.post('/api/jump-hosts', requireAuth, (req, res) => {
+    const b = req.body || {};
+    if (!b.name || !b.connectionId) return res.status(400).json({ error: '名称和 SSH 连接不能为空' });
+    const jumpHost = storage.saveJumpHost({ id: crypto.randomUUID(), name: String(b.name), connectionId: String(b.connectionId), createdAt: Date.now(), updatedAt: Date.now() });
+    addActivity(`新增跳板机：${jumpHost.name}`);
+    res.json({ jumpHost });
+});
+app.put('/api/jump-hosts/:id', requireAuth, (req, res) => {
+    const old = storage.listJumpHosts().find((j) => j.id === req.params.id);
+    if (!old) return res.status(404).json({ error: '跳板机不存在' });
+    const b = req.body || {};
+    const jumpHost = storage.saveJumpHost({ ...old, name: String(b.name ?? old.name), connectionId: String(b.connectionId ?? old.connectionId), updatedAt: Date.now() });
+    addActivity(`编辑跳板机：${jumpHost.name}`);
+    res.json({ jumpHost });
+});
+app.delete('/api/jump-hosts/:id', requireAuth, (req, res) => { storage.deleteJumpHost(req.params.id); addActivity('删除跳板机'); res.json({ ok: true }); });
 
 function execRemoteCommand(sshClient, command) {
     return new Promise((resolve, reject) => {
@@ -70,6 +674,9 @@ function dockerServiceRestartCommand() {
 
 // 提供静态文件
 app.use(express.static(path.join(__dirname, 'public')));
+
+// 健康检查
+app.get('/healthz', (req, res) => res.status(200).send('OK'));
 
 // 兜底路由
 app.get('*', (req, res) => {
@@ -634,10 +1241,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
     });
 });
 
-// 健康检查
-app.get('/healthz', (req, res) => res.status(200).send('OK'));
-
 server.listen(PORT, () => {
-    console.log(`🌬️  Zephyr-SSH 服务运行在 http://localhost:${PORT}`);
+    console.log(`🌬️  Zephyr 服务运行在 http://localhost:${PORT}`);
     console.log(`   WebSocket 路径: /ssh`);
 });
