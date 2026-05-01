@@ -96,8 +96,13 @@
                     <span class="fm-editor-status" id="fmEditorStatus">Ready</span>
                 </div>
                 <div class="fm-editor-code-shell">
-                    <textarea class="fm-editor-textarea" id="fmEditorTextarea" rows="15"></textarea>
-                    <div class="fm-editor-minimap" id="fmEditorMinimap" title="代码概览，点击快速定位"></div>
+                    <div class="fm-editor-main wrap-enabled" id="fmEditorMain">
+                        <pre class="fm-editor-highlight" id="fmEditorHighlight" aria-hidden="true"></pre>
+                        <textarea class="fm-editor-textarea" id="fmEditorTextarea" rows="15" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
+                    </div>
+                    <div class="fm-editor-minimap" id="fmEditorMinimap" title="代码概览，点击快速定位">
+                        <pre class="fm-minimap-code" id="fmEditorMinimapCode" aria-hidden="true"></pre>
+                    </div>
                 </div>
                 <div class="fm-editor-actions">
                     <button class="btn btn-primary" id="fmEditorSaveBtn">保存</button>

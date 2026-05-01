@@ -48,8 +48,11 @@ const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
 const fmEditorModal = $('#fmEditorModal');
 const fmEditorTitle = $('#fmEditorTitle');
+const fmEditorMain = $('#fmEditorMain');
 const fmEditorTextarea = $('#fmEditorTextarea');
+const fmEditorHighlight = $('#fmEditorHighlight');
 const fmEditorMinimap = $('#fmEditorMinimap');
+const fmEditorMinimapCode = $('#fmEditorMinimapCode');
 const fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
 const fmEditorSaveBtn = $('#fmEditorSaveBtn');
 const fmEditorCancelBtn = $('#fmEditorCancelBtn');
@@ -76,10 +79,12 @@ let currentPath = '.';
 let allFiles = [];
 let searchQuery = '';
 let editorFilePath = null;
+let editorLanguage = 'plain';
 let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
+const EDITOR_MINIMAP_SCALE = 0.22;
 
 // 图表实例管理
 let chartInstances = {};
@@ -499,40 +504,347 @@ function normalizeLineEnding(text, lineEnding) {
 function updateEditorStatus() {
     const text = fmEditorTextarea.value || '';
     const lines = text.length ? text.split(/\r\n|\r|\n/).length : 1;
-    fmEditorStatus.textContent = `${lines} 行 · ${text.length} 字符 · ${editorRawBytes?.length || 0} bytes`;
-    updateEditorMinimap();
+    const langLabel = getEditorLanguageLabel(editorLanguage);
+    fmEditorStatus.textContent = `${lines} 行 · ${text.length} 字符 · ${editorRawBytes?.length || 0} bytes · ${langLabel}`;
+    renderEditorCodeLayers();
 }
 
-function classifyMinimapLine(line) {
-    const trimmed = line.trim();
-    if (!trimmed) return 'blank';
-    if (/^(\/\/|#|\/\*|\*|<!--)/.test(trimmed)) return 'comment';
-    if (/^(class|function|const|let|var|import|export|def|async|if|for|while|switch|try|catch)\b/.test(trimmed)) return 'keyword';
-    if (/[{}()[\]]/.test(trimmed)) return 'structure';
-    return 'text';
+const EDITOR_LANGUAGE_BY_EXT = {
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', json: 'json', jsonc: 'javascript',
+    html: 'html', htm: 'html', xml: 'html', vue: 'html', svelte: 'html',
+    css: 'css', scss: 'css', sass: 'css', less: 'css',
+    py: 'python', rb: 'ruby', php: 'php',
+    sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell', ksh: 'shell',
+    yml: 'yaml', yaml: 'yaml', toml: 'toml', ini: 'ini', env: 'shell',
+    md: 'markdown', markdown: 'markdown',
+    go: 'go', rs: 'rust', java: 'java', kt: 'kotlin', kts: 'kotlin',
+    c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+    cs: 'csharp', swift: 'swift', sql: 'sql', lua: 'lua',
+};
+
+const EDITOR_LANGUAGE_BY_NAME = {
+    dockerfile: 'dockerfile', containerfile: 'dockerfile', makefile: 'makefile',
+    'compose.yml': 'yaml', 'compose.yaml': 'yaml',
+};
+
+const EDITOR_LANGUAGE_LABELS = {
+    plain: 'Plain Text', javascript: 'JavaScript', typescript: 'TypeScript', json: 'JSON',
+    html: 'HTML/XML', css: 'CSS', python: 'Python', shell: 'Shell', yaml: 'YAML',
+    markdown: 'Markdown', go: 'Go', rust: 'Rust', java: 'Java', c: 'C', cpp: 'C++',
+    csharp: 'C#', php: 'PHP', ruby: 'Ruby', sql: 'SQL', lua: 'Lua', dockerfile: 'Dockerfile',
+    makefile: 'Makefile', toml: 'TOML', ini: 'INI', kotlin: 'Kotlin', swift: 'Swift',
+};
+
+const EDITOR_KEYWORDS = {
+    javascript: new Set('as async await break case catch class const continue debugger default delete do else export extends finally for from function get if import in instanceof let new of return set static super switch this throw try typeof var void while with yield null true false undefined'.split(' ')),
+    typescript: new Set('abstract any as async await boolean break case catch class const constructor continue debugger declare default delete do else enum export extends false finally for from function get if implements import in infer instanceof interface is keyof let module namespace never new null number object of private protected public readonly return set static string super switch symbol this throw true try type typeof undefined unknown var void while with yield'.split(' ')),
+    json: new Set('true false null'.split(' ')),
+    python: new Set('and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield self'.split(' ')),
+    shell: new Set('alias bg bind break builtin case cd command continue do done echo elif else esac eval exec exit export false fg fi for function getopts hash if in jobs kill let local logout popd printf pushd pwd read readonly return select set shift source test then time trap true type typeset ulimit umask unalias unset until wait while sudo'.split(' ')),
+    yaml: new Set('true false null yes no on off'.split(' ')),
+    css: new Set('important import media supports keyframes from to and or not only screen print all root'.split(' ')),
+    go: new Set('break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var nil true false iota'.split(' ')),
+    rust: new Set('as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while'.split(' ')),
+    java: new Set('abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new null package private protected public return short static strictfp super switch synchronized this throw throws transient true try void volatile while'.split(' ')),
+    c: new Set('auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while null NULL'.split(' ')),
+    cpp: new Set('alignas alignof and asm auto bitand bitor bool break case catch char char16_t char32_t class compl const constexpr const_cast continue decltype default delete do double dynamic_cast else enum explicit export extern false final float for friend goto if inline int long mutable namespace new noexcept not nullptr operator or override private protected public register reinterpret_cast return short signed sizeof static static_assert static_cast struct switch template this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t while xor'.split(' ')),
+    php: new Set('abstract and array as break callable case catch class clone const continue declare default die do echo else elseif empty enddeclare endfor endforeach endif endswitch endwhile eval exit extends final finally fn for foreach function global goto if implements include include_once instanceof insteadof interface isset list namespace new null or print private protected public require require_once return static switch throw trait try unset use var while xor yield true false'.split(' ')),
+    ruby: new Set('BEGIN END alias and begin break case class def defined do else elsif end ensure false for if in module next nil not or redo rescue retry return self super then true undef unless until when while yield'.split(' ')),
+    sql: new Set('add all alter and as asc by case check column constraint create database default delete desc distinct drop else exists foreign from group having in index inner insert into is join key left like limit not null on or order outer primary references right select set table then union unique update values view where true false'.split(' ')),
+    lua: new Set('and break do else elseif end false for function goto if in local nil not or repeat return then true until while'.split(' ')),
+    dockerfile: new Set('FROM RUN CMD LABEL MAINTAINER EXPOSE ENV ADD COPY ENTRYPOINT VOLUME USER WORKDIR ARG ONBUILD STOPSIGNAL HEALTHCHECK SHELL AS'.split(' ')),
+    makefile: new Set('include define endef ifeq ifneq ifdef ifndef else endif export unexport override private vpath'.split(' ')),
+    markdown: new Set(), toml: new Set('true false'.split(' ')), ini: new Set('true false yes no on off'.split(' ')),
+};
+
+function detectEditorLanguage(filePath = '') {
+    const fileName = (filePath.split('/').pop() || '').toLowerCase();
+    if (EDITOR_LANGUAGE_BY_NAME[fileName]) return EDITOR_LANGUAGE_BY_NAME[fileName];
+    const ext = fileName.includes('.') ? fileName.split('.').pop() : '';
+    return EDITOR_LANGUAGE_BY_EXT[ext] || 'plain';
+}
+
+function getEditorLanguageLabel(language) {
+    return EDITOR_LANGUAGE_LABELS[language] || EDITOR_LANGUAGE_LABELS.plain;
+}
+
+function escapeHtml(text = '') {
+    return String(text).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
+function tok(type, text) {
+    if (!text) return '';
+    return `<span class="tok-${type}">${escapeHtml(text)}</span>`;
+}
+
+function getLineComment(language) {
+    if (['python', 'shell', 'yaml', 'ruby', 'toml', 'ini', 'dockerfile', 'makefile'].includes(language)) return '#';
+    if (['sql', 'lua'].includes(language)) return '--';
+    if (language === 'plain' || language === 'json') return '';
+    return '//';
+}
+
+function getBlockComment(language) {
+    if (['javascript', 'typescript', 'css', 'go', 'rust', 'java', 'c', 'cpp', 'csharp', 'php', 'swift', 'kotlin'].includes(language)) {
+        return ['/*', '*/'];
+    }
+    return null;
+}
+
+function readQuoted(line, start, quote, language, state) {
+    const triple = (language === 'python' || language === 'ruby') && (quote === '"' || quote === "'") && line.startsWith(quote.repeat(3), start);
+    const delimiter = triple ? quote.repeat(3) : quote;
+    let i = start + delimiter.length;
+    while (i < line.length) {
+        if (!triple && line[i] === '\\') {
+            i += 2;
+            continue;
+        }
+        if (line.startsWith(delimiter, i)) {
+            i += delimiter.length;
+            return { end: i, closed: true, delimiter };
+        }
+        i++;
+    }
+    const canContinue = triple || quote === '`' || (!triple && line.endsWith('\\'));
+    if (canContinue) state.stringQuote = delimiter;
+    return { end: line.length, closed: false, delimiter };
+}
+
+function finishOpenString(line, state) {
+    const delimiter = state.stringQuote;
+    let i = 0;
+    while (i < line.length) {
+        if (delimiter.length === 1 && line[i] === '\\') {
+            i += 2;
+            continue;
+        }
+        if (line.startsWith(delimiter, i)) {
+            i += delimiter.length;
+            state.stringQuote = '';
+            return { html: tok('string', line.slice(0, i)), index: i };
+        }
+        i++;
+    }
+    return { html: tok('string', line), index: line.length };
+}
+
+function classifyIdentifier(identifier, line, start, end, language) {
+    const keywords = EDITOR_KEYWORDS[language] || EDITOR_KEYWORDS.plain;
+    const upper = identifier.toUpperCase();
+    const normalized = language === 'dockerfile' ? upper : identifier;
+    const after = line.slice(end).trimStart();
+    const before = line.slice(0, start).trimEnd();
+
+    if (keywords?.has(normalized) || keywords?.has(identifier)) return tok('keyword', identifier);
+    if (/^(true|false|null|nil|None|True|False|undefined|NaN|Infinity)$/i.test(identifier)) return tok('literal', identifier);
+    if ((language === 'json' || language === 'yaml' || language === 'toml' || language === 'ini') && after.startsWith(':')) return tok('attr', identifier);
+    if (language === 'css' && (after.startsWith(':') || identifier.startsWith('--'))) return tok(identifier.startsWith('--') ? 'variable' : 'attr', identifier);
+    if (after.startsWith('(') && !before.endsWith('.')) return tok('function', identifier);
+    if (before.endsWith('.') || before.endsWith('::')) return tok('property', identifier);
+    if (/^[A-Z][A-Za-z0-9_$]*$/.test(identifier)) return tok('type', identifier);
+    return escapeHtml(identifier);
+}
+
+function highlightHtmlTag(rawTag) {
+    const match = rawTag.match(/^(<\/?)([^\s>/]+)([\s\S]*?)(\/?>)$/);
+    if (!match) return tok('tag', rawTag);
+    const [, open, name, attrs, close] = match;
+    let html = `${tok('punctuation', open)}${tok('tag', name)}`;
+    const attrRegex = /([:@A-Za-z_][\w:.-]*)(\s*=\s*)?("[^"]*"|'[^']*'|[^\s"'=<>`]+)?/g;
+    let lastIndex = 0;
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(attrs))) {
+        html += escapeHtml(attrs.slice(lastIndex, attrMatch.index));
+        html += tok('attr', attrMatch[1]);
+        if (attrMatch[2]) html += tok('operator', attrMatch[2]);
+        if (attrMatch[3]) html += tok('string', attrMatch[3]);
+        lastIndex = attrRegex.lastIndex;
+    }
+    html += escapeHtml(attrs.slice(lastIndex));
+    html += tok('punctuation', close);
+    return html;
+}
+
+function highlightHtmlLine(line, state) {
+    let html = '';
+    let i = 0;
+    while (i < line.length) {
+        if (state.htmlComment) {
+            const end = line.indexOf('-->', i);
+            if (end === -1) return html + tok('comment', line.slice(i));
+            html += tok('comment', line.slice(i, end + 3));
+            state.htmlComment = false;
+            i = end + 3;
+            continue;
+        }
+        if (line.startsWith('<!--', i)) {
+            const end = line.indexOf('-->', i + 4);
+            if (end === -1) {
+                state.htmlComment = true;
+                return html + tok('comment', line.slice(i));
+            }
+            html += tok('comment', line.slice(i, end + 3));
+            i = end + 3;
+            continue;
+        }
+        if (line[i] === '<') {
+            const end = line.indexOf('>', i + 1);
+            if (end !== -1) {
+                html += highlightHtmlTag(line.slice(i, end + 1));
+                i = end + 1;
+                continue;
+            }
+        }
+        if (line[i] === '&') {
+            const entity = line.slice(i).match(/^&[A-Za-z0-9#]+;/)?.[0];
+            if (entity) {
+                html += tok('literal', entity);
+                i += entity.length;
+                continue;
+            }
+        }
+        html += escapeHtml(line[i]);
+        i++;
+    }
+    return html;
+}
+
+function highlightMarkdownLine(line) {
+    if (/^\s{0,3}#{1,6}\s/.test(line)) return tok('keyword', line);
+    if (/^\s{0,3}([-*+]\s|\d+\.\s)/.test(line)) return line.replace(/^([\s\d.*+-]+)/, (m) => tok('operator', m));
+    return highlightGenericLine(line, 'plain', {});
+}
+
+function highlightGenericLine(line, language, state) {
+    if (language === 'html') return highlightHtmlLine(line, state);
+    if (language === 'markdown') return highlightMarkdownLine(line);
+
+    let html = '';
+    let i = 0;
+    const lineComment = getLineComment(language);
+    const blockComment = getBlockComment(language);
+
+    while (i < line.length) {
+        if (state.stringQuote) {
+            const open = finishOpenString(line.slice(i), state);
+            html += open.html;
+            i += open.index;
+            continue;
+        }
+
+        if (state.blockComment) {
+            const end = line.indexOf(state.blockComment, i);
+            if (end === -1) return html + tok('comment', line.slice(i));
+            html += tok('comment', line.slice(i, end + state.blockComment.length));
+            i = end + state.blockComment.length;
+            state.blockComment = '';
+            continue;
+        }
+
+        if (blockComment && line.startsWith(blockComment[0], i)) {
+            const end = line.indexOf(blockComment[1], i + blockComment[0].length);
+            if (end === -1) {
+                state.blockComment = blockComment[1];
+                return html + tok('comment', line.slice(i));
+            }
+            html += tok('comment', line.slice(i, end + blockComment[1].length));
+            i = end + blockComment[1].length;
+            continue;
+        }
+
+        if (lineComment && line.startsWith(lineComment, i)) {
+            html += tok('comment', line.slice(i));
+            break;
+        }
+
+        const rest = line.slice(i);
+        if (language === 'markdown' && /^\s{0,3}>/.test(rest)) {
+            html += tok('comment', rest);
+            break;
+        }
+
+        const ch = line[i];
+        if (ch === '"' || ch === "'" || ch === '`') {
+            const quoted = readQuoted(line, i, ch, language, state);
+            html += tok('string', line.slice(i, quoted.end));
+            i = quoted.end;
+            continue;
+        }
+
+        const atRule = rest.match(/^@[A-Za-z_-][\w-]*/)?.[0];
+        if (atRule && (language === 'css' || language === 'java' || language === 'typescript')) {
+            html += tok('keyword', atRule);
+            i += atRule.length;
+            continue;
+        }
+
+        const number = rest.match(/^(0x[\da-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/)?.[0];
+        if (number && !/[\w$]/.test(line[i - 1] || '')) {
+            html += tok('number', number);
+            i += number.length;
+            continue;
+        }
+
+        const identifier = rest.match(/^[A-Za-z_$-][\w$-]*/)?.[0];
+        if (identifier && !identifier.startsWith('-')) {
+            html += classifyIdentifier(identifier, line, i, i + identifier.length, language);
+            i += identifier.length;
+            continue;
+        }
+
+        const operator = rest.match(/^(===|!==|=>|->|::|&&|\|\||\+\+|--|==|!=|<=|>=|[-+*/%=&|^!~?:]+)/)?.[0];
+        if (operator) {
+            html += tok('operator', operator);
+            i += operator.length;
+            continue;
+        }
+
+        if (/^[{}()[\],.;]$/.test(ch)) {
+            html += tok('punctuation', ch);
+            i++;
+            continue;
+        }
+
+        html += escapeHtml(ch);
+        i++;
+    }
+    return html;
+}
+
+function highlightCode(text, language) {
+    const normalized = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalized.split('\n');
+    const state = { blockComment: '', stringQuote: '', htmlComment: false };
+    const highlighted = lines.map(line => highlightGenericLine(line, language, state));
+    return highlighted.join('\n') || '&#8203;';
+}
+
+function syncEditorCodeScroll() {
+    if (!fmEditorTextarea) return;
+    if (fmEditorHighlight) {
+        fmEditorHighlight.style.transform = `translate3d(${-fmEditorTextarea.scrollLeft}px, ${-fmEditorTextarea.scrollTop}px, 0)`;
+    }
+    updateEditorMinimapViewport();
+}
+
+function renderEditorCodeLayers() {
+    if (!fmEditorTextarea) return;
+    const highlighted = highlightCode(fmEditorTextarea.value || '', editorLanguage);
+    if (fmEditorHighlight) fmEditorHighlight.innerHTML = highlighted;
+    if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = highlighted;
+    syncEditorCodeScroll();
 }
 
 function updateEditorMinimap() {
     if (!fmEditorMinimap) return;
     fmEditorModal.classList.toggle('minimap-hidden', editorMinimapHidden);
     fmEditorMinimapToggle?.classList.toggle('active', !editorMinimapHidden);
-    if (editorMinimapHidden) return;
-    const lines = (fmEditorTextarea.value || '').split(/\r\n|\r|\n/);
-    const maxLines = 420;
-    const step = Math.max(1, Math.ceil(lines.length / maxLines));
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i < lines.length; i += step) {
-        const sample = lines.slice(i, i + step).find(Boolean) || '';
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = `fm-minimap-line ${classifyMinimapLine(sample)}`;
-        row.dataset.line = String(i);
-        row.style.width = `${Math.min(100, Math.max(12, sample.trim().length * 2.2))}%`;
-        row.setAttribute('aria-label', `跳转到第 ${i + 1} 行`);
-        frag.appendChild(row);
-    }
-    fmEditorMinimap.replaceChildren(frag);
-    updateEditorMinimapViewport();
+    fmEditorMinimap.style.setProperty('--minimap-scale', String(EDITOR_MINIMAP_SCALE));
+    renderEditorCodeLayers();
 }
 
 function updateEditorMinimapViewport() {
@@ -544,6 +856,11 @@ function updateEditorMinimapViewport() {
     const heightPercent = Math.max(10, viewportRatio * 100);
     fmEditorMinimap.style.setProperty('--minimap-view-top', `${ratio * (100 - heightPercent)}%`);
     fmEditorMinimap.style.setProperty('--minimap-view-height', `${heightPercent}%`);
+    if (fmEditorMinimapCode) {
+        const scaledHeight = fmEditorMinimapCode.scrollHeight * EDITOR_MINIMAP_SCALE;
+        const overflow = Math.max(0, scaledHeight - fmEditorMinimap.clientHeight);
+        fmEditorMinimap.style.setProperty('--minimap-code-top', `${-(ratio * overflow)}px`);
+    }
 }
 
 function setEditorScrollFromMinimap(clientY) {
@@ -554,7 +871,7 @@ function setEditorScrollFromMinimap(clientY) {
     const thumbHeight = Math.max(18, rect.height * viewportRatio);
     const ratio = Math.min(1, Math.max(0, (clientY - rect.top - thumbHeight / 2) / Math.max(1, rect.height - thumbHeight)));
     fmEditorTextarea.scrollTop = ratio * maxScroll;
-    updateEditorMinimapViewport();
+    syncEditorCodeScroll();
 }
 
 function closeEditor({ animated = true } = {}) {
@@ -575,6 +892,9 @@ function closeEditor({ animated = true } = {}) {
 function applyEditorOptions() {
     fmEditorTextarea.wrap = fmEditorWrap.checked ? 'soft' : 'off';
     fmEditorTextarea.style.tabSize = fmEditorTabSize.value;
+    fmEditorMain?.classList.toggle('wrap-enabled', fmEditorWrap.checked);
+    fmEditorHighlight?.style.setProperty('tab-size', fmEditorTabSize.value);
+    fmEditorMinimapCode?.style.setProperty('tab-size', fmEditorTabSize.value);
     updateEditorMinimap();
 }
 
@@ -590,6 +910,7 @@ function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
 
 function openEditor(filePath) {
     editorFilePath = filePath;
+    editorLanguage = detectEditorLanguage(filePath);
     fmEditorModal.style.display = 'flex';
     fmEditorModal.classList.remove('closing');
     requestAnimationFrame(() => fmEditorModal.classList.add('open'));
@@ -630,7 +951,7 @@ fmEditorLineEnding.addEventListener('change', updateEditorStatus);
 fmEditorTabSize.addEventListener('change', applyEditorOptions);
 fmEditorWrap.addEventListener('change', applyEditorOptions);
 fmEditorTextarea.addEventListener('input', updateEditorStatus);
-fmEditorTextarea.addEventListener('scroll', updateEditorMinimapViewport, { passive: true });
+fmEditorTextarea.addEventListener('scroll', syncEditorCodeScroll, { passive: true });
 fmEditorMinimap?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     fmEditorMinimap.setPointerCapture?.(e.pointerId);
