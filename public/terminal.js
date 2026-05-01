@@ -27,7 +27,7 @@ const topbarActions = $('#topbarActions');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
-const wtermThemeSelect = $('#wtermThemeSelect');
+const wtermThemeToggle = $('#wtermThemeToggle');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
@@ -113,7 +113,6 @@ let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
-const EDITOR_MINIMAP_SCALE = 0.22;
 let activeConnectionToken = 0;
 let reconnectTimer = 0;
 let userClosedConnection = false;
@@ -179,13 +178,20 @@ function applyWtermTheme(theme) {
     const normalized = theme === 'light' ? 'light' : 'default';
     document.documentElement.setAttribute('data-wterm-theme', normalized);
     localStorage.setItem('zephyr-wterm-theme', normalized);
-    if (wtermThemeSelect) wtermThemeSelect.value = normalized;
+    if (wtermThemeToggle) {
+        wtermThemeToggle.textContent = normalized === 'light' ? '终端: Light' : '终端: 默认';
+        wtermThemeToggle.classList.toggle('active', normalized === 'light');
+        wtermThemeToggle.setAttribute('aria-pressed', normalized === 'light' ? 'true' : 'false');
+    }
     try { term?.setOption?.('theme', normalized === 'light' ? 'light' : 'default'); } catch (_) {}
     scheduleTerminalScrollbarUpdate();
 }
 
 applyWtermTheme(getPreferredWtermTheme());
-wtermThemeSelect?.addEventListener('change', () => applyWtermTheme(wtermThemeSelect.value));
+wtermThemeToggle?.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-wterm-theme');
+    applyWtermTheme(current === 'light' ? 'default' : 'light');
+});
 
 themeToggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme');
@@ -1043,17 +1049,37 @@ function syncEditorCodeScroll() {
 
 function renderEditorCodeLayers() {
     if (!fmEditorTextarea) return;
-    const highlighted = highlightCode(fmEditorTextarea.value || '', editorLanguage);
+    const text = fmEditorTextarea.value || '';
+    const highlighted = highlightCode(text, editorLanguage);
     if (fmEditorHighlight) fmEditorHighlight.innerHTML = highlighted;
-    if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = highlighted;
+    if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = renderMinimapCode(text, editorLanguage);
     syncEditorCodeScroll();
+}
+
+function renderMinimapCode(text = '', language = 'plain') {
+    const normalized = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalized.split('\n');
+    return lines.map((line) => {
+        if (!line) return '<span class="fm-minimap-line"></span>';
+        const indent = line.match(/^\s*/)?.[0].length || 0;
+        const trimmed = line.trim();
+        const commentPrefix = getLineComment(language);
+        const type = commentPrefix && trimmed.startsWith(commentPrefix)
+            ? 'comment'
+            : (/^<\/?[A-Za-z]/.test(trimmed) ? 'tag'
+                : (/^(const|let|var|function|class|if|else|for|while|return|import|export|def|class|from|async|await|public|private|protected|static)\b/.test(trimmed) ? 'keyword'
+                    : (/(['"`]).*\1/.test(trimmed) ? 'string'
+                        : (/\b\d+(\.\d+)?\b/.test(trimmed) ? 'number' : 'text'))));
+        const visualIndent = Math.min(42, indent * 2.2);
+        const visualWidth = Math.min(100 - visualIndent, Math.max(8, trimmed.length * 1.45));
+        return `<span class="fm-minimap-line"><span class="fm-minimap-seg indent" style="width:${visualIndent}%"></span><span class="fm-minimap-seg ${type}" style="width:${visualWidth}%"></span></span>`;
+    }).join('');
 }
 
 function updateEditorMinimap() {
     if (!fmEditorMinimap) return;
     fmEditorModal.classList.toggle('minimap-hidden', editorMinimapHidden);
     fmEditorMinimapToggle?.classList.toggle('active', !editorMinimapHidden);
-    fmEditorMinimap.style.setProperty('--minimap-scale', String(EDITOR_MINIMAP_SCALE));
     renderEditorCodeLayers();
 }
 
@@ -1067,8 +1093,7 @@ function updateEditorMinimapViewport() {
     fmEditorMinimap.style.setProperty('--minimap-view-top', `${ratio * (100 - heightPercent)}%`);
     fmEditorMinimap.style.setProperty('--minimap-view-height', `${heightPercent}%`);
     if (fmEditorMinimapCode) {
-        const scaledHeight = fmEditorMinimapCode.scrollHeight * EDITOR_MINIMAP_SCALE;
-        const overflow = Math.max(0, scaledHeight - fmEditorMinimap.clientHeight);
+        const overflow = Math.max(0, fmEditorMinimapCode.scrollHeight - fmEditorMinimap.clientHeight);
         fmEditorMinimap.style.setProperty('--minimap-code-top', `${-(ratio * overflow)}px`);
     }
 }
@@ -2195,12 +2220,15 @@ function openPanelLayoutMenu(button, panel) {
     document.body.appendChild(menu);
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const left = Math.min(Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
-    const top = Math.min(Math.max(8, rect.top + rect.height / 2 - menuRect.height / 2), window.innerHeight - menuRect.height - 8);
+    const anchorX = rect.left + rect.width / 2;
+    const left = Math.min(Math.max(8, anchorX - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
+    const belowTop = rect.bottom + 8;
+    const aboveTop = rect.top - menuRect.height - 8;
+    const top = belowTop + menuRect.height <= window.innerHeight - 8 ? belowTop : Math.max(8, aboveTop);
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
-    menu.style.setProperty('--menu-origin-x', `${rect.left + rect.width / 2 - left}px`);
-    menu.style.setProperty('--menu-origin-y', `${rect.top + rect.height / 2 - top}px`);
+    menu.style.setProperty('--menu-origin-x', `${anchorX - left}px`);
+    menu.style.setProperty('--menu-origin-y', belowTop + menuRect.height <= window.innerHeight - 8 ? '0px' : `${menuRect.height}px`);
     menu.addEventListener('click', (e) => {
         const item = e.target.closest('[data-layout]');
         if (!item) return;
