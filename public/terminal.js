@@ -148,8 +148,16 @@ function getTerminalCharMetrics() {
     };
 }
 
-function sendTerminalResize() {
+function sendTerminalResize(cols, rows) {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+    if (Number.isFinite(cols) && Number.isFinite(rows)) {
+        wsConnection.send(JSON.stringify({
+            type: 'resize',
+            rows: Math.max(2, Math.floor(rows)),
+            cols: Math.max(2, Math.floor(cols)),
+        }));
+        return;
+    }
     const rect = wtermWrapper.getBoundingClientRect();
     const { lineHeight, charWidth } = getTerminalCharMetrics();
     wsConnection.send(JSON.stringify({
@@ -792,10 +800,10 @@ function updateLine(id, value) {
 }
 
 function getTerminalScrollElement() {
-    // @wterm/dom 0.1.x 文档只暴露 init/write/resize/focus/destroy 等公开方法，
-    // 没有稳定的 scrollToBottom API；滚动应当只控制 DOM renderer 生成的根节点，
-    // 避免触碰 _core.viewport 这类内部实现导致渲染/滚动状态来回打架。
-    return wtermWrapper.querySelector('[data-wterm-root]') || wtermWrapper;
+    // 按 wterm 官方实现，滚动容器就是传给 new WTerm(element) 的宿主元素本身。
+    // 官方 CSS 通过 .wterm.has-scrollback { overflow-y: auto; } 打开原生滚动条，
+    // WTerm.write() 内部会根据 element.scrollTop/scrollHeight 决定是否贴底。
+    return wtermWrapper;
 }
 
 function getTerminalBottomDistance(el = getTerminalScrollElement()) {
@@ -809,38 +817,20 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
 }
 
 function scrollTerminalToBottom() {
-    try {
-        const el = getTerminalScrollElement();
-        if (el) {
-            const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-            if (maxScroll > 0) {
-                isProgrammaticTerminalScroll = true;
-                el.scrollTop = maxScroll;
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
-                });
-            }
-        }
-    } catch (_) {}
+    // 不再从业务层强制 scrollTop。wterm 官方 renderer 在 write/render 后自行贴底，
+    // 外层再次 requestAnimationFrame + scrollTop 会与输入光标可见性滚动竞争，导致抖动。
 }
 
 function markTerminalUserInput(data = '') {
-    // 输入回显通常会紧跟在用户按键之后到达。此时不要再从外层滚动 DOM，
-    // 否则会和浏览器的焦点/光标可见性滚动以及 wterm 自身渲染同步冲突，造成“抖一下”。
-    terminalInputEchoSuppressUntil = performance.now() + 140;
-    terminalInputEchoMaxLength = Math.max(8, (data || '').length + 2);
+    // 官方输入处理不需要额外抑制/补滚动；保留函数避免改动调用链。
 }
 
 function isLikelyTerminalInputEcho(data = '') {
-    return performance.now() < terminalInputEchoSuppressUntil && data.length <= terminalInputEchoMaxLength;
+    return false;
 }
 
 function scheduleTerminalScrollToBottom() {
-    if (terminalScrollRaf) return;
-    terminalScrollRaf = requestAnimationFrame(() => {
-        terminalScrollRaf = 0;
-        scrollTerminalToBottom();
-    });
+    // 使用 wterm 官方滚动机制，不做业务层补滚动。
 }
 
 function stopTerminalAutoScrollObserver() {
@@ -855,16 +845,8 @@ function stopTerminalAutoScrollObserver() {
 
 function setupTerminalScrollHooks() {
     stopTerminalAutoScrollObserver();
-    const scrollEl = getTerminalScrollElement();
-    if (!scrollEl) return;
-
-    shouldFollowTerminalOutput = isTerminalAtBottom(scrollEl, 96);
-    const onScroll = () => {
-        if (isProgrammaticTerminalScroll) return;
-        shouldFollowTerminalOutput = isTerminalAtBottom(scrollEl, 96);
-    };
-    scrollEl.addEventListener('scroll', onScroll, { passive: true });
-    terminalScrollCleanup = () => scrollEl.removeEventListener('scroll', onScroll);
+    // WTerm 内部会在 write 前记录是否贴底，并在 render 后只在需要时滚到底部。
+    // 这里不再监听/覆盖滚动状态，避免和官方 _shouldScrollToBottom 状态冲突。
 }
 
 function isModifierOnlyKeyEvent(e) {
@@ -1409,6 +1391,7 @@ async function initWTerm() {
         term = new WTermClass(wtermWrapper, {
             cols: 80, rows: 24, autoResize: true, cursorBlink: true,
             onData: (data) => sendData(data),
+            onResize: (cols, rows) => sendTerminalResize(cols, rows),
         });
     } catch {
         term = new WTermClass(wtermWrapper);
@@ -1461,10 +1444,7 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) {
-                            const followOutput = shouldFollowTerminalOutput || isTerminalAtBottom(getTerminalScrollElement(), 96);
-                            const suppressScrollForEcho = isLikelyTerminalInputEcho(msg.data || '');
                             term.write(msg.data);
-                            if (followOutput && !suppressScrollForEcho) scheduleTerminalScrollToBottom();
                         }
                         break;
                     case 'error':
