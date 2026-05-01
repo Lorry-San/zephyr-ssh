@@ -21,6 +21,7 @@
     --wterm-fg: #e6edf3;
     --wterm-selection: rgba(88,166,255,0.28);
     --keyboard-inset: 0px;
+    --keyboard-avoidance: 0px;
     --stable-vh: 100vh;
     --visual-vh: var(--stable-vh, 100vh);
     --visual-offset-top: 0px;
@@ -113,8 +114,8 @@ body:has(.terminal-page) {
     position: fixed;
     inset: 0;
     width: 100%;
-    height: var(--visual-vh, var(--stable-vh, 100vh));
-    min-height: var(--visual-vh, var(--stable-vh, 100vh));
+    height: var(--stable-vh, 100vh);
+    min-height: var(--stable-vh, 100vh);
     padding: 0;
     overflow: hidden;
 }
@@ -260,8 +261,8 @@ body:has(.terminal-page) {
     display: flex;
     flex-direction: column;
     background: var(--bg);
-    height: var(--visual-vh, var(--stable-vh, 100vh));
-    max-height: var(--visual-vh, var(--stable-vh, 100vh));
+    height: var(--stable-vh, 100vh);
+    max-height: var(--stable-vh, 100vh);
     overflow: hidden;
     overscroll-behavior: none;
     border: 1px solid var(--border);
@@ -274,6 +275,16 @@ body:has(.terminal-page) {
         background-color 0.24s ease,
         border-color 0.24s ease;
     will-change: height, transform;
+}
+
+.terminal-page::after {
+    content: '';
+    display: block;
+    flex: 0 0 var(--keyboard-avoidance, 0px);
+    height: var(--keyboard-avoidance, 0px);
+    min-height: var(--keyboard-avoidance, 0px);
+    pointer-events: none;
+    will-change: height, flex-basis;
 }
 
 /* 顶栏 */

@@ -147,6 +147,7 @@ let pinchLastAppliedFontSize = 14;
 let suppressNextLayoutClick = false;
 let viewportAnimationRaf = 0;
 let viewportAnimationResizeTimer = 0;
+let cachedSelectionText = '';
 
 const viewportAnimationState = {
     currentHeight: 0,
@@ -165,12 +166,14 @@ const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 function getViewportKeyboardMetrics() {
     const viewport = window.visualViewport;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+    const stableHeight = Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stable-vh')) || 0);
+    const baselineHeight = Math.max(layoutHeight, stableHeight || 0);
     const viewportHeight = Math.round(viewport?.height || layoutHeight || 0);
     const offsetTop = Math.round(viewport?.offsetTop || 0);
-    const keyboardInset = viewport ? Math.max(0, layoutHeight - viewportHeight - offsetTop) : 0;
+    const keyboardInset = viewport ? Math.max(0, baselineHeight - viewportHeight - offsetTop) : 0;
     const roundedInset = Math.round(keyboardInset);
     return {
-        layoutHeight,
+        layoutHeight: baselineHeight || layoutHeight,
         viewportHeight,
         offsetTop,
         keyboardInset: roundedInset,
@@ -180,9 +183,10 @@ function getViewportKeyboardMetrics() {
 
 function setViewportCssMetrics(height, offsetTop) {
     const roundedHeight = Math.max(1, Math.round(height));
-    const roundedOffset = Math.round(offsetTop);
+    const roundedAvoidance = Math.max(0, Math.round(offsetTop));
     document.documentElement.style.setProperty('--visual-vh', `${roundedHeight}px`);
-    document.documentElement.style.setProperty('--visual-offset-top', `${roundedOffset}px`);
+    document.documentElement.style.setProperty('--visual-offset-top', '0px');
+    document.documentElement.style.setProperty('--keyboard-avoidance', `${roundedAvoidance}px`);
 }
 
 function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = false } = {}) {
@@ -424,8 +428,7 @@ setupTerminalPinchZoom();
 
 // ---------- 复制功能 ----------
 copyBtn.addEventListener('click', async () => {
-    const selection = window.getSelection();
-    const text = selection.toString();
+    const text = getCopyableSelectionText();
     if (!text) return;
     const originalText = copyBtn.textContent;
     try {
@@ -443,6 +446,49 @@ copyBtn.addEventListener('click', async () => {
     }
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
+
+copyBtn.addEventListener('pointerdown', (e) => e.preventDefault(), { passive: false });
+copyBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+
+function normalizeCopiedTerminalText(text = '') {
+    let value = String(text)
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\r\n?/g, '\n');
+    // 终端中的长链接常被视觉换行拆开；复制时把 URL 内部换行/空白拼回去，避免链接缺段。
+    value = value.replace(/https?:\/\/[^\s<>'"]+(?:\s+[^\s<>'"]+)*/g, (match) => {
+        const compact = match.replace(/\s+/g, '');
+        return /^https?:\/\//.test(compact) ? compact : match;
+    });
+    return value;
+}
+
+function getSelectionTextFromRanges(selection) {
+    if (!selection || selection.rangeCount === 0) return '';
+    const parts = [];
+    for (let i = 0; i < selection.rangeCount; i++) {
+        const range = selection.getRangeAt(i);
+        parts.push(range.cloneContents().textContent || range.toString() || '');
+    }
+    return parts.join('');
+}
+
+function getCopyableSelectionText() {
+    const selection = window.getSelection();
+    const liveText = normalizeCopiedTerminalText(getSelectionTextFromRanges(selection) || selection?.toString?.() || '');
+    if (liveText) {
+        cachedSelectionText = liveText;
+        return liveText;
+    }
+    return cachedSelectionText;
+}
+
+document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    const text = normalizeCopiedTerminalText(getSelectionTextFromRanges(selection) || selection.toString());
+    if (text) cachedSelectionText = text;
+}, { passive: true });
 
 // ---------- Ctrl+C 智能判断 ----------
 document.addEventListener('keydown', (e) => {
@@ -2166,7 +2212,7 @@ function updateViewportInsets() {
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', mobileKeyboardOpen ? `${metrics.keyboardInset}px` : '0px');
         document.documentElement.classList.toggle('keyboard-open', mobileKeyboardOpen);
-        animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
+        animateViewportCssMetrics(metrics.layoutHeight, mobileKeyboardOpen ? metrics.keyboardInset : 0);
     });
     if (mobileKeyboardOpen) {
         window.setTimeout(() => {
