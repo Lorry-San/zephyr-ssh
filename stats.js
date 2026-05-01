@@ -9,9 +9,9 @@ const STAT_COMMAND = [
   "printf '\n__END_DISKSTATS__\n'",
   'cat /proc/net/dev || true',
   "printf '\n__END_NET__\n'",
-  'curl -4fsS --connect-timeout 3 https://api.ipify.org || true',
+  "IP4=''; if command -v ip >/dev/null 2>&1; then IP4=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i==\"src\") {print $(i+1); exit}}' || true); fi; if [ -z \"$IP4\" ]; then IP4=$(hostname -I 2>/dev/null | tr ' ' '\\n' | grep -E '^[0-9]+(\\.[0-9]+){3}$' | head -n1 || true); fi; printf '%s\\n' \"$IP4\"",
   "printf '\n__END_IP4__\n'",
-  "IP6=''; if command -v curl >/dev/null 2>&1; then IP6=$(curl -6fsS --connect-timeout 3 https://api64.ipify.org 2>/dev/null | head -n1 || true); fi; if [ -z \"$IP6\" ] && command -v ip >/dev/null 2>&1; then IP6=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i==\"src\") {print $(i+1); exit}}' || true); fi; if [ -z \"$IP6\" ] && command -v ip >/dev/null 2>&1; then IP6=$(ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ]; then IP6=$(hostname -I 2>/dev/null | tr ' ' '\\n' | grep ':' | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ] && [ -r /proc/net/if_inet6 ]; then IP6=$(awk '$4 == \"00\" && $1 !~ /^fe80/ { ip=$1; printf \"%s:%s:%s:%s:%s:%s:%s:%s\\n\", substr(ip,1,4), substr(ip,5,4), substr(ip,9,4), substr(ip,13,4), substr(ip,17,4), substr(ip,21,4), substr(ip,25,4), substr(ip,29,4); exit }' /proc/net/if_inet6 2>/dev/null || true); fi; printf '%s\\n' \"$IP6\"",
+  "IP6=''; if command -v ip >/dev/null 2>&1; then IP6=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i==\"src\") {print $(i+1); exit}}' || true); fi; if [ -z \"$IP6\" ] && command -v ip >/dev/null 2>&1; then IP6=$(ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ]; then IP6=$(hostname -I 2>/dev/null | tr ' ' '\\n' | grep ':' | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ] && [ -r /proc/net/if_inet6 ]; then IP6=$(awk '$4 == \"00\" && $1 !~ /^fe80/ { ip=$1; printf \"%s:%s:%s:%s:%s:%s:%s:%s\\n\", substr(ip,1,4), substr(ip,5,4), substr(ip,9,4), substr(ip,13,4), substr(ip,17,4), substr(ip,21,4), substr(ip,25,4), substr(ip,29,4); exit }' /proc/net/if_inet6 2>/dev/null || true); fi; printf '%s\\n' \"$IP6\"",
   "printf '\n__END_IP6__\n'",
   'cat /proc/cpuinfo || true',
   "printf '\n__END_CPUINFO__\n'",
@@ -22,17 +22,33 @@ const STAT_COMMAND = [
 
 function execRemote(sshClient, command) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
     sshClient.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
-      if (err) return reject(err);
+      if (err) return finish(reject, err);
       let stdout = '';
       let stderr = '';
+      const timer = setTimeout(() => {
+        try { stream.close?.(); } catch {}
+        try { stream.destroy?.(); } catch {}
+        finish(reject, new Error('Remote stats command timeout'));
+      }, 15000);
       stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
-      stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+      stream.stderr?.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+      stream.on('error', (streamErr) => {
+        clearTimeout(timer);
+        finish(reject, streamErr);
+      });
       stream.on('close', (code) => {
+        clearTimeout(timer);
         if (code !== 0 && stdout.trim().length === 0) {
-          return reject(new Error(`Remote command failed: ${stderr.trim()}`));
+          return finish(reject, new Error(`Remote command failed: ${stderr.trim() || `exit ${code}`}`));
         }
-        resolve(stdout);
+        finish(resolve, stdout);
       });
     });
   });

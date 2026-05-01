@@ -127,6 +127,7 @@ let dockerLogBuffer = '';
 
 // 图表实例管理
 let chartInstances = {};
+let latestStatsData = null;
 let shouldFollowTerminalOutput = true;
 let terminalScrollRaf = 0;
 let terminalScrollbarRaf = 0;
@@ -136,6 +137,7 @@ let terminalResizeCleanup = null;
 let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
+let mobileKeyboardOpen = false;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
@@ -148,6 +150,15 @@ const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 const TERMINAL_BOTTOM_THRESHOLD = 48;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 
+function setStableViewportHeight({ force = false } = {}) {
+    const viewport = window.visualViewport;
+    const keyboardInset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+    if (!force && keyboardInset > 80) return;
+    const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+    if (height > 0) document.documentElement.style.setProperty('--stable-vh', `${height}px`);
+}
+
+setStableViewportHeight({ force: true });
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -1953,18 +1964,20 @@ function updateViewportInsets() {
     const roundedInset = Math.round(keyboardInset);
     if (Math.abs((updateViewportInsets._lastInset ?? -1) - roundedInset) < 2) return;
     updateViewportInsets._lastInset = roundedInset;
+    const wasKeyboardOpen = mobileKeyboardOpen;
+    mobileKeyboardOpen = roundedInset > 80;
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
-        document.documentElement.style.setProperty('--keyboard-inset', `${roundedInset}px`);
+        // 不再把键盘高度叠加到页面 padding 上：移动端浏览器已经会调整 visualViewport，
+        // 额外改布局会导致页面“二次位移”跳动。这里只记录变量给 toast 等非布局元素使用。
+        document.documentElement.style.setProperty('--keyboard-inset', roundedInset > 80 ? `${roundedInset}px` : '0px');
         document.documentElement.classList.toggle('keyboard-open', roundedInset > 80);
     });
-    if (roundedInset > 80) {
+    if (!mobileKeyboardOpen && wasKeyboardOpen) {
         window.setTimeout(() => {
-            scheduleTerminalScrollToBottom();
+            setStableViewportHeight();
             scheduleTerminalResize();
-        }, 180);
-    } else {
-        window.setTimeout(scheduleTerminalResize, 180);
+        }, 220);
     }
 }
 
@@ -1979,6 +1992,7 @@ function setupMobileKeyboardAvoidance() {
 
 function renderStats(d) {
     if (!infoBody || !d) return;
+    latestStatsData = d;
     const cpuUsage = safeVal(d.cpu?.usage);
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
     const memTotalGB = (safeVal(d.memTotal) / 1024).toFixed(1);
@@ -2081,8 +2095,13 @@ function showInfoModal() {
         return;
     }
     ensureFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
-    if (infoBody && !infoBody.children.length) {
+    if (latestStatsData) {
+        renderStats(latestStatsData);
+    } else if (infoBody && !infoBody.children.length) {
         infoBody.innerHTML = '<div class="info-loading">正在加载服务器实时监控数据...</div>';
+    }
+    if (wsConnection?.readyState === WebSocket.OPEN) {
+        wsConnection.send(JSON.stringify({ type: 'stats-request' }));
     }
     infoModal.style.display = 'flex';
     // display 从 none 切换为 flex 后，下一帧再加 open，确保浏览器能播放开启动画。
@@ -2471,6 +2490,7 @@ setupPanelResize();
 setupTerminalInputActivityHooks();
 setupMobileKeyboardAvoidance();
 window.addEventListener('resize', () => {
+    setStableViewportHeight();
     [fileManager, infoModal, dockerPanel].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
 });
@@ -2766,6 +2786,12 @@ function connectWebSocket(connectionToken = activeConnectionToken) {
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'stats') { renderStats(msg.data); return; }
+                if (msg.type === 'stats-error') {
+                    if (infoBody && (!latestStatsData || infoBody.querySelector('.info-loading'))) {
+                        infoBody.innerHTML = `<div class="info-loading error">实时监控数据加载失败：${escapeHtml(msg.message || '未知错误')}</div>`;
+                    }
+                    return;
+                }
                 if (msg.type?.startsWith('sftp-')) { handleSFTPMessage(msg); return; }
                 if (msg.type?.startsWith('docker-')) { handleDockerMessage(msg); return; }
                 switch (msg.type) {
@@ -2857,16 +2883,15 @@ function handleKeyboardHide() {
 }
 
 if (typeof visualViewport !== 'undefined') {
-    visualViewport.addEventListener('resize', () => {
-        handleKeyboardShow();
-    });
-    visualViewport.addEventListener('scroll', () => {
-        handleKeyboardShow();
-    });
+    // 监听已在 setupMobileKeyboardAvoidance 中统一注册，避免重复触发布局更新造成跳动。
 }
 
 window.addEventListener('orientationchange', () => {
-    setTimeout(handleKeyboardHide, 300);
+    setTimeout(() => {
+        setStableViewportHeight({ force: true });
+        handleKeyboardHide();
+        scheduleTerminalResize();
+    }, 300);
 });
 disconnectBtn.addEventListener('click', () => {
     disconnect({ userInitiated: true });

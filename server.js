@@ -94,6 +94,7 @@ wss.on('connection', (ws, req) => {
                 sendJSON({ type: 'stats', data: result.stats });
             } catch (err) {
                 console.error('[STATS] 读取远程统计失败:', err.message);
+                sendJSON({ type: 'stats-error', message: err.message || '读取远程统计失败' });
             } finally {
                 statsRunning = false;
             }
@@ -416,6 +417,23 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         // 窗口大小调整
         if (msg.type === 'resize') {
             if (sshStream && sshStream.setWindow) sshStream.setWindow(msg.rows, msg.cols, 0, 0);
+            return;
+        }
+
+        // 手动请求一帧实时监控数据（打开监控面板时使用）
+        if (msg.type === 'stats-request') {
+            if (!sshClient || statsRunning) return;
+            statsRunning = true;
+            try {
+                const result = await getRemoteStats(sshClient, remoteStatsState);
+                remoteStatsState = result.state;
+                sendJSON({ type: 'stats', data: result.stats });
+            } catch (err) {
+                console.error('[STATS] 手动读取远程统计失败:', err.message);
+                sendJSON({ type: 'stats-error', message: err.message || '读取远程统计失败' });
+            } finally {
+                statsRunning = false;
+            }
             return;
         }
 
