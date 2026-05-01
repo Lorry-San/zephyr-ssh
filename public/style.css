@@ -314,11 +314,17 @@ body:has(.terminal-page) {
     overflow-x: auto;
     overflow-y: hidden;
     padding-bottom: 2px;
-    scrollbar-width: thin;
+    scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
 }
-.topbar-actions::-webkit-scrollbar { height: 4px; }
+.topbar-actions.scroll-active,
+.topbar-actions:hover,
+.topbar-actions:focus-within { scrollbar-width: thin; }
+.topbar-actions::-webkit-scrollbar { height: 0; }
+.topbar-actions.scroll-active::-webkit-scrollbar,
+.topbar-actions:hover::-webkit-scrollbar,
+.topbar-actions:focus-within::-webkit-scrollbar { height: 4px; }
 .topbar-actions::-webkit-scrollbar-thumb { background: rgba(139,148,158,0.45); border-radius: 999px; }
 .btn-sm {
     display: inline-flex;
@@ -387,8 +393,17 @@ body:has(.terminal-page) {
     padding: 6px 10px;
     flex-shrink: 0;
     overflow-x: auto;
+    scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
 }
+.toolbar.scroll-active,
+.toolbar:hover,
+.toolbar:focus-within { scrollbar-width: thin; }
+.toolbar::-webkit-scrollbar { height: 0; }
+.toolbar.scroll-active::-webkit-scrollbar,
+.toolbar:hover::-webkit-scrollbar,
+.toolbar:focus-within::-webkit-scrollbar { height: 4px; }
+.toolbar::-webkit-scrollbar-thumb { background: rgba(139,148,158,0.45); border-radius: 999px; }
 .toolbar-row {
     display: flex;
     align-items: center;
@@ -764,7 +779,7 @@ body:has(.terminal-page) {
     justify-content: center;
     cursor: pointer;
     touch-action: none;
-    transform: translate3d(-12px, 0, 0);
+    transform: translateZ(0);
     transition: background 0.18s ease, transform 0.34s cubic-bezier(0.2, 0.9, 0.2, 1);
     pointer-events: auto;
 }
@@ -772,7 +787,7 @@ body:has(.terminal-page) {
 .panel-traffic-btn:active,
 .panel-traffic-btn.pressing {
     background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
-    transform: translate3d(-12px, 0, 0) scale(0.94);
+    transform: scale(0.94);
 }
 .panel-traffic-btn span,
 .panel-traffic-btn span::before,
@@ -1605,7 +1620,10 @@ body:has(.terminal-page) {
         padding: 6px 0 2px 0;
         margin-top: 4px;
     }
-    .topbar-actions::-webkit-scrollbar { height: 3px; }
+    .topbar-actions::-webkit-scrollbar { height: 0; }
+    .topbar-actions.scroll-active::-webkit-scrollbar,
+    .topbar-actions:hover::-webkit-scrollbar,
+    .topbar-actions:focus-within::-webkit-scrollbar { height: 3px; }
     .btn-sm { padding: 5px 10px; min-height: 28px; font-size: 11px; }
     .wterm-theme-toggle { min-width: 70px; }
     .toolbar { padding: 5px 8px; }
@@ -1654,7 +1672,10 @@ body:has(.terminal-page) {
         margin-top: 4px;
         padding: 6px 0 2px 0;
     }
-    .topbar-actions::-webkit-scrollbar { height: 3px; }
+    .topbar-actions::-webkit-scrollbar { height: 0; }
+    .topbar-actions.scroll-active::-webkit-scrollbar,
+    .topbar-actions:hover::-webkit-scrollbar,
+    .topbar-actions:focus-within::-webkit-scrollbar { height: 3px; }
     .btn-sm { font-size: 11px; }
     .docker-table { min-width: 640px; font-size: 11px; }
     .docker-table th,

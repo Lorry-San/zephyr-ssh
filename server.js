@@ -52,6 +52,22 @@ function normalizeDockerMirrors(raw) {
     }
 }
 
+function dockerServiceRestartCommand() {
+    return [
+        'set -e',
+        'if [ "$(id -u)" = "0" ]; then SUDO=""; else SUDO="sudo -n"; fi',
+        'if command -v systemctl >/dev/null 2>&1; then',
+        '  $SUDO systemctl restart docker',
+        'elif command -v service >/dev/null 2>&1; then',
+        '  $SUDO service docker restart',
+        'else',
+        '  echo "未找到 systemctl/service，无法自动重启 Docker" >&2',
+        '  exit 1',
+        'fi',
+        'echo "Docker 服务已重启"'
+    ].join('\n');
+}
+
 // 提供静态文件
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -316,6 +332,12 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 `;
                 const raw = await execRemoteCommand(sshClient, command);
                 sendJSON({ type: 'docker-mirrors-save', success: true, output: raw, mirrors });
+                return;
+            }
+
+            if (msg.type === 'docker-restart-service') {
+                const raw = await execRemoteCommand(sshClient, dockerServiceRestartCommand());
+                sendJSON({ type: 'docker-service-restart', success: true, output: raw });
                 return;
             }
         } catch (err) {

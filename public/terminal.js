@@ -77,6 +77,7 @@ const infoBody = $('#infoBody');
 // Docker 面板 DOM
 const dockerPanel = $('#dockerPanel');
 const dockerCloseBtn = $('#dockerCloseBtn');
+const dockerRestartBtn = $('#dockerRestartBtn');
 const dockerRefreshBtn = $('#dockerRefreshBtn');
 const dockerStatus = $('#dockerStatus');
 const dockerInstallHint = $('#dockerInstallHint');
@@ -96,6 +97,7 @@ const dockerLogPauseBtn = $('#dockerLogPauseBtn');
 const dockerLogDownloadBtn = $('#dockerLogDownloadBtn');
 const dockerLogCloseBtn = $('#dockerLogCloseBtn');
 const dockerContainerLog = $('#dockerContainerLog');
+const toolbar = $('#toolbar');
 
 // ---------- 全局变量 ----------
 let term = null;
@@ -268,9 +270,14 @@ function sendTerminalResize(cols, rows) {
     }
     const rect = wtermWrapper.getBoundingClientRect();
     const { lineHeight, charWidth } = getTerminalCharMetrics();
+    let effectiveHeight = rect.height;
+    if (mobileKeyboardOpen && window.visualViewport) {
+        const viewportBottom = window.visualViewport.offsetTop + window.visualViewport.height;
+        effectiveHeight = Math.max(lineHeight * 2, Math.min(rect.height, viewportBottom - rect.top));
+    }
     wsConnection.send(JSON.stringify({
         type: 'resize',
-        rows: Math.max(2, Math.floor(rect.height / lineHeight)),
+        rows: Math.max(2, Math.floor(effectiveHeight / lineHeight)),
         cols: Math.max(2, Math.floor(rect.width / charWidth)),
     }));
 }
@@ -1559,6 +1566,11 @@ function handleDockerMessage(msg) {
             renderDockerMirrors();
             setDockerStatus('配置已保存，请重启 Docker 服务', false, 'success');
             break;
+        case 'docker-service-restart':
+            setDockerStatus('Docker 服务已重启，正在刷新资源...', true, 'success');
+            showToast('Docker 服务已重启', 'success');
+            window.setTimeout(() => checkDockerStatus({ force: true }), 1200);
+            break;
         case 'docker-log-start':
             appendDockerLog('--- 日志流已连接 ---\n');
             break;
@@ -1596,6 +1608,11 @@ dockerBtn?.addEventListener('click', () => {
 });
 dockerCloseBtn?.addEventListener('click', hideDockerPanel);
 dockerRefreshBtn?.addEventListener('click', () => checkDockerStatus({ force: true }));
+dockerRestartBtn?.addEventListener('click', () => {
+    if (!confirm('确认重启目标主机 Docker 服务？运行中的容器通常会继续运行，但 Docker API 会短暂不可用。')) return;
+    setDockerStatus('正在重启 Docker 服务...', true);
+    dockerSend({ type: 'docker-restart-service' });
+});
 document.querySelectorAll('[data-docker-tab]').forEach((tab) => {
     tab.addEventListener('click', () => {
         document.querySelectorAll('[data-docker-tab]').forEach((item) => item.classList.toggle('active', item === tab));
@@ -1973,12 +1990,38 @@ function updateViewportInsets() {
         document.documentElement.style.setProperty('--keyboard-inset', roundedInset > 80 ? `${roundedInset}px` : '0px');
         document.documentElement.classList.toggle('keyboard-open', roundedInset > 80);
     });
-    if (!mobileKeyboardOpen && wasKeyboardOpen) {
+    if (mobileKeyboardOpen) {
+        window.setTimeout(() => {
+            scheduleTerminalScrollToBottom();
+            scheduleTerminalResize();
+        }, 180);
+    } else if (wasKeyboardOpen) {
         window.setTimeout(() => {
             setStableViewportHeight();
+            scheduleTerminalScrollToBottom();
             scheduleTerminalResize();
         }, 220);
     }
+}
+
+function setupHorizontalScrollbarVisibility(...elements) {
+    elements.filter(Boolean).forEach((el) => {
+        let timer = 0;
+        const show = () => {
+            el.classList.add('scroll-active');
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => el.classList.remove('scroll-active'), 1100);
+        };
+        el.addEventListener('pointerdown', show, { passive: true });
+        el.addEventListener('touchstart', show, { passive: true });
+        el.addEventListener('wheel', show, { passive: true });
+        el.addEventListener('scroll', show, { passive: true });
+        el.addEventListener('mouseenter', show, { passive: true });
+        el.addEventListener('mouseleave', () => {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => el.classList.remove('scroll-active'), 260);
+        }, { passive: true });
+    });
 }
 
 function setupMobileKeyboardAvoidance() {
@@ -2275,7 +2318,7 @@ function openPanelLayoutMenu(button, panel) {
         const rect = button.getBoundingClientRect();
         const menuRect = menu.getBoundingClientRect();
         const anchorX = rect.left + rect.width / 2;
-        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2 - 16), window.innerWidth - menuRect.width - 8);
+        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2 - 32), window.innerWidth - menuRect.width - 8);
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
         const opensBelow = belowTop + menuRect.height <= window.innerHeight - 8;
@@ -2489,6 +2532,7 @@ setupPanelDrag();
 setupPanelResize();
 setupTerminalInputActivityHooks();
 setupMobileKeyboardAvoidance();
+setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
     [fileManager, infoModal, dockerPanel].forEach((panel) => panel && clampPanel(panel));
