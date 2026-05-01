@@ -677,19 +677,17 @@ body:has(.terminal-page) {
 }
 
 .panel-drag-handle {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
+    position: relative;
     width: 100%;
     height: 28px;
+    flex-shrink: 0;
     z-index: 6;
     cursor: default;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: transparent;
-    opacity: 0.72;
+    background: color-mix(in srgb, var(--border) 34%, transparent);
+    opacity: 1;
     touch-action: none;
     pointer-events: auto;
 }
@@ -698,7 +696,7 @@ body:has(.terminal-page) {
     height: 18px;
     border: 0;
     border-radius: 999px;
-    background: transparent;
+    background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -776,6 +774,20 @@ body:has(.terminal-page) {
     grid-template-columns: repeat(4, 1fr);
     gap: 8px;
     will-change: transform, opacity, filter;
+}
+.panel-layout-menu::before {
+    content: '';
+    position: absolute;
+    top: -7px;
+    left: var(--menu-origin-x, 50%);
+    width: 14px;
+    height: 14px;
+    border-left: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+    background: inherit;
+    transform: translateX(-50%) rotate(45deg);
+    backdrop-filter: inherit;
+    -webkit-backdrop-filter: inherit;
 }
 @keyframes panelMenuIn {
     0% { opacity: 0; transform: translateY(-12px) scale(0.72); filter: blur(10px); }

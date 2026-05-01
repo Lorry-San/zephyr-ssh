@@ -2218,17 +2218,22 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
     `;
     document.body.appendChild(menu);
-    const rect = button.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const anchorX = rect.left + rect.width / 2;
-    const left = Math.min(Math.max(8, anchorX - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
-    const belowTop = rect.bottom + 8;
-    const aboveTop = rect.top - menuRect.height - 8;
-    const top = belowTop + menuRect.height <= window.innerHeight - 8 ? belowTop : Math.max(8, aboveTop);
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    menu.style.setProperty('--menu-origin-x', `${anchorX - left}px`);
-    menu.style.setProperty('--menu-origin-y', belowTop + menuRect.height <= window.innerHeight - 8 ? '0px' : `${menuRect.height}px`);
+    const placeMenu = () => {
+        const rect = button.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const anchorX = rect.left + rect.width / 2;
+        const left = Math.min(Math.max(8, anchorX - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
+        const belowTop = rect.bottom + 8;
+        const aboveTop = rect.top - menuRect.height - 8;
+        const opensBelow = belowTop + menuRect.height <= window.innerHeight - 8;
+        const top = opensBelow ? belowTop : Math.max(8, aboveTop);
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.style.setProperty('--menu-origin-x', `${anchorX - left}px`);
+        menu.style.setProperty('--menu-origin-y', opensBelow ? '0px' : `${menuRect.height}px`);
+    };
+    placeMenu();
+    requestAnimationFrame(placeMenu);
     menu.addEventListener('click', (e) => {
         const item = e.target.closest('[data-layout]');
         if (!item) return;
@@ -2324,8 +2329,14 @@ function setupFloatingPanel(panel, options) {
 }
 
 function setupPanelDrag() {
-    document.querySelectorAll('[data-drag-panel]').forEach((handle) => {
-        const panel = document.getElementById(handle.dataset.dragPanel);
+    const handles = [
+        ...document.querySelectorAll('[data-drag-panel]'),
+        ...document.querySelectorAll('.panel-titlebar'),
+    ];
+    handles.forEach((handle) => {
+        const panel = handle.dataset.dragPanel
+            ? document.getElementById(handle.dataset.dragPanel)
+            : handle.closest('.file-manager, .info-modal, .docker-panel');
         if (!panel) return;
         handle.addEventListener('pointerdown', (e) => {
             if (e.target.closest('button,input,select,textarea,label')) return;
