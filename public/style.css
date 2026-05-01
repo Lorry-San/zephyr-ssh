@@ -113,15 +113,10 @@ body:has(.terminal-page) {
     position: fixed;
     inset: 0;
     width: 100%;
-    height: var(--stable-vh, 100vh);
-    min-height: var(--stable-vh, 100vh);
-    padding: 0;
-    overflow: hidden;
-}
-
-html.keyboard-open body:has(.terminal-page) {
     height: var(--visual-vh, var(--stable-vh, 100vh));
     min-height: var(--visual-vh, var(--stable-vh, 100vh));
+    padding: 0;
+    overflow: hidden;
 }
 
 /* ===== 登录卡片 ===== */
@@ -265,8 +260,8 @@ html.keyboard-open body:has(.terminal-page) {
     display: flex;
     flex-direction: column;
     background: var(--bg);
-    height: var(--stable-vh, 100vh);
-    max-height: var(--stable-vh, 100vh);
+    height: var(--visual-vh, var(--stable-vh, 100vh));
+    max-height: var(--visual-vh, var(--stable-vh, 100vh));
     overflow: hidden;
     overscroll-behavior: none;
     border: 1px solid var(--border);
@@ -276,18 +271,9 @@ html.keyboard-open body:has(.terminal-page) {
     padding-right: env(safe-area-inset-right);
     transform: translate3d(0, 0, 0);
     transition:
-        height 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-        max-height 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-        transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
         background-color 0.24s ease,
         border-color 0.24s ease;
     will-change: height, transform;
-}
-
-html.keyboard-open .terminal-page {
-    height: var(--visual-vh, var(--stable-vh, 100vh));
-    max-height: var(--visual-vh, var(--stable-vh, 100vh));
-    transform: translate3d(0, var(--visual-offset-top, 0px), 0);
 }
 
 /* 顶栏 */

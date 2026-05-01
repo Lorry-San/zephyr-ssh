@@ -145,6 +145,15 @@ let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
 let suppressNextLayoutClick = false;
+let viewportAnimationRaf = 0;
+let viewportAnimationResizeTimer = 0;
+
+const viewportAnimationState = {
+    currentHeight: 0,
+    currentOffsetTop: 0,
+    targetHeight: 0,
+    targetOffsetTop: 0,
+};
 
 const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
@@ -169,11 +178,74 @@ function getViewportKeyboardMetrics() {
     };
 }
 
+function setViewportCssMetrics(height, offsetTop) {
+    const roundedHeight = Math.max(1, Math.round(height));
+    const roundedOffset = Math.round(offsetTop);
+    document.documentElement.style.setProperty('--visual-vh', `${roundedHeight}px`);
+    document.documentElement.style.setProperty('--visual-offset-top', `${roundedOffset}px`);
+}
+
+function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = false } = {}) {
+    const targetH = Math.max(1, Math.round(targetHeight || window.innerHeight || document.documentElement.clientHeight || 1));
+    const targetY = Math.round(targetOffsetTop || 0);
+    if (!viewportAnimationState.currentHeight || immediate) {
+        viewportAnimationState.currentHeight = targetH;
+        viewportAnimationState.currentOffsetTop = targetY;
+        viewportAnimationState.targetHeight = targetH;
+        viewportAnimationState.targetOffsetTop = targetY;
+        setViewportCssMetrics(targetH, targetY);
+        window.clearTimeout(viewportAnimationResizeTimer);
+        viewportAnimationResizeTimer = window.setTimeout(scheduleTerminalResize, 80);
+        return;
+    }
+
+    viewportAnimationState.targetHeight = targetH;
+    viewportAnimationState.targetOffsetTop = targetY;
+    if (viewportAnimationRaf) return;
+
+    const step = () => {
+        viewportAnimationRaf = 0;
+        const state = viewportAnimationState;
+        const heightDelta = state.targetHeight - state.currentHeight;
+        const offsetDelta = state.targetOffsetTop - state.currentOffsetTop;
+        const stiffness = mobileKeyboardOpen ? 0.24 : 0.20;
+
+        state.currentHeight += heightDelta * stiffness;
+        state.currentOffsetTop += offsetDelta * stiffness;
+
+        if (Math.abs(heightDelta) < 0.75 && Math.abs(offsetDelta) < 0.75) {
+            state.currentHeight = state.targetHeight;
+            state.currentOffsetTop = state.targetOffsetTop;
+        }
+
+        setViewportCssMetrics(state.currentHeight, state.currentOffsetTop);
+
+        if (state.currentHeight !== state.targetHeight || state.currentOffsetTop !== state.targetOffsetTop) {
+            viewportAnimationRaf = requestAnimationFrame(step);
+        } else {
+            shouldFollowTerminalOutput = true;
+            scheduleTerminalScrollToBottom();
+            scheduleTerminalResize();
+        }
+    };
+
+    viewportAnimationRaf = requestAnimationFrame(step);
+    window.clearTimeout(viewportAnimationResizeTimer);
+    viewportAnimationResizeTimer = window.setTimeout(() => {
+        shouldFollowTerminalOutput = true;
+        scheduleTerminalScrollToBottom();
+        scheduleTerminalResize();
+    }, mobileKeyboardOpen ? 360 : 420);
+}
+
 function setStableViewportHeight({ force = false } = {}) {
     const { keyboardOpen } = getViewportKeyboardMetrics();
     if (!force && keyboardOpen) return;
     const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
-    if (height > 0) document.documentElement.style.setProperty('--stable-vh', `${height}px`);
+    if (height > 0) {
+        document.documentElement.style.setProperty('--stable-vh', `${height}px`);
+        if (!keyboardOpen) animateViewportCssMetrics(height, 0, { immediate: force });
+    }
 }
 
 setStableViewportHeight({ force: true });
@@ -2093,18 +2165,13 @@ function updateViewportInsets() {
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', mobileKeyboardOpen ? `${metrics.keyboardInset}px` : '0px');
-        document.documentElement.style.setProperty('--visual-vh', `${metrics.viewportHeight || metrics.layoutHeight}px`);
-        document.documentElement.style.setProperty('--visual-offset-top', `${metrics.offsetTop}px`);
         document.documentElement.classList.toggle('keyboard-open', mobileKeyboardOpen);
+        animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
     });
     if (mobileKeyboardOpen) {
         window.setTimeout(() => {
-            if (document.activeElement === cmdInput) {
-                cmdInput.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-            }
             shouldFollowTerminalOutput = true;
             scheduleTerminalScrollToBottom();
-            scheduleTerminalResize();
         }, 180);
     } else if (wasKeyboardOpen) {
         window.setTimeout(() => {
@@ -3039,8 +3106,9 @@ function handleKeyboardHide() {
     updateViewportInsets._lastSignature = '';
     mobileKeyboardOpen = false;
     document.documentElement.style.setProperty('--keyboard-inset', '0px');
-    document.documentElement.style.setProperty('--visual-offset-top', '0px');
     document.documentElement.classList.remove('keyboard-open');
+    const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+    animateViewportCssMetrics(height, 0);
 }
 
 if (typeof visualViewport !== 'undefined') {
