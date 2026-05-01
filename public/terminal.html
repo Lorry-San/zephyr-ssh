@@ -26,10 +26,18 @@
                 <span id="statusText">连接中...</span>
             </div>
             <span class="info" id="connInfo"></span>
-            <div style="display:flex;gap:8px;">
+            <div class="topbar-actions" id="topbarActions">
                 <button class="btn-sm" id="fileBtn" title="文件管理">📁 文件</button>
                 <button class="btn-sm" id="infoBtn" title="实时监控">📊 监控</button>
+                <button class="btn-sm" id="dockerBtn" title="Docker 容器与镜像管理">🐳 Docker</button>
                 <button class="btn-sm" id="copyBtn" title="复制选中内容">📋 复制</button>
+                <label class="wterm-theme-control" title="独立切换 wterm 终端主题，不跟随全局深浅色模式">
+                    <span>终端</span>
+                    <select id="wtermThemeSelect" aria-label="wterm 终端主题">
+                        <option value="default">默认</option>
+                        <option value="light">Light</option>
+                    </select>
+                </label>
                 <button class="btn-sm" id="themeToggle" title="切换主题">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
                 <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
@@ -57,8 +65,9 @@
                 <button class="tool-btn" id="fmNewFolderBtn">📁 新建文件夹</button>
                 <button class="tool-btn" id="fmNewFileBtn">📄 新建文件</button>
                 <label class="tool-btn fm-upload-label" for="fmUploadInput">📤 上传文件</label>
-                <input type="file" id="fmUploadInput" style="display:none;">
+                <input type="file" id="fmUploadInput" style="display:none;" multiple>
             </div>
+            <div class="fm-drop-overlay" id="fmDropOverlay">将文件拖放到此处上传到当前目录</div>
             <div class="fm-list" id="fmList"></div>
             <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
                 <div class="fm-editor-header">
@@ -111,6 +120,77 @@
             </div>
             <div class="panel-resize-handle left" data-resize-panel="fileManager" data-resize-edge="left" title="拖动调整大小"></div>
             <div class="panel-resize-handle right" data-resize-panel="fileManager" data-resize-edge="right" title="拖动调整大小"></div>
+        </div>
+
+        <!-- Docker 管理面板 -->
+        <div class="docker-panel" id="dockerPanel" style="display:none;">
+            <div class="panel-drag-handle" data-drag-panel="dockerPanel" title="拖动移动窗口">
+                <button class="panel-traffic-btn" data-layout-panel="dockerPanel" title="窗口布局"><span></span></button>
+            </div>
+            <div class="docker-header panel-titlebar">
+                <div class="docker-title">🐳 Docker 管理</div>
+                <div class="docker-header-actions">
+                    <button class="tool-btn" id="dockerRefreshBtn">刷新</button>
+                    <button class="tool-btn" id="dockerCloseBtn">✕</button>
+                </div>
+            </div>
+            <div class="docker-status" id="dockerStatus">点击 Docker Tab 后检测目标主机 Docker 状态...</div>
+            <div class="docker-install-hint" id="dockerInstallHint" style="display:none;">
+                <div class="docker-empty-icon">🐳</div>
+                <h3>未检测到 Docker，请先安装 Docker</h3>
+                <p>可在终端中执行以下命令安装：</p>
+                <code>curl -fsSL https://get.docker.com | bash</code>
+            </div>
+            <div class="docker-content" id="dockerContent" style="display:none;">
+                <div class="docker-tabs" role="tablist">
+                    <button class="docker-tab active" data-docker-tab="containers">容器</button>
+                    <button class="docker-tab" data-docker-tab="images">镜像</button>
+                    <button class="docker-tab" data-docker-tab="settings">镜像加速器</button>
+                </div>
+                <div class="docker-tab-panel active" id="dockerContainersPanel">
+                    <div class="docker-table-wrap">
+                        <table class="docker-table">
+                            <thead><tr><th>名称</th><th>镜像</th><th>状态</th><th>端口</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody id="dockerContainersBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="docker-tab-panel" id="dockerImagesPanel">
+                    <div class="docker-pull-row">
+                        <input type="text" id="dockerPullInput" placeholder="镜像名，例如 nginx:alpine">
+                        <button class="tool-btn" id="dockerPullBtn">拉取</button>
+                    </div>
+                    <pre class="docker-log-box" id="dockerPullLog" aria-live="polite"></pre>
+                    <div class="docker-table-wrap">
+                        <table class="docker-table">
+                            <thead><tr><th>仓库</th><th>标签</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead>
+                            <tbody id="dockerImagesBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="docker-tab-panel" id="dockerSettingsPanel">
+                    <p class="docker-settings-desc">配置 Docker registry-mirrors 后，请重启 Docker 服务使配置生效。</p>
+                    <div class="docker-mirror-list" id="dockerMirrorList"></div>
+                    <div class="docker-pull-row">
+                        <input type="url" id="dockerMirrorInput" placeholder="https://mirror.ccs.tencentyun.com">
+                        <button class="tool-btn" id="dockerMirrorAddBtn">添加</button>
+                        <button class="tool-btn" id="dockerMirrorSaveBtn">保存配置</button>
+                    </div>
+                </div>
+            </div>
+            <div class="docker-log-drawer" id="dockerLogDrawer" style="display:none;">
+                <div class="docker-log-header">
+                    <span id="dockerLogTitle">容器日志</span>
+                    <div class="docker-log-actions">
+                        <button class="tool-btn" id="dockerLogPauseBtn">暂停滚动</button>
+                        <button class="tool-btn" id="dockerLogDownloadBtn">下载</button>
+                        <button class="tool-btn" id="dockerLogCloseBtn">关闭</button>
+                    </div>
+                </div>
+                <pre class="docker-container-log" id="dockerContainerLog"></pre>
+            </div>
+            <div class="panel-resize-handle left" data-resize-panel="dockerPanel" data-resize-edge="left" title="拖动调整大小"></div>
+            <div class="panel-resize-handle right" data-resize-panel="dockerPanel" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
         <!-- 实时监控覆盖层 -->

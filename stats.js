@@ -11,7 +11,7 @@ const STAT_COMMAND = [
   "printf '\n__END_NET__\n'",
   'curl -4fsS --connect-timeout 3 https://api.ipify.org || true',
   "printf '\n__END_IP4__\n'",
-  'curl -6fsS --connect-timeout 3 https://api.ipify.org || true',
+  "IP6=''; if command -v curl >/dev/null 2>&1; then IP6=$(curl -6fsS --connect-timeout 3 https://api64.ipify.org 2>/dev/null | head -n1 || true); fi; if [ -z \"$IP6\" ] && command -v ip >/dev/null 2>&1; then IP6=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i==\"src\") {print $(i+1); exit}}' || true); fi; if [ -z \"$IP6\" ] && command -v ip >/dev/null 2>&1; then IP6=$(ip -o -6 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ]; then IP6=$(hostname -I 2>/dev/null | tr ' ' '\\n' | grep ':' | grep -vi '^fe80' | head -n1 || true); fi; if [ -z \"$IP6\" ] && [ -r /proc/net/if_inet6 ]; then IP6=$(awk '$4 == \"00\" && $1 !~ /^fe80/ { ip=$1; printf \"%s:%s:%s:%s:%s:%s:%s:%s\\n\", substr(ip,1,4), substr(ip,5,4), substr(ip,9,4), substr(ip,13,4), substr(ip,17,4), substr(ip,21,4), substr(ip,25,4), substr(ip,29,4); exit }' /proc/net/if_inet6 2>/dev/null || true); fi; printf '%s\\n' \"$IP6\"",
   "printf '\n__END_IP6__\n'",
   'cat /proc/cpuinfo || true',
   "printf '\n__END_CPUINFO__\n'",
@@ -170,12 +170,30 @@ function parseIp(raw) {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed) || /:/g.test(trimmed)) {
+    // IPv4 pattern
+    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed)) {
       return trimmed;
     }
-    const parts = trimmed.split(/\s+/);
-    if (parts.length >= 4 && parts[3] && parts[3].includes('/')) {
-      return parts[3].split('/')[0];
+    // IPv6 pattern - look for valid IPv6
+    if (/^[0-9a-f:]+$/.test(trimmed.toLowerCase())) {
+      // Skip link-local (fe80::) and loopback (::1)
+      if (!/^fe80:/i.test(trimmed) && trimmed !== '::1' && trimmed.includes(':')) {
+        // Basic validation: IPv6 should have at least one colon
+        return trimmed;
+      }
+    }
+    // Parse line with potential mixed content
+    const tokens = trimmed.split(/\s+/);
+    for (const token of tokens) {
+      const candidate = token.replace(/,$/, '').replace(/[;\|].*$/, '').split('/')[0].split('%')[0];
+      // IPv4 check
+      if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(candidate)) return candidate;
+      // IPv6 check - must have colon and be valid hex
+      if (candidate.includes(':') && /^[0-9a-f:.]+$/i.test(candidate)) {
+        if (!/^fe80:/i.test(candidate) && candidate !== '::1' && candidate.length > 2) {
+          return candidate;
+        }
+      }
     }
   }
   return 'N/A';

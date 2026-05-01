@@ -23,14 +23,17 @@ const terminalContainer = $('#terminalContainer');
 const wtermWrapper = $('#wtermWrapper');
 const terminalScrollbar = $('#terminalScrollbar');
 const terminalScrollbarThumb = $('#terminalScrollbarThumb');
+const topbarActions = $('#topbarActions');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
+const wtermThemeSelect = $('#wtermThemeSelect');
 const cmdInput = $('#cmdInput');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
 const infoBtn = $('#infoBtn');
+const dockerBtn = $('#dockerBtn');
 const fontDecreaseBtn = $('#fontDecreaseBtn');
 const fontIncreaseBtn = $('#fontIncreaseBtn');
 
@@ -44,6 +47,7 @@ const fmCloseBtn = $('#fmCloseBtn');
 const fmNewFolderBtn = $('#fmNewFolderBtn');
 const fmNewFileBtn = $('#fmNewFileBtn');
 const fmUploadInput = $('#fmUploadInput');
+const fmDropOverlay = $('#fmDropOverlay');
 const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
 const fmEditorModal = $('#fmEditorModal');
@@ -70,6 +74,29 @@ const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
 const infoBody = $('#infoBody');
 
+// Docker 面板 DOM
+const dockerPanel = $('#dockerPanel');
+const dockerCloseBtn = $('#dockerCloseBtn');
+const dockerRefreshBtn = $('#dockerRefreshBtn');
+const dockerStatus = $('#dockerStatus');
+const dockerInstallHint = $('#dockerInstallHint');
+const dockerContent = $('#dockerContent');
+const dockerContainersBody = $('#dockerContainersBody');
+const dockerImagesBody = $('#dockerImagesBody');
+const dockerPullInput = $('#dockerPullInput');
+const dockerPullBtn = $('#dockerPullBtn');
+const dockerPullLog = $('#dockerPullLog');
+const dockerMirrorList = $('#dockerMirrorList');
+const dockerMirrorInput = $('#dockerMirrorInput');
+const dockerMirrorAddBtn = $('#dockerMirrorAddBtn');
+const dockerMirrorSaveBtn = $('#dockerMirrorSaveBtn');
+const dockerLogDrawer = $('#dockerLogDrawer');
+const dockerLogTitle = $('#dockerLogTitle');
+const dockerLogPauseBtn = $('#dockerLogPauseBtn');
+const dockerLogDownloadBtn = $('#dockerLogDownloadBtn');
+const dockerLogCloseBtn = $('#dockerLogCloseBtn');
+const dockerContainerLog = $('#dockerContainerLog');
+
 // ---------- 全局变量 ----------
 let term = null;
 let wsConnection = null;
@@ -77,6 +104,8 @@ let isConnected = false;
 let sftpReady = false;
 let currentPath = '.';
 let allFiles = [];
+let pendingUploadFiles = [];
+let fileDragDepth = 0;
 let searchQuery = '';
 let editorFilePath = null;
 let editorLanguage = 'plain';
@@ -85,6 +114,17 @@ let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') =
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const EDITOR_MINIMAP_SCALE = 0.22;
+let activeConnectionToken = 0;
+let reconnectTimer = 0;
+let userClosedConnection = false;
+let reconnectInProgress = false;
+
+let dockerChecked = false;
+let dockerInstalled = false;
+let dockerMirrors = [];
+let dockerCurrentLogContainer = null;
+let dockerAutoScrollLog = true;
+let dockerLogBuffer = '';
 
 // 图表实例管理
 let chartInstances = {};
@@ -93,6 +133,7 @@ let terminalScrollRaf = 0;
 let terminalScrollbarRaf = 0;
 let isProgrammaticTerminalScroll = false;
 let terminalScrollCleanup = null;
+let terminalResizeCleanup = null;
 let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
@@ -116,11 +157,35 @@ function getPreferredTheme() {
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 function applyTheme(theme) {
+    if (document.documentElement.getAttribute('data-theme') !== theme) {
+        document.documentElement.classList.add('theme-transitioning');
+        window.clearTimeout(applyTheme._transitionTimer);
+        applyTheme._transitionTimer = window.setTimeout(() => {
+            document.documentElement.classList.remove('theme-transitioning');
+        }, 300);
+    }
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('zephyr-theme', theme);
     themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 applyTheme(getPreferredTheme());
+
+function getPreferredWtermTheme() {
+    const saved = localStorage.getItem('zephyr-wterm-theme');
+    return saved === 'light' ? 'light' : 'default';
+}
+
+function applyWtermTheme(theme) {
+    const normalized = theme === 'light' ? 'light' : 'default';
+    document.documentElement.setAttribute('data-wterm-theme', normalized);
+    localStorage.setItem('zephyr-wterm-theme', normalized);
+    if (wtermThemeSelect) wtermThemeSelect.value = normalized;
+    try { term?.setOption?.('theme', normalized === 'light' ? 'light' : 'default'); } catch (_) {}
+    scheduleTerminalScrollbarUpdate();
+}
+
+applyWtermTheme(getPreferredWtermTheme());
+wtermThemeSelect?.addEventListener('change', () => applyWtermTheme(wtermThemeSelect.value));
 
 themeToggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme');
@@ -262,6 +327,34 @@ document.addEventListener('keydown', (e) => {
         sendData('\x03');
     }
 });
+
+// ---------- 通用提示 ----------
+function showToast(message, type = 'info', timeout = 2800) {
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+    window.setTimeout(() => {
+        toast.classList.remove('show');
+        window.setTimeout(() => toast.remove(), 220);
+    }, timeout);
+}
+
+function sendJsonMessage(payload) {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
+        showToast('SSH 尚未连接', 'error');
+        return false;
+    }
+    wsConnection.send(JSON.stringify(payload));
+    return true;
+}
 
 // ---------- 文件管理器 ----------
 function showFileManager() {
@@ -419,17 +512,134 @@ fmNewFileBtn.addEventListener('click', () => {
     wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: currentPath.replace(/\/+$/, '') + '/' + name }));
 });
 // 上传文件
-fmUploadInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+function uploadFile(file) {
+    if (!file || !sftpReady || !wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
         const base64 = ev.target.result.split(',')[1];
         wsConnection.send(JSON.stringify({ type: 'sftp-upload', path: currentPath.replace(/\/+$/, '') + '/' + file.name, data: base64 }));
     };
+    reader.onerror = () => showToast(`读取文件失败：${file.name}`, 'error');
     reader.readAsDataURL(file);
+}
+
+function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    if (!sftpReady) {
+        pendingUploadFiles.push(...files);
+        showToast('SFTP 正在初始化，文件将在就绪后自动上传', 'info');
+        showFileManager();
+        initSFTP();
+        return;
+    }
+    showToast(`开始上传 ${files.length} 个文件到 ${currentPath}`, 'info');
+    files.forEach(uploadFile);
+}
+
+function flushPendingUploads() {
+    if (!pendingUploadFiles.length || !sftpReady) return;
+    const files = pendingUploadFiles.splice(0);
+    uploadFiles(files);
+}
+
+function hasDraggedFiles(e) {
+    return Array.from(e.dataTransfer?.types || []).includes('Files');
+}
+
+function setFileDragActive(active) {
+    fileManager.classList.toggle('drag-over', active);
+}
+
+fmUploadInput.addEventListener('change', (e) => {
+    uploadFiles(e.target.files);
     fmUploadInput.value = '';
 });
+
+document.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    fileDragDepth += 1;
+    if (!fileManager.classList.contains('open')) showFileManager();
+    setFileDragActive(true);
+}, { passive: false });
+
+document.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!fileManager.classList.contains('open')) showFileManager();
+    setFileDragActive(true);
+}, { passive: false });
+
+document.addEventListener('dragleave', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    fileDragDepth = Math.max(0, fileDragDepth - 1);
+    if (fileDragDepth === 0 || !e.relatedTarget) setFileDragActive(false);
+}, { passive: true });
+
+document.addEventListener('drop', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    fileDragDepth = 0;
+    setFileDragActive(false);
+    if (!fileManager.classList.contains('open')) showFileManager();
+    uploadFiles(e.dataTransfer?.files);
+}, { passive: false });
+
+// 直接在文件管理器上处理拖拽
+fmDropOverlay.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+}, { passive: false });
+
+fmDropOverlay.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+}, { passive: false });
+
+fmDropOverlay.addEventListener('drop', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth = 0;
+    setFileDragActive(false);
+    uploadFiles(e.dataTransfer?.files);
+}, { passive: false });
+
+fmList.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth += 1;
+    setFileDragActive(true);
+}, { passive: false });
+
+fmList.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setFileDragActive(true);
+}, { passive: false });
+
+fmList.addEventListener('dragleave', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    fileDragDepth = Math.max(0, fileDragDepth - 1);
+    if (fileDragDepth === 0) setFileDragActive(false);
+}, { passive: true });
+
+fmList.addEventListener('drop', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth = 0;
+    setFileDragActive(false);
+    uploadFiles(e.dataTransfer?.files);
+}, { passive: false });
 // 编辑器
 function base64ToBytes(base64) {
     const binary = atob(base64 || '');
@@ -955,10 +1165,12 @@ fmEditorTextarea.addEventListener('scroll', syncEditorCodeScroll, { passive: tru
 fmEditorMinimap?.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     fmEditorMinimap.setPointerCapture?.(e.pointerId);
+    fmEditorMinimap.classList.add('dragging');
     setEditorScrollFromMinimap(e.clientY);
     fmEditorTextarea.focus();
     const onMove = (ev) => setEditorScrollFromMinimap(ev.clientY);
     const onUp = () => {
+        fmEditorMinimap.classList.remove('dragging');
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
     };
@@ -983,18 +1195,20 @@ fmEditorTextarea.addEventListener('keydown', (e) => {
 if (window.ResizeObserver && fmEditorTextarea) {
     const editorResizeObserver = new ResizeObserver(updateEditorMinimapViewport);
     editorResizeObserver.observe(fmEditorTextarea);
+    if (fmEditorMinimap) editorResizeObserver.observe(fmEditorMinimap);
 }
 
 // ---------- SFTP 消息处理 ----------
 function handleSFTPMessage(msg) {
     switch (msg.type) {
-        case 'sftp-ready': sftpReady = true; refreshFileList(); break;
+        case 'sftp-ready': sftpReady = true; refreshFileList(); flushPendingUploads(); break;
         case 'sftp-list':
             if (msg.error) alert('列出目录失败: ' + msg.error);
             else { renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; }
             break;
         case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload':
-            if (msg.success) refreshFileList(); else alert('操作失败: ' + (msg.error || '未知错误'));
+            if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); }
+            else showToast('操作失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-download':
             if (msg.error) alert('下载失败: ' + msg.error);
@@ -1024,6 +1238,361 @@ function handleSFTPMessage(msg) {
         case 'sftp-error': alert('SFTP 错误: ' + msg.message); sftpReady = false; break;
     }
 }
+
+// ---------- Docker 管理面板 ----------
+function setDockerStatus(message, loading = false, type = 'info') {
+    if (!dockerStatus) return;
+    dockerStatus.textContent = message;
+    dockerStatus.classList.toggle('loading', loading);
+    dockerStatus.dataset.type = type;
+}
+
+function dockerSend(payload) {
+    return sendJsonMessage(payload);
+}
+
+function dockerRefreshAll() {
+    if (!dockerInstalled) return;
+    dockerSend({ type: 'docker-list-containers' });
+    dockerSend({ type: 'docker-list-images' });
+    dockerSend({ type: 'docker-mirrors-get' });
+}
+
+function checkDockerStatus({ force = false } = {}) {
+    if (!force && dockerChecked) {
+        if (dockerInstalled) dockerRefreshAll();
+        return;
+    }
+    setDockerStatus('正在检测 Docker...', true);
+    dockerInstallHint.style.display = 'none';
+    dockerContent.style.display = 'none';
+    dockerSend({ type: 'docker-check' });
+}
+
+function showDockerPanel() {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
+        showToast('请先连接 SSH', 'error');
+        return;
+    }
+    ensureFloatingPanel(dockerPanel, getDefaultPanelOptions(dockerPanel));
+    dockerPanel.style.display = 'flex';
+    requestAnimationFrame(() => {
+        dockerPanel.classList.add('open');
+        dockerBtn.classList.add('active');
+        bringPanelToFront(dockerPanel);
+    });
+    checkDockerStatus();
+}
+
+function hideDockerPanel() {
+    dockerPanel.classList.remove('open');
+    dockerBtn.classList.remove('active');
+    window.setTimeout(() => {
+        if (!dockerPanel.classList.contains('open')) dockerPanel.style.display = 'none';
+    }, 280);
+}
+
+function normalizeContainer(row = {}) {
+    return {
+        id: row.ID || row.IDs || row.ContainerID || '',
+        name: row.Names || row.Name || row.names || 'N/A',
+        image: row.Image || 'N/A',
+        status: row.Status || row.State || 'N/A',
+        ports: row.Ports || '—',
+        created: row.CreatedAt || row.Created || 'N/A',
+    };
+}
+
+function normalizeImage(row = {}) {
+    return {
+        id: row.ID || row.ImageID || '',
+        repository: row.Repository || 'N/A',
+        tag: row.Tag || 'N/A',
+        size: row.Size || 'N/A',
+        created: row.CreatedAt || row.CreatedSince || row.Created || 'N/A',
+    };
+}
+
+function shortId(id = '') {
+    return String(id).replace(/^sha256:/, '').slice(0, 12) || '';
+}
+
+function renderDockerContainers(containers = []) {
+    if (!dockerContainersBody) return;
+    dockerContainersBody.innerHTML = '';
+    if (!containers.length) {
+        dockerContainersBody.innerHTML = '<tr><td colspan="6">暂无容器</td></tr>';
+        return;
+    }
+    containers.map(normalizeContainer).forEach((container) => {
+        const tr = document.createElement('tr');
+        const target = container.id || container.name;
+        const running = /up|running/i.test(container.status);
+        tr.innerHTML = `
+            <td title="${escapeHtml(container.id)}">${escapeHtml(container.name)}<div class="docker-sub-id">${escapeHtml(shortId(container.id))}</div></td>
+            <td>${escapeHtml(container.image)}</td>
+            <td><span class="docker-badge ${running ? 'running' : 'stopped'}">${escapeHtml(container.status)}</span></td>
+            <td>${escapeHtml(container.ports || '—')}</td>
+            <td>${escapeHtml(container.created)}</td>
+            <td><div class="docker-actions"></div></td>
+        `;
+        const actions = tr.querySelector('.docker-actions');
+        const actionButtons = [
+            ['start', '启动', '▶️'],
+            ['stop', '停止', '⏹️'],
+            ['restart', '重启', '🔄'],
+            ['logs', '日志', '📜'],
+            ['remove', '删除', '🗑️'],
+        ];
+        actionButtons.forEach(([action, label, icon]) => {
+            const btn = document.createElement('button');
+            btn.className = `tool-btn ${action === 'remove' ? 'danger-text' : ''}`;
+            btn.textContent = `${icon} ${label}`;
+            btn.disabled = (action === 'start' && running) || (action === 'stop' && !running);
+            btn.addEventListener('click', () => {
+                if (action === 'logs') return openDockerLogs(target, container.name);
+                if (action === 'remove' && !confirm(`确认删除容器 ${container.name}?`)) return;
+                setDockerStatus(`正在执行容器${label}操作...`, true);
+                dockerSend({ type: 'docker-container-action', action, id: target });
+            });
+            actions.appendChild(btn);
+        });
+        dockerContainersBody.appendChild(tr);
+    });
+}
+
+function renderDockerImages(images = []) {
+    if (!dockerImagesBody) return;
+    dockerImagesBody.innerHTML = '';
+    if (!images.length) {
+        dockerImagesBody.innerHTML = '<tr><td colspan="5">暂无镜像</td></tr>';
+        return;
+    }
+    images.map(normalizeImage).forEach((image) => {
+        const imageRef = image.repository !== '<none>' && image.tag !== '<none>' ? `${image.repository}:${image.tag}` : image.id;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td title="${escapeHtml(image.id)}">${escapeHtml(image.repository)}<div class="docker-sub-id">${escapeHtml(shortId(image.id))}</div></td>
+            <td>${escapeHtml(image.tag)}</td>
+            <td>${escapeHtml(image.size)}</td>
+            <td>${escapeHtml(image.created)}</td>
+            <td><div class="docker-actions"></div></td>
+        `;
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'tool-btn danger-text';
+        deleteBtn.textContent = '🗑️ 删除';
+        deleteBtn.addEventListener('click', () => {
+            if (!confirm(`确认删除镜像 ${imageRef}?`)) return;
+            setDockerStatus('正在检查镜像使用情况...', true);
+            dockerSend({ type: 'docker-delete-image', image: imageRef, id: image.id });
+        });
+        tr.querySelector('.docker-actions').appendChild(deleteBtn);
+        dockerImagesBody.appendChild(tr);
+    });
+}
+
+function renderDockerMirrors() {
+    if (!dockerMirrorList) return;
+    dockerMirrorList.innerHTML = '';
+    if (!dockerMirrors.length) {
+        const empty = document.createElement('div');
+        empty.className = 'docker-empty-row';
+        empty.textContent = '尚未配置镜像加速器';
+        dockerMirrorList.appendChild(empty);
+        return;
+    }
+    dockerMirrors.forEach((mirror, index) => {
+        const row = document.createElement('div');
+        row.className = 'docker-mirror-item';
+        const input = document.createElement('input');
+        input.value = mirror;
+        input.addEventListener('input', () => { dockerMirrors[index] = input.value.trim(); });
+        const del = document.createElement('button');
+        del.className = 'tool-btn danger-text';
+        del.textContent = '删除';
+        del.addEventListener('click', () => {
+            dockerMirrors.splice(index, 1);
+            renderDockerMirrors();
+        });
+        row.append(input, del);
+        dockerMirrorList.appendChild(row);
+    });
+}
+
+function openDockerLogs(containerId, name) {
+    if (!containerId) return;
+    if (dockerCurrentLogContainer) dockerSend({ type: 'docker-logs-stop', id: dockerCurrentLogContainer });
+    dockerCurrentLogContainer = containerId;
+    dockerLogBuffer = '';
+    dockerAutoScrollLog = true;
+    dockerContainerLog.textContent = '';
+    dockerLogTitle.textContent = `容器日志 · ${name || shortId(containerId)}`;
+    dockerLogPauseBtn.textContent = '暂停滚动';
+    dockerLogDrawer.style.display = 'flex';
+    dockerSend({ type: 'docker-logs-start', id: containerId });
+}
+
+function appendDockerLog(data = '') {
+    dockerLogBuffer += data;
+    dockerContainerLog.textContent += data;
+    if (dockerAutoScrollLog) dockerContainerLog.scrollTop = dockerContainerLog.scrollHeight;
+}
+
+function closeDockerLogs() {
+    if (dockerCurrentLogContainer) dockerSend({ type: 'docker-logs-stop', id: dockerCurrentLogContainer });
+    dockerCurrentLogContainer = null;
+    dockerLogDrawer.style.display = 'none';
+}
+
+function handleDockerMessage(msg) {
+    switch (msg.type) {
+        case 'docker-status':
+            dockerChecked = true;
+            dockerInstalled = !!msg.installed;
+            if (!dockerInstalled) {
+                setDockerStatus('未检测到 Docker，请先安装 Docker', false, 'warning');
+                dockerInstallHint.style.display = 'flex';
+                dockerContent.style.display = 'none';
+            } else {
+                setDockerStatus(msg.version || 'Docker 已安装，正在加载资源...', true, 'success');
+                dockerInstallHint.style.display = 'none';
+                dockerContent.style.display = 'flex';
+                dockerRefreshAll();
+            }
+            break;
+        case 'docker-containers':
+            if (msg.error) { setDockerStatus(`容器列表加载失败：${msg.error}`, false, 'error'); return; }
+            renderDockerContainers(msg.containers || []);
+            setDockerStatus('容器列表已更新', false, 'success');
+            break;
+        case 'docker-images':
+            if (msg.error) { setDockerStatus(`镜像列表加载失败：${msg.error}`, false, 'error'); return; }
+            renderDockerImages(msg.images || []);
+            break;
+        case 'docker-action':
+            showToast('Docker 容器操作完成', 'success');
+            dockerRefreshAll();
+            break;
+        case 'docker-image-delete':
+            if (msg.requiresForce) {
+                const ok = confirm(`该镜像正在被以下容器使用：\n${msg.usedBy}\n\n是否强制删除？`);
+                if (ok) dockerSend({ type: 'docker-delete-image', image: msg.image, force: true });
+                else setDockerStatus('已取消删除镜像', false);
+                return;
+            }
+            if (msg.success) { showToast('镜像已删除', 'success'); dockerRefreshAll(); }
+            else showToast(`镜像删除失败：${msg.error || '未知错误'}`, 'error');
+            break;
+        case 'docker-pull-start':
+            dockerPullBtn.disabled = true;
+            dockerPullLog.textContent = `开始拉取 ${msg.image}...\n`;
+            setDockerStatus('正在拉取镜像...', true);
+            break;
+        case 'docker-pull-log':
+            dockerPullLog.textContent += msg.data || '';
+            dockerPullLog.scrollTop = dockerPullLog.scrollHeight;
+            break;
+        case 'docker-pull-complete':
+            dockerPullBtn.disabled = false;
+            setDockerStatus(msg.success ? '镜像拉取完成' : `镜像拉取失败（code=${msg.code ?? 'N/A'}）`, false, msg.success ? 'success' : 'error');
+            showToast(msg.success ? '镜像拉取完成' : '镜像拉取失败', msg.success ? 'success' : 'error');
+            dockerRefreshAll();
+            break;
+        case 'docker-mirrors':
+            dockerMirrors = Array.isArray(msg.mirrors) ? msg.mirrors : [];
+            renderDockerMirrors();
+            break;
+        case 'docker-mirrors-save':
+            showToast('镜像加速器配置已保存，请重启 Docker 服务', 'success', 4200);
+            dockerMirrors = Array.isArray(msg.mirrors) ? msg.mirrors : dockerMirrors;
+            renderDockerMirrors();
+            setDockerStatus('配置已保存，请重启 Docker 服务', false, 'success');
+            break;
+        case 'docker-log-start':
+            appendDockerLog('--- 日志流已连接 ---\n');
+            break;
+        case 'docker-log-data':
+            appendDockerLog(msg.data || '');
+            break;
+        case 'docker-log-end':
+            if (msg.container === dockerCurrentLogContainer) appendDockerLog('\n--- 日志流已结束 ---\n');
+            break;
+        case 'docker-log-error':
+        case 'docker-error':
+            setDockerStatus(msg.message || msg.error || 'Docker 操作失败', false, 'error');
+            showToast(msg.message || msg.error || 'Docker 操作失败', 'error');
+            dockerPullBtn.disabled = false;
+            break;
+    }
+}
+
+function resetFeatureStateAfterReconnect() {
+    sftpReady = false;
+    dockerChecked = false;
+    dockerInstalled = false;
+    dockerCurrentLogContainer = null;
+    dockerLogBuffer = '';
+    dockerAutoScrollLog = true;
+    if (dockerLogDrawer) dockerLogDrawer.style.display = 'none';
+    if (dockerPullBtn) dockerPullBtn.disabled = false;
+    if (dockerPanel?.classList.contains('open')) checkDockerStatus({ force: true });
+    if (fileManager?.classList.contains('open')) initSFTP();
+}
+
+dockerBtn?.addEventListener('click', () => {
+    if (dockerPanel.classList.contains('open')) hideDockerPanel();
+    else showDockerPanel();
+});
+dockerCloseBtn?.addEventListener('click', hideDockerPanel);
+dockerRefreshBtn?.addEventListener('click', () => checkDockerStatus({ force: true }));
+document.querySelectorAll('[data-docker-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('[data-docker-tab]').forEach((item) => item.classList.toggle('active', item === tab));
+        document.querySelectorAll('.docker-tab-panel').forEach((panel) => panel.classList.remove('active'));
+        const target = document.getElementById(`docker${tab.dataset.dockerTab[0].toUpperCase()}${tab.dataset.dockerTab.slice(1)}Panel`);
+        target?.classList.add('active');
+    });
+});
+dockerPullBtn?.addEventListener('click', () => {
+    const image = dockerPullInput.value.trim();
+    if (!image) { showToast('请输入镜像名，例如 nginx:alpine', 'error'); return; }
+    dockerSend({ type: 'docker-pull-image', image });
+});
+dockerPullInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') dockerPullBtn.click(); });
+dockerMirrorAddBtn?.addEventListener('click', () => {
+    const value = dockerMirrorInput.value.trim();
+    if (!value) return;
+    dockerMirrors.push(value);
+    dockerMirrorInput.value = '';
+    renderDockerMirrors();
+});
+dockerMirrorSaveBtn?.addEventListener('click', () => {
+    dockerMirrors = dockerMirrors.map((item) => item.trim()).filter(Boolean);
+    setDockerStatus('正在保存镜像加速器配置...', true);
+    dockerSend({ type: 'docker-mirrors-set', mirrors: dockerMirrors });
+});
+dockerLogCloseBtn?.addEventListener('click', closeDockerLogs);
+dockerLogPauseBtn?.addEventListener('click', () => {
+    dockerAutoScrollLog = !dockerAutoScrollLog;
+    dockerLogPauseBtn.textContent = dockerAutoScrollLog ? '暂停滚动' : '继续滚动';
+    if (dockerAutoScrollLog) dockerContainerLog.scrollTop = dockerContainerLog.scrollHeight;
+});
+dockerContainerLog?.addEventListener('scroll', () => {
+    const atBottom = dockerContainerLog.scrollHeight - dockerContainerLog.scrollTop - dockerContainerLog.clientHeight < 24;
+    if (!atBottom) {
+        dockerAutoScrollLog = false;
+        dockerLogPauseBtn.textContent = '继续滚动';
+    }
+}, { passive: true });
+dockerLogDownloadBtn?.addEventListener('click', () => {
+    const blob = new Blob([dockerLogBuffer || dockerContainerLog.textContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(dockerLogTitle.textContent || 'container').replace(/[^\w.-]+/g, '_')}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+});
 
 // ---------- 监控面板 ----------
 function safeVal(val, fallback = 0) {
@@ -1337,6 +1906,33 @@ function setupTerminalCustomScrollbar() {
     }, { passive: false });
 }
 
+function updateViewportInsets() {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const keyboardInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+    const roundedInset = Math.round(keyboardInset);
+    document.documentElement.style.setProperty('--keyboard-inset', `${roundedInset}px`);
+    document.documentElement.classList.toggle('keyboard-open', roundedInset > 80);
+    if (roundedInset > 80) {
+        window.setTimeout(() => {
+            cmdInput?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            scheduleTerminalScrollToBottom();
+            scheduleTerminalResize();
+        }, 40);
+    } else {
+        scheduleTerminalResize();
+    }
+}
+
+function setupMobileKeyboardAvoidance() {
+    if (!window.visualViewport) return;
+    window.visualViewport.addEventListener('resize', updateViewportInsets);
+    window.visualViewport.addEventListener('scroll', updateViewportInsets);
+    cmdInput?.addEventListener('focus', updateViewportInsets);
+    cmdInput?.addEventListener('blur', () => window.setTimeout(updateViewportInsets, 120));
+    updateViewportInsets();
+}
+
 function renderStats(d) {
     const cpuUsage = safeVal(d.cpu?.usage);
     const memUsedGB = (safeVal(d.memUsed) / 1024).toFixed(1);
@@ -1518,6 +2114,9 @@ function getDefaultPanelOptions(panel) {
     if (panel === fileManager) {
         return { width: Math.min(parentRect.width * 0.72, 820), height: Math.min(parentRect.height * 0.68, 620), left: 16, top: 52 };
     }
+    if (panel === dockerPanel) {
+        return { width: Math.min(parentRect.width * 0.8, 980), height: Math.min(parentRect.height * 0.72, 660), left: 28, top: 52 };
+    }
     return { width: Math.min(480, parentRect.width - 24), height: Math.min(parentRect.height * 0.72, 620), top: 52 };
 }
 
@@ -1597,9 +2196,11 @@ function openPanelLayoutMenu(button, panel) {
     const rect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
     const left = Math.min(Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2), window.innerWidth - menuRect.width - 8);
+    const top = Math.min(Math.max(8, rect.top + rect.height / 2 - menuRect.height / 2), window.innerHeight - menuRect.height - 8);
     menu.style.left = `${left}px`;
-    menu.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - menuRect.height - 8)}px`;
+    menu.style.top = `${top}px`;
     menu.style.setProperty('--menu-origin-x', `${rect.left + rect.width / 2 - left}px`);
+    menu.style.setProperty('--menu-origin-y', `${rect.top + rect.height / 2 - top}px`);
     menu.addEventListener('click', (e) => {
         const item = e.target.closest('[data-layout]');
         if (!item) return;
@@ -1672,7 +2273,7 @@ function setupPanelLayoutMenu() {
 function bringPanelToFront(panel) {
     if (!panel) return;
     const wasFront = panel.classList.contains('front');
-    document.querySelectorAll('.file-manager, .info-modal').forEach((p) => {
+    document.querySelectorAll('.file-manager, .info-modal, .docker-panel').forEach((p) => {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
@@ -1785,12 +2386,15 @@ function setupPanelResize() {
 
 setupFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
 setupFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
+setupFloatingPanel(dockerPanel, getDefaultPanelOptions(dockerPanel));
 setupPanelLayoutMenu();
 setupPanelDrag();
 setupPanelResize();
 setupTerminalInputActivityHooks();
+setupMobileKeyboardAvoidance();
 window.addEventListener('resize', () => {
-    [fileManager, infoModal].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel].forEach((panel) => panel && clampPanel(panel));
+    updateViewportInsets();
 });
 
 // ---------- 辅助键 / 终端输入 ----------
@@ -1879,8 +2483,132 @@ function setStatus(state, msg) {
 }
 connInfo.textContent = `${params.username}@${params.host}:${params.port}`;
 
+function clearReconnectTimer() {
+    if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = 0;
+    }
+}
+
+function stopTerminalResizeObserver() {
+    terminalResizeCleanup?.();
+    terminalResizeCleanup = null;
+    window.clearTimeout(scheduleTerminalResize._timer);
+}
+
+function destroyTerminalInstance({ clear = true } = {}) {
+    stopTerminalAutoScrollObserver();
+    stopTerminalResizeObserver();
+    if (term) {
+        try { term.destroy?.(); } catch (_) {}
+        term = null;
+    }
+    if (clear) wtermWrapper.innerHTML = '';
+}
+
+function closeWebSocketOnly(reason = '重建连接') {
+    const ws = wsConnection;
+    wsConnection = null;
+    if (!ws) return;
+    try {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'disconnect' }));
+    } catch (_) {}
+    try {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close(1000, reason);
+    } catch (_) {}
+}
+
+function disconnect({ userInitiated = true, updateStatus = true, destroyTerminal = true } = {}) {
+    userClosedConnection = userInitiated;
+    reconnectInProgress = false;
+    clearReconnectTimer();
+    activeConnectionToken += 1;
+    closeWebSocketOnly(userInitiated ? '用户主动断开' : '重建连接');
+    if (destroyTerminal) destroyTerminalInstance();
+    isConnected = false;
+    sftpReady = false;
+    if (updateStatus) setStatus('disconnected', '已断开');
+}
+
+function syncFeaturePanelsAfterConnection() {
+    // 重置所有特性状态
+    sftpReady = false;
+    dockerChecked = false;
+    dockerInstalled = false;
+    dockerCurrentLogContainer = null;
+    dockerLogBuffer = '';
+    dockerAutoScrollLog = true;
+    if (dockerLogDrawer) dockerLogDrawer.style.display = 'none';
+    if (dockerPullBtn) dockerPullBtn.disabled = false;
+    
+    // 现在重新初始化打开的面板
+    if (fileManager?.classList.contains('open')) {
+        initSFTP();
+    }
+    if (dockerPanel?.classList.contains('open')) {
+        checkDockerStatus({ force: true });
+    }
+    
+    // 确保终端获得焦点并可见
+    setTimeout(() => {
+        if (term && typeof term.focus === 'function') {
+            try { term.focus(); } catch (_) {}
+        }
+    }, 100);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => { reconnectTimer = window.setTimeout(resolve, ms); });
+}
+
+async function startFreshConnection({ message = '正在建立 SSH 连接...', resetAttempts = false } = {}) {
+    clearReconnectTimer();
+    userClosedConnection = false;
+    activeConnectionToken += 1;
+    const token = activeConnectionToken;
+    closeWebSocketOnly('重建连接');
+    destroyTerminalInstance();
+    setStatus('connecting', message);
+    if (resetAttempts) reconnectAttempts = 0;
+    await initWTerm(token);
+    await connectWebSocket(token);
+    if (token !== activeConnectionToken) throw new Error('连接已被新的会话替换');
+    syncFeaturePanelsAfterConnection();
+    scheduleTerminalResize();
+}
+
+async function startAutoReconnect(reason = '连接已断开') {
+    if (userClosedConnection || reconnectInProgress) return;
+    reconnectInProgress = true;
+    while (!userClosedConnection && !isConnected && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempts += 1;
+        const label = `正在重连 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`;
+        setStatus('connecting', label);
+        showToast(`${reason}，${label}`, 'info', 2200);
+        try {
+            await sleep(2000);
+            reconnectTimer = 0;
+            if (userClosedConnection || isConnected) break;
+            await startFreshConnection({ message: label, resetAttempts: false });
+            reconnectAttempts = 0;
+            reconnectInProgress = false;
+            showToast('自动重连成功', 'success');
+            return;
+        } catch (err) {
+            reconnectTimer = 0;
+            if (userClosedConnection || isConnected) break;
+            console.warn('[SSH] 自动重连失败:', err.message);
+        }
+    }
+    reconnectInProgress = false;
+    if (!userClosedConnection && !isConnected) {
+        setStatus('error', '自动重连失败，请手动点击“重连”');
+        showToast('自动重连失败，请手动点击“重连”', 'error', 4200);
+    }
+}
+
 // ---------- WTerm 初始化 ----------
-async function initWTerm() {
+async function initWTerm(connectionToken = activeConnectionToken) {
     let WTermClass;
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
@@ -1889,10 +2617,13 @@ async function initWTerm() {
         const module = await import('/vendor/@wterm/dom/dist/wterm.js');
         WTermClass = module.WTerm || module.default;
     }
+    if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
     wtermWrapper.innerHTML = '';
     try {
         term = new WTermClass(wtermWrapper, {
             cols: 80, rows: 24, autoResize: true, cursorBlink: true,
+            theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
+            fontSize: terminalFontSize,
             onData: (data) => sendData(data),
             onResize: (cols, rows) => sendTerminalResize(cols, rows),
         });
@@ -1902,26 +2633,44 @@ async function initWTerm() {
         else if (typeof term.on === 'function') term.on('data', data => sendData(data));
     }
     if (typeof term.init === 'function') await term.init();
+    if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
+    applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
 
     const observeResize = () => sendTerminalResize();
+    let ro = null;
     if (window.ResizeObserver) {
-        const ro = new ResizeObserver(() => { clearTimeout(ro._timer); ro._timer = setTimeout(observeResize, 150); });
+        ro = new ResizeObserver(() => { clearTimeout(ro._timer); ro._timer = setTimeout(observeResize, 150); });
         ro.observe(wtermWrapper);
     }
     window.addEventListener('resize', observeResize);
+    terminalResizeCleanup = () => {
+        ro?.disconnect();
+        window.removeEventListener('resize', observeResize);
+    };
     setupTerminalScrollHooks();
 }
 
 // ---------- WebSocket 连接 ----------
-function connectWebSocket() {
+function connectWebSocket(connectionToken = activeConnectionToken) {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/ssh`);
-        const timeout = setTimeout(() => { ws.close(); reject(new Error('连接超时')); }, 10000);
+        let settled = false;
+        let ready = false;
+        const fail = (err) => {
+            if (settled) return;
+            settled = true;
+            reject(err instanceof Error ? err : new Error(String(err || '连接失败')));
+        };
+        const timeout = setTimeout(() => {
+            try { ws.close(); } catch (_) {}
+            fail(new Error('连接超时'));
+        }, 10000);
 
         ws.addEventListener('open', () => {
+            if (connectionToken !== activeConnectionToken) { try { ws.close(); } catch (_) {} return; }
             clearTimeout(timeout);
             ws.send(JSON.stringify({
                 type: 'connect',
@@ -1935,12 +2684,16 @@ function connectWebSocket() {
         });
 
         ws.addEventListener('message', (event) => {
+            if (connectionToken !== activeConnectionToken) return;
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'stats') { renderStats(msg.data); return; }
                 if (msg.type?.startsWith('sftp-')) { handleSFTPMessage(msg); return; }
+                if (msg.type?.startsWith('docker-')) { handleDockerMessage(msg); return; }
                 switch (msg.type) {
                     case 'ready':
+                        ready = true;
+                        settled = true;
                         setStatus('connected', '已连接');
                         if (term?.focus) term.focus();
                         reconnectAttempts = 0;
@@ -1953,10 +2706,14 @@ function connectWebSocket() {
                         break;
                     case 'error':
                         setStatus('error', msg.message);
-                        reject(new Error(msg.message));
+                        fail(new Error(msg.message));
                         break;
                     case 'close':
                         setStatus('disconnected', msg.message || '会话已关闭');
+                        if (!userClosedConnection) {
+                            try { ws.close(4000, 'SSH 会话关闭'); } catch (_) {}
+                            startAutoReconnect(msg.message || 'SSH 会话已关闭');
+                        }
                         break;
                     case 'banner':
                         writeTerminalData(msg.data);
@@ -1968,59 +2725,80 @@ function connectWebSocket() {
         ws.addEventListener('error', () => clearTimeout(timeout));
         ws.addEventListener('close', (e) => {
             clearTimeout(timeout);
-            wsConnection = null;
+            if (connectionToken !== activeConnectionToken) return;
+            if (wsConnection === ws) wsConnection = null;
+            if (!ready) {
+                fail(new Error(`连接已关闭 (${e.code || 'N/A'})`));
+                return;
+            }
             if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
-            if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
+            if (!userClosedConnection) startAutoReconnect(`连接已断开 (${e.code || 'N/A'})`);
         });
 
-        wsConnection = ws;
+        if (connectionToken === activeConnectionToken) wsConnection = ws;
+        else { try { ws.close(); } catch (_) {} }
     });
 }
 
-function disconnect() {
-    if (wsConnection) {
-        try { wsConnection.send(JSON.stringify({ type: 'disconnect' })); } catch (_) {}
-        wsConnection.close(1000, '用户主动断开');
-        wsConnection = null;
-    }
-    stopTerminalAutoScrollObserver();
-    if (term) { try { term.destroy?.(); } catch (_) {} term = null; }
-    setStatus('disconnected', '已断开');
-    isConnected = false;
-}
-
 async function reconnect() {
-    disconnect();
-    wtermWrapper.innerHTML = '';
-    reconnectAttempts = 0;
-    setStatus('connecting', '正在重连...');
+    if (reconnectInProgress) return;
+    reconnectInProgress = true;
+    reconnectBtn.disabled = true;
     try {
-        await initWTerm();
-        await connectWebSocket();
+        await startFreshConnection({ message: '正在重连...', resetAttempts: true });
+        showToast('重连成功', 'success');
     } catch (err) {
         setStatus('error', err.message);
+        showToast(`重连失败：${err.message}`, 'error', 4200);
+    } finally {
+        reconnectInProgress = false;
+        reconnectBtn.disabled = false;
     }
 }
 
 async function main() {
-    setStatus('connecting', '正在初始化终端...');
     try {
-        await initWTerm();
-        await connectWebSocket();
+        await startFreshConnection({ message: '正在初始化终端...', resetAttempts: true });
     } catch (err) {
         setStatus('error', err.message);
-        if (reconnectAttempts++ < MAX_RECONNECT_ATTEMPTS) {
-            setTimeout(() => { if (!isConnected) main(); }, 2000);
-        }
+        startAutoReconnect(err.message);
     }
 }
 
 reconnectBtn.addEventListener('click', reconnect);
+
+// ---------- 移动端软键盘处理 ----------
+function handleKeyboardShow() {
+    const vvTop = visualViewport?.offsetTop || 0;
+    const vvHeight = visualViewport?.height || window.innerHeight;
+    const bottomSpace = window.innerHeight - (vvTop + vvHeight);
+    if (bottomSpace > 20) {
+        // 软键盘弹出，调整页面
+        document.documentElement.style.setProperty('--keyboard-inset', `${bottomSpace + 4}px`);
+    }
+}
+
+function handleKeyboardHide() {
+    document.documentElement.style.setProperty('--keyboard-inset', '0px');
+}
+
+if (typeof visualViewport !== 'undefined') {
+    visualViewport.addEventListener('resize', () => {
+        handleKeyboardShow();
+    });
+    visualViewport.addEventListener('scroll', () => {
+        handleKeyboardShow();
+    });
+}
+
+window.addEventListener('orientationchange', () => {
+    setTimeout(handleKeyboardHide, 300);
+});
 disconnectBtn.addEventListener('click', () => {
-    disconnect();
+    disconnect({ userInitiated: true });
     sessionStorage.removeItem('zephyr_ssh_params');
     window.location.href = '/';
 });
-window.addEventListener('beforeunload', disconnect);
+window.addEventListener('beforeunload', () => disconnect({ userInitiated: true, updateStatus: false }));
 
 main();
