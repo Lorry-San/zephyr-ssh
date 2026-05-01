@@ -22,6 +22,8 @@
     --wterm-selection: rgba(88,166,255,0.28);
     --keyboard-inset: 0px;
     --stable-vh: 100vh;
+    --visual-vh: var(--stable-vh, 100vh);
+    --visual-offset-top: 0px;
 }
 
 /* 浅色主题 */
@@ -115,6 +117,11 @@ body:has(.terminal-page) {
     min-height: var(--stable-vh, 100vh);
     padding: 0;
     overflow: hidden;
+}
+
+html.keyboard-open body:has(.terminal-page) {
+    height: var(--visual-vh, var(--stable-vh, 100vh));
+    min-height: var(--visual-vh, var(--stable-vh, 100vh));
 }
 
 /* ===== 登录卡片 ===== */
@@ -267,7 +274,20 @@ body:has(.terminal-page) {
     padding-bottom: max(4px, env(safe-area-inset-bottom));
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
-    transition: background-color 0.24s ease, border-color 0.24s ease;
+    transform: translate3d(0, 0, 0);
+    transition:
+        height 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        max-height 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        background-color 0.24s ease,
+        border-color 0.24s ease;
+    will-change: height, transform;
+}
+
+html.keyboard-open .terminal-page {
+    height: var(--visual-vh, var(--stable-vh, 100vh));
+    max-height: var(--visual-vh, var(--stable-vh, 100vh));
+    transform: translate3d(0, var(--visual-offset-top, 0px), 0);
 }
 
 /* 顶栏 */
