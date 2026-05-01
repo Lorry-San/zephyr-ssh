@@ -176,6 +176,21 @@ function getPreferredWtermTheme() {
 
 function applyWtermTheme(theme) {
     const normalized = theme === 'light' ? 'light' : 'default';
+    const changed = document.documentElement.getAttribute('data-wterm-theme') !== normalized;
+    if (changed) {
+        document.documentElement.classList.add('wterm-theme-transitioning');
+        terminalContainer?.classList.remove('wterm-theme-animating');
+        wtermThemeToggle?.classList.remove('switching');
+        void terminalContainer?.offsetWidth;
+        terminalContainer?.classList.add('wterm-theme-animating');
+        wtermThemeToggle?.classList.add('switching');
+        window.clearTimeout(applyWtermTheme._transitionTimer);
+        applyWtermTheme._transitionTimer = window.setTimeout(() => {
+            document.documentElement.classList.remove('wterm-theme-transitioning');
+            terminalContainer?.classList.remove('wterm-theme-animating');
+            wtermThemeToggle?.classList.remove('switching');
+        }, 460);
+    }
     document.documentElement.setAttribute('data-wterm-theme', normalized);
     localStorage.setItem('zephyr-wterm-theme', normalized);
     if (wtermThemeToggle) {
@@ -1060,7 +1075,7 @@ function renderMinimapCode(text = '', language = 'plain') {
     const normalized = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = normalized.split('\n');
     return lines.map((line) => {
-        if (!line) return '<span class="fm-minimap-line"></span>';
+        if (!line) return '<span class="fm-minimap-line">&nbsp;</span>';
         const indent = line.match(/^\s*/)?.[0].length || 0;
         const trimmed = line.trim();
         const commentPrefix = getLineComment(language);
@@ -1070,9 +1085,9 @@ function renderMinimapCode(text = '', language = 'plain') {
                 : (/^(const|let|var|function|class|if|else|for|while|return|import|export|def|class|from|async|await|public|private|protected|static)\b/.test(trimmed) ? 'keyword'
                     : (/(['"`]).*\1/.test(trimmed) ? 'string'
                         : (/\b\d+(\.\d+)?\b/.test(trimmed) ? 'number' : 'text'))));
-        const visualIndent = Math.min(42, indent * 2.2);
-        const visualWidth = Math.min(100 - visualIndent, Math.max(8, trimmed.length * 1.45));
-        return `<span class="fm-minimap-line"><span class="fm-minimap-seg indent" style="width:${visualIndent}%"></span><span class="fm-minimap-seg ${type}" style="width:${visualWidth}%"></span></span>`;
+        const safeIndent = '&nbsp;'.repeat(Math.min(indent, 24));
+        const preview = escapeHtml(trimmed.slice(0, 72));
+        return `<span class="fm-minimap-line"><span class="fm-minimap-seg indent">${safeIndent}</span><span class="fm-minimap-seg ${type}">${preview || '&nbsp;'}</span></span>`;
     }).join('');
 }
 
@@ -2229,8 +2244,13 @@ function openPanelLayoutMenu(button, panel) {
         const top = opensBelow ? belowTop : Math.max(8, aboveTop);
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
-        menu.style.setProperty('--menu-origin-x', `${anchorX - left}px`);
+        const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
+        menu.style.setProperty('--menu-origin-x', `${originX}px`);
         menu.style.setProperty('--menu-origin-y', opensBelow ? '0px' : `${menuRect.height}px`);
+        menu.style.setProperty('--menu-enter-y', opensBelow ? '-12px' : '12px');
+        menu.style.setProperty('--menu-overshoot-y', opensBelow ? '1px' : '-1px');
+        menu.style.setProperty('--menu-settle-y', opensBelow ? '-0.5px' : '0.5px');
+        menu.dataset.placement = opensBelow ? 'below' : 'above';
     };
     placeMenu();
     requestAnimationFrame(placeMenu);
