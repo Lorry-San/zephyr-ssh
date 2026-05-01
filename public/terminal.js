@@ -812,8 +812,7 @@ function scrollTerminalToBottom() {
     try {
         const el = getTerminalScrollElement();
         if (el) {
-            const bottomSafeArea = parseFloat(getComputedStyle(el).paddingBottom) || 0;
-            const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight - bottomSafeArea);
+            const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
             if (maxScroll > 0) {
                 isProgrammaticTerminalScroll = true;
                 el.scrollTop = maxScroll;
