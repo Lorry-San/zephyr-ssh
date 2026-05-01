@@ -84,6 +84,8 @@ let shouldFollowTerminalOutput = true;
 let terminalScrollRaf = 0;
 let isProgrammaticTerminalScroll = false;
 let terminalScrollCleanup = null;
+let terminalInputEchoSuppressUntil = 0;
+let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
@@ -823,8 +825,14 @@ function scrollTerminalToBottom() {
 }
 
 function markTerminalUserInput(data = '') {
-    // 不在输入过程中手动控制滚动。@wterm/dom 内部已经实现了与官方演示一致的
-    // 输入、光标和滚动同步；外部 scrollTop 干预会和它的渲染循环打架导致电脑端抖动。
+    // 输入回显通常会紧跟在用户按键之后到达。此时不要再从外层滚动 DOM，
+    // 否则会和浏览器的焦点/光标可见性滚动以及 wterm 自身渲染同步冲突，造成“抖一下”。
+    terminalInputEchoSuppressUntil = performance.now() + 140;
+    terminalInputEchoMaxLength = Math.max(8, (data || '').length + 2);
+}
+
+function isLikelyTerminalInputEcho(data = '') {
+    return performance.now() < terminalInputEchoSuppressUntil && data.length <= terminalInputEchoMaxLength;
 }
 
 function scheduleTerminalScrollToBottom() {
@@ -1454,8 +1462,9 @@ function connectWebSocket() {
                     case 'data':
                         if (term?.write) {
                             const followOutput = shouldFollowTerminalOutput || isTerminalAtBottom(getTerminalScrollElement(), 96);
+                            const suppressScrollForEcho = isLikelyTerminalInputEcho(msg.data || '');
                             term.write(msg.data);
-                            if (followOutput) scheduleTerminalScrollToBottom();
+                            if (followOutput && !suppressScrollForEcho) scheduleTerminalScrollToBottom();
                         }
                         break;
                     case 'error':
