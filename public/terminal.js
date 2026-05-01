@@ -154,6 +154,10 @@ const viewportAnimationState = {
     currentOffsetTop: 0,
     targetHeight: 0,
     targetOffsetTop: 0,
+    startHeight: 0,
+    startOffsetTop: 0,
+    startTime: 0,
+    duration: 560,
 };
 
 const TERMINAL_FONT_MIN = 10;
@@ -172,24 +176,59 @@ function getViewportKeyboardMetrics() {
     const offsetTop = Math.round(viewport?.offsetTop || 0);
     const keyboardInset = viewport ? Math.max(0, baselineHeight - viewportHeight - offsetTop) : 0;
     const roundedInset = Math.round(keyboardInset);
+    const openThreshold = Math.min(260, Math.max(110, baselineHeight * 0.15));
+    const closeThreshold = Math.max(70, openThreshold * 0.55);
+    const keyboardOpen = isKeyboardAvoidanceTarget()
+        && roundedInset > (mobileKeyboardOpen ? closeThreshold : openThreshold);
     return {
         layoutHeight: baselineHeight || layoutHeight,
         viewportHeight,
         offsetTop,
         keyboardInset: roundedInset,
-        keyboardOpen: roundedInset > 80,
+        keyboardOpen,
     };
+}
+
+function isKeyboardAvoidanceTarget(element = document.activeElement) {
+    if (!element) return false;
+    if (element === cmdInput) return true;
+    const tag = element.tagName?.toLowerCase();
+    const editable = tag === 'textarea'
+        || (tag === 'input' && !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'range', 'color'].includes((element.type || '').toLowerCase()))
+        || element.isContentEditable;
+    return Boolean(editable || terminalContainer?.contains(element));
 }
 
 function setViewportCssMetrics(height, offsetTop) {
     const roundedHeight = Math.max(1, Math.round(height));
-    const roundedAvoidance = Math.max(0, Math.round(offsetTop));
+    const roundedOffset = Math.round(offsetTop);
     document.documentElement.style.setProperty('--visual-vh', `${roundedHeight}px`);
-    document.documentElement.style.setProperty('--visual-offset-top', '0px');
-    document.documentElement.style.setProperty('--keyboard-avoidance', `${roundedAvoidance}px`);
+    document.documentElement.style.setProperty('--visual-offset-top', `${roundedOffset}px`);
+}
+
+function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
 }
 
 function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = false } = {}) {
+    const targetH = Math.max(1, Math.round(targetHeight || window.innerHeight || document.documentElement.clientHeight || 1));
+    const targetY = Math.round(targetOffsetTop || 0);
+    if (viewportAnimationRaf) cancelAnimationFrame(viewportAnimationRaf);
+    viewportAnimationRaf = 0;
+    viewportAnimationState.currentHeight = targetH;
+    viewportAnimationState.currentOffsetTop = targetY;
+    viewportAnimationState.targetHeight = targetH;
+    viewportAnimationState.targetOffsetTop = targetY;
+    setViewportCssMetrics(targetH, targetY);
+    window.clearTimeout(viewportAnimationResizeTimer);
+    viewportAnimationResizeTimer = window.setTimeout(() => {
+        shouldFollowTerminalOutput = true;
+        scheduleTerminalScrollToBottom();
+        scheduleTerminalResize();
+    }, immediate ? 40 : 90);
+}
+
+function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate = false } = {}) {
     const targetH = Math.max(1, Math.round(targetHeight || window.innerHeight || document.documentElement.clientHeight || 1));
     const targetY = Math.round(targetOffsetTop || 0);
     if (!viewportAnimationState.currentHeight || immediate) {
@@ -245,10 +284,18 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
 function setStableViewportHeight({ force = false } = {}) {
     const { keyboardOpen } = getViewportKeyboardMetrics();
     if (!force && keyboardOpen) return;
-    const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+    const height = Math.round(Math.max(
+        window.innerHeight || 0,
+        document.documentElement.clientHeight || 0,
+        !keyboardOpen && window.visualViewport ? window.visualViewport.height || 0 : 0,
+    ));
     if (height > 0) {
         document.documentElement.style.setProperty('--stable-vh', `${height}px`);
-        if (!keyboardOpen) animateViewportCssMetrics(height, 0, { immediate: force });
+        if (!keyboardOpen) {
+            document.documentElement.style.setProperty('--keyboard-inset', '0px');
+            document.documentElement.classList.remove('keyboard-open');
+            animateViewportCssMetrics(height, 0, { immediate: force });
+        }
     }
 }
 
@@ -2203,7 +2250,7 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport) return;
     const metrics = getViewportKeyboardMetrics();
-    const signature = `${metrics.keyboardInset}:${metrics.viewportHeight}:${metrics.offsetTop}`;
+    const signature = `${metrics.keyboardOpen}:${metrics.keyboardInset}:${metrics.viewportHeight}:${metrics.offsetTop}`;
     if (updateViewportInsets._lastSignature === signature) return;
     updateViewportInsets._lastSignature = signature;
     const wasKeyboardOpen = mobileKeyboardOpen;
@@ -2212,8 +2259,15 @@ function updateViewportInsets() {
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', mobileKeyboardOpen ? `${metrics.keyboardInset}px` : '0px');
         document.documentElement.classList.toggle('keyboard-open', mobileKeyboardOpen);
-        animateViewportCssMetrics(metrics.layoutHeight, mobileKeyboardOpen ? metrics.keyboardInset : 0);
+        animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
     });
+    window.clearTimeout(updateViewportInsets._settleTimer);
+    updateViewportInsets._settleTimer = window.setTimeout(() => {
+        if (!mobileKeyboardOpen) setStableViewportHeight();
+        shouldFollowTerminalOutput = true;
+        scheduleTerminalScrollToBottom();
+        scheduleTerminalResize();
+    }, mobileKeyboardOpen ? 280 : 180);
     if (mobileKeyboardOpen) {
         window.setTimeout(() => {
             shouldFollowTerminalOutput = true;
@@ -2250,8 +2304,8 @@ function setupHorizontalScrollbarVisibility(...elements) {
 
 function setupMobileKeyboardAvoidance() {
     if (!window.visualViewport) return;
-    window.visualViewport.addEventListener('resize', updateViewportInsets);
-    window.visualViewport.addEventListener('scroll', updateViewportInsets);
+    window.visualViewport.addEventListener('resize', updateViewportInsets, { passive: true });
+    window.visualViewport.addEventListener('scroll', updateViewportInsets, { passive: true });
     cmdInput?.addEventListener('focus', () => {
         updateViewportInsets();
         window.setTimeout(updateViewportInsets, 80);
@@ -3153,8 +3207,7 @@ function handleKeyboardHide() {
     mobileKeyboardOpen = false;
     document.documentElement.style.setProperty('--keyboard-inset', '0px');
     document.documentElement.classList.remove('keyboard-open');
-    const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
-    animateViewportCssMetrics(height, 0);
+    setStableViewportHeight({ force: true });
 }
 
 if (typeof visualViewport !== 'undefined') {
