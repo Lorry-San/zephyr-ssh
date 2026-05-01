@@ -6,6 +6,8 @@ let editingId = null;
 let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
 let fullscreenLoadingTimer = 0;
+let appKeyboardBaseline = 0;
+let appKeyboardOpen = false;
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
 function api(path, options = {}) {
@@ -79,8 +81,69 @@ async function openConnection(id) {
 function openPlaceholderTab(c) { const tabId = `tab_${Date.now()}`; terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: '占位', iframe: false }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); }
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     $('#sessionTabs').innerHTML = terminalTabs.length ? terminalTabs.map((t) => `<button class="session-tab ${t.id === activeTerminalTab ? 'active' : ''}" data-tab="${t.id}"><span>${escapeHtml(t.protocol)} · ${escapeHtml(t.name)}</span><em>${escapeHtml(t.status)}</em><i title="全屏" data-fullscreen-tab="${t.id}">⛶</i><b data-close-tab="${t.id}">×</b></button>`).join('') : '<div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div>';
-    if (rebuildWorkspace) $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
+    if (rebuildWorkspace) $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}" allow="fullscreen; virtual-keyboard"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
     else $$('#terminalWorkspace [data-frame]').forEach((el) => el.classList.toggle('active', el.dataset.frame === activeTerminalTab));
+}
+
+function resetTerminalWorkspaceKeyboard() {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return;
+    appKeyboardOpen = false;
+    appKeyboardBaseline = 0;
+    workspace.classList.remove('keyboard-open');
+    document.documentElement.style.setProperty('--app-keyboard-inset', '0px');
+    document.documentElement.style.setProperty('--app-visual-vh', '100vh');
+    document.documentElement.style.setProperty('--app-visual-offset-top', '0px');
+    workspace.style.height = '';
+    workspace.style.maxHeight = '';
+    workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
+        frame.style.height = '';
+        frame.style.maxHeight = '';
+    });
+}
+
+function applyTerminalWorkspaceKeyboard(metrics = {}) {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return;
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    const isWorkspaceFullscreen = fullscreenElement === workspace;
+    const inset = Math.round(Number(metrics.keyboardInset) || 0);
+    const viewportHeight = Math.round(Number(metrics.viewportHeight) || window.visualViewport?.height || window.innerHeight || 0);
+    const offsetTop = Math.round(Number(metrics.offsetTop) || window.visualViewport?.offsetTop || 0);
+    const keyboardOpen = !!metrics.keyboardOpen && inset >= 100;
+
+    if (!keyboardOpen || !isWorkspaceFullscreen) {
+        if (!keyboardOpen) resetTerminalWorkspaceKeyboard();
+        return;
+    }
+
+    appKeyboardOpen = true;
+    workspace.classList.add('keyboard-open');
+    document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
+    document.documentElement.style.setProperty('--app-visual-vh', `${Math.max(240, viewportHeight)}px`);
+    document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
+    workspace.style.height = `${Math.max(240, viewportHeight)}px`;
+    workspace.style.maxHeight = `${Math.max(240, viewportHeight)}px`;
+    const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
+    if (frame) {
+        frame.style.height = '100%';
+        frame.style.maxHeight = '100%';
+    }
+}
+
+function updateFullscreenKeyboardFromViewport() {
+    const workspace = $('#terminalWorkspace');
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!workspace || fullscreenElement !== workspace || !window.visualViewport) return;
+    const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+    if (!appKeyboardOpen) appKeyboardBaseline = Math.max(appKeyboardBaseline || 0, layoutHeight, Math.round(window.visualViewport.height || 0));
+    const baseline = Math.max(appKeyboardBaseline || 0, layoutHeight);
+    const viewportHeight = Math.round(window.visualViewport.height || layoutHeight);
+    const offsetTop = Math.round(window.visualViewport.offsetTop || 0);
+    const inset = Math.max(0, baseline - viewportHeight - offsetTop);
+    if (inset >= 100 || appKeyboardOpen) {
+        applyTerminalWorkspaceKeyboard({ keyboardOpen: inset >= 16, keyboardInset: inset, viewportHeight, layoutHeight: baseline, offsetTop });
+    }
 }
 
 function ensureFullscreenLoader() {
@@ -171,10 +234,17 @@ function bindEvents() {
     $('#sessionTabs').addEventListener('click', (e) => { const full = e.target.closest('[data-fullscreen-tab]')?.dataset.fullscreenTab; const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (full) { e.stopPropagation(); fullscreenTerminalTab(full).catch((err) => toast(err.message)); return; } if (close) { terminalTabs = terminalTabs.filter((t) => t.id !== close); sessionStorage.removeItem(`zephyr_ssh_params_${close}`); if (activeTerminalTab === close) activeTerminalTab = terminalTabs[0]?.id || null; renderTerminalTabs(); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
         const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-        if (fullscreenElement === $('#terminalWorkspace')) hideFullscreenLoading({ delay: 360 });
-        else showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 420 });
+        if (fullscreenElement === $('#terminalWorkspace')) {
+            appKeyboardBaseline = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, window.visualViewport?.height || 0);
+            hideFullscreenLoading({ delay: 360 });
+        } else {
+            resetTerminalWorkspaceKeyboard();
+            showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 420 });
+        }
     }));
-    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
+    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
+    window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
+    window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpForm').addEventListener('submit', saveJump);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });

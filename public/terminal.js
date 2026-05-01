@@ -152,7 +152,9 @@ let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
+let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
+let keyboardFallbackTimer = 0;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
@@ -183,14 +185,60 @@ function getCssPxVar(name) {
     return Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0);
 }
 
+function getVirtualKeyboardInset() {
+    const rect = navigator.virtualKeyboard?.boundingRect;
+    const height = Math.round(rect?.height || 0);
+    return height > 0 ? height : 0;
+}
+
+function isTouchKeyboardDevice() {
+    return (navigator.maxTouchPoints || 0) > 0
+        || window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
+}
+
+function getKeyboardBaselineHeight() {
+    return Math.round(Math.max(
+        keyboardViewportBaseline || 0,
+        getCssPxVar('--stable-vh'),
+        window.innerHeight || 0,
+        document.documentElement.clientHeight || 0,
+        window.visualViewport?.height || 0,
+    ));
+}
+
+function getEstimatedKeyboardInset() {
+    const baseline = getKeyboardBaselineHeight() || 720;
+    return Math.round(Math.min(430, Math.max(240, baseline * 0.42)));
+}
+
+function notifyParentKeyboardMetrics(metrics) {
+    if (embeddedMode && window.parent && window.parent !== window) {
+        window.parent.postMessage({
+            source: 'zephyr-terminal',
+            type: 'keyboard-metrics',
+            tabId: params?.tabId,
+            keyboardOpen: !!metrics.keyboardOpen,
+            keyboardInset: metrics.keyboardInset || 0,
+            viewportHeight: metrics.viewportHeight || 0,
+            layoutHeight: metrics.layoutHeight || 0,
+            offsetTop: metrics.offsetTop || 0,
+        }, '*');
+    }
+}
+
 function getViewportKeyboardMetrics() {
     const viewport = window.visualViewport;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
     const stableHeight = getCssPxVar('--stable-vh');
     const baselineHeight = Math.max(layoutHeight, stableHeight || 0, keyboardViewportBaseline || 0);
-    const viewportHeight = Math.round(viewport?.height || layoutHeight || 0);
+    const rawViewportHeight = Math.round(viewport?.height || layoutHeight || 0);
     const offsetTop = Math.round(viewport?.offsetTop || 0);
-    const keyboardInset = viewport ? Math.max(0, baselineHeight - viewportHeight - offsetTop) : 0;
+    const visualViewportInset = viewport ? Math.max(0, baselineHeight - rawViewportHeight - offsetTop) : 0;
+    const virtualKeyboardInset = getVirtualKeyboardInset();
+    const keyboardInset = Math.max(visualViewportInset, virtualKeyboardInset);
+    const viewportHeight = virtualKeyboardInset > visualViewportInset
+        ? Math.max(1, baselineHeight - virtualKeyboardInset - offsetTop)
+        : rawViewportHeight;
     const roundedInset = Math.round(keyboardInset);
     const openThreshold = Math.min(260, Math.max(110, baselineHeight * 0.15));
     // 关闭阈值刻意低于开启阈值：标准键盘收起时持续跟随 visualViewport，
@@ -247,7 +295,7 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
         scheduleTerminalResize();
-    }, immediate ? 40 : 220);
+    }, immediate ? 40 : 600);  // 增加延迟到 600ms 以匹配更长的 transition
 }
 
 function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate = false } = {}) {
@@ -2268,14 +2316,79 @@ function setupTerminalCustomScrollbar() {
     }, { passive: false });
 }
 
+function getFallbackKeyboardMetrics() {
+    const layoutHeight = getKeyboardBaselineHeight() || Math.round(window.innerHeight || document.documentElement.clientHeight || 720);
+    const keyboardInset = getEstimatedKeyboardInset();
+    return {
+        layoutHeight,
+        viewportHeight: Math.max(240, layoutHeight - keyboardInset),
+        offsetTop: 0,
+        keyboardInset,
+        keyboardOpen: true,
+        wantsAvoidance: true,
+        fallback: true,
+    };
+}
+
+function applyKeyboardFallbackAvoidance() {
+    if (!keyboardFocusLikely || !isTouchKeyboardDevice()) return false;
+    const metrics = getFallbackKeyboardMetrics();
+    keyboardViewportBaseline = Math.max(metrics.layoutHeight, keyboardViewportBaseline || 0);
+    const signature = `fallback:${metrics.keyboardInset}:${metrics.viewportHeight}:${metrics.layoutHeight}`;
+    if (updateViewportInsets._lastSignature === signature && mobileKeyboardOpen) return true;
+    updateViewportInsets._lastSignature = signature;
+    updateViewportInsets._lastViewportHeight = metrics.viewportHeight;
+    updateViewportInsets._lastKeyboardInset = metrics.keyboardInset;
+    mobileKeyboardOpen = true;
+    notifyParentKeyboardMetrics(metrics);
+    document.documentElement.style.setProperty('--keyboard-inset', `${metrics.keyboardInset}px`);
+    document.documentElement.classList.add('keyboard-open');
+    animateViewportCssMetrics(metrics.viewportHeight, metrics.offsetTop);
+    shouldFollowTerminalOutput = true;
+    scheduleTerminalScrollToBottom();
+    scheduleTerminalResize();
+    return true;
+}
+
+function scheduleKeyboardFallbackAvoidance() {
+    if (!keyboardFocusLikely || !isTouchKeyboardDevice()) return;
+    window.clearTimeout(keyboardFallbackTimer);
+    keyboardFallbackTimer = window.setTimeout(() => {
+        const metrics = getViewportKeyboardMetrics();
+        if (!keyboardFocusLikely || metrics.keyboardInset >= 100 || mobileKeyboardOpen) return;
+        applyKeyboardFallbackAvoidance();
+    }, 220);
+}
+
+function markKeyboardFocusActive() {
+    keyboardFocusLikely = isTouchKeyboardDevice();
+    keyboardViewportBaseline = Math.max(getKeyboardBaselineHeight(), keyboardViewportBaseline || 0);
+    updateViewportInsets();
+    scheduleKeyboardFallbackAvoidance();
+}
+
+function markKeyboardFocusInactive() {
+    keyboardFocusLikely = false;
+    window.clearTimeout(keyboardFallbackTimer);
+}
+
 function updateViewportInsets() {
     const viewport = window.visualViewport;
-    if (!viewport) return;
+    if (!viewport && !navigator.virtualKeyboard) return;
     if (!isKeyboardAvoidanceTarget() && !mobileKeyboardOpen) return;
     const metrics = getViewportKeyboardMetrics();
+    // 如果键盘高度小于 100px，认为是悬浮键盘，忽略
+    if (metrics.keyboardInset < 100) {
+        if (mobileKeyboardOpen && keyboardFocusLikely) {
+            applyKeyboardFallbackAvoidance();
+            return;
+        }
+        if (!mobileKeyboardOpen) return;
+    }
     if (!mobileKeyboardOpen && metrics.keyboardOpen) {
         keyboardViewportBaseline = Math.max(metrics.layoutHeight, keyboardViewportBaseline || 0);
     }
+    notifyParentKeyboardMetrics(metrics);
     const heightDelta = Math.abs(metrics.viewportHeight - (updateViewportInsets._lastViewportHeight || 0));
     const insetDelta = Math.abs(metrics.keyboardInset - (updateViewportInsets._lastKeyboardInset || 0));
     const signature = `${metrics.keyboardOpen}:${Math.round(metrics.keyboardInset / 4) * 4}:${Math.round(metrics.viewportHeight / 4) * 4}:${Math.round(metrics.offsetTop / 2) * 2}`;
@@ -2334,6 +2447,8 @@ function finalizeKeyboardClose({ force = false } = {}) {
     }
     updateViewportInsets._lastSignature = '';
     mobileKeyboardOpen = false;
+    if (force) keyboardFocusLikely = false;
+    window.clearTimeout(keyboardFallbackTimer);
     keyboardViewportBaseline = 0;
     document.documentElement.style.setProperty('--keyboard-inset', '0px');
     document.documentElement.classList.remove('keyboard-open');
@@ -2361,9 +2476,19 @@ function setupHorizontalScrollbarVisibility(...elements) {
 }
 
 function setupMobileKeyboardAvoidance() {
-    if (!window.visualViewport) return;
-    window.visualViewport.addEventListener('resize', updateViewportInsets, { passive: true });
-    window.visualViewport.addEventListener('scroll', updateViewportInsets, { passive: true });
+    if (!window.visualViewport && !navigator.virtualKeyboard && !isTouchKeyboardDevice()) return;
+    try {
+        if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;
+    } catch (_) {}
+    window.visualViewport?.addEventListener('resize', updateViewportInsets, { passive: true });
+    window.visualViewport?.addEventListener('scroll', updateViewportInsets, { passive: true });
+    navigator.virtualKeyboard?.addEventListener?.('geometrychange', updateViewportInsets);
+    document.addEventListener('focusin', (e) => {
+        if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusActive();
+    }, true);
+    document.addEventListener('focusout', (e) => {
+        if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusInactive();
+    }, true);
     cmdInput?.addEventListener('focus', () => {
         keyboardViewportBaseline = Math.max(
             window.innerHeight || 0,
@@ -2371,16 +2496,20 @@ function setupMobileKeyboardAvoidance() {
             window.visualViewport?.height || 0,
             getCssPxVar('--stable-vh'),
         );
+        markKeyboardFocusActive();
         updateViewportInsets();
         window.setTimeout(updateViewportInsets, 80);
         window.setTimeout(updateViewportInsets, 260);
         window.setTimeout(updateViewportInsets, 520);
     });
     cmdInput?.addEventListener('blur', () => {
+        markKeyboardFocusInactive();
         // 不在 blur 立即复位。iOS/Android 标准键盘收起时 visualViewport 仍在动画中，
         // 过早恢复 100vh 会造成页面先下坠再回弹；改为继续跟随到接近全高后再释放。
         [80, 180, 320, 520].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
-        window.setTimeout(() => finalizeKeyboardClose(), 680);
+        window.setTimeout(() => {
+            if (!keyboardFocusLikely && !isKeyboardAvoidanceTarget()) finalizeKeyboardClose();
+        }, 680);
     });
     updateViewportInsets();
 }
@@ -3280,6 +3409,7 @@ function handleKeyboardShow() {
 
 function handleKeyboardHide() {
     finalizeKeyboardClose({ force: true });
+    notifyParentKeyboardMetrics(getViewportKeyboardMetrics());
 }
 
 if (typeof visualViewport !== 'undefined') {
