@@ -25,6 +25,7 @@
     --stable-vh: 100vh;
     --visual-vh: var(--stable-vh, 100vh);
     --visual-offset-top: 0px;
+    --vvh: 100dvh;
 }
 
 /* 浅色主题 */
@@ -175,7 +176,7 @@ body:has(.terminal-page) {
 }
 
 html.viewport-updating body:has(.terminal-page) {
-    transition: height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), min-height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: height 0.20s cubic-bezier(0.16, 1, 0.3, 1), min-height 0.20s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 body.app-body {
@@ -567,9 +568,9 @@ body.app-body > .toast.show { opacity: 1; transform: translate3d(0,0,0) scale(1)
 
 html.viewport-updating .terminal-page {
     transition:
-        height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
-        max-height 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
-        transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+        height 0.20s cubic-bezier(0.16, 1, 0.3, 1),
+        max-height 0.20s cubic-bezier(0.16, 1, 0.3, 1),
+        transform 0.20s cubic-bezier(0.16, 1, 0.3, 1),
         background-color 0.24s ease,
         border-color 0.24s ease;
 }
@@ -1266,11 +1267,18 @@ html.keyboard-open .terminal-page {
     border-left: 2px solid var(--text-secondary);
 }
 
-.fm-header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.fm-header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--border); min-width: 0; }
 .fm-header { flex-wrap: wrap; min-width: 0; }
-.fm-header.panel-titlebar { flex-wrap: nowrap; }
+.fm-header.panel-titlebar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+.fm-header.panel-titlebar::-webkit-scrollbar { height: 0; }
 .fm-path-box { flex: 1 1 240px; min-width: 160px; display: flex; gap: 4px; }
-.fm-header.panel-titlebar .fm-path-box { flex: 1 1 auto; order: 0; }
+.fm-header.panel-titlebar .fm-path-box { flex: 1 1 auto; order: 0; min-width: 96px; }
 .fm-header.panel-titlebar .fm-refresh-btn { margin-left: auto; }
 .fm-path-input { flex: 1; min-width: 0; padding: 4px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-mono); }
 .fm-search-input { flex: 1; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-sans); margin: 0 12px 4px; }
@@ -1991,6 +1999,22 @@ html.keyboard-open .terminal-page {
     }
     .fm-header { padding: 7px 8px; }
     .fm-path-box { flex-basis: 100%; order: 3; }
+    .fm-header.panel-titlebar {
+        gap: 4px;
+        padding-inline: 6px;
+    }
+    .fm-header.panel-titlebar .tool-btn { padding-inline: 7px; }
+    .fm-header.panel-titlebar .fm-back-btn {
+        max-width: 38px;
+        overflow: hidden;
+        text-overflow: clip;
+    }
+    .fm-header.panel-titlebar .fm-path-box {
+        flex: 1 1 92px;
+        min-width: 82px;
+    }
+    .fm-header.panel-titlebar .fm-path-input { font-size: 12px; padding-inline: 7px; }
+    .fm-header.panel-titlebar .fm-refresh-btn { margin-left: 0; }
     .fm-toolbar { padding-inline: 8px; overflow-x: auto; gap: 4px; }
     .toast-container { left: 12px; right: 12px; top: auto; bottom: calc(12px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px)); }
     .toast { width: 100%; max-width: none; }
@@ -2037,6 +2061,13 @@ html.keyboard-open .terminal-page {
     .topbar-actions:hover::-webkit-scrollbar,
     .topbar-actions:focus-within::-webkit-scrollbar { height: 3px; }
     .btn-sm { font-size: 11px; }
+    .fm-header.panel-titlebar {
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+    }
+    .fm-header.panel-titlebar::-webkit-scrollbar { height: 0; }
+    .fm-header.panel-titlebar .fm-path-box { min-width: 82px; }
     .docker-table { min-width: 640px; font-size: 11px; }
     .docker-table th,
     .docker-table td { padding: 6px 8px; }

@@ -179,18 +179,25 @@ const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 const TERMINAL_BOTTOM_THRESHOLD = 48;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 
+function getCssPxVar(name) {
+    return Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0);
+}
+
 function getViewportKeyboardMetrics() {
     const viewport = window.visualViewport;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
-    const stableHeight = Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stable-vh')) || 0);
+    const stableHeight = getCssPxVar('--stable-vh');
     const baselineHeight = Math.max(layoutHeight, stableHeight || 0, keyboardViewportBaseline || 0);
     const viewportHeight = Math.round(viewport?.height || layoutHeight || 0);
     const offsetTop = Math.round(viewport?.offsetTop || 0);
     const keyboardInset = viewport ? Math.max(0, baselineHeight - viewportHeight - offsetTop) : 0;
     const roundedInset = Math.round(keyboardInset);
     const openThreshold = Math.min(260, Math.max(110, baselineHeight * 0.15));
-    const closeThreshold = Math.max(70, openThreshold * 0.55);
-    const keyboardOpen = isKeyboardAvoidanceTarget()
+    // 关闭阈值刻意低于开启阈值：标准键盘收起时持续跟随 visualViewport，
+    // 直到几乎恢复全高才释放布局，避免出现/消失最后一帧突然跳动。
+    const closeThreshold = 8;
+    const wantsAvoidance = isKeyboardAvoidanceTarget();
+    const keyboardOpen = (wantsAvoidance || mobileKeyboardOpen)
         && roundedInset > (mobileKeyboardOpen ? closeThreshold : openThreshold);
     return {
         layoutHeight: baselineHeight || layoutHeight,
@@ -198,6 +205,7 @@ function getViewportKeyboardMetrics() {
         offsetTop,
         keyboardInset: roundedInset,
         keyboardOpen,
+        wantsAvoidance,
     };
 }
 
@@ -2263,7 +2271,7 @@ function setupTerminalCustomScrollbar() {
 function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    if (!isKeyboardAvoidanceTarget()) return;
+    if (!isKeyboardAvoidanceTarget() && !mobileKeyboardOpen) return;
     const metrics = getViewportKeyboardMetrics();
     if (!mobileKeyboardOpen && metrics.keyboardOpen) {
         keyboardViewportBaseline = Math.max(metrics.layoutHeight, keyboardViewportBaseline || 0);
@@ -2285,17 +2293,21 @@ function updateViewportInsets() {
         if (!tinyNoise) {
             animateViewportCssMetrics(mobileKeyboardOpen ? metrics.viewportHeight : metrics.layoutHeight, mobileKeyboardOpen ? metrics.offsetTop : 0);
         }
+        if (wasKeyboardOpen || mobileKeyboardOpen) {
+            shouldFollowTerminalOutput = true;
+            scheduleTerminalScrollToBottom();
+            scheduleTerminalResize();
+        }
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
         if (!mobileKeyboardOpen) {
-            keyboardViewportBaseline = 0;
-            setStableViewportHeight();
+            finalizeKeyboardClose();
         }
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
         scheduleTerminalResize();
-    }, mobileKeyboardOpen ? 360 : 220);
+    }, mobileKeyboardOpen ? 360 : 120);
     if (mobileKeyboardOpen) {
         window.setTimeout(() => {
             shouldFollowTerminalOutput = true;
@@ -2303,12 +2315,29 @@ function updateViewportInsets() {
         }, 180);
     } else if (wasKeyboardOpen) {
         window.setTimeout(() => {
-            keyboardViewportBaseline = 0;
-            setStableViewportHeight();
+            finalizeKeyboardClose();
             scheduleTerminalScrollToBottom();
             scheduleTerminalResize();
-        }, 220);
+        }, 260);
     }
+}
+
+function finalizeKeyboardClose({ force = false } = {}) {
+    const metrics = getViewportKeyboardMetrics();
+    const visuallyRestored = !window.visualViewport
+        || metrics.keyboardInset <= 8
+        || metrics.viewportHeight >= metrics.layoutHeight - 8;
+    if (!force && !visuallyRestored) {
+        window.clearTimeout(finalizeKeyboardClose._timer);
+        finalizeKeyboardClose._timer = window.setTimeout(() => finalizeKeyboardClose(), 120);
+        return;
+    }
+    updateViewportInsets._lastSignature = '';
+    mobileKeyboardOpen = false;
+    keyboardViewportBaseline = 0;
+    document.documentElement.style.setProperty('--keyboard-inset', '0px');
+    document.documentElement.classList.remove('keyboard-open');
+    setStableViewportHeight({ force });
 }
 
 function setupHorizontalScrollbarVisibility(...elements) {
@@ -2340,21 +2369,18 @@ function setupMobileKeyboardAvoidance() {
             window.innerHeight || 0,
             document.documentElement.clientHeight || 0,
             window.visualViewport?.height || 0,
-            parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stable-vh')) || 0,
+            getCssPxVar('--stable-vh'),
         );
         updateViewportInsets();
         window.setTimeout(updateViewportInsets, 80);
         window.setTimeout(updateViewportInsets, 260);
+        window.setTimeout(updateViewportInsets, 520);
     });
     cmdInput?.addEventListener('blur', () => {
-        window.setTimeout(() => {
-            updateViewportInsets._lastSignature = '';
-            mobileKeyboardOpen = false;
-            keyboardViewportBaseline = 0;
-            document.documentElement.style.setProperty('--keyboard-inset', '0px');
-            document.documentElement.classList.remove('keyboard-open');
-            setStableViewportHeight();
-        }, 160);
+        // 不在 blur 立即复位。iOS/Android 标准键盘收起时 visualViewport 仍在动画中，
+        // 过早恢复 100vh 会造成页面先下坠再回弹；改为继续跟随到接近全高后再释放。
+        [80, 180, 320, 520].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
+        window.setTimeout(() => finalizeKeyboardClose(), 680);
     });
     updateViewportInsets();
 }
@@ -3253,11 +3279,7 @@ function handleKeyboardShow() {
 }
 
 function handleKeyboardHide() {
-    updateViewportInsets._lastSignature = '';
-    mobileKeyboardOpen = false;
-    document.documentElement.style.setProperty('--keyboard-inset', '0px');
-    document.documentElement.classList.remove('keyboard-open');
-    setStableViewportHeight({ force: true });
+    finalizeKeyboardClose({ force: true });
 }
 
 if (typeof visualViewport !== 'undefined') {
