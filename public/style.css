@@ -1068,6 +1068,11 @@ body:has(.terminal-page) {
     overflow: hidden;
 }
 .fm-editor-main {
+    --editor-font-size: 13px;
+    --editor-line-height: 20.15px;
+    --editor-gutter-width: 48px;
+    --editor-code-padding-x: 12px;
+    --editor-code-padding-y: 12px;
     position: relative;
     flex: 1;
     min-width: 0;
@@ -1080,10 +1085,35 @@ body:has(.terminal-page) {
 .fm-editor-highlight,
 .fm-editor-textarea {
     font-family: var(--font-mono);
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: var(--editor-font-size);
+    line-height: var(--editor-line-height);
     tab-size: 4;
-    padding: 12px;
+    padding: var(--editor-code-padding-y) var(--editor-code-padding-x) var(--editor-code-padding-y) calc(var(--editor-gutter-width) + var(--editor-code-padding-x));
+}
+.fm-editor-line-numbers {
+    position: absolute;
+    inset: 0 auto auto 0;
+    z-index: 3;
+    width: var(--editor-gutter-width);
+    min-height: 100%;
+    padding: var(--editor-code-padding-y) 8px var(--editor-code-padding-y) 6px;
+    border-right: 1px solid rgba(139,148,158,0.16);
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+    font-family: var(--font-mono);
+    font-size: var(--editor-font-size);
+    line-height: var(--editor-line-height);
+    text-align: right;
+    user-select: none;
+    pointer-events: none;
+    white-space: pre;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+}
+.fm-editor-line-numbers span {
+    display: block;
+    height: var(--editor-line-number-height, var(--editor-line-height));
+    line-height: var(--editor-line-height);
 }
 .fm-editor-highlight {
     position: absolute;
@@ -1141,6 +1171,10 @@ body:has(.terminal-page) {
     --minimap-view-top: 0%;
     --minimap-view-height: 100%;
     --minimap-scale: 0.22;
+    --minimap-font-size: 3px;
+    --minimap-line-height: 4.4px;
+    --minimap-padding-top: 4px;
+    --minimap-padding-left: 12px;
     --minimap-code-top: 0px;
     position: relative;
     width: 148px;
@@ -1190,12 +1224,12 @@ body:has(.terminal-page) {
     min-width: 100%;
     min-height: 100%;
     margin: 0;
-    padding: 6px 7px 6px 6px;
+    padding: var(--minimap-padding-top) 7px 6px var(--minimap-padding-left);
     border: 0;
     color: var(--text-secondary);
     font-family: var(--font-mono);
-    font-size: 5.5px;
-    line-height: 6.6px;
+    font-size: var(--minimap-font-size);
+    line-height: var(--minimap-line-height);
     white-space: pre;
     pointer-events: none;
     opacity: 0.92;
@@ -1203,10 +1237,10 @@ body:has(.terminal-page) {
 .fm-minimap-line {
     display: block;
     width: 100%;
-    height: 6.6px;
+    height: var(--minimap-line-height);
     margin: 0;
     overflow: hidden;
-    white-space: nowrap;
+    white-space: pre;
     text-overflow: clip;
     color: color-mix(in srgb, var(--text) 68%, var(--text-secondary));
     opacity: 0.74;

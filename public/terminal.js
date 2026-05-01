@@ -54,6 +54,7 @@ const fmEditorModal = $('#fmEditorModal');
 const fmEditorTitle = $('#fmEditorTitle');
 const fmEditorMain = $('#fmEditorMain');
 const fmEditorTextarea = $('#fmEditorTextarea');
+let fmEditorLineNumbers = $('#fmEditorLineNumbers');
 const fmEditorHighlight = $('#fmEditorHighlight');
 const fmEditorMinimap = $('#fmEditorMinimap');
 const fmEditorMinimapCode = $('#fmEditorMinimapCode');
@@ -1072,10 +1073,50 @@ function highlightCode(text, language) {
     return highlighted.join('\n') || '&#8203;';
 }
 
+function getEditorLines(text = '') {
+    return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+}
+
+function getDisplayColumnCount(line = '', tabSize = Number(fmEditorTabSize?.value) || 4) {
+    let columns = 0;
+    for (const ch of String(line)) {
+        if (ch === '\t') {
+            columns += tabSize - (columns % tabSize || 0);
+        } else if (/[^\x00-\xff]/.test(ch)) {
+            columns += 2;
+        } else {
+            columns += 1;
+        }
+    }
+    return columns;
+}
+
+function getEditorWrapColumns() {
+    if (!fmEditorTextarea) return 120;
+    const computed = getComputedStyle(fmEditorTextarea);
+    const fontSize = parseFloat(computed.fontSize) || 13;
+    const charWidth = fontSize * 0.62;
+    const paddingLeft = parseFloat(computed.paddingLeft) || 0;
+    const paddingRight = parseFloat(computed.paddingRight) || 0;
+    const codeWidth = Math.max(charWidth, fmEditorTextarea.clientWidth - paddingLeft - paddingRight);
+    return Math.max(1, Math.floor(codeWidth / charWidth));
+}
+
+function getEditorVisualRows(lines) {
+    const wrapEnabled = fmEditorWrap?.checked !== false && fmEditorMain?.classList.contains('wrap-enabled');
+    if (!wrapEnabled) return lines.map(() => 1);
+    const columns = getEditorWrapColumns();
+    const tabSize = Number(fmEditorTabSize?.value) || 4;
+    return lines.map((line) => Math.max(1, Math.ceil(Math.max(1, getDisplayColumnCount(line, tabSize)) / columns)));
+}
+
 function syncEditorCodeScroll() {
     if (!fmEditorTextarea) return;
     if (fmEditorHighlight) {
         fmEditorHighlight.style.transform = `translate3d(${-fmEditorTextarea.scrollLeft}px, ${-fmEditorTextarea.scrollTop}px, 0)`;
+    }
+    if (fmEditorLineNumbers) {
+        fmEditorLineNumbers.style.transform = `translate3d(0, ${-fmEditorTextarea.scrollTop}px, 0)`;
     }
     updateEditorMinimapViewport();
 }
@@ -1083,18 +1124,63 @@ function syncEditorCodeScroll() {
 function renderEditorCodeLayers() {
     if (!fmEditorTextarea) return;
     const text = fmEditorTextarea.value || '';
+    const lines = getEditorLines(text);
+    const visualRows = getEditorVisualRows(lines);
     const highlighted = highlightCode(text, editorLanguage);
     if (fmEditorHighlight) fmEditorHighlight.innerHTML = highlighted;
-    if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = renderMinimapCode(text, editorLanguage);
+    renderEditorLineNumbers(lines, visualRows);
+    syncEditorMinimapMetrics();
+    if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = renderMinimapCode(lines, editorLanguage, visualRows);
     syncEditorCodeScroll();
 }
 
-function renderMinimapCode(text = '', language = 'plain') {
-    const normalized = String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const lines = normalized.split('\n');
-    return lines.map((line) => {
-        if (!line) return '<span class="fm-minimap-line">&nbsp;</span>';
-        const indent = line.match(/^\s*/)?.[0].length || 0;
+function ensureEditorLineNumbers() {
+    if (!fmEditorMain) return null;
+    if (!fmEditorLineNumbers) {
+        fmEditorLineNumbers = document.createElement('div');
+        fmEditorLineNumbers.id = 'fmEditorLineNumbers';
+        fmEditorLineNumbers.className = 'fm-editor-line-numbers';
+        fmEditorLineNumbers.setAttribute('aria-hidden', 'true');
+        fmEditorMain.insertBefore(fmEditorLineNumbers, fmEditorMain.firstChild);
+    }
+    return fmEditorLineNumbers;
+}
+
+function renderEditorLineNumbers(lines = getEditorLines(fmEditorTextarea?.value || ''), visualRows = getEditorVisualRows(lines)) {
+    const gutter = ensureEditorLineNumbers();
+    if (!gutter) return;
+    const lineCount = Math.max(1, lines.length);
+    const digits = String(lineCount).length;
+    const gutterWidth = Math.max(48, 22 + digits * 8);
+    fmEditorMain?.style.setProperty('--editor-gutter-width', `${gutterWidth}px`);
+    const lineHeight = parseFloat(getComputedStyle(fmEditorTextarea).lineHeight) || 20.15;
+    const signature = `${lineCount}:${gutterWidth}:${visualRows.join(',')}`;
+    if (gutter._signature === signature) return;
+    gutter._signature = signature;
+    gutter.innerHTML = Array.from({ length: lineCount }, (_, i) => {
+        const rowHeight = Math.max(1, visualRows[i] || 1) * lineHeight;
+        return `<span style="--editor-line-number-height:${rowHeight}px">${i + 1}</span>`;
+    }).join('');
+}
+
+function syncEditorMinimapMetrics() {
+    if (!fmEditorTextarea || !fmEditorMinimap) return;
+    const computed = getComputedStyle(fmEditorTextarea);
+    const fontSize = parseFloat(computed.fontSize) || 13;
+    const lineHeight = parseFloat(computed.lineHeight) || fontSize * 1.55;
+    const paddingTop = parseFloat(computed.paddingTop) || 0;
+    const paddingLeft = parseFloat(computed.paddingLeft) || 0;
+    const scale = Number(getComputedStyle(fmEditorMinimap).getPropertyValue('--minimap-scale')) || 0.22;
+    fmEditorMinimap.style.setProperty('--minimap-font-size', `${Math.max(3, fontSize * scale)}px`);
+    fmEditorMinimap.style.setProperty('--minimap-line-height', `${Math.max(4, lineHeight * scale)}px`);
+    fmEditorMinimap.style.setProperty('--minimap-padding-top', `${Math.max(0, paddingTop * scale)}px`);
+    fmEditorMinimap.style.setProperty('--minimap-padding-left', `${Math.max(0, paddingLeft * scale)}px`);
+}
+
+function renderMinimapCode(textOrLines = '', language = 'plain', visualRows = null) {
+    const lines = Array.isArray(textOrLines) ? textOrLines : getEditorLines(textOrLines);
+    const rows = visualRows || getEditorVisualRows(lines);
+    return lines.map((line, index) => {
         const trimmed = line.trim();
         const commentPrefix = getLineComment(language);
         const type = commentPrefix && trimmed.startsWith(commentPrefix)
@@ -1103,9 +1189,9 @@ function renderMinimapCode(text = '', language = 'plain') {
                 : (/^(const|let|var|function|class|if|else|for|while|return|import|export|def|class|from|async|await|public|private|protected|static)\b/.test(trimmed) ? 'keyword'
                     : (/(['"`]).*\1/.test(trimmed) ? 'string'
                         : (/\b\d+(\.\d+)?\b/.test(trimmed) ? 'number' : 'text'))));
-        const safeIndent = '&nbsp;'.repeat(Math.min(indent, 24));
-        const preview = escapeHtml(trimmed.slice(0, 72));
-        return `<span class="fm-minimap-line"><span class="fm-minimap-seg indent">${safeIndent}</span><span class="fm-minimap-seg ${type}">${preview || '&nbsp;'}</span></span>`;
+        const preview = escapeHtml(line.slice(0, 120)) || '&nbsp;';
+        const lineRows = Math.max(1, rows[index] || 1);
+        return `<span class="fm-minimap-line" style="height:calc(var(--minimap-line-height) * ${lineRows})"><span class="fm-minimap-seg ${type}">${preview}</span></span>`;
     }).join('');
 }
 
@@ -1251,7 +1337,13 @@ fmEditorTextarea.addEventListener('keydown', (e) => {
 });
 
 if (window.ResizeObserver && fmEditorTextarea) {
-    const editorResizeObserver = new ResizeObserver(updateEditorMinimapViewport);
+    const editorResizeObserver = new ResizeObserver(() => {
+        window.cancelAnimationFrame(editorResizeObserver._raf);
+        editorResizeObserver._raf = window.requestAnimationFrame(() => {
+            renderEditorCodeLayers();
+            updateEditorMinimapViewport();
+        });
+    });
     editorResizeObserver.observe(fmEditorTextarea);
     if (fmEditorMinimap) editorResizeObserver.observe(fmEditorMinimap);
 }
