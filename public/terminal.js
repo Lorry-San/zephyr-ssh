@@ -80,15 +80,12 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 
 // 图表实例管理
 let chartInstances = {};
-let shouldAutoScroll = true;
+
+// 终端滚动状态（按照官方 wterm 方案）
+let terminalShouldScrollToBottom = true;  // 记录是否应该滚动的意图
 let terminalScrollRaf = 0;
 let terminalScrollListeners = [];
 let isProgrammaticScroll = false;
-let terminalPendingScrollAfterInput = false;
-let isTerminalInputActive = false;
-let terminalInputIdleTimer = 0;
-let terminalAutoScrollResumeWanted = true;
-let terminalUserScrolledDuringInput = false;
 let isTerminalRenderingOutput = false;
 let terminalFontSize = 14;
 let pinchStartDistance = 0;
@@ -100,7 +97,7 @@ const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
 const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
-const TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS = 500;
+
 
 // ---------- 主题管理 ----------
 function getPreferredTheme() {
@@ -817,7 +814,6 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
 }
 
 function scrollTerminalToBottom() {
-    if (!shouldAutoScroll || isTerminalInputActive) return;
     try {
         const el = getTerminalScrollElement();
         if (el) {
@@ -832,81 +828,50 @@ function scrollTerminalToBottom() {
 }
 
 function markTerminalUserInput(data = '') {
-    terminalPendingScrollAfterInput = /[\r\n]/.test(data);
-    pauseTerminalAutoScrollForInput();
-}
-
-function pauseTerminalAutoScrollForInput() {
-    if (!isTerminalInputActive) {
-        terminalAutoScrollResumeWanted = isTerminalAtBottom();
-        terminalUserScrolledDuringInput = false;
-    }
-    isTerminalInputActive = true;
-    shouldAutoScroll = false;
-    clearTerminalAutoScrollTimers();
-
-    window.clearTimeout(terminalInputIdleTimer);
-    terminalInputIdleTimer = window.setTimeout(resumeTerminalAutoScrollAfterInputIdle, TERMINAL_INPUT_IDLE_SCROLL_RESUME_MS);
-}
-
-function resumeTerminalAutoScrollAfterInputIdle() {
-    terminalInputIdleTimer = 0;
-    isTerminalInputActive = false;
-
-    const atBottom = isTerminalAtBottom();
-    shouldAutoScroll = terminalUserScrolledDuringInput ? atBottom : terminalAutoScrollResumeWanted;
-    terminalAutoScrollResumeWanted = shouldAutoScroll;
-    terminalUserScrolledDuringInput = false;
-
-    if (shouldAutoScroll) scrollTerminalToBottom();
-}
-
-function clearTerminalAutoScrollTimers() {
-    if (terminalScrollRaf) {
-        cancelAnimationFrame(terminalScrollRaf);
-        terminalScrollRaf = 0;
+    // 用户输入时记录当前是否在底部（官方 wterm 做法）
+    terminalShouldScrollToBottom = isTerminalAtBottom();
+    
+    // 立即滚动到底部，这样输入过程中不会抖
+    if (terminalShouldScrollToBottom) {
+        scrollTerminalToBottom();
     }
 }
 
 function scheduleTerminalScrollToBottom() {
-    if (!shouldAutoScroll || isTerminalInputActive || terminalScrollRaf) return;
+    if (terminalScrollRaf) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
-        scrollTerminalToBottom();
+        if (terminalShouldScrollToBottom) {
+            scrollTerminalToBottom();
+        }
     });
 }
 
 function stopTerminalAutoScrollObserver() {
-    clearTerminalAutoScrollTimers();
-    window.clearTimeout(terminalInputIdleTimer);
-    terminalInputIdleTimer = 0;
-    isTerminalInputActive = false;
-    terminalUserScrolledDuringInput = false;
+    if (terminalScrollRaf) {
+        cancelAnimationFrame(terminalScrollRaf);
+        terminalScrollRaf = 0;
+    }
     terminalScrollListeners.forEach(({ el, handler }) => el.removeEventListener('scroll', handler));
     terminalScrollListeners = [];
-
 }
 
 function setupTerminalScrollHooks() {
     stopTerminalAutoScrollObserver();
-    shouldAutoScroll = true;
+    terminalShouldScrollToBottom = true;
 
     const scrollEl = getTerminalScrollElement();
     if (scrollEl) {
         const handler = () => {
             if (isProgrammaticScroll || isTerminalRenderingOutput) return;
-            if (isTerminalInputActive) {
-                terminalUserScrolledDuringInput = true;
-                terminalAutoScrollResumeWanted = isTerminalAtBottom(scrollEl);
-                return;
-            }
-            shouldAutoScroll = isTerminalAtBottom(scrollEl);
+            // 用户手动滚动时，记录当前位置是否在底部
+            terminalShouldScrollToBottom = isTerminalAtBottom(scrollEl);
         };
         scrollEl.addEventListener('scroll', handler, { passive: true });
         terminalScrollListeners.push({ el: scrollEl, handler });
     }
 
-    scheduleTerminalScrollToBottom();
+    scrollTerminalToBottom();
 }
 
 function isModifierOnlyKeyEvent(e) {
@@ -1501,9 +1466,8 @@ function connectWebSocket() {
                         break;
                     case 'data':
                         if (term?.write) {
-                            const scrollEl = getTerminalScrollElement();
-                            const savedScrollTop = scrollEl?.scrollTop ?? 0;
-                            const nearBottom = isTerminalAtBottom();
+                            // 在写入前记录当前滚动状态（官方 wterm 做法）
+                            terminalShouldScrollToBottom = isTerminalAtBottom();
                             
                             isTerminalRenderingOutput = true;
                             try {
@@ -1512,19 +1476,8 @@ function connectWebSocket() {
                                 requestAnimationFrame(() => { isTerminalRenderingOutput = false; });
                             }
                             
-                            // 如果正在输入，保持滚动位置不变
-                            if (isTerminalInputActive && scrollEl) {
-                                scrollEl.scrollTop = savedScrollTop;
-                            }
-                            
-                            const hasLineBreak = /[\r\n]/.test(msg.data || '');
-                            const isInputEcho = terminalPendingScrollAfterInput && msg.data && msg.data.length <= 8;
-                            const shouldFollowOutput = nearBottom && !isInputEcho && !isTerminalInputActive;
-                            if (terminalPendingScrollAfterInput && hasLineBreak) {
-                                terminalPendingScrollAfterInput = false;
-                                terminalAutoScrollResumeWanted = nearBottom;
-                            }
-                            if (shouldFollowOutput) scheduleTerminalScrollToBottom();
+                            // 调度滚动（下一帧根据 terminalShouldScrollToBottom 决定是否滚动）
+                            scheduleTerminalScrollToBottom();
                         }
                         break;
                     case 'error':
