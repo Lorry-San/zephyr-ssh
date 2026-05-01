@@ -19,7 +19,10 @@ const statusText = $('#statusText');
 const connInfo = $('#connInfo');
 const terminalOverlay = $('#terminalOverlay');
 const overlayMsg = $('#overlayMsg');
+const terminalContainer = $('#terminalContainer');
 const wtermWrapper = $('#wtermWrapper');
+const terminalScrollbar = $('#terminalScrollbar');
+const terminalScrollbarThumb = $('#terminalScrollbarThumb');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
@@ -82,6 +85,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 let chartInstances = {};
 let shouldFollowTerminalOutput = true;
 let terminalScrollRaf = 0;
+let terminalScrollbarRaf = 0;
 let isProgrammaticTerminalScroll = false;
 let terminalScrollCleanup = null;
 let terminalInputEchoSuppressUntil = 0;
@@ -96,6 +100,8 @@ const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
 const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
+const TERMINAL_BOTTOM_THRESHOLD = 48;
+const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 
 
 // ---------- 主题管理 ----------
@@ -800,9 +806,6 @@ function updateLine(id, value) {
 }
 
 function getTerminalScrollElement() {
-    // 按 wterm 官方实现，滚动容器就是传给 new WTerm(element) 的宿主元素本身。
-    // 官方 CSS 通过 .wterm.has-scrollback { overflow-y: auto; } 打开原生滚动条，
-    // WTerm.write() 内部会根据 element.scrollTop/scrollHeight 决定是否贴底。
     return wtermWrapper;
 }
 
@@ -811,32 +814,91 @@ function getTerminalBottomDistance(el = getTerminalScrollElement()) {
     return el.scrollHeight - el.scrollTop - el.clientHeight;
 }
 
-function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = 48) {
+function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = TERMINAL_BOTTOM_THRESHOLD) {
     if (!el) return true;
     return getTerminalBottomDistance(el) <= threshold;
 }
 
+function getTerminalMaxScroll(el = getTerminalScrollElement()) {
+    if (!el) return 0;
+    return Math.max(0, el.scrollHeight - el.clientHeight);
+}
+
+function updateTerminalScrollbarNow() {
+    const el = getTerminalScrollElement();
+    if (!el || !terminalContainer || !terminalScrollbar || !terminalScrollbarThumb) return;
+    const maxScroll = getTerminalMaxScroll(el);
+    const scrollable = maxScroll > 1;
+    terminalContainer.classList.toggle('scrollable', scrollable);
+    el.classList.toggle('terminal-scrollable', scrollable);
+    if (!scrollable) {
+        terminalScrollbar.style.setProperty('--terminal-scroll-thumb-top', '0px');
+        terminalScrollbar.style.setProperty('--terminal-scroll-thumb-height', '100%');
+        return;
+    }
+
+    const trackHeight = terminalScrollbar.clientHeight || terminalScrollbar.getBoundingClientRect().height || 1;
+    const thumbHeight = Math.min(trackHeight, Math.max(TERMINAL_SCROLLBAR_MIN_THUMB, (el.clientHeight / Math.max(el.scrollHeight, 1)) * trackHeight));
+    const movable = Math.max(1, trackHeight - thumbHeight);
+    const ratio = Math.min(1, Math.max(0, el.scrollTop / maxScroll));
+    terminalScrollbar.style.setProperty('--terminal-scroll-thumb-height', `${thumbHeight}px`);
+    terminalScrollbar.style.setProperty('--terminal-scroll-thumb-top', `${ratio * movable}px`);
+}
+
+function scheduleTerminalScrollbarUpdate() {
+    if (terminalScrollbarRaf) return;
+    terminalScrollbarRaf = requestAnimationFrame(() => {
+        terminalScrollbarRaf = 0;
+        updateTerminalScrollbarNow();
+    });
+}
+
 function scrollTerminalToBottom() {
-    // 不再从业务层强制 scrollTop。wterm 官方 renderer 在 write/render 后自行贴底，
-    // 外层再次 requestAnimationFrame + scrollTop 会与输入光标可见性滚动竞争，导致抖动。
+    const el = getTerminalScrollElement();
+    if (!el) return;
+    isProgrammaticTerminalScroll = true;
+    el.scrollTop = getTerminalMaxScroll(el);
+    shouldFollowTerminalOutput = true;
+    scheduleTerminalScrollbarUpdate();
+    requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
 }
 
 function markTerminalUserInput(data = '') {
-    // 官方输入处理不需要额外抑制/补滚动；保留函数避免改动调用链。
+    if (!data) return;
+    shouldFollowTerminalOutput = true;
+    terminalInputEchoSuppressUntil = performance.now() + 350;
+    terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
+    scheduleTerminalScrollToBottom();
 }
 
 function isLikelyTerminalInputEcho(data = '') {
-    return false;
+    if (!data || !terminalInputEchoMaxLength) return false;
+    if (performance.now() > terminalInputEchoSuppressUntil) {
+        terminalInputEchoMaxLength = 0;
+        return false;
+    }
+    return data.length <= terminalInputEchoMaxLength + 8;
 }
 
 function scheduleTerminalScrollToBottom() {
-    // 使用 wterm 官方滚动机制，不做业务层补滚动。
+    if (terminalScrollRaf) return;
+    terminalScrollRaf = requestAnimationFrame(() => {
+        terminalScrollRaf = 0;
+        requestAnimationFrame(() => {
+            if (shouldFollowTerminalOutput) scrollTerminalToBottom();
+            else scheduleTerminalScrollbarUpdate();
+        });
+    });
 }
 
 function stopTerminalAutoScrollObserver() {
     if (terminalScrollRaf) {
         cancelAnimationFrame(terminalScrollRaf);
         terminalScrollRaf = 0;
+    }
+    if (terminalScrollbarRaf) {
+        cancelAnimationFrame(terminalScrollbarRaf);
+        terminalScrollbarRaf = 0;
     }
     terminalScrollCleanup?.();
     terminalScrollCleanup = null;
@@ -845,8 +907,60 @@ function stopTerminalAutoScrollObserver() {
 
 function setupTerminalScrollHooks() {
     stopTerminalAutoScrollObserver();
-    // WTerm 内部会在 write 前记录是否贴底，并在 render 后只在需要时滚到底部。
-    // 这里不再监听/覆盖滚动状态，避免和官方 _shouldScrollToBottom 状态冲突。
+    shouldFollowTerminalOutput = true;
+
+    const onScroll = () => {
+        if (!isProgrammaticTerminalScroll) {
+            shouldFollowTerminalOutput = isTerminalAtBottom();
+        }
+        scheduleTerminalScrollbarUpdate();
+    };
+
+    const onWheel = (e) => {
+        if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+            shouldFollowTerminalOutput = e.deltaY >= 0 ? isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2) : false;
+        }
+    };
+
+    let touchStartY = 0;
+    const onTouchStart = (e) => {
+        if (e.touches.length === 1) touchStartY = e.touches[0].clientY;
+    };
+    const onTouchMove = (e) => {
+        if (e.touches.length !== 1) return;
+        const dy = e.touches[0].clientY - touchStartY;
+        if (Math.abs(dy) > 4) {
+            shouldFollowTerminalOutput = dy < 0 ? isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2) : false;
+        }
+    };
+
+    wtermWrapper.addEventListener('scroll', onScroll, { passive: true });
+    wtermWrapper.addEventListener('wheel', onWheel, { passive: true });
+    wtermWrapper.addEventListener('touchstart', onTouchStart, { passive: true });
+    wtermWrapper.addEventListener('touchmove', onTouchMove, { passive: true });
+
+    let resizeObserver = null;
+    if (window.ResizeObserver) {
+        resizeObserver = new ResizeObserver(() => {
+            if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom();
+            else scheduleTerminalScrollbarUpdate();
+        });
+        resizeObserver.observe(wtermWrapper);
+        const grid = wtermWrapper.querySelector('.term-grid');
+        if (grid) resizeObserver.observe(grid);
+    }
+
+    setupTerminalCustomScrollbar();
+    terminalScrollCleanup = () => {
+        wtermWrapper.removeEventListener('scroll', onScroll);
+        wtermWrapper.removeEventListener('wheel', onWheel);
+        wtermWrapper.removeEventListener('touchstart', onTouchStart);
+        wtermWrapper.removeEventListener('touchmove', onTouchMove);
+        resizeObserver?.disconnect();
+    };
+
+    scheduleTerminalScrollToBottom();
+    scheduleTerminalScrollbarUpdate();
 }
 
 function isModifierOnlyKeyEvent(e) {
@@ -854,7 +968,52 @@ function isModifierOnlyKeyEvent(e) {
 }
 
 function setupTerminalInputActivityHooks() {
-    // 官方用法不需要额外监听输入活动来控制滚动。
+    document.addEventListener('keydown', (e) => {
+        if (isModifierOnlyKeyEvent(e)) return;
+        if (document.activeElement === cmdInput) return;
+        if (!terminalContainer?.contains(document.activeElement) && document.activeElement !== document.body) return;
+        shouldFollowTerminalOutput = true;
+        scheduleTerminalScrollToBottom();
+    }, true);
+}
+
+function setupTerminalCustomScrollbar() {
+    if (!terminalScrollbar || !terminalScrollbarThumb || terminalScrollbar._zephyrReady) return;
+    terminalScrollbar._zephyrReady = true;
+
+    const setScrollFromClientY = (clientY) => {
+        const el = getTerminalScrollElement();
+        const maxScroll = getTerminalMaxScroll(el);
+        if (!el || maxScroll <= 0) return;
+        const rect = terminalScrollbar.getBoundingClientRect();
+        const thumbHeight = terminalScrollbarThumb.getBoundingClientRect().height || TERMINAL_SCROLLBAR_MIN_THUMB;
+        const ratio = Math.min(1, Math.max(0, (clientY - rect.top - thumbHeight / 2) / Math.max(1, rect.height - thumbHeight)));
+        isProgrammaticTerminalScroll = true;
+        el.scrollTop = ratio * maxScroll;
+        shouldFollowTerminalOutput = isTerminalAtBottom(el);
+        scheduleTerminalScrollbarUpdate();
+        requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+    };
+
+    terminalScrollbar.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        terminalScrollbar.classList.add('dragging');
+        terminalScrollbar.setPointerCapture?.(e.pointerId);
+        setScrollFromClientY(e.clientY);
+        const onMove = (ev) => {
+            ev.preventDefault();
+            setScrollFromClientY(ev.clientY);
+        };
+        const onUp = () => {
+            terminalScrollbar.classList.remove('dragging');
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            term?.focus?.();
+        };
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', onUp, { once: true });
+    }, { passive: false });
 }
 
 function renderStats(d) {
@@ -955,6 +1114,29 @@ function showInfoModal() {
         infoModal.classList.add('open');
         infoBtn.classList.add('active');
     });
+}
+
+function patchWTermScrollBehavior() {
+    if (!term || term._zephyrScrollPatched) return;
+    // wterm 0.1.x 的私有 _scrollToBottom 会按行高向下取整，某些尺寸下会离底部差半行，
+    // 下一次 write 前 _isScrolledToBottom() 判断失败，自动滚动就会断掉。这里改成精确贴底。
+    if (typeof term._scrollToBottom === 'function') {
+        term._scrollToBottom = () => scrollTerminalToBottom();
+    }
+    if (typeof term._isScrolledToBottom === 'function') {
+        term._isScrolledToBottom = () => isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD);
+    }
+    term._zephyrScrollPatched = true;
+}
+
+function writeTerminalData(data = '') {
+    if (!term?.write) return;
+    const wasAtBottom = isTerminalAtBottom();
+    if (isLikelyTerminalInputEcho(data)) shouldFollowTerminalOutput = true;
+    else shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
+    term.write(data);
+    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom();
+    else scheduleTerminalScrollbarUpdate();
 }
 
 function hideInfoModal() {
@@ -1400,6 +1582,7 @@ async function initWTerm() {
     }
     if (typeof term.init === 'function') await term.init();
     applyTerminalFontSize(terminalFontSize, { persist: false });
+    patchWTermScrollBehavior();
 
     const observeResize = () => sendTerminalResize();
     if (window.ResizeObserver) {
@@ -1440,12 +1623,12 @@ function connectWebSocket() {
                         setStatus('connected', '已连接');
                         if (term?.focus) term.focus();
                         reconnectAttempts = 0;
+                        shouldFollowTerminalOutput = true;
+                        scheduleTerminalScrollToBottom();
                         resolve(ws);
                         break;
                     case 'data':
-                        if (term?.write) {
-                            term.write(msg.data);
-                        }
+                        writeTerminalData(msg.data);
                         break;
                     case 'error':
                         setStatus('error', msg.message);
@@ -1455,7 +1638,7 @@ function connectWebSocket() {
                         setStatus('disconnected', msg.message || '会话已关闭');
                         break;
                     case 'banner':
-                        if (term?.write) term.write(msg.data);
+                        writeTerminalData(msg.data);
                         break;
                 }
             } catch (_) {}
