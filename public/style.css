@@ -276,16 +276,24 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 .activity-item span { color: var(--text-secondary); }
 .empty-card, .terminal-placeholder { padding: 28px; text-align: center; color: var(--text-secondary); }
 .browser-tabs { min-height: 50px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); padding: 10px; margin-bottom: 14px; overflow-x: auto; }
-.session-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; margin: 0 8px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); cursor: pointer; }
+.session-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 300px; margin: 0 8px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); cursor: pointer; }
 .session-tab.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12); }
 .session-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-tab em { color: var(--text-secondary); font-size: 11px; font-style: normal; }
+.session-tab i, .session-tab b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; font-style: normal; line-height: 1; flex: 0 0 auto; }
+.session-tab i { color: var(--accent-hover); background: rgba(88,166,255,.12); }
 .session-tab b { color: var(--danger); font-size: 16px; }
+.session-tab i:hover { background: rgba(88,166,255,.24); }
+.session-tab b:hover { background: rgba(248,81,73,.14); }
 .terminal-workspace { border: 1px solid var(--border); border-radius: var(--radius-lg); background: #05070a; min-height: 720px; overflow: hidden; position: relative; }
 .terminal-frame { display: none; width: 100%; height: 720px; border: 0; background: var(--bg); }
 .terminal-frame.active { display: block; }
 .terminal-workspace .terminal-placeholder { min-height: 720px; display: none; place-items: center; }
 .terminal-workspace .terminal-placeholder.active, .terminal-workspace > .terminal-placeholder:only-child { display: grid; }
+.terminal-frame:fullscreen, .terminal-workspace:fullscreen { width: 100vw; height: 100vh; border-radius: 0; }
+.terminal-frame:fullscreen { display: block; }
+.panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.panel-title-row h2 { margin: 0; }
 .empty-state { color: var(--text-secondary); font-size: 14px; padding: 6px; }
 .settings-layout { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: start; }
 .settings-menu { display: grid; gap: 6px; padding: 10px; }

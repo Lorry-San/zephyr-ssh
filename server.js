@@ -192,7 +192,7 @@ function clientIp(req) {
     return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim().replace(/^::ffff:/, '') || 'unknown';
 }
 
-function publicOrigin(req) { return process.env.PUBLIC_ORIGIN || `${req.protocol}://${req.get('host')}`; }
+function publicOrigin(req) { return req.headers.origin || (process.env.PUBLIC_ORIGIN && process.env.PUBLIC_ORIGIN !== 'http://localhost:3000' ? process.env.PUBLIC_ORIGIN : `${req.protocol}://${req.get('host')}`); }
 function rpIdFromOrigin(origin) { try { return new URL(origin).hostname; } catch { return 'localhost'; } }
 function safeSettings(s = storage.getSettings()) {
     const copy = JSON.parse(JSON.stringify(s || {}));
@@ -495,6 +495,8 @@ app.post('/api/settings/test-mail', requireAuth, async (req, res) => {
 app.get('/api/security/ip-bans', requireAuth, (req, res) => res.json({ bans: storage.listIpBans() }));
 app.delete('/api/security/ip-bans/:ip', requireAuth, (req, res) => { storage.clearIpBan(req.params.ip); res.json({ ok: true }); });
 app.get('/api/security/login-events', requireAuth, (req, res) => res.json({ events: storage.listLoginEvents(100) }));
+app.delete('/api/security/login-events', requireAuth, (req, res) => { storage.clearLoginEvents(); addActivity('清理登录事件日志'); res.json({ ok: true }); });
+app.delete('/api/activities', requireAuth, (req, res) => { storage.clearActivities(); res.json({ ok: true }); });
 
 app.get('/api/public/settings', (req, res) => {
     const s = storage.getSettings();
@@ -520,12 +522,14 @@ app.post('/api/passkeys/register/verify', requireAuth, async (req, res) => {
 app.delete('/api/passkeys/:id', requireAuth, (req, res) => { storage.deletePasskey(req.session.username, req.params.id); addActivity('删除 Passkey'); res.json({ ok: true }); });
 app.post('/api/passkeys/login/options', async (req, res) => {
     const origin = publicOrigin(req), rpID = rpIdFromOrigin(origin), user = storage.getFirstUser(), passkeys = user ? storage.listPasskeys(user.username) : [];
+    if (!passkeys.length) return res.status(400).json({ error: '当前账号尚未绑定 Passkey' });
     const options = await generateAuthenticationOptions({ rpID, allowCredentials: passkeys.map((p) => ({ id: p.credentialId, transports: p.transports })) });
     webauthnChallenges.set('login', { challenge: options.challenge, origin, rpID }); res.json(options);
 });
 app.post('/api/passkeys/login/verify', async (req, res) => {
     const credId = req.body?.id; const passkey = storage.getPasskeyByCredentialId(credId); if (!passkey) return res.status(400).json({ error: 'Passkey 不存在' });
     const state = webauthnChallenges.get('login');
+    if (!state) return res.status(400).json({ error: 'Passkey 登录会话已过期' });
     const origin = publicOrigin(req), rpID = rpIdFromOrigin(origin);
     try {
         const result = await verifyAuthenticationResponse({ response: req.body, expectedChallenge: state?.challenge || req.body?.challenge, expectedOrigin: state?.origin || origin, expectedRPID: state?.rpID || rpID, credential: { id: passkey.credentialId, publicKey: Buffer.from(passkey.publicKey, 'base64'), counter: passkey.counter || 0, transports: passkey.transports } });
@@ -535,6 +539,7 @@ app.post('/api/passkeys/login/verify', async (req, res) => {
 });
 
 app.get('/api/data/export', requireAuth, async (req, res) => {
+    try { storage.rawDb().pragma('wal_checkpoint(FULL)'); } catch (err) { console.error('[DB] WAL checkpoint failed:', err.message); }
     const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: '3.0.0', exportedAt: Date.now() }, null, 2) };
     const encrypted = encryptBuffer(await zipBuffer(files), process.env.ENCRYPTION_KEY);
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -547,9 +552,13 @@ app.post('/api/data/import', requireAuth, upload.single('backup'), async (req, r
         if (!req.file?.buffer) return res.status(400).json({ error: '请上传备份文件' });
         const zip = decryptBuffer(req.file.buffer, backupPassword || process.env.ENCRYPTION_KEY); const dir = await unzipper.Open.buffer(zip); const dbEntry = dir.files.find((f) => f.path === 'zephyr.db');
         if (!dbEntry) return res.status(400).json({ error: '备份包缺少 zephyr.db' });
+        try { storage.rawDb().pragma('wal_checkpoint(FULL)'); } catch {}
         const backupName = path.join(DATA_DIR, `zephyr-before-import-${Date.now()}.db`); fs.copyFileSync(path.join(DATA_DIR, 'zephyr.db'), backupName);
-        fs.writeFileSync(path.join(DATA_DIR, 'zephyr.db'), await dbEntry.buffer()); addActivity('导入数据备份');
-        res.json({ ok: true, message: '导入完成，请重启服务使数据库连接重新加载' });
+        storage.rawDb().close();
+        fs.writeFileSync(path.join(DATA_DIR, 'zephyr.db'), await dbEntry.buffer());
+        storage.init({ hashPassword });
+        addActivity('导入数据备份');
+        res.json({ ok: true, message: '导入完成，数据已重新加载' });
     } catch (err) { res.status(400).json({ error: err.message || '导入失败' }); }
 });
 
