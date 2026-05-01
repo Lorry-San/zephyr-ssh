@@ -3,6 +3,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 let connections = [], activities = [], proxies = [], jumpHosts = [], settings = {};
 let editingId = null;
+let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
@@ -48,15 +49,24 @@ function updateRouteOptions(mode = $('#connMode').value, selected = '') {
     $('#connRoute').innerHTML = '<option value="">无</option>' + list.map((x) => `<option value="${x.id}" ${selected === x.id ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('');
 }
 function openModal(conn = null) {
-    editingId = conn?.id || null; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
+    editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || 22; $('#connUsername').value = conn?.username || '';
     $('#connTags').value = (conn?.tags || []).join(', '); $('#connMode').value = conn?.connectionMode || 'direct'; updateRouteOptions($('#connMode').value, conn?.proxyId || conn?.jumpHostId || '');
-    $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#connRemark').value = conn?.remark || ''; $('#connectionModal').classList.add('show');
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey)); $('#connRemark').value = conn?.remark || ''; $('#connectionModal').classList.add('show');
 }
 function closeModal() { $('#connectionModal').classList.remove('show'); }
-function connectionPayload() { const mode = $('#connMode').value, route = $('#connRoute').value; return { name: $('#connName').value.trim(), protocol: $('#connProtocol').value, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || 22, username: $('#connUsername').value.trim(), password: $('#connPassword').value, privateKey: $('#connPrivateKey').value, remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? route : '', jumpHostId: mode === 'jump' ? route : '' }; }
+function connectionPayload({ forTest = false } = {}) { const mode = $('#connMode').value, route = $('#connRoute').value; const payload = { name: $('#connName').value.trim(), protocol: $('#connProtocol').value, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || 22, username: $('#connUsername').value.trim(), password: $('#connPassword').value, privateKey: $('#connPrivateKey').value, remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? route : '', jumpHostId: mode === 'jump' ? route : '' }; if (!forTest && editingId) { if (payload.password === '******') delete payload.password; if (payload.privateKey === '******') delete payload.privateKey; } return payload; }
 async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (payload.protocol !== 'SSH') toast('RDP/VNC 当前仅保存占位'); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
-async function testConnection() { try { const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...connectionPayload(), timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
+async function testConnection() { try { const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...connectionPayload({ forTest: true }), connectionId: editingId || '', timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
+
+async function revealConnectionSecrets() {
+    if (!editingId || editingSecretLoaded) return;
+    const data = await api(`/api/connections/${editingId}/open`, { method: 'POST' });
+    $('#connPassword').value = data.connection?.password || '';
+    $('#connPrivateKey').value = data.connection?.privateKey || '';
+    editingSecretLoaded = true;
+    toast('已载入保存的密码/私钥');
+}
 
 async function openConnection(id) {
     const data = await api(`/api/connections/${id}/open`, { method: 'POST' }); const c = data.connection;
@@ -66,9 +76,10 @@ async function openConnection(id) {
     terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); await loadConnections();
 }
 function openPlaceholderTab(c) { const tabId = `tab_${Date.now()}`; terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: '占位', iframe: false }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); }
-function renderTerminalTabs() {
+function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     $('#sessionTabs').innerHTML = terminalTabs.length ? terminalTabs.map((t) => `<button class="session-tab ${t.id === activeTerminalTab ? 'active' : ''}" data-tab="${t.id}"><span>${escapeHtml(t.protocol)} · ${escapeHtml(t.name)}</span><em>${escapeHtml(t.status)}</em><b data-close-tab="${t.id}">×</b></button>`).join('') : '<div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div>';
-    $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
+    if (rebuildWorkspace) $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
+    else $$('#terminalWorkspace [data-frame]').forEach((el) => el.classList.toggle('active', el.dataset.frame === activeTerminalTab));
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
@@ -103,11 +114,11 @@ function bindEvents() {
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     $$('.settings-tab').forEach((btn) => btn.addEventListener('click', () => { $$('.settings-tab').forEach((b) => b.classList.remove('active')); btn.classList.add('active'); $$('.settings-panel').forEach((p) => p.classList.remove('active')); $(`#settings-${btn.dataset.settings}`).classList.add('active'); }));
     $('#appThemeToggle').addEventListener('click', toggleTheme); $('#settingsThemeToggle').addEventListener('click', toggleTheme); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
-    $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; }); $('#connMode').addEventListener('change', () => updateRouteOptions()); $('#testConnectionBtn').addEventListener('click', testConnection);
+    $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $('#connMode').addEventListener('change', () => updateRouteOptions()); $('#testConnectionBtn').addEventListener('click', testConnection);
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
     $('#sessionTabs').addEventListener('click', (e) => { const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (close) { terminalTabs = terminalTabs.filter((t) => t.id !== close); sessionStorage.removeItem(`zephyr_ssh_params_${close}`); if (activeTerminalTab === close) activeTerminalTab = terminalTabs[0]?.id || null; renderTerminalTabs(); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
-    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs(); } });
+    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpForm').addEventListener('submit', saveJump);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
