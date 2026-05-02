@@ -318,40 +318,47 @@ body.terminal-mode .main-nav {
     --smartbar-nav-bg: color-mix(in srgb, var(--surface) 88%, transparent);
     --smartbar-nav-border: var(--border);
     position: fixed;
-    top: calc(49px + env(safe-area-inset-top, 0px));
-    left: max(14px, env(safe-area-inset-left));
-    right: max(14px, env(safe-area-inset-right));
+    top: calc(50px + env(safe-area-inset-top, 0px));
+    left: 0;
+    right: 0;
     z-index: 80;
     height: 0;
     pointer-events: none;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 0 16px;
 }
 .terminal-smartbar .empty-state { display: none; }
 .smartbar-panel {
     --smartbar-fusion-bg: var(--smartbar-nav-bg);
     position: absolute;
     top: -1px;
-    width: min(760px, calc(100vw - 64px));
-    min-height: 116px;
-    padding: 16px 18px 22px;
+    left: 50%;
+    transform: translateX(-50%) scale(.92);
+    transform-origin: top center;
+    width: min(940px, calc(100vw - 40px));
+    min-height: 126px;
+    padding: 18px 20px 24px;
     border: 1px solid var(--smartbar-nav-border);
     border-top: 0;
     border-radius: 0 0 30px 30px;
     background:
-        linear-gradient(180deg, var(--smartbar-fusion-bg), color-mix(in srgb, var(--surface) 82%, transparent)),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--surface) 88%, transparent)),
         radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.14), transparent 58%);
     overflow: visible;
-    box-shadow: 0 -1px 0 0 var(--smartbar-fusion-bg), 0 22px 64px rgba(0,0,0,.32), inset 0 1px 0 rgba(255,255,255,.12);
+    box-shadow: 0 -1px 0 0 var(--smartbar-fusion-bg), 0 32px 110px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.12);
     backdrop-filter: blur(28px) saturate(1.65);
     -webkit-backdrop-filter: blur(28px) saturate(1.65);
     opacity: 0;
     pointer-events: none;
-    filter: blur(7px);
+    filter: blur(10px);
     z-index: 2;
     transition:
-        transform .58s cubic-bezier(.22,1,.36,1),
+        transform .48s cubic-bezier(.22,1,.36,1),
         opacity .28s ease .08s,
         filter .34s ease .06s,
-        border-radius .58s cubic-bezier(.22,1,.36,1);
+        border-radius .48s cubic-bezier(.22,1,.36,1);
 }
 .smartbar-panel::before,
 .smartbar-panel::after {
@@ -373,18 +380,15 @@ body.terminal-mode .main-nav {
     border-top-left-radius: 18px;
     box-shadow: -12px 0 0 0 var(--smartbar-fusion-bg), -12px -1px 0 0 rgba(139,148,158,.16);
 }
-.terminal-smartbar.from-left .smartbar-panel {
-    left: 0;
-    transform: translate3d(18px, -18px, 0) scale3d(.12, .18, 1);
-    transform-origin: top left;
-}
+.terminal-smartbar.from-left .smartbar-panel,
 .terminal-smartbar.from-right .smartbar-panel {
-    right: 0;
-    transform: translate3d(-18px, -18px, 0) scale3d(.12, .18, 1);
-    transform-origin: top right;
+    left: 50%;
+    right: auto;
+    transform: translate3d(-50%, -22px, 0) scale3d(.12, .18, 1);
+    transform-origin: top center;
 }
 .terminal-smartbar.open .smartbar-panel {
-    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+    transform: translate3d(-50%, 0, 0) scale3d(1, 1, 1);
     opacity: 1;
     pointer-events: auto;
     filter: blur(0);
@@ -483,10 +487,11 @@ body.terminal-mode .main-nav {
 .smartbar-dock {
     display: flex;
     align-items: flex-end;
+    justify-content: center;
     gap: 12px;
     min-width: 0;
     max-width: 100%;
-    min-height: 88px;
+    min-height: 92px;
     overflow: visible;
     scrollbar-width: none;
     padding: 12px 10px 2px;
@@ -1241,9 +1246,10 @@ html.keyboard-open .terminal-page {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 14px;
+    padding: 10px 16px;
     background: var(--surface);
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.08);
     font-size: 13px;
     flex-shrink: 0;
     gap: 10px;
