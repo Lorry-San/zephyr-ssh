@@ -338,13 +338,14 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    const isWorkspaceFullscreen = fullscreenElement === workspace;
+    const fullscreenWindow = activeTerminalTab ? workspace.querySelector(`.terminal-window[data-window="${CSS.escape(activeTerminalTab)}"]`) : null;
+    const isFullscreenTerminalSurface = fullscreenElement === workspace || fullscreenElement === fullscreenWindow || workspace.classList.contains('custom-fullscreen');
     const inset = Math.round(Number(metrics.keyboardInset) || 0);
     const viewportHeight = Math.round(Number(metrics.viewportHeight) || window.visualViewport?.height || window.innerHeight || 0);
     const offsetTop = Math.round(Number(metrics.offsetTop) || window.visualViewport?.offsetTop || 0);
     const keyboardOpen = !!metrics.keyboardOpen && inset >= 100;
 
-    if (!keyboardOpen || !isWorkspaceFullscreen) {
+    if (!keyboardOpen || !isFullscreenTerminalSurface) {
         if (!keyboardOpen) resetTerminalWorkspaceKeyboard();
         return;
     }
@@ -366,7 +367,7 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
 function updateFullscreenKeyboardFromViewport() {
     const workspace = $('#terminalWorkspace');
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!workspace || fullscreenElement !== workspace || !window.visualViewport) return;
+    if (!workspace || (!workspace.classList.contains('custom-fullscreen') && fullscreenElement !== workspace && !fullscreenElement?.classList?.contains('terminal-window')) || !window.visualViewport) return;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
     if (!appKeyboardOpen) appKeyboardBaseline = Math.max(appKeyboardBaseline || 0, layoutHeight, Math.round(window.visualViewport.height || 0));
     const baseline = Math.max(appKeyboardBaseline || 0, layoutHeight);
@@ -413,21 +414,35 @@ function hideFullscreenLoading({ delay = 520 } = {}) {
 }
 
 async function fullscreenTerminalTab(tabId) {
+    restoreTerminalSession(tabId);
     activeTerminalTab = tabId;
     touchTerminalSession(tabId);
-    renderTerminalTabs({ rebuildWorkspace: false });
-    const target = $('#terminalWorkspace');
-    if (!target) return;
-    showFullscreenLoading('正在进入全屏...');
+    renderTerminalTabs();
+    const workspace = $('#terminalWorkspace');
+    const win = workspace?.querySelector(`.terminal-window[data-window="${CSS.escape(tabId)}"]`);
+    if (!workspace || !win) return;
+    showFullscreenLoading(isCompactTerminalWorkspace() ? '正在进入移动端全屏...' : '正在进入浏览器全屏...');
     try {
         if (isCompactTerminalWorkspace()) {
-            target.classList.toggle('custom-fullscreen');
+            workspace.classList.toggle('custom-fullscreen');
+            document.body.classList.toggle('terminal-custom-fullscreen-open', workspace.classList.contains('custom-fullscreen'));
             hideFullscreenLoading({ delay: 360 });
-        } else if (target.requestFullscreen) await target.requestFullscreen();
-        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
-        else {
-            hideFullscreenLoading({ delay: 0 });
-            toast('当前浏览器不支持全屏 API');
+            window.setTimeout(() => {
+                win.querySelector('.terminal-frame')?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'focus-terminal' }, '*');
+            }, 120);
+        } else {
+            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+            if (fullscreenElement === win || fullscreenElement === workspace) {
+                if (document.exitFullscreen) await document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                return;
+            }
+            if (win.requestFullscreen) await win.requestFullscreen();
+            else if (win.webkitRequestFullscreen) win.webkitRequestFullscreen();
+            else {
+                hideFullscreenLoading({ delay: 0 });
+                toast('当前浏览器不支持全屏 API');
+            }
         }
     } catch (err) {
         hideFullscreenLoading({ delay: 0 });
@@ -506,13 +521,18 @@ function startWorkspaceSplitterDrag(e, axis) {
     e.preventDefault();
     const splitter = e.target.closest('[data-splitter]');
     const rect = workspace.getBoundingClientRect();
-    let dragging = false;
-    let startX = e.clientX;
-    let startY = e.clientY;
-    let holdTimer = 0;
+
+    const applyPosition = (clientX, clientY) => {
+        if (axis === 'x') {
+            const pct = Math.min(82, Math.max(24, ((clientX - rect.left) / rect.width) * 100));
+            workspace.style.setProperty('--workspace-split-x', `${pct.toFixed(2)}%`);
+        } else {
+            const pct = Math.min(78, Math.max(22, ((clientY - rect.top) / rect.height) * 100));
+            workspace.style.setProperty('--workspace-split-y', `${pct.toFixed(2)}%`);
+        }
+    };
 
     const cleanup = () => {
-        window.clearTimeout(holdTimer);
         splitter?.classList.remove('arming', 'dragging');
         workspace.classList.remove('splitting');
         window.removeEventListener('pointermove', onMove);
@@ -521,29 +541,14 @@ function startWorkspaceSplitterDrag(e, axis) {
     };
 
     const onMove = (ev) => {
-        if (!dragging) {
-            const moved = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY);
-            if (moved > 10) cleanup();
-            return;
-        }
-        if (axis === 'x') {
-            const pct = Math.min(78, Math.max(35, ((ev.clientX - rect.left) / rect.width) * 100));
-            workspace.style.setProperty('--workspace-split-x', `${pct}%`);
-        } else {
-            const pct = Math.min(72, Math.max(28, ((ev.clientY - rect.top) / rect.height) * 100));
-            workspace.style.setProperty('--workspace-split-y', `${pct}%`);
-        }
+        ev.preventDefault?.();
+        applyPosition(ev.clientX, ev.clientY);
     };
 
-    holdTimer = window.setTimeout(() => {
-        dragging = true;
-        splitter?.classList.remove('arming');
-        splitter?.classList.add('dragging');
-        workspace.classList.add('splitting');
-    }, 320);
-    splitter?.classList.add('arming');
-
-    window.addEventListener('pointermove', onMove, { passive: true });
+    splitter?.classList.add('dragging');
+    workspace.classList.add('splitting');
+    applyPosition(e.clientX, e.clientY);
+    window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', cleanup, { once: true });
     window.addEventListener('pointercancel', cleanup, { once: true });
 }
@@ -595,7 +600,12 @@ function bindEvents() {
         $$('.terminal-window-titlebar.menu-open').forEach((el) => { if (!menuBtn || !el.contains(menuBtn)) el.classList.remove('menu-open'); });
         if (menuBtn) { e.stopPropagation(); menuBtn.closest('.terminal-window-titlebar')?.classList.toggle('menu-open'); return; }
         const action = e.target.closest('[data-window-action]');
-        if (action) { e.stopPropagation(); applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction); return; }
+        if (action) {
+            e.stopPropagation();
+            action.closest('.terminal-window-titlebar')?.classList.remove('menu-open');
+            applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction);
+            return;
+        }
         const win = e.target.closest('[data-window]');
         if (win) { activeTerminalTab = win.dataset.window; touchTerminalSession(activeTerminalTab); renderTerminalTabs({ rebuildWorkspace: false }); }
     });
@@ -607,12 +617,16 @@ function bindEvents() {
     });
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
+        const workspace = $('#terminalWorkspace');
         const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-        if (fullscreenElement === $('#terminalWorkspace')) {
+        const isTerminalFullscreen = fullscreenElement === workspace || fullscreenElement?.classList?.contains('terminal-window');
+        if (isTerminalFullscreen) {
             appKeyboardBaseline = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, window.visualViewport?.height || 0);
             hideFullscreenLoading({ delay: 620 });
         } else {
             resetTerminalWorkspaceKeyboard();
+            workspace?.classList.remove('custom-fullscreen');
+            document.body.classList.remove('terminal-custom-fullscreen-open');
             showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 680 });
         }
     }));

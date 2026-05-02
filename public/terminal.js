@@ -458,8 +458,13 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e)
 });
 
 window.addEventListener('message', (e) => {
-    if (e.data?.source === 'zephyr-app' && e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
+    if (e.data?.source !== 'zephyr-app') return;
+    if (e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
         applyTheme(e.data.theme);
+    }
+    if (e.data.type === 'focus-terminal') {
+        try { term?.focus?.(); } catch (_) {}
+        wtermWrapper?.focus?.({ preventScroll: true });
     }
 });
 
@@ -3143,6 +3148,14 @@ const comboSequences = { 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', '
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) term?.focus?.();
+});
+['pointerdown', 'touchstart'].forEach((eventName) => {
+    wtermWrapper.addEventListener(eventName, () => {
+        window.setTimeout(() => {
+            try { term?.focus?.(); } catch (_) {}
+            notifyParentActivity();
+        }, 0);
+    }, { passive: true });
 });
 
 // ---------- 状态指示 ----------
