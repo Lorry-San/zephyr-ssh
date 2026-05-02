@@ -5,6 +5,10 @@ let connections = [], activities = [], proxies = [], jumpHosts = [], settings = 
 let editingId = null;
 let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
+let openOrderStack = [], visualLayout = [], recentUseStack = [];
+let terminalSmartbarOpen = false;
+let terminalSmartbarTimer = 0;
+let terminalDragState = null;
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
@@ -87,13 +91,118 @@ async function openConnection(id) {
     if (c.protocol !== 'SSH') { openPlaceholderTab(c); return; }
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, password: c.password || '', privateKey: c.privateKey || '', init: '', tabId, embedded: true, timestamp: Date.now() }));
-    terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); await loadConnections();
+    terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+    openOrderStack.push(tabId);
+    activeTerminalTab = tabId;
+    touchTerminalSession(tabId);
+    enforceTerminalWorkspaceLimit(tabId);
+    renderTerminalTabs();
+    switchView('terminal');
+    await loadConnections();
 }
-function openPlaceholderTab(c) { const tabId = `tab_${Date.now()}`; terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: '占位', iframe: false }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); }
+function openPlaceholderTab(c) {
+    const tabId = `tab_${Date.now()}`;
+    terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: '占位', iframe: false, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+    openOrderStack.push(tabId);
+    activeTerminalTab = tabId;
+    touchTerminalSession(tabId);
+    enforceTerminalWorkspaceLimit(tabId);
+    renderTerminalTabs();
+    switchView('terminal');
+}
+
+function isCompactTerminalWorkspace() { return matchMedia('(hover: none) and (pointer: coarse)').matches || innerWidth <= 760; }
+function getTerminalSession(id) { return terminalTabs.find((t) => t.id === id); }
+function visibleTerminalTabs() { return terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id)); }
+function terminalShortName(name = '') { const s = String(name || 'Terminal'); return s.length > 6 ? `${s.slice(0, 6)}…` : s; }
+function touchTerminalSession(id) { const t = getTerminalSession(id); if (t) t.lastUsedAt = Date.now(); recentUseStack = [id, ...recentUseStack.filter((x) => x !== id)].filter((x) => getTerminalSession(x)); }
+function orderedVisibleIds() { return openOrderStack.filter((id) => visibleTerminalTabs().some((t) => t.id === id)); }
+function computeDefaultVisualLayout() {
+    const ids = orderedVisibleIds();
+    if (ids.length <= 2) return ids;
+    return [ids[ids.length - 1], ids[1], ids[0]].filter(Boolean);
+}
+function syncVisualLayout({ preserve = true } = {}) {
+    const visibleIds = orderedVisibleIds();
+    if (!preserve || !visualLayout.length) visualLayout = computeDefaultVisualLayout();
+    else visualLayout = [...visualLayout.filter((id) => visibleIds.includes(id)), ...visibleIds.filter((id) => !visualLayout.includes(id))];
+    if (visibleIds.length === 3 && (!preserve || visualLayout.length !== 3)) visualLayout = computeDefaultVisualLayout();
+    if (!activeTerminalTab || !getTerminalSession(activeTerminalTab) || getTerminalSession(activeTerminalTab)?.minimized) activeTerminalTab = visualLayout[0] || visibleIds[0] || terminalTabs[0]?.id || null;
+}
+function minimizeTerminalSession(id, { activateNext = true } = {}) {
+    const t = getTerminalSession(id); if (!t) return;
+    t.minimized = true;
+    visualLayout = visualLayout.filter((x) => x !== id);
+    if (activeTerminalTab === id && activateNext) activeTerminalTab = visualLayout[0] || orderedVisibleIds()[0] || terminalTabs.find((x) => !x.minimized)?.id || terminalTabs[0]?.id || null;
+    syncVisualLayout({ preserve: false });
+}
+function restoreTerminalSession(id) {
+    const t = getTerminalSession(id); if (!t) return;
+    t.minimized = false;
+    activeTerminalTab = id;
+    touchTerminalSession(id);
+    enforceTerminalWorkspaceLimit(id);
+}
+function enforceTerminalWorkspaceLimit(newId) {
+    if (isCompactTerminalWorkspace()) {
+        terminalTabs.forEach((t) => { if (t.id !== newId) t.minimized = true; });
+    } else {
+        while (visibleTerminalTabs().length > 3) {
+            const oldestVisible = openOrderStack.find((id) => id !== newId && getTerminalSession(id) && !getTerminalSession(id).minimized);
+            if (!oldestVisible) break;
+            minimizeTerminalSession(oldestVisible, { activateNext: false });
+        }
+    }
+    syncVisualLayout({ preserve: false });
+}
+function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
+function renderTerminalSmartbar() {
+    const left = openOrderStack.map(getTerminalSession).filter(Boolean);
+    const right = recentUseStack.map(getTerminalSession).filter(Boolean);
+    const icon = (t, side) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em>${escapeHtml(t.status || '')}</em></button>`;
+    $('#sessionTabs').className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''}`;
+    $('#sessionTabs').innerHTML = `
+        <button class="smartbar-handle left" data-smartbar-toggle title="展开/收回终端栏"></button>
+        <div class="smartbar-panel">
+            <div class="smartbar-group left" aria-label="按开启顺序排列">${left.map((t) => icon(t, 'left')).join('') || '<span class="smartbar-empty">暂无会话</span>'}<button class="smartbar-add" title="请从仪表盘连接服务器">＋</button></div>
+            <button class="smartbar-collapse" data-smartbar-toggle title="收回">⌃</button>
+            <div class="smartbar-group right" aria-label="最近使用">${right.map((t) => icon(t, 'right')).join('')}</div>
+        </div>
+        <button class="smartbar-handle right" data-smartbar-toggle title="展开/收回终端栏"></button>`;
+}
+function terminalWindowMenu(t) {
+    const mobile = isCompactTerminalWorkspace();
+    const items = mobile
+        ? [['fullscreen', '全屏'], ['minimize', '最小化'], ['close', '关闭']]
+        : [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
+    return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
+}
+function renderTerminalWorkspace() {
+    const visible = visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
+    const count = visible.length;
+    const workspace = $('#terminalWorkspace');
+    workspace.className = `terminal-workspace terminal-workspace-grid layout-${Math.min(count, 3)} ${isCompactTerminalWorkspace() ? 'compact' : ''}`;
+    if (!count) {
+        workspace.innerHTML = '<div class="terminal-placeholder">暂无会话。点击仪表盘中的“连接”打开 SSH 会话。</div>';
+        return;
+    }
+    workspace.innerHTML = visible.map((t, index) => `<article class="terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''}" data-window="${t.id}" draggable="false">
+        <div class="terminal-window-titlebar" data-window-drag="${t.id}"><span class="terminal-grip">::</span><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}</div>
+        <div class="terminal-window-body">${t.iframe ? `<iframe class="terminal-frame active" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}" allow="fullscreen; virtual-keyboard"></iframe>` : `<div class="terminal-placeholder active" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`}</div>
+    </article>`).join('') + (count === 2 ? '<div class="workspace-splitter vertical" data-splitter="x"></div>' : '') + (count === 3 ? '<div class="workspace-splitter vertical" data-splitter="x"></div><div class="workspace-splitter horizontal" data-splitter="y"></div>' : '');
+}
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
-    $('#sessionTabs').innerHTML = terminalTabs.length ? terminalTabs.map((t) => `<button class="session-tab ${t.id === activeTerminalTab ? 'active' : ''} ${closingTerminalTabs.has(t.id) ? 'closing' : ''}" data-tab="${t.id}"><span>${escapeHtml(t.protocol)} · ${escapeHtml(t.name)}</span><em>${escapeHtml(t.status)}</em><i title="全屏" data-fullscreen-tab="${t.id}">⛶</i><b data-close-tab="${t.id}">×</b></button>`).join('') : '<div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div>';
-    if (rebuildWorkspace) $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}" allow="fullscreen; virtual-keyboard"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
-    else $$('#terminalWorkspace [data-frame]').forEach((el) => el.classList.toggle('active', el.dataset.frame === activeTerminalTab));
+    syncVisualLayout({ preserve: true });
+    renderTerminalSmartbar();
+    if (rebuildWorkspace) renderTerminalWorkspace();
+    else {
+        $$('#terminalWorkspace [data-window]').forEach((el) => {
+            const active = el.dataset.window === activeTerminalTab;
+            el.classList.toggle('active', active);
+            el.classList.toggle('background', !active);
+        });
+        terminalTabs.forEach((t) => { $$(`[data-window-status="${t.id}"]`).forEach((el) => { el.textContent = t.status || ''; }); });
+    }
     requestAnimationFrame(() => broadcastThemeToTerminals(document.documentElement.getAttribute('data-theme') || getPreferredTheme()));
 }
 
@@ -103,11 +212,28 @@ function closeTerminalTab(tabId) {
     renderTerminalTabs({ rebuildWorkspace: false });
     window.setTimeout(() => {
         terminalTabs = terminalTabs.filter((t) => t.id !== tabId);
+        openOrderStack = openOrderStack.filter((id) => id !== tabId);
+        visualLayout = visualLayout.filter((id) => id !== tabId);
+        recentUseStack = recentUseStack.filter((id) => id !== tabId);
         closingTerminalTabs.delete(tabId);
         sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
-        if (activeTerminalTab === tabId) activeTerminalTab = terminalTabs[0]?.id || null;
+        if (activeTerminalTab === tabId) activeTerminalTab = visualLayout[0] || terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || null;
         renderTerminalTabs();
     }, 260);
+}
+
+function applyTerminalWindowPreset(tabId, action) {
+    const t = getTerminalSession(tabId); if (!t) return;
+    if (action === 'minimize') { minimizeTerminalSession(tabId); renderTerminalTabs(); return; }
+    if (action === 'close') { closeTerminalTab(tabId); return; }
+    if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
+    restoreTerminalSession(tabId);
+    const others = visualLayout.filter((id) => id !== tabId);
+    if (action === 'left-half' || action === 'left-two-thirds') visualLayout = [tabId, ...others].slice(0, 3);
+    else if (action === 'right-half' || action === 'right-two-thirds') visualLayout = [...others, tabId].slice(-3);
+    else if (action === 'right-top') visualLayout = [others[0] || tabId, tabId, ...others.filter((_, i) => i > 0)].slice(0, 3);
+    else if (action === 'right-bottom') visualLayout = [others[0] || tabId, ...others.filter((_, i) => i > 0), tabId].slice(0, 3);
+    activeTerminalTab = tabId; touchTerminalSession(tabId); renderTerminalTabs();
 }
 
 function resetTerminalWorkspaceKeyboard() {
@@ -207,12 +333,16 @@ function hideFullscreenLoading({ delay = 520 } = {}) {
 
 async function fullscreenTerminalTab(tabId) {
     activeTerminalTab = tabId;
+    touchTerminalSession(tabId);
     renderTerminalTabs({ rebuildWorkspace: false });
     const target = $('#terminalWorkspace');
     if (!target) return;
     showFullscreenLoading('正在进入全屏...');
     try {
-        if (target.requestFullscreen) await target.requestFullscreen();
+        if (isCompactTerminalWorkspace()) {
+            target.classList.toggle('custom-fullscreen');
+            hideFullscreenLoading({ delay: 360 });
+        } else if (target.requestFullscreen) await target.requestFullscreen();
         else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
         else {
             hideFullscreenLoading({ delay: 0 });
@@ -222,6 +352,74 @@ async function fullscreenTerminalTab(tabId) {
         hideFullscreenLoading({ delay: 0 });
         throw err;
     }
+}
+
+function setTerminalSmartbarOpen(open) {
+    terminalSmartbarOpen = open;
+    window.clearTimeout(terminalSmartbarTimer);
+    $('#sessionTabs')?.classList.toggle('open', open);
+    if (open) terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), 30000);
+}
+function noteTerminalWorkspaceActivity() {
+    if (terminalSmartbarOpen) setTerminalSmartbarOpen(true);
+}
+function swapTerminalWindows(a, b) {
+    if (!a || !b || a === b) return;
+    const ia = visualLayout.indexOf(a), ib = visualLayout.indexOf(b);
+    if (ia < 0 || ib < 0) return;
+    [visualLayout[ia], visualLayout[ib]] = [visualLayout[ib], visualLayout[ia]];
+    renderTerminalTabs();
+}
+function startTerminalWindowDrag(e, tabId) {
+    if (isCompactTerminalWorkspace() || e.target.closest('button')) return;
+    const win = e.target.closest('.terminal-window');
+    if (!win) return;
+    e.preventDefault();
+    activeTerminalTab = tabId;
+    touchTerminalSession(tabId);
+    terminalDragState = { id: tabId, startX: e.clientX, startY: e.clientY, moved: false };
+    win.classList.add('dragging');
+    document.body.classList.add('terminal-window-dragging');
+    const onMove = (ev) => {
+        const dx = ev.clientX - terminalDragState.startX, dy = ev.clientY - terminalDragState.startY;
+        if (Math.abs(dx) + Math.abs(dy) > 6) terminalDragState.moved = true;
+        win.style.setProperty('--drag-x', `${dx}px`);
+        win.style.setProperty('--drag-y', `${dy}px`);
+    };
+    const onUp = (ev) => {
+        const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window')?.dataset.window;
+        win.classList.remove('dragging');
+        win.style.removeProperty('--drag-x');
+        win.style.removeProperty('--drag-y');
+        document.body.classList.remove('terminal-window-dragging');
+        window.removeEventListener('pointermove', onMove);
+        if (target) swapTerminalWindows(tabId, target); else renderTerminalTabs({ rebuildWorkspace: false });
+        terminalDragState = null;
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { once: true });
+}
+function startWorkspaceSplitterDrag(e, axis) {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return;
+    e.preventDefault();
+    const rect = workspace.getBoundingClientRect();
+    const onMove = (ev) => {
+        if (axis === 'x') {
+            const pct = Math.min(78, Math.max(35, ((ev.clientX - rect.left) / rect.width) * 100));
+            workspace.style.setProperty('--workspace-split-x', `${pct}%`);
+        } else {
+            const pct = Math.min(72, Math.max(28, ((ev.clientY - rect.top) / rect.height) * 100));
+            workspace.style.setProperty('--workspace-split-y', `${pct}%`);
+        }
+    };
+    const onUp = () => {
+        workspace.classList.remove('splitting');
+        window.removeEventListener('pointermove', onMove);
+    };
+    workspace.classList.add('splitting');
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { once: true });
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
@@ -259,7 +457,28 @@ function bindEvents() {
     $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $('#connMode').addEventListener('change', () => updateRouteOptions()); $('#routeUpBtn')?.addEventListener('click', () => moveSelectedRouteOption(-1)); $('#routeDownBtn')?.addEventListener('click', () => moveSelectedRouteOption(1)); $('#testConnectionBtn').addEventListener('click', testConnection);
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
-    $('#sessionTabs').addEventListener('click', (e) => { const full = e.target.closest('[data-fullscreen-tab]')?.dataset.fullscreenTab; const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (full) { e.stopPropagation(); fullscreenTerminalTab(full).catch((err) => toast(err.message)); return; } if (close) { closeTerminalTab(close); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
+    $('#sessionTabs').addEventListener('click', (e) => {
+        if (e.target.closest('[data-smartbar-toggle]')) { setTerminalSmartbarOpen(!terminalSmartbarOpen); return; }
+        const tab = e.target.closest('[data-smartbar-tab]')?.dataset.smartbarTab;
+        if (tab) { restoreTerminalSession(tab); activeTerminalTab = tab; touchTerminalSession(tab); setTerminalSmartbarOpen(false); renderTerminalTabs(); }
+    });
+    $('#terminalWorkspace').addEventListener('click', (e) => {
+        noteTerminalWorkspaceActivity();
+        const menuBtn = e.target.closest('[data-window-menu]');
+        $$('.terminal-window-titlebar.menu-open').forEach((el) => { if (!menuBtn || !el.contains(menuBtn)) el.classList.remove('menu-open'); });
+        if (menuBtn) { e.stopPropagation(); menuBtn.closest('.terminal-window-titlebar')?.classList.toggle('menu-open'); return; }
+        const action = e.target.closest('[data-window-action]');
+        if (action) { e.stopPropagation(); applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction); return; }
+        const win = e.target.closest('[data-window]');
+        if (win) { activeTerminalTab = win.dataset.window; touchTerminalSession(activeTerminalTab); renderTerminalTabs({ rebuildWorkspace: false }); }
+    });
+    $('#terminalWorkspace').addEventListener('pointerdown', (e) => {
+        const splitter = e.target.closest('[data-splitter]');
+        if (splitter) { startWorkspaceSplitterDrag(e, splitter.dataset.splitter); return; }
+        const drag = e.target.closest('[data-window-drag]');
+        if (drag) startTerminalWindowDrag(e, drag.dataset.windowDrag);
+    });
+    ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
         const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
         if (fullscreenElement === $('#terminalWorkspace')) {
@@ -274,6 +493,7 @@ function bindEvents() {
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });
+    window.addEventListener('resize', () => { if (terminalTabs.length) { enforceTerminalWorkspaceLimit(activeTerminalTab); renderTerminalTabs(); } });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpForm').addEventListener('submit', saveJump);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
