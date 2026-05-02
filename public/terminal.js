@@ -19,6 +19,14 @@ function notifyParentStatus(status) {
         window.parent.postMessage({ source: 'zephyr-terminal', tabId: params?.tabId, status }, '*');
     }
 }
+function notifyParentActivity() {
+    if (embeddedMode && window.parent && window.parent !== window) {
+        window.parent.postMessage({ source: 'zephyr-terminal', type: 'activity', tabId: params?.tabId }, '*');
+    }
+}
+['keydown', 'pointerdown', 'mousedown', 'touchstart'].forEach((eventName) => {
+    document.addEventListener(eventName, notifyParentActivity, { passive: true, capture: true });
+});
 if (!params) {
     if (!embeddedMode) window.location.href = '/';
     throw new Error('缺少连接参数');

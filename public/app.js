@@ -13,7 +13,11 @@ let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
 let closingTerminalTabs = new Set();
+let minimizingTerminalTabs = new Set();
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
+
+const SMARTBAR_AUTO_HIDE_MS = 30000;
+const TERMINAL_EDGE_SNAP_PX = 56;
 
 function api(path, options = {}) {
     return fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options })
@@ -29,7 +33,11 @@ function toggleTheme() { applyTheme(document.documentElement.getAttribute('data-
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function renderMarkdown(md) { let s = escapeHtml(md); s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); return s.replace(/\n/g, '<br>'); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
-function switchView(name) { $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name)); $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`)); }
+function switchView(name) {
+    $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
+    $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+    document.body.classList.toggle('terminal-mode', name === 'terminal');
+}
 function parseTags(v) { return String(v || '').split(',').map((x) => x.trim()).filter(Boolean); }
 function base64urlToBuffer(value) { const s = String(value).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)); }
 function bufferToBase64url(buffer) { return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
@@ -129,8 +137,18 @@ function syncVisualLayout({ preserve = true } = {}) {
     if (visibleIds.length === 3 && (!preserve || visualLayout.length !== 3)) visualLayout = computeDefaultVisualLayout();
     if (!activeTerminalTab || !getTerminalSession(activeTerminalTab) || getTerminalSession(activeTerminalTab)?.minimized) activeTerminalTab = visualLayout[0] || visibleIds[0] || terminalTabs[0]?.id || null;
 }
-function minimizeTerminalSession(id, { activateNext = true } = {}) {
+function minimizeTerminalSession(id, { activateNext = true, animated = true } = {}) {
     const t = getTerminalSession(id); if (!t) return;
+    if (animated && !t.minimized && !minimizingTerminalTabs.has(id)) {
+        minimizingTerminalTabs.add(id);
+        renderTerminalTabs({ rebuildWorkspace: false });
+        window.setTimeout(() => {
+            minimizingTerminalTabs.delete(id);
+            minimizeTerminalSession(id, { activateNext, animated: false });
+            renderTerminalTabs();
+        }, 260);
+        return;
+    }
     t.minimized = true;
     visualLayout = visualLayout.filter((x) => x !== id);
     if (activeTerminalTab === id && activateNext) activeTerminalTab = visualLayout[0] || orderedVisibleIds()[0] || terminalTabs.find((x) => !x.minimized)?.id || terminalTabs[0]?.id || null;
@@ -150,7 +168,7 @@ function enforceTerminalWorkspaceLimit(newId) {
         while (visibleTerminalTabs().length > 3) {
             const oldestVisible = openOrderStack.find((id) => id !== newId && getTerminalSession(id) && !getTerminalSession(id).minimized);
             if (!oldestVisible) break;
-            minimizeTerminalSession(oldestVisible, { activateNext: false });
+            minimizeTerminalSession(oldestVisible, { activateNext: false, animated: false });
         }
     }
     syncVisualLayout({ preserve: false });
@@ -164,7 +182,7 @@ function renderTerminalSmartbar() {
     $('#sessionTabs').innerHTML = `
         <button class="smartbar-handle left" data-smartbar-toggle title="展开/收回终端栏"></button>
         <div class="smartbar-panel">
-            <div class="smartbar-group left" aria-label="按开启顺序排列">${left.map((t) => icon(t, 'left')).join('') || '<span class="smartbar-empty">暂无会话</span>'}<button class="smartbar-add" title="请从仪表盘连接服务器">＋</button></div>
+            <div class="smartbar-group left" aria-label="按开启顺序排列">${left.map((t) => icon(t, 'left')).join('') || '<span class="smartbar-empty">暂无会话</span>'}<button class="smartbar-add" data-smartbar-add title="回到仪表盘新建连接">＋</button></div>
             <button class="smartbar-collapse" data-smartbar-toggle title="收回">⌃</button>
             <div class="smartbar-group right" aria-label="最近使用">${right.map((t) => icon(t, 'right')).join('')}</div>
         </div>
@@ -177,6 +195,37 @@ function terminalWindowMenu(t) {
         : [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
     return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
 }
+function terminalWindowTitlebarHtml(t) {
+    return `<span class="terminal-grip">::</span><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}`;
+}
+function createTerminalWindowElement(t) {
+    const article = document.createElement('article');
+    article.className = 'terminal-window';
+    article.dataset.window = t.id;
+    article.draggable = false;
+    const titlebar = document.createElement('div');
+    titlebar.className = 'terminal-window-titlebar';
+    titlebar.dataset.windowDrag = t.id;
+    titlebar.innerHTML = terminalWindowTitlebarHtml(t);
+    const body = document.createElement('div');
+    body.className = 'terminal-window-body';
+    if (t.iframe) {
+        const frame = document.createElement('iframe');
+        frame.className = 'terminal-frame active';
+        frame.dataset.frame = t.id;
+        frame.src = `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
+        frame.allow = 'fullscreen; virtual-keyboard';
+        body.appendChild(frame);
+    } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'terminal-placeholder active';
+        placeholder.dataset.frame = t.id;
+        placeholder.textContent = `${t.protocol} 协议将在后续版本接入。`;
+        body.appendChild(placeholder);
+    }
+    article.append(titlebar, body);
+    return article;
+}
 function renderTerminalWorkspace() {
     const visible = visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
     const count = visible.length;
@@ -186,10 +235,32 @@ function renderTerminalWorkspace() {
         workspace.innerHTML = '<div class="terminal-placeholder">暂无会话。点击仪表盘中的“连接”打开 SSH 会话。</div>';
         return;
     }
-    workspace.innerHTML = visible.map((t, index) => `<article class="terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''}" data-window="${t.id}" draggable="false">
-        <div class="terminal-window-titlebar" data-window-drag="${t.id}"><span class="terminal-grip">::</span><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}</div>
-        <div class="terminal-window-body">${t.iframe ? `<iframe class="terminal-frame active" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}" allow="fullscreen; virtual-keyboard"></iframe>` : `<div class="terminal-placeholder active" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`}</div>
-    </article>`).join('') + (count === 2 ? '<div class="workspace-splitter vertical" data-splitter="x"></div>' : '') + (count === 3 ? '<div class="workspace-splitter vertical" data-splitter="x"></div><div class="workspace-splitter horizontal" data-splitter="y"></div>' : '');
+    workspace.querySelectorAll(':scope > .terminal-placeholder, :scope > .workspace-splitter').forEach((el) => el.remove());
+    const visibleIds = new Set(visible.map((t) => t.id));
+    workspace.querySelectorAll(':scope > .terminal-window').forEach((el) => { if (!visibleIds.has(el.dataset.window)) el.remove(); });
+    visible.forEach((t, index) => {
+        let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
+        if (!win) win = createTerminalWindowElement(t);
+        const titlebar = win.querySelector('.terminal-window-titlebar');
+        if (titlebar) {
+            titlebar.dataset.windowDrag = t.id;
+            titlebar.innerHTML = terminalWindowTitlebarHtml(t);
+        }
+        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''}`;
+        workspace.appendChild(win);
+    });
+    if (count === 2 || count === 3) {
+        const splitterX = document.createElement('div');
+        splitterX.className = 'workspace-splitter vertical';
+        splitterX.dataset.splitter = 'x';
+        workspace.appendChild(splitterX);
+    }
+    if (count === 3) {
+        const splitterY = document.createElement('div');
+        splitterY.className = 'workspace-splitter horizontal';
+        splitterY.dataset.splitter = 'y';
+        workspace.appendChild(splitterY);
+    }
 }
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     syncVisualLayout({ preserve: true });
@@ -200,6 +271,8 @@ function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
             const active = el.dataset.window === activeTerminalTab;
             el.classList.toggle('active', active);
             el.classList.toggle('background', !active);
+            el.classList.toggle('closing', closingTerminalTabs.has(el.dataset.window));
+            el.classList.toggle('minimizing', minimizingTerminalTabs.has(el.dataset.window));
         });
         terminalTabs.forEach((t) => { $$(`[data-window-status="${t.id}"]`).forEach((el) => { el.textContent = t.status || ''; }); });
     }
@@ -228,11 +301,19 @@ function applyTerminalWindowPreset(tabId, action) {
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
     restoreTerminalSession(tabId);
+    const workspace = $('#terminalWorkspace');
     const others = visualLayout.filter((id) => id !== tabId);
     if (action === 'left-half' || action === 'left-two-thirds') visualLayout = [tabId, ...others].slice(0, 3);
     else if (action === 'right-half' || action === 'right-two-thirds') visualLayout = [...others, tabId].slice(-3);
     else if (action === 'right-top') visualLayout = [others[0] || tabId, tabId, ...others.filter((_, i) => i > 0)].slice(0, 3);
     else if (action === 'right-bottom') visualLayout = [others[0] || tabId, ...others.filter((_, i) => i > 0), tabId].slice(0, 3);
+    if (workspace) {
+        if (action === 'left-half' || action === 'right-half') workspace.style.setProperty('--workspace-split-x', '50%');
+        if (action === 'left-two-thirds' || action === 'right-top' || action === 'right-bottom') workspace.style.setProperty('--workspace-split-x', '66.666%');
+        if (action === 'right-two-thirds') workspace.style.setProperty('--workspace-split-x', '33.333%');
+        if (action === 'right-top') workspace.style.setProperty('--workspace-split-y', '50%');
+        if (action === 'right-bottom') workspace.style.setProperty('--workspace-split-y', '50%');
+    }
     activeTerminalTab = tabId; touchTerminalSession(tabId); renderTerminalTabs();
 }
 
@@ -358,7 +439,7 @@ function setTerminalSmartbarOpen(open) {
     terminalSmartbarOpen = open;
     window.clearTimeout(terminalSmartbarTimer);
     $('#sessionTabs')?.classList.toggle('open', open);
-    if (open) terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), 30000);
+    if (open) terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), SMARTBAR_AUTO_HIDE_MS);
 }
 function noteTerminalWorkspaceActivity() {
     if (terminalSmartbarOpen) setTerminalSmartbarOpen(true);
@@ -369,6 +450,23 @@ function swapTerminalWindows(a, b) {
     if (ia < 0 || ib < 0) return;
     [visualLayout[ia], visualLayout[ib]] = [visualLayout[ib], visualLayout[ia]];
     renderTerminalTabs();
+}
+function snapTerminalWindowToEdge(tabId, clientX, clientY) {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace || isCompactTerminalWorkspace()) return false;
+    const rect = workspace.getBoundingClientRect();
+    const nearLeft = clientX - rect.left <= TERMINAL_EDGE_SNAP_PX;
+    const nearRight = rect.right - clientX <= TERMINAL_EDGE_SNAP_PX;
+    const nearTop = clientY - rect.top <= TERMINAL_EDGE_SNAP_PX;
+    const nearBottom = rect.bottom - clientY <= TERMINAL_EDGE_SNAP_PX;
+    if (!nearLeft && !nearRight && !nearTop && !nearBottom) return false;
+    if (nearLeft) applyTerminalWindowPreset(tabId, 'left-half');
+    else if (nearRight && nearTop) applyTerminalWindowPreset(tabId, 'right-top');
+    else if (nearRight && nearBottom) applyTerminalWindowPreset(tabId, 'right-bottom');
+    else if (nearRight) applyTerminalWindowPreset(tabId, 'right-half');
+    else if (nearTop) applyTerminalWindowPreset(tabId, 'left-two-thirds');
+    else applyTerminalWindowPreset(tabId, 'right-two-thirds');
+    return true;
 }
 function startTerminalWindowDrag(e, tabId) {
     if (isCompactTerminalWorkspace() || e.target.closest('button')) return;
@@ -387,13 +485,16 @@ function startTerminalWindowDrag(e, tabId) {
         win.style.setProperty('--drag-y', `${dy}px`);
     };
     const onUp = (ev) => {
+        win.style.pointerEvents = 'none';
         const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window')?.dataset.window;
+        win.style.pointerEvents = '';
         win.classList.remove('dragging');
         win.style.removeProperty('--drag-x');
         win.style.removeProperty('--drag-y');
         document.body.classList.remove('terminal-window-dragging');
         window.removeEventListener('pointermove', onMove);
-        if (target) swapTerminalWindows(tabId, target); else renderTerminalTabs({ rebuildWorkspace: false });
+        if (target && target !== tabId) swapTerminalWindows(tabId, target);
+        else if (!snapTerminalWindowToEdge(tabId, ev.clientX, ev.clientY)) renderTerminalTabs({ rebuildWorkspace: false });
         terminalDragState = null;
     };
     window.addEventListener('pointermove', onMove, { passive: true });
@@ -403,8 +504,28 @@ function startWorkspaceSplitterDrag(e, axis) {
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
     e.preventDefault();
+    const splitter = e.target.closest('[data-splitter]');
     const rect = workspace.getBoundingClientRect();
+    let dragging = false;
+    let startX = e.clientX;
+    let startY = e.clientY;
+    let holdTimer = 0;
+
+    const cleanup = () => {
+        window.clearTimeout(holdTimer);
+        splitter?.classList.remove('arming', 'dragging');
+        workspace.classList.remove('splitting');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', cleanup);
+        window.removeEventListener('pointercancel', cleanup);
+    };
+
     const onMove = (ev) => {
+        if (!dragging) {
+            const moved = Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY);
+            if (moved > 10) cleanup();
+            return;
+        }
         if (axis === 'x') {
             const pct = Math.min(78, Math.max(35, ((ev.clientX - rect.left) / rect.width) * 100));
             workspace.style.setProperty('--workspace-split-x', `${pct}%`);
@@ -413,13 +534,18 @@ function startWorkspaceSplitterDrag(e, axis) {
             workspace.style.setProperty('--workspace-split-y', `${pct}%`);
         }
     };
-    const onUp = () => {
-        workspace.classList.remove('splitting');
-        window.removeEventListener('pointermove', onMove);
-    };
-    workspace.classList.add('splitting');
+
+    holdTimer = window.setTimeout(() => {
+        dragging = true;
+        splitter?.classList.remove('arming');
+        splitter?.classList.add('dragging');
+        workspace.classList.add('splitting');
+    }, 320);
+    splitter?.classList.add('arming');
+
     window.addEventListener('pointermove', onMove, { passive: true });
-    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointerup', cleanup, { once: true });
+    window.addEventListener('pointercancel', cleanup, { once: true });
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
@@ -459,6 +585,7 @@ function bindEvents() {
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
     $('#sessionTabs').addEventListener('click', (e) => {
         if (e.target.closest('[data-smartbar-toggle]')) { setTerminalSmartbarOpen(!terminalSmartbarOpen); return; }
+        if (e.target.closest('[data-smartbar-add]')) { switchView('dashboard'); setTerminalSmartbarOpen(false); toast('请从仪表盘选择或新建连接'); return; }
         const tab = e.target.closest('[data-smartbar-tab]')?.dataset.smartbarTab;
         if (tab) { restoreTerminalSession(tab); activeTerminalTab = tab; touchTerminalSession(tab); setTerminalSmartbarOpen(false); renderTerminalTabs(); }
     });
@@ -490,7 +617,7 @@ function bindEvents() {
         }
     }));
     systemThemeQuery.addEventListener('change', () => { if (!localStorage.getItem('zephyr-theme')) applyTheme(getSystemTheme()); });
-    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
+    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } if (e.data.type === 'activity') { noteTerminalWorkspaceActivity(); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });
     window.addEventListener('resize', () => { if (terminalTabs.length) { enforceTerminalWorkspaceLimit(activeTerminalTab); renderTerminalTabs(); } });
