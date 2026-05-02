@@ -7,6 +7,8 @@ let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
 let openOrderStack = [], visualLayout = [], recentUseStack = [];
 let terminalSmartbarOpen = false;
+let terminalSmartbarSide = 'left';
+let terminalSmartbarPickerOpen = false;
 let terminalSmartbarTimer = 0;
 let terminalDragState = null;
 let fullscreenLoadingTimer = 0;
@@ -120,9 +122,19 @@ function openPlaceholderTab(c) {
 }
 
 function isCompactTerminalWorkspace() { return matchMedia('(hover: none) and (pointer: coarse)').matches || innerWidth <= 760; }
+function getConfiguredTerminalMaxWindows() {
+    const value = Number(settings?.terminal?.maxWindows || localStorage.getItem('zephyr-terminal-max-windows') || 3);
+    return Math.min(3, Math.max(1, Number.isFinite(value) ? value : 3));
+}
+function getEffectiveTerminalMaxWindows() { return isCompactTerminalWorkspace() ? 1 : getConfiguredTerminalMaxWindows(); }
 function getTerminalSession(id) { return terminalTabs.find((t) => t.id === id); }
 function visibleTerminalTabs() { return terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id)); }
 function terminalShortName(name = '') { const s = String(name || 'Terminal'); return s.length > 6 ? `${s.slice(0, 6)}…` : s; }
+function terminalInitials(name = '') {
+    const parts = String(name || 'T').trim().split(/[\s._-]+/).filter(Boolean);
+    const raw = parts.length > 1 ? parts.slice(0, 2).map((x) => x[0]).join('') : (parts[0] || 'T').slice(0, 2);
+    return raw.toUpperCase();
+}
 function touchTerminalSession(id) { const t = getTerminalSession(id); if (t) t.lastUsedAt = Date.now(); recentUseStack = [id, ...recentUseStack.filter((x) => x !== id)].filter((x) => getTerminalSession(x)); }
 function orderedVisibleIds() { return openOrderStack.filter((id) => visibleTerminalTabs().some((t) => t.id === id)); }
 function computeDefaultVisualLayout() {
@@ -162,10 +174,11 @@ function restoreTerminalSession(id) {
     enforceTerminalWorkspaceLimit(id);
 }
 function enforceTerminalWorkspaceLimit(newId) {
-    if (isCompactTerminalWorkspace()) {
+    const maxWindows = getEffectiveTerminalMaxWindows();
+    if (maxWindows <= 1) {
         terminalTabs.forEach((t) => { if (t.id !== newId) t.minimized = true; });
     } else {
-        while (visibleTerminalTabs().length > 3) {
+        while (visibleTerminalTabs().length > maxWindows) {
             const oldestVisible = openOrderStack.find((id) => id !== newId && getTerminalSession(id) && !getTerminalSession(id).minimized);
             if (!oldestVisible) break;
             minimizeTerminalSession(oldestVisible, { activateNext: false, animated: false });
@@ -175,28 +188,49 @@ function enforceTerminalWorkspaceLimit(newId) {
 }
 function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
 function renderTerminalSmartbar() {
-    const left = openOrderStack.map(getTerminalSession).filter(Boolean);
-    const right = recentUseStack.map(getTerminalSession).filter(Boolean);
-    const icon = (t, side) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em>${escapeHtml(t.status || '')}</em></button>`;
-    $('#sessionTabs').className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''}`;
+    const orderedIds = terminalSmartbarSide === 'right' ? recentUseStack : openOrderStack;
+    const seen = new Set();
+    const sessions = orderedIds.map(getTerminalSession).filter(Boolean).filter((t) => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+    });
+    const icon = (t) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
+    const sshConnections = connections.filter((c) => c.protocol === 'SSH');
+    const picker = terminalSmartbarPickerOpen ? `
+        <div class="smartbar-picker" role="dialog" aria-label="选择服务器连接">
+            <div class="smartbar-picker-head"><strong>选择服务器</strong><button data-smartbar-picker-close title="关闭">×</button></div>
+            <div class="smartbar-picker-list">
+                ${sshConnections.length ? sshConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ssh"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH 服务器</div>'}
+            </div>
+        </div>` : '';
+    $('#sessionTabs').className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} from-${terminalSmartbarSide}`;
     $('#sessionTabs').innerHTML = `
-        <button class="smartbar-handle left" data-smartbar-toggle title="展开/收回终端栏"></button>
+        <button class="smartbar-handle left" data-smartbar-toggle="left" title="展开终端栏"><span>⌄</span></button>
         <div class="smartbar-panel">
-            <div class="smartbar-group left" aria-label="按开启顺序排列">${left.map((t) => icon(t, 'left')).join('') || '<span class="smartbar-empty">暂无会话</span>'}<button class="smartbar-add" data-smartbar-add title="回到仪表盘新建连接">＋</button></div>
-            <button class="smartbar-collapse" data-smartbar-toggle title="收回">⌃</button>
-            <div class="smartbar-group right" aria-label="最近使用">${right.map((t) => icon(t, 'right')).join('')}</div>
+            <div class="smartbar-dock" aria-label="${terminalSmartbarSide === 'right' ? '最近使用会话' : '开启顺序会话'}">
+                ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
+                <button class="smartbar-add" data-smartbar-add title="选择服务器连接">＋</button>
+            </div>
+            ${picker}
         </div>
-        <button class="smartbar-handle right" data-smartbar-toggle title="展开/收回终端栏"></button>`;
+        <button class="smartbar-handle right" data-smartbar-toggle="right" title="展开终端栏"><span>⌄</span></button>`;
 }
 function terminalWindowMenu(t) {
-    const mobile = isCompactTerminalWorkspace();
-    const items = mobile
-        ? [['fullscreen', '全屏'], ['minimize', '最小化'], ['close', '关闭']]
-        : [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
+    const maxWindows = getEffectiveTerminalMaxWindows();
+    const visibleCount = visibleTerminalTabs().length;
+    let items;
+    if (maxWindows <= 1 || visibleCount <= 1) {
+        items = [['close', '关闭']];
+    } else if (maxWindows === 2 || visibleCount === 2) {
+        items = [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
+    } else {
+        items = [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
+    }
     return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
 }
 function terminalWindowTitlebarHtml(t) {
-    return `<span class="terminal-grip">::</span><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}`;
+    return `<button class="terminal-grip" data-window-drag="${t.id}" title="拖动交换位置" aria-label="拖动交换位置"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}`;
 }
 function createTerminalWindowElement(t) {
     const article = document.createElement('article');
@@ -205,7 +239,6 @@ function createTerminalWindowElement(t) {
     article.draggable = false;
     const titlebar = document.createElement('div');
     titlebar.className = 'terminal-window-titlebar';
-    titlebar.dataset.windowDrag = t.id;
     titlebar.innerHTML = terminalWindowTitlebarHtml(t);
     const body = document.createElement('div');
     body.className = 'terminal-window-body';
@@ -243,7 +276,6 @@ function renderTerminalWorkspace() {
         if (!win) win = createTerminalWindowElement(t);
         const titlebar = win.querySelector('.terminal-window-titlebar');
         if (titlebar) {
-            titlebar.dataset.windowDrag = t.id;
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
         win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''}`;
@@ -450,14 +482,16 @@ async function fullscreenTerminalTab(tabId) {
     }
 }
 
-function setTerminalSmartbarOpen(open) {
+function setTerminalSmartbarOpen(open, side = terminalSmartbarSide) {
     terminalSmartbarOpen = open;
+    terminalSmartbarSide = side || terminalSmartbarSide || 'left';
+    if (!open) terminalSmartbarPickerOpen = false;
     window.clearTimeout(terminalSmartbarTimer);
-    $('#sessionTabs')?.classList.toggle('open', open);
+    renderTerminalSmartbar();
     if (open) terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), SMARTBAR_AUTO_HIDE_MS);
 }
 function noteTerminalWorkspaceActivity() {
-    if (terminalSmartbarOpen) setTerminalSmartbarOpen(true);
+    if (terminalSmartbarOpen) setTerminalSmartbarOpen(false);
 }
 function swapTerminalWindows(a, b) {
     if (!a || !b || a === b) return;
@@ -484,7 +518,7 @@ function snapTerminalWindowToEdge(tabId, clientX, clientY) {
     return true;
 }
 function startTerminalWindowDrag(e, tabId) {
-    if (isCompactTerminalWorkspace() || e.target.closest('button')) return;
+    if (isCompactTerminalWorkspace() || (e.target.closest('button') && !e.target.closest('.terminal-grip'))) return;
     const win = e.target.closest('.terminal-window');
     if (!win) return;
     e.preventDefault();
@@ -562,6 +596,7 @@ async function loadSettings() {
     $('#ipWhitelistEnabled').checked = !!sec.ipWhitelistEnabled; $('#ipWhitelist').value = sec.ipWhitelist || ''; $('#bruteForceEnabled').checked = sec.bruteForceEnabled !== false; $('#bruteForceMaxFailures').value = sec.bruteForceMaxFailures || 5; $('#bruteForceBanMinutes').value = sec.bruteForceBanMinutes || 15;
     $('#captchaEnabled').checked = !!cap.enabled; $('#captchaProvider').value = cap.provider || 'turnstile'; $('#captchaSiteKey').value = cap.siteKey || cap.tencentCaptchaAppId || ''; $('#captchaSecretKey').value = cap.secretKey || '';
     $('#mailEnabled').checked = !!mail.enabled; $('#mailHost').value = mail.host || ''; $('#mailPort').value = mail.port || 465; $('#mailSecure').checked = mail.secure !== false; $('#mailUser').value = mail.user || ''; $('#mailPass').value = mail.pass || ''; $('#mailFrom').value = mail.from || ''; $('#mailAdminEmail').value = mail.adminEmail || ''; $('#notifyLoginSuccess').checked = mail.notifyLoginSuccess !== false; $('#notifyLoginFailure').checked = mail.notifyLoginFailure !== false; $('#geoLookupEnabled').checked = mail.geoLookupEnabled !== false;
+    $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
     await loadSecurityStatus(); await loadSecurityLists();
 }
 async function saveBeian(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ beian: { icp: $('#icpInput').value, policeBeian: $('#policeInput').value, policeBeianUrl: $('#policeUrlInput').value, show: $('#showBeianInput').checked } }) }); toast('备案信息已保存'); }
@@ -573,6 +608,15 @@ function renderSecurityLists() { $('#ipBanList').innerHTML = ipBans.map((b) => `
 async function saveSecurityPolicy(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ security: { ipWhitelistEnabled: $('#ipWhitelistEnabled').checked, ipWhitelist: $('#ipWhitelist').value, bruteForceEnabled: $('#bruteForceEnabled').checked, bruteForceMaxFailures: Number($('#bruteForceMaxFailures').value) || 5, bruteForceBanMinutes: Number($('#bruteForceBanMinutes').value) || 15 } }) }); toast('安全策略已保存'); }
 async function saveCaptcha(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ captcha: { enabled: $('#captchaEnabled').checked, provider: $('#captchaProvider').value, siteKey: $('#captchaSiteKey').value, secretKey: $('#captchaSecretKey').value, tencentCaptchaAppId: $('#captchaProvider').value === 'tencent' ? $('#captchaSiteKey').value : '' } }) }); toast('CAPTCHA 已保存'); }
 async function saveMail(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ mail: { enabled: $('#mailEnabled').checked, host: $('#mailHost').value, port: Number($('#mailPort').value) || 465, secure: $('#mailSecure').checked, user: $('#mailUser').value, pass: $('#mailPass').value, from: $('#mailFrom').value, adminEmail: $('#mailAdminEmail').value, notifyLoginSuccess: $('#notifyLoginSuccess').checked, notifyLoginFailure: $('#notifyLoginFailure').checked, geoLookupEnabled: $('#geoLookupEnabled').checked } }) }); toast('邮件设置已保存'); }
+async function saveTerminalLayout(e) {
+    e.preventDefault();
+    const maxWindows = Math.min(3, Math.max(1, Number($('#terminalMaxWindows').value) || 3));
+    localStorage.setItem('zephyr-terminal-max-windows', String(maxWindows));
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows } }) });
+    enforceTerminalWorkspaceLimit(activeTerminalTab);
+    renderTerminalTabs();
+    toast(`终端布局已保存：最多 ${maxWindows} 窗`);
+}
 async function setupTotp() { const r = await api('/api/security/totp/setup', { method: 'POST', body: '{}' }); $('#totpEnableForm').classList.remove('force-hidden'); $('#totpQrBox').innerHTML = `<img class="qr-img" src="${r.qr}"><p class="muted">密钥：${escapeHtml(r.secret)}</p>`; }
 async function registerPasskey() { try { if (!window.PublicKeyCredential) return toast('当前浏览器不支持 Passkey'); const options = await api('/api/passkeys/register/options', { method: 'POST', body: '{}' }); options.challenge = base64urlToBuffer(options.challenge); options.user.id = base64urlToBuffer(options.user.id); (options.excludeCredentials || []).forEach((c) => { c.id = base64urlToBuffer(c.id); }); const cred = await navigator.credentials.create({ publicKey: options }); if (!cred) return toast('Passkey 创建被取消'); const payload = { id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type, response: { clientDataJSON: bufferToBase64url(cred.response.clientDataJSON), attestationObject: bufferToBase64url(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } }; await api('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify(payload) }); toast('Passkey 已绑定'); await loadSecurityStatus(); } catch (err) { toast('Passkey 注册失败：' + err.message); } }
 async function loadNetwork() { proxies = (await api('/api/proxies')).proxies || []; jumpHosts = (await api('/api/jump-hosts')).jumpHosts || []; renderNetwork(); updateRouteOptions(); }
@@ -589,10 +633,25 @@ function bindEvents() {
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
     $('#sessionTabs').addEventListener('click', (e) => {
-        if (e.target.closest('[data-smartbar-toggle]')) { setTerminalSmartbarOpen(!terminalSmartbarOpen); return; }
-        if (e.target.closest('[data-smartbar-add]')) { switchView('dashboard'); setTerminalSmartbarOpen(false); toast('请从仪表盘选择或新建连接'); return; }
+        const toggle = e.target.closest('[data-smartbar-toggle]');
+        if (toggle) { setTerminalSmartbarOpen(!(terminalSmartbarOpen && terminalSmartbarSide === toggle.dataset.smartbarToggle), toggle.dataset.smartbarToggle); return; }
+        if (e.target.closest('[data-smartbar-add]')) { terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen; setTerminalSmartbarOpen(true, terminalSmartbarSide); return; }
+        if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
+        const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
+        if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); return; }
         const tab = e.target.closest('[data-smartbar-tab]')?.dataset.smartbarTab;
-        if (tab) { restoreTerminalSession(tab); activeTerminalTab = tab; touchTerminalSession(tab); setTerminalSmartbarOpen(false); renderTerminalTabs(); }
+        if (tab) {
+            const t = getTerminalSession(tab);
+            if (t && !t.minimized && activeTerminalTab === tab) {
+                minimizeTerminalSession(tab);
+            } else {
+                restoreTerminalSession(tab);
+                activeTerminalTab = tab;
+                touchTerminalSession(tab);
+            }
+            setTerminalSmartbarOpen(false);
+            renderTerminalTabs();
+        }
     });
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
@@ -640,7 +699,7 @@ function bindEvents() {
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
     $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
-    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail);
+    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);
     $('#totpBox').addEventListener('click', (e) => { if (e.target.id === 'setupTotpBtn') setupTotp().catch((err) => toast(err.message)); });
     $('#totpEnableForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/totp/enable', { method: 'POST', body: JSON.stringify({ code: $('#totpEnableCode').value }) }); toast('TOTP 已开启'); $('#totpEnableForm').classList.add('force-hidden'); await loadSecurityStatus(); });
     $('#totpDisableForm').addEventListener('submit', async (e) => { e.preventDefault(); if (!confirm('确定关闭 TOTP？')) return; await api('/api/security/totp/disable', { method: 'POST', body: JSON.stringify({ currentPassword: $('#totpDisablePassword').value, code: $('#totpDisableCode').value }) }); e.target.reset(); toast('TOTP 已关闭'); await loadSecurityStatus(); });
