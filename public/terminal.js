@@ -155,6 +155,8 @@ let mobileKeyboardOpen = false;
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
+let keyboardFallbackActive = false;
+let keyboardFallbackAppliedAt = 0;
 let pinchStartDistance = 0;
 let pinchStartFontSize = 14;
 let pinchLastAppliedFontSize = 14;
@@ -208,7 +210,7 @@ function getKeyboardBaselineHeight() {
 
 function getEstimatedKeyboardInset() {
     const baseline = getKeyboardBaselineHeight() || 720;
-    return Math.round(Math.min(430, Math.max(240, baseline * 0.42)));
+    return Math.round(Math.min(380, Math.max(230, baseline * 0.33)));
 }
 
 function notifyParentKeyboardMetrics(metrics) {
@@ -255,6 +257,12 @@ function getViewportKeyboardMetrics() {
         keyboardOpen,
         wantsAvoidance,
     };
+}
+
+function isViewportVisuallyRestored(metrics, tolerance = 8) {
+    if (!window.visualViewport) return true;
+    return metrics.keyboardInset <= tolerance
+        || metrics.viewportHeight >= metrics.layoutHeight - tolerance;
 }
 
 function isKeyboardAvoidanceTarget(element = document.activeElement) {
@@ -2340,6 +2348,8 @@ function applyKeyboardFallbackAvoidance() {
     updateViewportInsets._lastViewportHeight = metrics.viewportHeight;
     updateViewportInsets._lastKeyboardInset = metrics.keyboardInset;
     mobileKeyboardOpen = true;
+    keyboardFallbackActive = true;
+    keyboardFallbackAppliedAt = performance.now();
     notifyParentKeyboardMetrics(metrics);
     document.documentElement.style.setProperty('--keyboard-inset', `${metrics.keyboardInset}px`);
     document.documentElement.classList.add('keyboard-open');
@@ -2370,6 +2380,12 @@ function markKeyboardFocusActive() {
 function markKeyboardFocusInactive() {
     keyboardFocusLikely = false;
     window.clearTimeout(keyboardFallbackTimer);
+    if (keyboardFallbackActive) {
+        window.clearTimeout(markKeyboardFocusInactive._timer);
+        markKeyboardFocusInactive._timer = window.setTimeout(() => {
+            if (!keyboardFocusLikely) finalizeKeyboardClose({ force: true });
+        }, 160);
+    }
 }
 
 function updateViewportInsets() {
@@ -2377,13 +2393,27 @@ function updateViewportInsets() {
     if (!viewport && !navigator.virtualKeyboard) return;
     if (!isKeyboardAvoidanceTarget() && !mobileKeyboardOpen) return;
     const metrics = getViewportKeyboardMetrics();
-    // 如果键盘高度小于 100px，认为是悬浮键盘，忽略
+    const visuallyRestored = isViewportVisuallyRestored(metrics);
+    // 如果键盘高度小于 100px，认为没有标准软键盘遮挡。
+    // Android 通过“返回/收起键盘”隐藏键盘时，输入框可能仍保持 focus；旧逻辑会因为
+    // keyboardFocusLikely 仍为 true 而重新套用 fallback 高度，导致页面一直停在半屏。
+    // 这里优先处理“已打开 -> 已恢复”的关闭路径，只让真正的 fallback 会话继续维持占位。
     if (metrics.keyboardInset < 100) {
-        if (mobileKeyboardOpen && keyboardFocusLikely) {
-            applyKeyboardFallbackAvoidance();
+        if (keyboardFallbackActive) {
+            if (!keyboardFocusLikely || performance.now() - keyboardFallbackAppliedAt > 1200) {
+                finalizeKeyboardClose({ force: true });
+            }
             return;
         }
-        if (!mobileKeyboardOpen) return;
+        if (mobileKeyboardOpen) {
+            finalizeKeyboardClose({ force: visuallyRestored });
+            return;
+        }
+        return;
+    }
+    if (keyboardFallbackActive) {
+        keyboardFallbackActive = false;
+        keyboardFallbackAppliedAt = 0;
     }
     if (!mobileKeyboardOpen && metrics.keyboardOpen) {
         keyboardViewportBaseline = Math.max(metrics.layoutHeight, keyboardViewportBaseline || 0);
@@ -2415,7 +2445,7 @@ function updateViewportInsets() {
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
         if (!mobileKeyboardOpen) {
-            finalizeKeyboardClose();
+            finalizeKeyboardClose({ force: true });
         }
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
@@ -2437,9 +2467,7 @@ function updateViewportInsets() {
 
 function finalizeKeyboardClose({ force = false } = {}) {
     const metrics = getViewportKeyboardMetrics();
-    const visuallyRestored = !window.visualViewport
-        || metrics.keyboardInset <= 8
-        || metrics.viewportHeight >= metrics.layoutHeight - 8;
+    const visuallyRestored = isViewportVisuallyRestored(metrics);
     if (!force && !visuallyRestored) {
         window.clearTimeout(finalizeKeyboardClose._timer);
         finalizeKeyboardClose._timer = window.setTimeout(() => finalizeKeyboardClose(), 120);
@@ -2449,10 +2477,25 @@ function finalizeKeyboardClose({ force = false } = {}) {
     mobileKeyboardOpen = false;
     if (force) keyboardFocusLikely = false;
     window.clearTimeout(keyboardFallbackTimer);
+    keyboardFallbackActive = false;
+    keyboardFallbackAppliedAt = 0;
     keyboardViewportBaseline = 0;
     document.documentElement.style.setProperty('--keyboard-inset', '0px');
     document.documentElement.classList.remove('keyboard-open');
     setStableViewportHeight({ force });
+    const restoredHeight = Math.round(Math.max(
+        window.innerHeight || 0,
+        document.documentElement.clientHeight || 0,
+        window.visualViewport?.height || 0,
+        getCssPxVar('--stable-vh'),
+    ));
+    notifyParentKeyboardMetrics({
+        keyboardOpen: false,
+        keyboardInset: 0,
+        viewportHeight: restoredHeight,
+        layoutHeight: restoredHeight,
+        offsetTop: 0,
+    });
 }
 
 function setupHorizontalScrollbarVisibility(...elements) {
