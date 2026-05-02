@@ -11,6 +11,7 @@ let terminalSmartbarSide = 'left';
 let terminalSmartbarPickerOpen = false;
 let terminalSmartbarTimer = 0;
 let terminalDragState = null;
+let terminalControlLongPress = false;
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
@@ -261,7 +262,7 @@ function terminalWindowMenu(t) {
     return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
 }
 function terminalWindowTitlebarHtml(t) {
-    return `<button class="terminal-grip" data-window-drag="${t.id}" title="拖动交换位置" aria-label="拖动交换位置"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong><em data-window-status="${t.id}">${escapeHtml(t.status || '')}</em><button class="terminal-window-more" data-window-menu="${t.id}" title="窗口操作">…</button>${terminalWindowMenu(t)}`;
+    return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
 }
 function createTerminalWindowElement(t) {
     const article = document.createElement('article');
@@ -514,12 +515,29 @@ async function fullscreenTerminalTab(tabId) {
 }
 
 function setTerminalSmartbarOpen(open, side = terminalSmartbarSide) {
-    terminalSmartbarOpen = open;
-    terminalSmartbarSide = side || terminalSmartbarSide || 'left';
-    if (!open) terminalSmartbarPickerOpen = false;
+    const nextSide = side || terminalSmartbarSide || 'left';
+    const sideChanged = terminalSmartbarSide !== nextSide;
+    terminalSmartbarSide = nextSide;
     window.clearTimeout(terminalSmartbarTimer);
+
+    if (!open) {
+        terminalSmartbarOpen = false;
+        terminalSmartbarPickerOpen = false;
+        const root = $('#sessionTabs');
+        root?.classList.remove('open');
+        root?.classList.add('closing');
+        window.setTimeout(() => root?.classList.remove('closing'), 360);
+        return;
+    }
+
+    terminalSmartbarOpen = true;
+    if (sideChanged) {
+        const root = $('#sessionTabs');
+        root?.classList.add('switching');
+        window.setTimeout(() => root?.classList.remove('switching'), 420);
+    }
     renderTerminalSmartbar();
-    if (open) terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), SMARTBAR_AUTO_HIDE_MS);
+    terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), SMARTBAR_AUTO_HIDE_MS);
 }
 function noteTerminalWorkspaceActivity() {
     if (terminalSmartbarOpen) setTerminalSmartbarOpen(false);
@@ -694,9 +712,17 @@ function bindEvents() {
     });
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
-        const menuBtn = e.target.closest('[data-window-menu]');
+        const menuBtn = e.target.closest('[data-window-control]');
         $$('.terminal-window-titlebar.menu-open').forEach((el) => { if (!menuBtn || !el.contains(menuBtn)) el.classList.remove('menu-open'); });
-        if (menuBtn) { e.stopPropagation(); menuBtn.closest('.terminal-window-titlebar')?.classList.toggle('menu-open'); return; }
+        if (menuBtn) {
+            e.stopPropagation();
+            if (terminalControlLongPress) {
+                terminalControlLongPress = false;
+                return;
+            }
+            menuBtn.closest('.terminal-window-titlebar')?.classList.toggle('menu-open');
+            return;
+        }
         const action = e.target.closest('[data-window-action]');
         if (action) {
             e.stopPropagation();
@@ -710,8 +736,23 @@ function bindEvents() {
     $('#terminalWorkspace').addEventListener('pointerdown', (e) => {
         const splitter = e.target.closest('[data-splitter]');
         if (splitter) { startWorkspaceSplitterDrag(e, splitter.dataset.splitter); return; }
-        const drag = e.target.closest('[data-window-drag]');
-        if (drag) startTerminalWindowDrag(e, drag.dataset.windowDrag);
+        const control = e.target.closest('[data-window-control]');
+        if (control) {
+            const tabId = control.dataset.windowControl;
+            terminalControlLongPress = false;
+            const timer = window.setTimeout(() => {
+                terminalControlLongPress = true;
+                control.closest('.terminal-window-titlebar')?.classList.remove('menu-open');
+                startTerminalWindowDrag(e, tabId);
+            }, 280);
+            const cleanup = () => {
+                window.clearTimeout(timer);
+                window.removeEventListener('pointerup', cleanup);
+                window.removeEventListener('pointercancel', cleanup);
+            };
+            window.addEventListener('pointerup', cleanup, { once: true });
+            window.addEventListener('pointercancel', cleanup, { once: true });
+        }
     });
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
