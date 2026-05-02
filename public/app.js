@@ -8,6 +8,7 @@ let terminalTabs = [], activeTerminalTab = null;
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
+let closingTerminalTabs = new Set();
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
 function api(path, options = {}) {
@@ -15,9 +16,12 @@ function api(path, options = {}) {
         .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || data.message || '请求失败'); return data; });
 }
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
-function getPreferredTheme() { const saved = localStorage.getItem('zephyr-theme'); return saved === 'light' || saved === 'dark' ? saved : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); }
-function applyTheme(theme) { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('zephyr-theme', theme); $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙'; }
-function toggleTheme() { applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'); }
+const systemThemeQuery = matchMedia('(prefers-color-scheme: dark)');
+function getSystemTheme() { return systemThemeQuery.matches ? 'dark' : 'light'; }
+function getPreferredTheme() { const saved = localStorage.getItem('zephyr-theme'); return saved === 'light' || saved === 'dark' ? saved : getSystemTheme(); }
+function broadcastThemeToTerminals(theme) { $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme }, '*')); }
+function applyTheme(theme, { persist = false } = {}) { document.documentElement.classList.add('theme-transitioning'); window.clearTimeout(applyTheme._timer); applyTheme._timer = window.setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 360); document.documentElement.setAttribute('data-theme', theme); if (persist) localStorage.setItem('zephyr-theme', theme); $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙'; $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙'; broadcastThemeToTerminals(theme); }
+function toggleTheme() { applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', { persist: true }); }
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function renderMarkdown(md) { let s = escapeHtml(md); s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); return s.replace(/\n/g, '<br>'); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
@@ -87,9 +91,23 @@ async function openConnection(id) {
 }
 function openPlaceholderTab(c) { const tabId = `tab_${Date.now()}`; terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: '占位', iframe: false }); activeTerminalTab = tabId; renderTerminalTabs(); switchView('terminal'); }
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
-    $('#sessionTabs').innerHTML = terminalTabs.length ? terminalTabs.map((t) => `<button class="session-tab ${t.id === activeTerminalTab ? 'active' : ''}" data-tab="${t.id}"><span>${escapeHtml(t.protocol)} · ${escapeHtml(t.name)}</span><em>${escapeHtml(t.status)}</em><i title="全屏" data-fullscreen-tab="${t.id}">⛶</i><b data-close-tab="${t.id}">×</b></button>`).join('') : '<div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div>';
+    $('#sessionTabs').innerHTML = terminalTabs.length ? terminalTabs.map((t) => `<button class="session-tab ${t.id === activeTerminalTab ? 'active' : ''} ${closingTerminalTabs.has(t.id) ? 'closing' : ''}" data-tab="${t.id}"><span>${escapeHtml(t.protocol)} · ${escapeHtml(t.name)}</span><em>${escapeHtml(t.status)}</em><i title="全屏" data-fullscreen-tab="${t.id}">⛶</i><b data-close-tab="${t.id}">×</b></button>`).join('') : '<div class="empty-state">从仪表盘点击“连接”打开 SSH 会话。</div>';
     if (rebuildWorkspace) $('#terminalWorkspace').innerHTML = terminalTabs.length ? terminalTabs.map((t) => t.iframe ? `<iframe class="terminal-frame ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}" src="/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}" allow="fullscreen; virtual-keyboard"></iframe>` : `<div class="terminal-placeholder ${t.id === activeTerminalTab ? 'active' : ''}" data-frame="${t.id}">${escapeHtml(t.protocol)} 协议将在后续版本接入。</div>`).join('') : '<div class="terminal-placeholder">暂无会话。</div>';
     else $$('#terminalWorkspace [data-frame]').forEach((el) => el.classList.toggle('active', el.dataset.frame === activeTerminalTab));
+    requestAnimationFrame(() => broadcastThemeToTerminals(document.documentElement.getAttribute('data-theme') || getPreferredTheme()));
+}
+
+function closeTerminalTab(tabId) {
+    if (!terminalTabs.some((t) => t.id === tabId) || closingTerminalTabs.has(tabId)) return;
+    closingTerminalTabs.add(tabId);
+    renderTerminalTabs({ rebuildWorkspace: false });
+    window.setTimeout(() => {
+        terminalTabs = terminalTabs.filter((t) => t.id !== tabId);
+        closingTerminalTabs.delete(tabId);
+        sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
+        if (activeTerminalTab === tabId) activeTerminalTab = terminalTabs[0]?.id || null;
+        renderTerminalTabs();
+    }, 260);
 }
 
 function resetTerminalWorkspaceKeyboard() {
@@ -172,15 +190,18 @@ function showFullscreenLoading(text = '正在切换全屏...') {
     const loader = ensureFullscreenLoader();
     if (!workspace || !loader) return;
     loader.querySelector('span').textContent = text;
+    workspace.classList.add('fullscreen-transitioning');
     workspace.classList.add('fullscreen-loading');
     window.clearTimeout(fullscreenLoadingTimer);
-    fullscreenLoadingTimer = window.setTimeout(() => hideFullscreenLoading(), 1800);
+    fullscreenLoadingTimer = window.setTimeout(() => hideFullscreenLoading(), 2400);
 }
 
-function hideFullscreenLoading({ delay = 260 } = {}) {
+function hideFullscreenLoading({ delay = 520 } = {}) {
     window.clearTimeout(fullscreenLoadingTimer);
     fullscreenLoadingTimer = window.setTimeout(() => {
-        $('#terminalWorkspace')?.classList.remove('fullscreen-loading');
+        const workspace = $('#terminalWorkspace');
+        workspace?.classList.remove('fullscreen-loading');
+        window.setTimeout(() => workspace?.classList.remove('fullscreen-transitioning'), 520);
     }, delay);
 }
 
@@ -238,17 +259,18 @@ function bindEvents() {
     $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $('#connMode').addEventListener('change', () => updateRouteOptions()); $('#routeUpBtn')?.addEventListener('click', () => moveSelectedRouteOption(-1)); $('#routeDownBtn')?.addEventListener('click', () => moveSelectedRouteOption(1)); $('#testConnectionBtn').addEventListener('click', testConnection);
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
-    $('#sessionTabs').addEventListener('click', (e) => { const full = e.target.closest('[data-fullscreen-tab]')?.dataset.fullscreenTab; const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (full) { e.stopPropagation(); fullscreenTerminalTab(full).catch((err) => toast(err.message)); return; } if (close) { terminalTabs = terminalTabs.filter((t) => t.id !== close); sessionStorage.removeItem(`zephyr_ssh_params_${close}`); if (activeTerminalTab === close) activeTerminalTab = terminalTabs[0]?.id || null; renderTerminalTabs(); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
+    $('#sessionTabs').addEventListener('click', (e) => { const full = e.target.closest('[data-fullscreen-tab]')?.dataset.fullscreenTab; const close = e.target.closest('[data-close-tab]')?.dataset.closeTab; const tab = e.target.closest('[data-tab]')?.dataset.tab; if (full) { e.stopPropagation(); fullscreenTerminalTab(full).catch((err) => toast(err.message)); return; } if (close) { closeTerminalTab(close); return; } if (tab) { activeTerminalTab = tab; renderTerminalTabs(); } });
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
         const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
         if (fullscreenElement === $('#terminalWorkspace')) {
             appKeyboardBaseline = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, window.visualViewport?.height || 0);
-            hideFullscreenLoading({ delay: 360 });
+            hideFullscreenLoading({ delay: 620 });
         } else {
             resetTerminalWorkspaceKeyboard();
-            showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 420 });
+            showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 680 });
         }
     }));
+    systemThemeQuery.addEventListener('change', () => { if (!localStorage.getItem('zephyr-theme')) applyTheme(getSystemTheme()); });
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });

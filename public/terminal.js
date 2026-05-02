@@ -383,9 +383,9 @@ setStableViewportHeight({ force: true });
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
-function applyTheme(theme) {
+function applyTheme(theme, { persist = false } = {}) {
     if (document.documentElement.getAttribute('data-theme') !== theme) {
         document.documentElement.classList.add('theme-transitioning');
         window.clearTimeout(applyTheme._transitionTimer);
@@ -394,7 +394,7 @@ function applyTheme(theme) {
         }, 300);
     }
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('zephyr-theme', theme);
+    if (persist) localStorage.setItem('zephyr-theme', theme);
     themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 applyTheme(getPreferredTheme());
@@ -440,12 +440,18 @@ wtermThemeToggle?.addEventListener('click', () => {
 
 themeToggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme');
-    applyTheme(current === 'dark' ? 'light' : 'dark');
+    applyTheme(current === 'dark' ? 'light' : 'dark', { persist: true });
 });
 
-window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
     if (!localStorage.getItem('zephyr-theme')) {
-        applyTheme(e.matches ? 'light' : 'dark');
+        applyTheme(e.matches ? 'dark' : 'light');
+    }
+});
+
+window.addEventListener('message', (e) => {
+    if (e.data?.source === 'zephyr-app' && e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
+        applyTheme(e.data.theme);
     }
 });
 

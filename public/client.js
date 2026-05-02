@@ -21,16 +21,15 @@ const REMEMBER_USERNAME_KEY = 'zephyr-remember-username';
 let tempTotpToken = '';
 let defaultUsername = 'admin';
 
-// ===== 主题管理 (登录页) =====
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function applyTheme(theme) {
+function applyTheme(theme, { persist = false } = {}) {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('zephyr-theme', theme);
+    if (persist) localStorage.setItem('zephyr-theme', theme);
     [themeToggleLogin, themeToggleChange, themeToggleTotp, themeToggleForgot].filter(Boolean).forEach((btn) => { btn.textContent = theme === 'dark' ? '☀️' : '🌙'; });
 }
 
@@ -38,16 +37,16 @@ applyTheme(getPreferredTheme());
 
 function toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme');
-    applyTheme(current === 'dark' ? 'light' : 'dark');
+    applyTheme(current === 'dark' ? 'light' : 'dark', { persist: true });
 }
 themeToggleLogin?.addEventListener('click', toggleTheme);
 themeToggleChange?.addEventListener('click', toggleTheme);
 themeToggleTotp?.addEventListener('click', toggleTheme);
 themeToggleForgot?.addEventListener('click', toggleTheme);
 
-window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
     if (!localStorage.getItem('zephyr-theme')) {
-        applyTheme(e.matches ? 'light' : 'dark');
+        applyTheme(e.matches ? 'dark' : 'light');
     }
 });
 

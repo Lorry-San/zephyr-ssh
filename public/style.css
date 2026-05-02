@@ -132,8 +132,8 @@ select {
 .theme-transitioning *,
 .wterm-theme-transitioning,
 .wterm-theme-transitioning * {
-    transition-duration: 320ms !important;
-    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+    transition-duration: 420ms !important;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 html,
@@ -246,10 +246,13 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 .nav-tab, .settings-tab {
     border: 1px solid transparent; background: transparent; color: var(--text-secondary);
     border-radius: var(--radius); padding: 8px 13px; cursor: pointer; font-weight: 700;
-    transition: all .2s cubic-bezier(.2,.8,.2,1); white-space: nowrap;
+    position: relative; overflow: hidden;
+    transition: transform .34s cubic-bezier(.18,1.2,.2,1), background .28s cubic-bezier(.16,1,.3,1), color .28s ease, border-color .28s ease, box-shadow .28s ease; white-space: nowrap;
 }
-.nav-tab:hover, .settings-tab:hover { background: var(--bg); color: var(--text); }
-.nav-tab.active, .settings-tab.active { color: var(--accent-hover); background: rgba(88,166,255,.15); border-color: rgba(88,166,255,.35); }
+.nav-tab::after, .settings-tab::after { content: ''; position: absolute; inset: auto 16px 5px; height: 3px; border-radius: 999px; background: var(--accent-hover); opacity: 0; transform: scaleX(.35); transition: opacity .32s ease, transform .42s cubic-bezier(.16,1,.3,1); }
+.nav-tab:hover, .settings-tab:hover { background: var(--bg); color: var(--text); transform: translateY(-1px); }
+.nav-tab.active, .settings-tab.active { color: var(--accent-hover); background: rgba(88,166,255,.15); border-color: rgba(88,166,255,.35); box-shadow: inset 0 0 0 1px rgba(88,166,255,.08), 0 8px 22px rgba(88,166,255,.08); }
+.nav-tab.active::after, .settings-tab.active::after { opacity: 1; transform: scaleX(1); }
 .app-main { width: min(1180px, calc(100% - 28px)); margin: 0 auto; padding: 26px 0 48px; }
 .view { display: none; animation: fadeIn .28s ease-out; }
 .view.active { display: block; }
@@ -289,8 +292,11 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 .activity-item span { color: var(--text-secondary); }
 .empty-card, .terminal-placeholder { padding: 28px; text-align: center; color: var(--text-secondary); }
 .browser-tabs { min-height: 50px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); padding: 10px; margin-bottom: 14px; overflow-x: auto; }
-.session-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 300px; margin: 0 8px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); cursor: pointer; }
-.session-tab.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12); }
+.session-tab { display: inline-flex; align-items: center; gap: 8px; max-width: 300px; margin: 0 8px 0 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text); cursor: pointer; transform-origin: center; animation: sessionTabIn .34s cubic-bezier(.16,1,.3,1); transition: opacity .24s ease, max-width .28s cubic-bezier(.16,1,.3,1), margin .28s ease, padding .28s ease, transform .34s cubic-bezier(.18,1.2,.2,1), border-color .24s ease, box-shadow .28s ease, background .24s ease; }
+.session-tab:hover { transform: translateY(-1px) scale(1.015); }
+.session-tab.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12), 0 10px 24px rgba(88,166,255,.10); }
+.session-tab.closing { opacity: 0; max-width: 0; margin-right: 0; padding-left: 0; padding-right: 0; transform: translateY(-8px) scale(.86); pointer-events: none; overflow: hidden; }
+@keyframes sessionTabIn { from { opacity: 0; transform: translateY(8px) scale(.92); } to { opacity: 1; transform: none; } }
 .session-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-tab em { color: var(--text-secondary); font-size: 11px; font-style: normal; }
 .session-tab i, .session-tab b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; font-style: normal; line-height: 1; flex: 0 0 auto; }
@@ -298,7 +304,8 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 .session-tab b { color: var(--danger); font-size: 16px; }
 .session-tab i:hover { background: rgba(88,166,255,.24); }
 .session-tab b:hover { background: rgba(248,81,73,.14); }
-.terminal-workspace { border: 1px solid var(--border); border-radius: var(--radius-lg); background: #05070a; min-height: 720px; overflow: hidden; position: relative; }
+.terminal-workspace { border: 1px solid var(--border); border-radius: var(--radius-lg); background: #05070a; min-height: 720px; overflow: hidden; position: relative; transition: border-radius .64s cubic-bezier(.16,1,.3,1), box-shadow .64s cubic-bezier(.16,1,.3,1), transform .64s cubic-bezier(.16,1,.3,1); }
+.terminal-workspace.fullscreen-transitioning { transform: scale(.992); box-shadow: 0 28px 88px rgba(0,0,0,.36); }
 .terminal-frame { display: none; width: 100%; height: 720px; border: 0; background: var(--bg); }
 .terminal-frame.active { display: block; }
 .terminal-workspace .terminal-placeholder { min-height: 720px; display: none; place-items: center; }
@@ -311,7 +318,7 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
     min-height: var(--app-visual-vh) !important;
     max-height: var(--app-visual-vh) !important;
     transform: translate3d(0, var(--app-visual-offset-top), 0);
-    transition: height 0.2s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: height 0.42s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.42s cubic-bezier(0.16, 1, 0.3, 1), transform 0.42s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .terminal-workspace:fullscreen.keyboard-open .terminal-frame.active {
     height: 100% !important;
@@ -337,7 +344,7 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
     transform: scale(1.015);
     backdrop-filter: blur(14px) saturate(1.25);
     -webkit-backdrop-filter: blur(14px) saturate(1.25);
-    transition: opacity .22s ease, transform .28s cubic-bezier(.16,1,.3,1);
+    transition: opacity .44s ease, transform .64s cubic-bezier(.16,1,.3,1);
 }
 .terminal-workspace.fullscreen-loading .terminal-fullscreen-loader {
     opacity: 1;
