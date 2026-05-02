@@ -126,6 +126,10 @@ function getConfiguredTerminalMaxWindows() {
     const value = Number(settings?.terminal?.maxWindows || localStorage.getItem('zephyr-terminal-max-windows') || 3);
     return Math.min(3, Math.max(1, Number.isFinite(value) ? value : 3));
 }
+function getTerminalSmartbarOrder() {
+    const value = settings?.terminal?.smartbarOrder || localStorage.getItem('zephyr-terminal-smartbar-order') || 'old-left';
+    return value === 'new-left' ? 'new-left' : 'old-left';
+}
 function getEffectiveTerminalMaxWindows() { return isCompactTerminalWorkspace() ? 1 : getConfiguredTerminalMaxWindows(); }
 function getTerminalSession(id) { return terminalTabs.find((t) => t.id === id); }
 function visibleTerminalTabs() { return terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id)); }
@@ -188,7 +192,11 @@ function enforceTerminalWorkspaceLimit(newId) {
 }
 function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
 function renderTerminalSmartbar() {
-    const orderedIds = terminalSmartbarSide === 'right' ? recentUseStack : openOrderStack;
+    const order = getTerminalSmartbarOrder();
+    const oldestFirst = order === 'old-left'
+        ? terminalSmartbarSide === 'left'
+        : terminalSmartbarSide === 'right';
+    const orderedIds = oldestFirst ? openOrderStack : [...openOrderStack].reverse();
     const seen = new Set();
     const sessions = orderedIds.map(getTerminalSession).filter(Boolean).filter((t) => {
         if (seen.has(t.id)) return false;
@@ -213,6 +221,8 @@ function renderTerminalSmartbar() {
                 <button class="smartbar-add" data-smartbar-add title="选择服务器连接">＋</button>
             </div>
             ${picker}
+            <button class="smartbar-close-corner left" data-smartbar-close title="收回">⌃</button>
+            <button class="smartbar-close-corner right" data-smartbar-close title="收回">⌃</button>
         </div>
         <button class="smartbar-handle right" data-smartbar-toggle="right" title="展开终端栏"><span>⌄</span></button>`;
 }
@@ -566,21 +576,25 @@ function startWorkspaceSplitterDrag(e, axis) {
         }
     };
 
-    const cleanup = () => {
-        splitter?.classList.remove('arming', 'dragging');
-        workspace.classList.remove('splitting');
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', cleanup);
-        window.removeEventListener('pointercancel', cleanup);
-    };
-
     const onMove = (ev) => {
         ev.preventDefault?.();
         applyPosition(ev.clientX, ev.clientY);
     };
 
+    const cleanup = () => {
+        splitter?.releasePointerCapture?.(e.pointerId);
+        splitter?.classList.remove('arming', 'dragging');
+        workspace.classList.remove('splitting');
+        document.body.classList.remove('terminal-workspace-splitting');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', cleanup);
+        window.removeEventListener('pointercancel', cleanup);
+    };
+
+    splitter?.setPointerCapture?.(e.pointerId);
     splitter?.classList.add('dragging');
     workspace.classList.add('splitting');
+    document.body.classList.add('terminal-workspace-splitting');
     applyPosition(e.clientX, e.clientY);
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', cleanup, { once: true });
@@ -597,6 +611,7 @@ async function loadSettings() {
     $('#captchaEnabled').checked = !!cap.enabled; $('#captchaProvider').value = cap.provider || 'turnstile'; $('#captchaSiteKey').value = cap.siteKey || cap.tencentCaptchaAppId || ''; $('#captchaSecretKey').value = cap.secretKey || '';
     $('#mailEnabled').checked = !!mail.enabled; $('#mailHost').value = mail.host || ''; $('#mailPort').value = mail.port || 465; $('#mailSecure').checked = mail.secure !== false; $('#mailUser').value = mail.user || ''; $('#mailPass').value = mail.pass || ''; $('#mailFrom').value = mail.from || ''; $('#mailAdminEmail').value = mail.adminEmail || ''; $('#notifyLoginSuccess').checked = mail.notifyLoginSuccess !== false; $('#notifyLoginFailure').checked = mail.notifyLoginFailure !== false; $('#geoLookupEnabled').checked = mail.geoLookupEnabled !== false;
     $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
+    $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
     await loadSecurityStatus(); await loadSecurityLists();
 }
 async function saveBeian(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ beian: { icp: $('#icpInput').value, policeBeian: $('#policeInput').value, policeBeianUrl: $('#policeUrlInput').value, show: $('#showBeianInput').checked } }) }); toast('备案信息已保存'); }
@@ -611,8 +626,10 @@ async function saveMail(e) { e.preventDefault(); settings = await api('/api/sett
 async function saveTerminalLayout(e) {
     e.preventDefault();
     const maxWindows = Math.min(3, Math.max(1, Number($('#terminalMaxWindows').value) || 3));
+    const smartbarOrder = $('#terminalSmartbarOrder').value === 'new-left' ? 'new-left' : 'old-left';
     localStorage.setItem('zephyr-terminal-max-windows', String(maxWindows));
-    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows } }) });
+    localStorage.setItem('zephyr-terminal-smartbar-order', smartbarOrder);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows, smartbarOrder } }) });
     enforceTerminalWorkspaceLimit(activeTerminalTab);
     renderTerminalTabs();
     toast(`终端布局已保存：最多 ${maxWindows} 窗`);
@@ -635,6 +652,7 @@ function bindEvents() {
     $('#sessionTabs').addEventListener('click', (e) => {
         const toggle = e.target.closest('[data-smartbar-toggle]');
         if (toggle) { setTerminalSmartbarOpen(!(terminalSmartbarOpen && terminalSmartbarSide === toggle.dataset.smartbarToggle), toggle.dataset.smartbarToggle); return; }
+        if (e.target.closest('[data-smartbar-close]')) { setTerminalSmartbarOpen(false); return; }
         if (e.target.closest('[data-smartbar-add]')) { terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen; setTerminalSmartbarOpen(true, terminalSmartbarSide); return; }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
         const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
