@@ -211,7 +211,11 @@ function renderTerminalSmartbar() {
         </div>` : '';
     const smartbarRoot = $('#sessionTabs');
     const navRectNow = $('.main-nav')?.getBoundingClientRect();
-    if (navRectNow) smartbarRoot.style.setProperty('--smartbar-top', `${Math.round(navRectNow.bottom)}px`);
+    if (navRectNow) {
+        const smartbarTop = `${Math.round(navRectNow.bottom)}px`;
+        smartbarRoot.style.setProperty('--smartbar-top', smartbarTop);
+        document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
+    }
     smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} from-${terminalSmartbarSide}`;
     $('#sessionTabs').innerHTML = `
         <button class="smartbar-handle left" data-smartbar-toggle="left" title="展开终端栏"><span>⌄</span></button>
@@ -231,21 +235,9 @@ function renderTerminalSmartbar() {
         const panel = smartbar?.querySelector('.smartbar-panel');
         if (!nav || !smartbar || !panel) return;
         const navRect = nav.getBoundingClientRect();
-        smartbar.style.setProperty('--smartbar-top', `${Math.round(navRect.bottom)}px`);
-        const panelRect = panel.getBoundingClientRect();
-        const navStyle = getComputedStyle(nav);
-        const panelStyle = getComputedStyle(panel);
-        console.debug('[smartbar-diagnostics]', {
-            open: terminalSmartbarOpen,
-            side: terminalSmartbarSide,
-            navHeight: Math.round(navRect.height),
-            navBottom: Math.round(navRect.bottom),
-            panelTop: Math.round(panelRect.top),
-            panelBottom: Math.round(panelRect.bottom),
-            smartbarTopVar: getComputedStyle(smartbar).getPropertyValue('--smartbar-top').trim(),
-            navBackground: navStyle.backgroundColor || navStyle.background,
-            panelBackground: panelStyle.backgroundColor || panelStyle.background,
-        });
+        const smartbarTop = `${Math.round(navRect.bottom)}px`;
+        smartbar.style.setProperty('--smartbar-top', smartbarTop);
+        document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
     });
 }
 function terminalWindowMenu(t) {
