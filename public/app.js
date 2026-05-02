@@ -192,18 +192,14 @@ function enforceTerminalWorkspaceLimit(newId) {
 }
 function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
 function renderTerminalSmartbar() {
-    const order = getTerminalSmartbarOrder();
-    const oldestFirst = order === 'old-left'
-        ? terminalSmartbarSide === 'left'
-        : terminalSmartbarSide === 'right';
-    const orderedIds = oldestFirst ? openOrderStack : [...openOrderStack].reverse();
+    const orderedIds = terminalSmartbarSide === 'left' ? openOrderStack : [...openOrderStack].reverse();
     const seen = new Set();
     const sessions = orderedIds.map(getTerminalSession).filter(Boolean).filter((t) => {
         if (seen.has(t.id)) return false;
         seen.add(t.id);
         return true;
     });
-    const icon = (t) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
+    const icon = (t, index) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" style="--dock-index:${index}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
     const sshConnections = connections.filter((c) => c.protocol === 'SSH');
     const picker = terminalSmartbarPickerOpen ? `
         <div class="smartbar-picker" role="dialog" aria-label="选择服务器连接">
@@ -212,19 +208,44 @@ function renderTerminalSmartbar() {
                 ${sshConnections.length ? sshConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ssh"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH 服务器</div>'}
             </div>
         </div>` : '';
-    $('#sessionTabs').className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} from-${terminalSmartbarSide}`;
+    const smartbarRoot = $('#sessionTabs');
+    const navRectNow = $('.main-nav')?.getBoundingClientRect();
+    if (navRectNow) smartbarRoot.style.setProperty('--smartbar-top', `${Math.round(navRectNow.bottom)}px`);
+    smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} from-${terminalSmartbarSide}`;
     $('#sessionTabs').innerHTML = `
         <button class="smartbar-handle left" data-smartbar-toggle="left" title="展开终端栏"><span>⌄</span></button>
         <div class="smartbar-panel">
             <div class="smartbar-dock" aria-label="${terminalSmartbarSide === 'right' ? '最近使用会话' : '开启顺序会话'}">
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
-                <button class="smartbar-add" data-smartbar-add title="选择服务器连接">＋</button>
+                <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
             </div>
             ${picker}
             <button class="smartbar-close-corner left" data-smartbar-close title="收回">⌃</button>
             <button class="smartbar-close-corner right" data-smartbar-close title="收回">⌃</button>
         </div>
         <button class="smartbar-handle right" data-smartbar-toggle="right" title="展开终端栏"><span>⌄</span></button>`;
+    requestAnimationFrame(() => {
+        const nav = $('.main-nav');
+        const smartbar = $('#sessionTabs');
+        const panel = smartbar?.querySelector('.smartbar-panel');
+        if (!nav || !smartbar || !panel) return;
+        const navRect = nav.getBoundingClientRect();
+        smartbar.style.setProperty('--smartbar-top', `${Math.round(navRect.bottom)}px`);
+        const panelRect = panel.getBoundingClientRect();
+        const navStyle = getComputedStyle(nav);
+        const panelStyle = getComputedStyle(panel);
+        console.debug('[smartbar-diagnostics]', {
+            open: terminalSmartbarOpen,
+            side: terminalSmartbarSide,
+            navHeight: Math.round(navRect.height),
+            navBottom: Math.round(navRect.bottom),
+            panelTop: Math.round(panelRect.top),
+            panelBottom: Math.round(panelRect.bottom),
+            smartbarTopVar: getComputedStyle(smartbar).getPropertyValue('--smartbar-top').trim(),
+            navBackground: navStyle.backgroundColor || navStyle.background,
+            panelBackground: panelStyle.backgroundColor || panelStyle.background,
+        });
+    });
 }
 function terminalWindowMenu(t) {
     const maxWindows = getEffectiveTerminalMaxWindows();

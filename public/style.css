@@ -246,11 +246,13 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 /* ===== Zephyr 管理后台第一版 ===== */
 .app-shell { min-height: 100vh; background: var(--bg); color: var(--text); }
 .main-nav {
+    --nav-fusion-bg: color-mix(in srgb, var(--surface) 88%, transparent);
     position: sticky; top: 0; z-index: 50;
     display: flex; align-items: center; justify-content: space-between; gap: 14px;
     padding: 12px 18px; border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    background: var(--nav-fusion-bg);
     backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
 }
 body.terminal-mode .main-nav {
     position: sticky;
@@ -315,10 +317,12 @@ body.terminal-mode .main-nav {
 .terminal-view.active { display: flex; flex-direction: column; min-height: calc(100dvh - 8px); }
 .app-main:has(#view-terminal.active) { width: calc(100% - 4px); padding: 2px 0 0; }
 .terminal-smartbar {
+    --smartbar-top: 61px;
     --smartbar-nav-bg: color-mix(in srgb, var(--surface) 88%, transparent);
     --smartbar-nav-border: var(--border);
+    --smartbar-panel-height: 156px;
     position: fixed;
-    top: calc(50px + env(safe-area-inset-top, 0px));
+    top: var(--smartbar-top);
     left: 0;
     right: 0;
     z-index: 80;
@@ -327,38 +331,43 @@ body.terminal-mode .main-nav {
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    padding: 0 16px;
+    padding: 0 clamp(18px, 4vw, 48px);
 }
 .terminal-smartbar .empty-state { display: none; }
 .smartbar-panel {
     --smartbar-fusion-bg: var(--smartbar-nav-bg);
     position: absolute;
-    top: -1px;
-    left: 50%;
-    transform: translateX(-50%) scale(.92);
-    transform-origin: top center;
-    width: min(940px, calc(100vw - 40px));
-    min-height: 126px;
-    padding: 18px 20px 24px;
+    top: 0;
+    left: 18px;
+    right: auto;
+    transform: translate3d(0, -18px, 0) scale3d(.28, .18, 1);
+    transform-origin: top left;
+    width: min(620px, calc(100vw - 96px));
+    min-height: var(--smartbar-panel-height);
+    padding: 22px 28px 26px;
     border: 1px solid var(--smartbar-nav-border);
     border-top: 0;
-    border-radius: 0 0 30px 30px;
-    background:
-        linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, transparent), color-mix(in srgb, var(--surface) 88%, transparent)),
-        radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.14), transparent 58%);
+    border-radius: 0 0 32px 32px;
+    background: var(--smartbar-fusion-bg);
     overflow: visible;
-    box-shadow: 0 -1px 0 0 var(--smartbar-fusion-bg), 0 32px 110px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.12);
-    backdrop-filter: blur(28px) saturate(1.65);
-    -webkit-backdrop-filter: blur(28px) saturate(1.65);
+    box-shadow:
+        0 -1px 0 0 var(--smartbar-fusion-bg),
+        0 34px 112px rgba(0,0,0,.26),
+        inset 0 1px 0 rgba(255,255,255,.10),
+        inset 0 -1px 0 rgba(255,255,255,.06);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
     opacity: 0;
     pointer-events: none;
-    filter: blur(10px);
+    filter: blur(12px);
+    clip-path: inset(0 48% 100% 48% round 0 0 32px 32px);
     z-index: 2;
     transition:
-        transform .48s cubic-bezier(.22,1,.36,1),
-        opacity .28s ease .08s,
-        filter .34s ease .06s,
-        border-radius .48s cubic-bezier(.22,1,.36,1);
+        transform .62s cubic-bezier(.18,1.18,.2,1),
+        opacity .24s ease .04s,
+        filter .38s ease .04s,
+        clip-path .62s cubic-bezier(.18,1.18,.2,1),
+        border-radius .62s cubic-bezier(.18,1.18,.2,1);
 }
 .smartbar-panel::before,
 .smartbar-panel::after {
@@ -380,39 +389,48 @@ body.terminal-mode .main-nav {
     border-top-left-radius: 18px;
     box-shadow: -12px 0 0 0 var(--smartbar-fusion-bg), -12px -1px 0 0 rgba(139,148,158,.16);
 }
-.terminal-smartbar.from-left .smartbar-panel,
-.terminal-smartbar.from-right .smartbar-panel {
-    left: 50%;
+.terminal-smartbar.from-left .smartbar-panel {
+    left: 18px;
     right: auto;
-    transform: translate3d(-50%, -22px, 0) scale3d(.12, .18, 1);
-    transform-origin: top center;
+    transform: translate3d(0, -20px, 0) scale3d(.16, .16, 1);
+    transform-origin: top left;
+    clip-path: inset(0 100% 100% 0 round 0 0 32px 32px);
+}
+.terminal-smartbar.from-right .smartbar-panel {
+    left: auto;
+    right: 18px;
+    transform: translate3d(0, -20px, 0) scale3d(.16, .16, 1);
+    transform-origin: top right;
+    clip-path: inset(0 0 100% 100% round 0 0 32px 32px);
 }
 .terminal-smartbar.open .smartbar-panel {
-    transform: translate3d(-50%, 0, 0) scale3d(1, 1, 1);
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
     opacity: 1;
     pointer-events: auto;
     filter: blur(0);
+    clip-path: inset(0 0 0 0 round 0 0 32px 32px);
 }
 .smartbar-handle {
     --smartbar-tab-bg: var(--smartbar-nav-bg);
     position: absolute;
     top: 0;
-    width: 86px;
-    height: 24px;
+    width: 94px;
+    height: 28px;
     border: 1px solid var(--smartbar-nav-border);
     border-top: 0;
     background: var(--smartbar-tab-bg);
     color: var(--text-secondary);
     cursor: pointer;
     pointer-events: auto;
-    box-shadow: 0 -1px 0 0 var(--smartbar-tab-bg), 0 10px 24px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.08);
-    backdrop-filter: blur(18px) saturate(1.4);
-    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    box-shadow: 0 -1px 0 0 var(--smartbar-tab-bg), 0 12px 26px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.08);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
     transition:
-        transform .42s cubic-bezier(.16,1,.3,1),
+        transform .48s cubic-bezier(.18,1.18,.2,1),
         color .18s ease,
         background .18s ease,
-        border-color .18s ease;
+        border-color .18s ease,
+        border-radius .48s cubic-bezier(.18,1.18,.2,1);
 }
 .smartbar-handle::before,
 .smartbar-handle::after {
@@ -455,13 +473,13 @@ body.terminal-mode .main-nav {
 }
 .terminal-smartbar.open.from-left .smartbar-handle.left,
 .terminal-smartbar.open.from-right .smartbar-handle.right {
-    transform: translateY(0) scale3d(8.8, 4.8, 1);
+    transform: translateY(0) scale3d(10.8, 5.6, 1);
     opacity: 0;
-    border-radius: 0 0 30px 30px;
+    border-radius: 0 0 32px 32px;
     transition:
-        transform .58s cubic-bezier(.22,1,.36,1),
-        opacity .18s ease .18s,
-        border-radius .58s cubic-bezier(.22,1,.36,1);
+        transform .62s cubic-bezier(.18,1.18,.2,1),
+        opacity .18s ease .20s,
+        border-radius .62s cubic-bezier(.18,1.18,.2,1);
 }
 .terminal-smartbar.open.from-left .smartbar-handle.left span,
 .terminal-smartbar.open.from-right .smartbar-handle.right span {
@@ -472,77 +490,153 @@ body.terminal-mode .main-nav {
 .smartbar-panel .smartbar-picker,
 .smartbar-panel .smartbar-close-corner {
     opacity: 0;
-    transform: translateY(-8px) scale(.96);
+    transform: translateY(-12px) scale(.94);
     transition:
         opacity .24s ease,
-        transform .42s cubic-bezier(.22,1,.36,1);
+        transform .48s cubic-bezier(.18,1.18,.2,1);
 }
 .terminal-smartbar.open .smartbar-panel .smartbar-dock,
 .terminal-smartbar.open .smartbar-panel .smartbar-picker,
 .terminal-smartbar.open .smartbar-panel .smartbar-close-corner {
     opacity: 1;
     transform: translateY(0) scale(1);
-    transition-delay: .14s;
+    transition-delay: .16s;
 }
 .smartbar-dock {
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    gap: 12px;
+    gap: clamp(10px, 1.2vw, 18px);
     min-width: 0;
     max-width: 100%;
-    min-height: 92px;
+    min-height: 108px;
     overflow: visible;
     scrollbar-width: none;
-    padding: 12px 10px 2px;
+    padding: 16px 14px 4px;
+    perspective: 900px;
 }
 .smartbar-dock::-webkit-scrollbar { display: none; }
-.terminal-smartbar.from-right .smartbar-dock { flex-direction: row-reverse; }
+.terminal-smartbar.from-left .smartbar-dock {
+    justify-content: flex-start;
+}
+.terminal-smartbar.from-right .smartbar-dock {
+    justify-content: flex-start;
+    flex-direction: row-reverse;
+}
 .smartbar-session,
 .smartbar-add {
+    --dock-scale: 1;
+    --dock-lift: 0px;
+    --dock-rotate: 0deg;
     position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
     flex-direction: column;
-    gap: 5px;
-    width: 76px;
-    height: 78px;
+    gap: 6px;
+    width: 82px;
+    height: 88px;
     border: 0;
-    border-radius: 18px;
+    border-radius: 20px;
     background: transparent;
     color: var(--text);
     cursor: pointer;
     flex: 0 0 auto;
-    transition: transform .48s cubic-bezier(.22,1.45,.36,1), opacity .2s ease;
+    opacity: 0;
+    transform: translate3d(0, 18px, 0) scale(.72) rotateX(10deg);
+    transform-origin: 50% 100%;
+    transition:
+        transform .52s cubic-bezier(.18,1.36,.2,1),
+        opacity .24s ease,
+        filter .28s ease;
+    will-change: transform, opacity, filter;
 }
 .smartbar-session-icon,
 .smartbar-add::before {
     content: '+';
     position: relative;
-    width: 54px;
-    height: 54px;
+    width: 62px;
+    height: 62px;
     border: 1px solid rgba(139,148,158,.24);
-    border-radius: 16px;
+    border-radius: 18px;
     background:
-        radial-gradient(circle at 30% 18%, rgba(255,255,255,.20), transparent 36%),
-        linear-gradient(145deg, color-mix(in srgb, var(--surface) 86%, transparent), color-mix(in srgb, var(--bg) 86%, transparent));
-    box-shadow: 0 8px 22px rgba(0,0,0,.20);
+        radial-gradient(circle at 30% 18%, rgba(255,255,255,.24), transparent 36%),
+        linear-gradient(145deg, color-mix(in srgb, var(--surface) 90%, transparent), color-mix(in srgb, var(--bg) 82%, transparent));
+    box-shadow: 0 10px 24px rgba(0,0,0,.22);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    transition: border-color .24s ease, box-shadow .28s ease, transform .48s cubic-bezier(.22,1.45,.36,1);
+    transition:
+        border-color .24s ease,
+        box-shadow .34s ease,
+        transform .52s cubic-bezier(.18,1.36,.2,1),
+        border-radius .34s ease;
+}
+.terminal-smartbar.open .smartbar-session,
+.terminal-smartbar.open .smartbar-add {
+    opacity: 1;
+    transform: translate3d(0, var(--dock-lift), 0) scale(var(--dock-scale)) rotateZ(var(--dock-rotate));
+    animation: dockItemBloom .64s cubic-bezier(.18,1.36,.2,1) both;
+    animation-delay: calc(.12s + (var(--dock-index, 0) * 42ms));
+}
+.smartbar-dock:hover .smartbar-session,
+.smartbar-dock:hover .smartbar-add {
+    filter: saturate(.96) brightness(.98);
 }
 .smartbar-session:hover,
-.smartbar-add:hover { transform: translateY(-8px) scale(1.08); }
+.smartbar-add:hover {
+    --dock-scale: 1.22;
+    --dock-lift: -14px;
+    --dock-rotate: -1deg;
+    filter: saturate(1.08) brightness(1.04);
+}
+.smartbar-session:hover + .smartbar-session,
+.smartbar-session:hover + .smartbar-add,
+.smartbar-add:hover + .smartbar-session {
+    --dock-scale: 1.09;
+    --dock-lift: -6px;
+}
+.smartbar-dock:has(.smartbar-session:hover) .smartbar-session:has(+ .smartbar-session:hover),
+.smartbar-dock:has(.smartbar-add:hover) .smartbar-session:has(+ .smartbar-add:hover) {
+    --dock-scale: 1.09;
+    --dock-lift: -6px;
+}
 .smartbar-session:hover .smartbar-session-icon,
 .smartbar-add:hover::before {
-    border-color: rgba(88,166,255,.52);
-    box-shadow: 0 18px 42px rgba(0,0,0,.30), 0 0 0 4px rgba(88,166,255,.08);
+    border-color: rgba(88,166,255,.58);
+    border-radius: 21px;
+    transform: translateY(-1px);
+    box-shadow: 0 22px 48px rgba(0,0,0,.30), 0 0 0 5px rgba(88,166,255,.09);
 }
-.smartbar-session.active .smartbar-session-icon { border-color: var(--accent); box-shadow: 0 14px 36px rgba(88,166,255,.20), 0 0 0 3px rgba(88,166,255,.12); }
-.smartbar-session.minimized { opacity: .72; }
+.smartbar-session.active .smartbar-session-icon {
+    border-color: var(--accent);
+    box-shadow: 0 16px 38px rgba(88,166,255,.22), 0 0 0 3px rgba(88,166,255,.14);
+    animation: dockActivePulse 2.2s ease-in-out infinite;
+}
+.smartbar-session.active::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent-hover);
+    transform: translateX(-50%);
+    box-shadow: 0 0 12px rgba(88,166,255,.72);
+}
+.smartbar-session.minimized { opacity: .74; }
+@keyframes dockItemBloom {
+    0% { opacity: 0; transform: translate3d(0, 28px, 0) scale(.58) rotateX(18deg); filter: blur(10px); }
+    55% { opacity: 1; transform: translate3d(0, -9px, 0) scale(1.08) rotateX(0); filter: blur(0); }
+    78% { transform: translate3d(0, 3px, 0) scale(.98); }
+    100% { opacity: 1; transform: translate3d(0, var(--dock-lift), 0) scale(var(--dock-scale)) rotateZ(var(--dock-rotate)); filter: blur(0); }
+}
+@keyframes dockActivePulse {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-1px) scale(1.025); }
+}
 .smartbar-session-icon .proto-dot {
     position: absolute;
     right: 7px;
@@ -551,11 +645,19 @@ body.terminal-mode .main-nav {
     height: 10px;
 }
 .smartbar-session-icon b {
-    font-size: 18px;
+    font-size: 20px;
     letter-spacing: .02em;
     font-weight: 900;
 }
-.smartbar-session strong { max-width: 74px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 1.1; font-weight: 700; }
+.smartbar-session strong {
+    max-width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.15;
+    font-weight: 700;
+}
 .smartbar-session em { display: none; }
 .smartbar-add {
     font-size: 0;
@@ -1090,6 +1192,46 @@ body.app-body > .toast.show { opacity: 1; transform: translate3d(0,0,0) scale(1)
     .remote-command textarea { min-height: 150px; }
     .remote-command .btn { justify-self: stretch; width: 100%; min-height: 42px; }
     .result-card h3 { flex-direction: column; gap: 4px; }
+    .terminal-smartbar {
+        --smartbar-panel-height: 138px;
+        padding-inline: 14px;
+    }
+    .smartbar-panel {
+        width: min(100vw - 28px, 720px);
+        padding: 18px 18px 22px;
+        border-radius: 0 0 26px 26px;
+    }
+    .terminal-smartbar.open .smartbar-panel {
+        clip-path: inset(0 0 0 0 round 0 0 26px 26px);
+    }
+    .smartbar-dock {
+        justify-content: flex-start;
+        min-height: 94px;
+        overflow-x: auto;
+        overflow-y: visible;
+        padding-inline: 8px;
+        gap: 8px;
+    }
+    .smartbar-session,
+    .smartbar-add {
+        width: 68px;
+        height: 78px;
+    }
+    .smartbar-session-icon,
+    .smartbar-add::before {
+        width: 54px;
+        height: 54px;
+        border-radius: 16px;
+    }
+    .smartbar-session strong {
+        max-width: 68px;
+        font-size: 10px;
+    }
+    .smartbar-session:hover,
+    .smartbar-add:hover {
+        --dock-scale: 1.08;
+        --dock-lift: -6px;
+    }
 }
 
 .theme-btn-login {
