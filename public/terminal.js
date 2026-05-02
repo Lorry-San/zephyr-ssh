@@ -2846,14 +2846,19 @@ function openPanelLayoutMenu(button, panel) {
     document.body.appendChild(menu);
     const placeMenu = () => {
         const rect = button.getBoundingClientRect();
-        const menuRect = menu.getBoundingClientRect();
         const viewport = window.visualViewport;
         const vvLeft = viewport?.offsetLeft || 0;
         const vvTop = viewport?.offsetTop || 0;
         const vvWidth = viewport?.width || window.innerWidth;
         const vvHeight = viewport?.height || window.innerHeight;
         const anchorX = rect.left + rect.width / 2;
-        const left = Math.min(Math.max(vvLeft + 8, anchorX - menuRect.width / 2), vvLeft + vvWidth - menuRect.width - 8);
+        const maxMenuWidth = Math.max(160, vvWidth - 16);
+        menu.style.width = `${Math.min(228, maxMenuWidth)}px`;
+        const menuRect = menu.getBoundingClientRect();
+        const idealLeft = anchorX - menuRect.width / 2;
+        const minLeft = vvLeft + 8;
+        const maxLeft = vvLeft + vvWidth - menuRect.width - 8;
+        const left = Math.min(Math.max(minLeft, idealLeft), Math.max(minLeft, maxLeft));
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
         const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;

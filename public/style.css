@@ -371,8 +371,14 @@ html:has(body.app-body) { height: auto; min-height: 100%; overflow: auto; }
 .panel-title-row h2 { margin: 0; }
 .empty-state { color: var(--text-secondary); font-size: 14px; padding: 6px; }
 .settings-layout { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: start; }
-.settings-menu { display: grid; gap: 6px; padding: 10px; }
-.settings-tab { text-align: left; }
+.settings-menu {
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+.settings-tab { text-align: left; border-radius: var(--radius); }
 .settings-content { padding: 18px; }
 .settings-panel { display: none; }
 .settings-panel.active { display: block; animation: fadeIn .24s ease-out; }
@@ -1166,7 +1172,7 @@ html.keyboard-open .terminal-page {
 .panel-layout-menu {
     position: fixed;
     z-index: 100;
-    width: min(210px, calc(100vw - 16px));
+    width: min(228px, calc(100vw - 16px));
     min-height: 74px;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -1911,6 +1917,22 @@ html.keyboard-open .terminal-page {
     position: sticky; top: 0; z-index: 2;
 }
 .info-modal-body { padding: 10px; overflow-y: auto; }
+.info-modal-body,
+.info-modal-body > :last-child,
+.info-modal-body .doughnut-row:last-child,
+.info-modal-body .ip-section:last-child,
+.info-modal-body .disk-card-row:last-child,
+.info-modal-body .doughnut-item:last-child,
+.info-modal-body .ip-box:last-child {
+    border-bottom-left-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-lg);
+}
+.info-modal-body > :last-child,
+.info-modal-body .doughnut-row:last-child,
+.info-modal-body .ip-section:last-child,
+.info-modal-body .disk-card-row:last-child {
+    margin-bottom: 0;
+}
 .info-loading {
     padding: 24px 14px;
     color: var(--text-secondary);
