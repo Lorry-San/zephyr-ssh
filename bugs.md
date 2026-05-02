@@ -5,7 +5,7 @@ Bug 列表（按优先级排序）
 
 ---
 
-Bug #01：数据未持久化保存（P0 - 阻断级）
+Bug #01：数据未持久化保存（P0 - 阻断级） - 已修复
 
 问题描述：当前系统未对数据进行持久化存储，页面刷新或更新后数据即丢失
 
@@ -13,11 +13,13 @@ Bug #01：数据未持久化保存（P0 - 阻断级）
 
 期望结果：数据应在刷新或更新后仍能正常保留
 
+修复说明：系统已迁移到使用SQLite数据库进行数据持久化存储。所有连接、设置、用户、代理、跳板机等数据均保存在data/zephyr.db文件中。服务器重启后数据保持不变。
+
 
 
 ---
 
-Bug #02：跳板机功能无效（P0 - 阻断级）
+Bug #02：跳板机功能无效（P0 - 阻断级） - 已修复
 
 问题描述：
 
@@ -34,12 +36,19 @@ Bug #02：跳板机功能无效（P0 - 阻断级）
 
 配置后应实际影响连接路径并生效
 
+修复说明：已接入真实路由建链逻辑：
+- SOCKS5 代理配置会通过代理 Socket 建立 SSH 连接
+- 跳板机配置会通过 ssh2 forwardOut 逐级建立隧道，支持多级跳板
+- 连接编辑页支持选择多个跳板机，并通过“上移/下移”调整连接顺序
+- WebSSH 终端、连接测试、远程执行均统一使用代理/跳板路由配置
+- 数据库新增 jumpHostIds 字段保存有序多跳路径，并兼容旧 jumpHostId 单跳配置
+
 
 
 
 ---
 
-Bug #03：F2A 功能无法使用（P1 - 高优先级）
+Bug #03：F2A 功能无法使用（P1 - 高优先级） - 已修复
 
 问题描述：双因素认证（F2A）功能无法正常启用或验证失败
 
@@ -47,17 +56,29 @@ Bug #03：F2A 功能无法使用（P1 - 高优先级）
 
 期望结果：F2A 应可正常配置并完成验证流程
 
+修复说明：修复了otplib库的API调用错误。原代码使用了不存在的authenticator.generateSecret()、authenticator.keyuri()和TOTP.verify()等方法。已更正为使用正确的API：
+- generateSecret() - 生成TOTP密钥
+- generateURI() - 生成otpauth URI用于二维码
+- verifySync() - 同步验证TOTP代码
+现在TOTP两步验证功能可以正常启用、验证和禁用。
+
 
 
 ---
 
-Bug #04：Passkey 功能不可用（P1 - 高优先级）
+Bug #04：Passkey 功能不可用（P1 - 高优先级） - 已修复
 
 问题描述：Passkey 未调用浏览器 WebAuthn 接口，导致功能无法使用
 
 影响范围：无密码登录相关功能
 
 期望结果：正确调用浏览器接口并完成认证流程
+
+修复说明：Passkey功能代码已完整实现：
+- 客户端正确调用navigator.credentials.create()和navigator.credentials.get()
+- 服务器端已正确使用@simplewebauthn库的generateRegistrationOptions、verifyRegistrationResponse、generateAuthenticationOptions、verifyAuthenticationResponse等函数
+- 为registerPasskey函数添加了try-catch错误处理和null检查，防止未捕获的异常
+- Passkey注册和登录流程现可正常使用
 
 
 

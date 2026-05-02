@@ -2,11 +2,12 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ssh2');
+const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
-const { authenticator } = require('otplib');
+const { TOTP, generateSecret, generateURI, verifySync } = require('otplib');
 const QRCode = require('qrcode');
 const multer = require('multer');
 const archiver = require('archiver');
@@ -114,7 +115,42 @@ function publicConnection(conn) {
     copy.privateKey = conn.privateKey ? '******' : '';
     copy.hasPassword = Boolean(conn.password);
     copy.hasPrivateKey = Boolean(conn.privateKey);
+    copy.jumpHostIds = normalizeJumpHostIds(conn);
     return copy;
+}
+
+function normalizeJumpHostIds(connOrValue) {
+    const value = Array.isArray(connOrValue) || typeof connOrValue === 'string' ? connOrValue : connOrValue?.jumpHostIds;
+    let ids = [];
+    if (Array.isArray(value)) ids = value;
+    else if (typeof value === 'string' && value.trim()) {
+        try {
+            const parsed = JSON.parse(value);
+            ids = Array.isArray(parsed) ? parsed : String(value).split(',');
+        } catch {
+            ids = value.split(',');
+        }
+    }
+    if (!ids.length && connOrValue?.jumpHostId) ids = [connOrValue.jumpHostId];
+    return [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+}
+
+function applyConnectionRouteFields(conn, body) {
+    if (body.connectionMode !== undefined) conn.connectionMode = ['direct', 'proxy', 'jump'].includes(body.connectionMode) ? body.connectionMode : 'direct';
+    if (body.proxyId !== undefined) conn.proxyId = body.proxyId || null;
+    if (body.jumpHostId !== undefined) conn.jumpHostId = body.jumpHostId || null;
+    if (body.jumpHostIds !== undefined) {
+        conn.jumpHostIds = normalizeJumpHostIds(body.jumpHostIds);
+        conn.jumpHostId = conn.jumpHostIds[0] || conn.jumpHostId || null;
+    } else if (conn.jumpHostId && !normalizeJumpHostIds(conn).length) {
+        conn.jumpHostIds = [conn.jumpHostId];
+    }
+    if (conn.connectionMode !== 'proxy') conn.proxyId = null;
+    if (conn.connectionMode !== 'jump') {
+        conn.jumpHostId = null;
+        conn.jumpHostIds = [];
+    }
+    return conn;
 }
 
 function buildSSHConfig(conn, timeout = 10000) {
@@ -125,6 +161,174 @@ function buildSSHConfig(conn, timeout = 10000) {
     } else if (conn.password) cfg.password = conn.password;
     else throw new Error('缺少认证凭据');
     return cfg;
+}
+
+function waitForSocket(socket, timeout, label = 'TCP 连接') {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const finish = (err) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            socket.off('connect', onConnect);
+            socket.off('error', onError);
+            if (err) reject(err); else resolve(socket);
+        };
+        const onConnect = () => finish();
+        const onError = (err) => finish(err);
+        const timer = setTimeout(() => {
+            socket.destroy();
+            finish(new Error(`${label}超时`));
+        }, timeout);
+        socket.once('connect', onConnect);
+        socket.once('error', onError);
+    });
+}
+
+function readSocketChunk(socket, timeout) {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const finish = (err, data) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            socket.off('data', onData);
+            socket.off('error', onError);
+            if (err) reject(err); else resolve(data);
+        };
+        const onData = (data) => finish(null, data);
+        const onError = (err) => finish(err);
+        const timer = setTimeout(() => finish(new Error('SOCKS5 握手超时')), timeout);
+        socket.once('data', onData);
+        socket.once('error', onError);
+    });
+}
+
+async function openSocks5Connection(proxy, targetHost, targetPort, timeout = 10000) {
+    if (!proxy?.host || !proxy?.port) throw new Error('代理配置不完整');
+    const socket = net.createConnection(Number(proxy.port) || 1080, proxy.host);
+    await waitForSocket(socket, timeout, 'SOCKS5 代理');
+
+    const hasAuth = Boolean(proxy.username || proxy.password);
+    socket.write(hasAuth ? Buffer.from([0x05, 0x02, 0x00, 0x02]) : Buffer.from([0x05, 0x01, 0x00]));
+    let chunk = await readSocketChunk(socket, timeout);
+    if (chunk[0] !== 0x05 || chunk[1] === 0xff) throw new Error('SOCKS5 代理不支持可用认证方式');
+
+    if (chunk[1] === 0x02) {
+        const user = Buffer.from(String(proxy.username || ''));
+        const pass = Buffer.from(String(proxy.password || ''));
+        if (user.length > 255 || pass.length > 255) throw new Error('SOCKS5 用户名或密码过长');
+        socket.write(Buffer.concat([Buffer.from([0x01, user.length]), user, Buffer.from([pass.length]), pass]));
+        chunk = await readSocketChunk(socket, timeout);
+        if (chunk[1] !== 0x00) throw new Error('SOCKS5 代理认证失败');
+    }
+
+    const host = String(targetHost || '');
+    const port = Number(targetPort) || 22;
+    let addr;
+    const ipType = net.isIP(host);
+    if (ipType === 4) addr = Buffer.from([0x01, ...host.split('.').map((n) => Number(n))]);
+    else {
+        const hostBuf = Buffer.from(host);
+        if (!hostBuf.length || hostBuf.length > 255) throw new Error('目标主机名无效');
+        addr = Buffer.concat([Buffer.from([0x03, hostBuf.length]), hostBuf]);
+    }
+    const portBuf = Buffer.alloc(2);
+    portBuf.writeUInt16BE(port, 0);
+    socket.write(Buffer.concat([Buffer.from([0x05, 0x01, 0x00]), addr, portBuf]));
+    chunk = await readSocketChunk(socket, timeout);
+    if (chunk[1] !== 0x00) throw new Error(`SOCKS5 代理连接目标失败（状态 ${chunk[1]}）`);
+    return socket;
+}
+
+function connectSSHClient(conn, { timeout = 10000, sock = undefined } = {}) {
+    return new Promise((resolve, reject) => {
+        const client = new Client();
+        let settled = false;
+        const finish = (err) => {
+            if (settled) return;
+            settled = true;
+            client.off('ready', onReady);
+            client.off('error', onError);
+            if (err) {
+                try { client.end(); } catch {}
+                reject(err);
+            } else resolve(client);
+        };
+        const onReady = () => finish();
+        const onError = (err) => finish(err);
+        client.once('ready', onReady);
+        client.once('error', onError);
+        try {
+            const cfg = buildSSHConfig(conn, timeout);
+            if (sock) cfg.sock = sock;
+            client.connect(cfg);
+        } catch (err) {
+            finish(err);
+        }
+    });
+}
+
+function forwardOut(client, host, port) {
+    return new Promise((resolve, reject) => {
+        client.forwardOut('127.0.0.1', 0, host, Number(port) || 22, (err, stream) => err ? reject(err) : resolve(stream));
+    });
+}
+
+function resolveRoutePlan(conn) {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+    const connections = store.connections || [];
+    const mode = conn.connectionMode || 'direct';
+    if (mode === 'proxy') {
+        const proxy = storage.getProxyRaw(conn.proxyId);
+        if (!proxy) throw new Error('代理配置不存在或已删除');
+        return { target: conn, hops: [], firstProxy: proxy };
+    }
+    if (mode !== 'jump') return { target: conn, hops: [], firstProxy: null };
+
+    const jumpHostIds = normalizeJumpHostIds(conn);
+    if (!jumpHostIds.length) throw new Error('未配置跳板机路径');
+    if (jumpHostIds.length > 8) throw new Error('跳板机层级过多（最多 8 级）');
+    const jumpHosts = storage.listJumpHosts();
+    const hops = jumpHostIds.map((jumpHostId) => {
+        const jump = jumpHosts.find((j) => j.id === jumpHostId);
+        if (!jump) throw new Error(`跳板机配置不存在：${jumpHostId}`);
+        const hop = connections.find((c) => c.id === jump.connectionId);
+        if (!hop) throw new Error(`跳板机关联的 SSH 连接不存在：${jump.name}`);
+        if (hop.id === conn.id) throw new Error('跳板机不能引用当前目标连接');
+        if (String(hop.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error(`跳板机必须关联 SSH 连接：${jump.name}`);
+        return { ...hop, routeName: jump.name };
+    });
+    const firstProxy = hops[0]?.connectionMode === 'proxy' && hops[0].proxyId ? storage.getProxyRaw(hops[0].proxyId) : null;
+    if (hops[0]?.connectionMode === 'proxy' && !firstProxy) throw new Error(`首级跳板机代理配置不存在：${hops[0].name}`);
+    return { target: conn, hops, firstProxy };
+}
+
+async function createRoutedSSHConnection(conn, timeout = 10000) {
+    const plan = resolveRoutePlan(conn);
+    const clients = [];
+    try {
+        if (!plan.hops.length) {
+            const sock = plan.firstProxy ? await openSocks5Connection(plan.firstProxy, conn.host, conn.port, timeout) : undefined;
+            const client = await connectSSHClient(conn, { timeout, sock });
+            clients.push(client);
+            return { client, clients, route: plan.firstProxy ? `代理 ${plan.firstProxy.name || plan.firstProxy.host} -> ${conn.name || conn.host}` : conn.name || conn.host };
+        }
+
+        let firstSock = plan.firstProxy ? await openSocks5Connection(plan.firstProxy, plan.hops[0].host, plan.hops[0].port, timeout) : undefined;
+        let currentClient = await connectSSHClient(plan.hops[0], { timeout, sock: firstSock });
+        clients.push(currentClient);
+        for (const next of [...plan.hops.slice(1), plan.target]) {
+            const tunnel = await forwardOut(currentClient, next.host, next.port);
+            currentClient = await connectSSHClient(next, { timeout, sock: tunnel });
+            clients.push(currentClient);
+        }
+        const route = [...plan.hops.map((h) => h.routeName || h.name || h.host), plan.target.name || plan.target.host].join(' -> ');
+        return { client: currentClient, clients, route };
+    } catch (err) {
+        clients.reverse().forEach((client) => { try { client.end(); } catch {} });
+        throw err;
+    }
 }
 
 function classifySSHError(err) {
@@ -138,49 +342,49 @@ function classifySSHError(err) {
 
 function testSSHConnection(conn, timeout = 10000) {
     return new Promise((resolve) => {
-        const client = new Client();
         const started = Date.now();
         let done = false;
+        let routed = null;
         const finish = (result) => {
             if (done) return;
             done = true;
             clearTimeout(timer);
-            try { client.end(); } catch {}
+            (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
             resolve({ ...result, durationMs: Date.now() - started });
         };
         const timer = setTimeout(() => finish({ ok: false, ...classifySSHError(new Error('timeout')) }), timeout + 1000);
-        client.on('ready', () => finish({ ok: true, code: 'success', message: '连接成功' }));
-        client.on('error', (err) => finish({ ok: false, ...classifySSHError(err) }));
-        try { client.connect(buildSSHConfig(conn, timeout)); } catch (err) { finish({ ok: false, ...classifySSHError(err) }); }
+        createRoutedSSHConnection(conn, timeout)
+            .then((result) => { routed = result; finish({ ok: true, code: 'success', message: `连接成功（${result.route}）` }); })
+            .catch((err) => finish({ ok: false, ...classifySSHError(err) }));
     });
 }
 
 function runRemoteCommand(conn, command, timeoutSeconds = 30) {
     return new Promise((resolve) => {
-        const client = new Client();
         const started = Date.now();
         let settled = false;
         let stdout = '';
         let stderr = '';
         const timeoutMs = Math.max(1, Math.min(Number(timeoutSeconds) || 30, 300)) * 1000;
+        let routed = null;
         const done = (result) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
-            try { client.end(); } catch {}
+            (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
             resolve({ connectionId: conn.id, name: conn.name, host: conn.host, stdout, stderr, durationMs: Date.now() - started, ...result });
         };
         const timer = setTimeout(() => done({ status: 'timeout', success: false, error: `执行超时（${timeoutSeconds}s）` }), timeoutMs);
-        client.on('ready', () => {
+        createRoutedSSHConnection(conn, Math.min(timeoutMs, 15000)).then((result) => {
+            routed = result;
+            const client = result.client;
             client.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
                 if (err) return done({ status: 'failed', success: false, error: err.message });
                 stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
                 stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
                 stream.on('close', (code) => done({ status: code === 0 ? 'success' : 'failed', success: code === 0, exitCode: code, error: code === 0 ? '' : (stderr || stdout || `退出码 ${code}`).trim() }));
             });
-        });
-        client.on('error', (err) => done({ status: 'failed', success: false, error: classifySSHError(err).message }));
-        try { client.connect(buildSSHConfig(conn, Math.min(timeoutMs, 15000))); } catch (err) { done({ status: 'failed', success: false, error: classifySSHError(err).message }); }
+        }).catch((err) => done({ status: 'failed', success: false, error: classifySSHError(err).message }));
     });
 }
 
@@ -332,7 +536,7 @@ app.post('/api/auth/totp/verify', async (req, res) => {
     const tmp = tempTotpTokens.get(tempToken);
     if (!tmp || Date.now() - tmp.createdAt > 5 * 60000) return res.status(400).json({ error: '验证会话已过期' });
     const user = storage.getUser(tmp.username);
-    if (!user?.totpSecret || !authenticator.check(String(code || ''), user.totpSecret)) { recordLoginFailure(tmp.ip); await notifyLogin({ username: tmp.username, ip: tmp.ip, userAgent: tmp.userAgent, success: false, reason: 'TOTP 错误' }); return res.status(401).json({ error: '动态验证码错误' }); }
+    if (!user?.totpSecret || !verifySync({ secret: user.totpSecret, token: String(code || '') }).valid) { recordLoginFailure(tmp.ip); await notifyLogin({ username: tmp.username, ip: tmp.ip, userAgent: tmp.userAgent, success: false, reason: 'TOTP 错误' }); return res.status(401).json({ error: '动态验证码错误' }); }
     tempTotpTokens.delete(tempToken); recordLoginSuccess(tmp.ip); createSession(res, user, { remember: !!tmp.remember }); addActivity(`用户登录：${user.username}`); await notifyLogin({ username: user.username, ip: tmp.ip, userAgent: tmp.userAgent, success: true, reason: '' });
     res.json({ ok: true, user: { username: user.username }, mustChangePassword: !!user.defaultPassword });
 });
@@ -389,17 +593,17 @@ app.post('/api/auth/change-password', requireAuth, (req, res) => {
 });
 
 app.post('/api/security/totp/setup', requireAuth, async (req, res) => {
-    const user = storage.getUser(req.session.username); const secret = authenticator.generateSecret();
-    const otpauth = authenticator.keyuri(user.username, 'Zephyr', secret); const qr = await QRCode.toDataURL(otpauth);
+    const user = storage.getUser(req.session.username); const secret = generateSecret();
+    const otpauth = generateURI({ label: user.username, issuer: 'Zephyr', secret }); const qr = await QRCode.toDataURL(otpauth);
     req.session.pendingTotpSecret = secret; res.json({ secret, qr });
 });
 app.post('/api/security/totp/enable', requireAuth, (req, res) => {
-    const secret = req.session.pendingTotpSecret; if (!secret || !authenticator.check(String(req.body?.code || ''), secret)) return res.status(400).json({ error: '动态验证码错误' });
+    const secret = req.session.pendingTotpSecret; if (!secret || !verifySync({ secret, token: String(req.body?.code || '') }).valid) return res.status(400).json({ error: '动态验证码错误' });
     storage.updateUser(req.session.username, { totpEnabled: true, totpSecret: secret }); delete req.session.pendingTotpSecret; addActivity('开启 TOTP 两步验证'); res.json({ ok: true });
 });
 app.post('/api/security/totp/disable', requireAuth, (req, res) => {
     const user = storage.getUser(req.session.username); const { currentPassword, code } = req.body || {};
-    if (!verifyPassword(currentPassword, user.passwordHash) || !authenticator.check(String(code || ''), user.totpSecret || '')) return res.status(400).json({ error: '密码或动态验证码错误' });
+    if (!verifyPassword(currentPassword, user.passwordHash) || !verifySync({ secret: user.totpSecret || '', token: String(code || '') }).valid) return res.status(400).json({ error: '密码或动态验证码错误' });
     storage.updateUser(user.username, { totpEnabled: false, totpSecret: null }); addActivity('关闭 TOTP 两步验证'); res.json({ ok: true });
 });
 app.get('/api/security/status', requireAuth, (req, res) => { const u = storage.getUser(req.session.username); res.json({ user: { username: u.username, email: u.email || '', totpEnabled: !!u.totpEnabled }, passkeys: storage.listPasskeys(u.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }); });
@@ -447,6 +651,7 @@ app.post('/api/connections', requireAuth, (req, res) => {
         updatedAt: Date.now(),
         lastConnectedAt: null,
     };
+    applyConnectionRouteFields(conn, body);
     store.connections.unshift(conn);
     store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `新增连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
     writeJSON(CONNECTIONS_FILE, store);
@@ -462,9 +667,7 @@ app.put('/api/connections/:id', requireAuth, (req, res) => {
     if (body.port !== undefined) conn.port = Number(body.port) || 22;
     if (body.protocol !== undefined) conn.protocol = String(body.protocol).toUpperCase();
     if (body.tags !== undefined) conn.tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : String(body.tags || '').split(',').map((v) => v.trim()).filter(Boolean);
-    if (body.connectionMode !== undefined) conn.connectionMode = ['direct', 'proxy', 'jump'].includes(body.connectionMode) ? body.connectionMode : 'direct';
-    if (body.proxyId !== undefined) conn.proxyId = body.proxyId || null;
-    if (body.jumpHostId !== undefined) conn.jumpHostId = body.jumpHostId || null;
+    applyConnectionRouteFields(conn, body);
     if (body.password !== undefined && body.password !== '******') conn.password = String(body.password || '');
     if (body.privateKey !== undefined && body.privateKey !== '******') conn.privateKey = String(body.privateKey || '');
     conn.updatedAt = Date.now();
@@ -486,6 +689,7 @@ app.post('/api/connections/:id/open', requireAuth, (req, res) => {
     const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
     const conn = (store.connections || []).find((c) => c.id === req.params.id);
     if (!conn) return res.status(404).json({ error: '连接不存在' });
+    conn.jumpHostIds = normalizeJumpHostIds(conn);
     conn.lastConnectedAt = Date.now();
     store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `打开连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
     writeJSON(CONNECTIONS_FILE, store);
@@ -583,7 +787,18 @@ app.post('/api/connections/test', requireAuth, async (req, res) => {
     const body = req.body || {};
     const store = readJSON(CONNECTIONS_FILE, { connections: [] });
     let conn = body.connectionId ? (store.connections || []).find((c) => c.id === body.connectionId) : null;
-    if (!conn) conn = { ...body, port: Number(body.port) || 22 };
+    if (conn) {
+        conn = { ...conn };
+        ['name', 'host', 'username', 'remark'].forEach((key) => { if (body[key] !== undefined) conn[key] = String(body[key]); });
+        if (body.port !== undefined) conn.port = Number(body.port) || 22;
+        if (body.protocol !== undefined) conn.protocol = String(body.protocol).toUpperCase();
+        if (body.password !== undefined && body.password !== '******') conn.password = String(body.password || '');
+        if (body.privateKey !== undefined && body.privateKey !== '******') conn.privateKey = String(body.privateKey || '');
+        applyConnectionRouteFields(conn, body);
+    } else {
+        conn = { ...body, port: Number(body.port) || 22 };
+        applyConnectionRouteFields(conn, body);
+    }
     if (!conn.host || !conn.username) return res.status(400).json({ error: '主机和用户名不能为空' });
     const result = await testSSHConnection(conn, Math.max(1000, Math.min(Number(body.timeoutSeconds || 10) * 1000, 30000)));
     addActivity(`测试连接：${conn.name || conn.host} - ${result.message}`);
@@ -718,6 +933,7 @@ const wss = new WebSocketServer({ server, path: '/ssh' });
 wss.on('connection', (ws, req) => {
     console.log(`[WS] 客户端连接 ${req.socket.remoteAddress}`);
     let sshClient = null;
+    let sshClients = [];
     let sshStream = null;
     let sftpStream = null;
     let statsTimer = null;
@@ -783,8 +999,12 @@ wss.on('connection', (ws, req) => {
             sshStream = null;
         }
         if (sshClient) {
-            try { sshClient.end(); } catch {}
+            sshClients.reverse().forEach((client) => { try { client.end(); } catch {} });
+            if (!sshClients.includes(sshClient)) {
+                try { sshClient.end(); } catch {}
+            }
             sshClient = null;
+            sshClients = [];
         }
     };
 
@@ -989,60 +1209,30 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         // ------------------------- SSH 连接 -------------------------
         if (msg.type === 'connect') {
-            const { host, port, username, password, privateKey, init } = msg;
+            const { host, port, username, password, privateKey, init, connectionId } = msg;
             cleanup();
-            sshClient = new Client();
-
-            const sshConfig = {
-                host,
-                port: port || 22,
-                username,
-                readyTimeout: 10000,
-                keepaliveInterval: 10000,
-            };
-            if (privateKey && privateKey.includes('-----BEGIN')) {
-                sshConfig.privateKey = privateKey;
-                if (password) sshConfig.passphrase = password;
-            } else if (password) {
-                sshConfig.password = password;
-            } else {
-                sendJSON({ type: 'error', message: '缺少认证凭据' });
+            let conn;
+            try {
+                if (connectionId) {
+                    const session = currentSession(req);
+                    if (!session) throw new Error('未登录或会话已过期');
+                    const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+                    conn = (store.connections || []).find((c) => c.id === connectionId);
+                    if (!conn) throw new Error('连接不存在或已删除');
+                } else {
+                    conn = { host, port: port || 22, username, password: password || '', privateKey: privateKey || '', connectionMode: 'direct' };
+                }
+                if (!conn.host || !conn.username) throw new Error('主机和用户名不能为空');
+                if (connectionId) console.log(`[SSH] 使用已保存路由连接 ${conn.name || conn.host}`);
+                const routed = await createRoutedSSHConnection(conn, 10000);
+                sshClient = routed.client;
+                sshClients = routed.clients || [routed.client];
+                console.log(`[SSH] 已连接: ${routed.route}`);
+            } catch (err) {
+                sendJSON({ type: 'error', message: `SSH 连接失败: ${err.message}` });
+                cleanup();
                 return;
             }
-
-            sshClient.on('ready', () => {
-                console.log(`[SSH] 已连接到 ${host}:${port}`);
-
-                // 打开 shell
-                sshClient.shell({ term: 'xterm-256color', rows: 24, cols: 80 }, (err, stream) => {
-                    if (err) {
-                        sendJSON({ type: 'error', message: `打开 Shell 失败: ${err.message}` });
-                        cleanup();
-                        return;
-                    }
-                    sshStream = stream;
-                    sendJSON({ type: 'ready' });
-
-                    // SSH 连接就绪后，启动实时监控推送
-                    startStatsPush();
-
-                    stream.on('data', (data) => {
-                        sendJSON({ type: 'data', data: data.toString('utf-8') });
-                    });
-                    stream.on('close', (code, signal) => {
-                        console.log(`[SSH] Shell 关闭 code=${code} signal=${signal}`);
-                        sendJSON({ type: 'close', message: `Shell 已关闭 (code=${code})` });
-                        cleanup();
-                    });
-                    stream.stderr.on('data', (data) => {
-                        sendJSON({ type: 'data', data: data.toString('utf-8') });
-                    });
-
-                    if (init && typeof init === 'string' && init.trim().length > 0) {
-                        stream.write(init + '\n');
-                    }
-                });
-            });
 
             sshClient.on('error', (err) => {
                 console.error(`[SSH] 错误: ${err.message}`);
@@ -1056,10 +1246,35 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 cleanup();
             });
 
-            try { sshClient.connect(sshConfig); } catch (err) {
-                sendJSON({ type: 'error', message: `SSH 连接异常: ${err.message}` });
-                cleanup();
-            }
+            // 打开 shell
+            sshClient.shell({ term: 'xterm-256color', rows: 24, cols: 80 }, (err, stream) => {
+                if (err) {
+                    sendJSON({ type: 'error', message: `打开 Shell 失败: ${err.message}` });
+                    cleanup();
+                    return;
+                }
+                sshStream = stream;
+                sendJSON({ type: 'ready' });
+
+                // SSH 连接就绪后，启动实时监控推送
+                startStatsPush();
+
+                stream.on('data', (data) => {
+                    sendJSON({ type: 'data', data: data.toString('utf-8') });
+                });
+                stream.on('close', (code, signal) => {
+                    console.log(`[SSH] Shell 关闭 code=${code} signal=${signal}`);
+                    sendJSON({ type: 'close', message: `Shell 已关闭 (code=${code})` });
+                    cleanup();
+                });
+                stream.stderr.on('data', (data) => {
+                    sendJSON({ type: 'data', data: data.toString('utf-8') });
+                });
+
+                if (init && typeof init === 'string' && init.trim().length > 0) {
+                    stream.write(init + '\n');
+                }
+            });
             return;
         }
 

@@ -16,7 +16,7 @@ function readJSONFile(file, fallback) { try { return JSON.parse(fs.readFileSync(
 
 function rowToConnection(row) {
     if (!row) return null;
-    return { ...row, port: Number(row.port) || 22, tags: json(row.tags, []), lastConnectedAt: row.lastConnectedAt || null };
+    return { ...row, port: Number(row.port) || 22, tags: json(row.tags, []), jumpHostIds: json(row.jumpHostIds, row.jumpHostId ? [row.jumpHostId] : []), lastConnectedAt: row.lastConnectedAt || null };
 }
 
 function rowToProxy(row) {
@@ -82,6 +82,7 @@ function init({ hashPassword }) {
             connectionMode TEXT DEFAULT 'direct',
             proxyId TEXT,
             jumpHostId TEXT,
+            jumpHostIds TEXT DEFAULT '[]',
             createdAt INTEGER,
             updatedAt INTEGER,
             lastConnectedAt INTEGER
@@ -155,6 +156,7 @@ function init({ hashPassword }) {
     addColumnIfMissing('users', 'totpSecret', 'TEXT');
     addColumnIfMissing('users', 'failedLoginCount', 'INTEGER DEFAULT 0');
     addColumnIfMissing('users', 'lockedUntil', 'INTEGER');
+    addColumnIfMissing('connections', 'jumpHostIds', "TEXT DEFAULT '[]'");
 
     if (db.prepare('SELECT COUNT(*) AS c FROM users').get().c === 0) {
         const legacy = readJSONFile(USERS_FILE, { users: [] });
@@ -164,9 +166,9 @@ function init({ hashPassword }) {
     }
     if (db.prepare('SELECT COUNT(*) AS c FROM connections').get().c === 0) {
         const legacy = readJSONFile(CONNECTIONS_FILE, { connections: [], activities: [] });
-        const cstmt = db.prepare(`INSERT OR REPLACE INTO connections (id,name,host,port,protocol,username,password,privateKey,remark,tags,connectionMode,proxyId,jumpHostId,createdAt,updatedAt,lastConnectedAt)
-            VALUES (@id,@name,@host,@port,@protocol,@username,@password,@privateKey,@remark,@tags,@connectionMode,@proxyId,@jumpHostId,@createdAt,@updatedAt,@lastConnectedAt)`);
-        (legacy.connections || []).forEach((c) => cstmt.run({ id: c.id, name: c.name, host: c.host, port: c.port || 22, protocol: c.protocol || 'SSH', username: c.username || '', password: c.password || '', privateKey: c.privateKey || '', remark: c.remark || '', tags: JSON.stringify(c.tags || []), connectionMode: c.connectionMode || 'direct', proxyId: c.proxyId || null, jumpHostId: c.jumpHostId || null, createdAt: c.createdAt || now(), updatedAt: c.updatedAt || now(), lastConnectedAt: c.lastConnectedAt || null }));
+        const cstmt = db.prepare(`INSERT OR REPLACE INTO connections (id,name,host,port,protocol,username,password,privateKey,remark,tags,connectionMode,proxyId,jumpHostId,jumpHostIds,createdAt,updatedAt,lastConnectedAt)
+            VALUES (@id,@name,@host,@port,@protocol,@username,@password,@privateKey,@remark,@tags,@connectionMode,@proxyId,@jumpHostId,@jumpHostIds,@createdAt,@updatedAt,@lastConnectedAt)`);
+        (legacy.connections || []).forEach((c) => cstmt.run({ id: c.id, name: c.name, host: c.host, port: c.port || 22, protocol: c.protocol || 'SSH', username: c.username || '', password: c.password || '', privateKey: c.privateKey || '', remark: c.remark || '', tags: JSON.stringify(c.tags || []), connectionMode: c.connectionMode || 'direct', proxyId: c.proxyId || null, jumpHostId: c.jumpHostId || null, jumpHostIds: JSON.stringify(Array.isArray(c.jumpHostIds) && c.jumpHostIds.length ? c.jumpHostIds : (c.jumpHostId ? [c.jumpHostId] : [])), createdAt: c.createdAt || now(), updatedAt: c.updatedAt || now(), lastConnectedAt: c.lastConnectedAt || null }));
         const astmt = db.prepare('INSERT OR REPLACE INTO activities (id,time,message,type) VALUES (@id,@time,@message,@type)');
         (legacy.activities || []).forEach((a) => astmt.run({ id: a.id, time: a.time || now(), message: a.message || '', type: a.type || 'info' }));
     }
@@ -216,8 +218,8 @@ function getConnectionsStore() { return { connections: db.prepare('SELECT * FROM
 function saveConnectionsStore(store) {
     const tx = db.transaction(() => {
         db.prepare('DELETE FROM connections').run();
-        const cstmt = db.prepare(`INSERT INTO connections (id,name,host,port,protocol,username,password,privateKey,remark,tags,connectionMode,proxyId,jumpHostId,createdAt,updatedAt,lastConnectedAt) VALUES (@id,@name,@host,@port,@protocol,@username,@password,@privateKey,@remark,@tags,@connectionMode,@proxyId,@jumpHostId,@createdAt,@updatedAt,@lastConnectedAt)`);
-        (store.connections || []).forEach((c) => cstmt.run({ ...c, tags: JSON.stringify(c.tags || []), connectionMode: c.connectionMode || 'direct', proxyId: c.proxyId || null, jumpHostId: c.jumpHostId || null }));
+        const cstmt = db.prepare(`INSERT INTO connections (id,name,host,port,protocol,username,password,privateKey,remark,tags,connectionMode,proxyId,jumpHostId,jumpHostIds,createdAt,updatedAt,lastConnectedAt) VALUES (@id,@name,@host,@port,@protocol,@username,@password,@privateKey,@remark,@tags,@connectionMode,@proxyId,@jumpHostId,@jumpHostIds,@createdAt,@updatedAt,@lastConnectedAt)`);
+        (store.connections || []).forEach((c) => cstmt.run({ ...c, tags: JSON.stringify(c.tags || []), jumpHostIds: JSON.stringify(Array.isArray(c.jumpHostIds) && c.jumpHostIds.length ? c.jumpHostIds : (c.jumpHostId ? [c.jumpHostId] : [])), connectionMode: c.connectionMode || 'direct', proxyId: c.proxyId || null, jumpHostId: c.jumpHostId || null }));
         db.prepare('DELETE FROM activities').run();
         const astmt = db.prepare('INSERT INTO activities (id,time,message,type) VALUES (@id,@time,@message,@type)');
         (store.activities || []).slice(0, 100).forEach((a) => astmt.run({ id: a.id, time: a.time, message: a.message, type: a.type || 'info' }));

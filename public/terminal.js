@@ -3346,6 +3346,7 @@ function connectWebSocket(connectionToken = activeConnectionToken) {
             clearTimeout(timeout);
             ws.send(JSON.stringify({
                 type: 'connect',
+                connectionId: params.connectionId || '',
                 host: params.host,
                 port: params.port,
                 username: params.username,
