@@ -192,6 +192,36 @@ function enforceTerminalWorkspaceLimit(newId) {
     syncVisualLayout({ preserve: false });
 }
 function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
+function positionSmartbarPicker() {
+    const smartbar = $('#sessionTabs');
+    const picker = smartbar?.querySelector('.smartbar-picker');
+    const addButton = smartbar?.querySelector('[data-smartbar-add]');
+    if (!smartbar || !picker || !addButton) return;
+    const viewport = window.visualViewport;
+    const vvLeft = viewport?.offsetLeft || 0;
+    const vvTop = viewport?.offsetTop || 0;
+    const vvWidth = viewport?.width || window.innerWidth;
+    const vvHeight = viewport?.height || window.innerHeight;
+    const margin = 14;
+    const addRect = addButton.getBoundingClientRect();
+    const pickerRect = picker.getBoundingClientRect();
+    const pickerWidth = Math.min(pickerRect.width || 300, Math.max(160, vvWidth - margin * 2));
+    const pickerHeight = pickerRect.height || 220;
+    const anchorX = addRect.left + addRect.width / 2;
+    const idealLeft = anchorX - pickerWidth / 2;
+    const minLeft = vvLeft + margin;
+    const maxLeft = vvLeft + vvWidth - pickerWidth - margin;
+    const left = Math.min(Math.max(idealLeft, minLeft), Math.max(minLeft, maxLeft));
+    const belowTop = addRect.bottom + 12;
+    const aboveTop = addRect.top - pickerHeight - 12;
+    const top = belowTop + pickerHeight <= vvTop + vvHeight - margin ? belowTop : Math.max(vvTop + margin, aboveTop);
+    const arrowLeft = Math.min(pickerWidth - 18, Math.max(18, anchorX - left));
+
+    picker.style.width = `${pickerWidth}px`;
+    picker.style.setProperty('--smartbar-picker-left', `${left}px`);
+    picker.style.setProperty('--smartbar-picker-top', `${top}px`);
+    picker.style.setProperty('--smartbar-picker-arrow-left', `${arrowLeft}px`);
+}
 function renderTerminalSmartbar() {
     const orderedIds = terminalSmartbarSide === 'left' ? openOrderStack : [...openOrderStack].reverse();
     const seen = new Set();
@@ -224,10 +254,10 @@ function renderTerminalSmartbar() {
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
                 <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
             </div>
-            ${picker}
             <button class="smartbar-close-corner left" data-smartbar-close title="收回">⌃</button>
             <button class="smartbar-close-corner right" data-smartbar-close title="收回">⌃</button>
         </div>
+        ${picker}
         <button class="smartbar-handle right" data-smartbar-toggle="right" title="展开终端栏"><span>⌄</span></button>`;
     requestAnimationFrame(() => {
         const nav = $('.main-nav');
@@ -238,6 +268,7 @@ function renderTerminalSmartbar() {
         const smartbarTop = `${Math.round(navRect.bottom)}px`;
         smartbar.style.setProperty('--smartbar-top', smartbarTop);
         document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
+        positionSmartbarPicker();
     });
 }
 function terminalWindowMenu(t) {
@@ -245,7 +276,7 @@ function terminalWindowMenu(t) {
     const visibleCount = visibleTerminalTabs().length;
     let items;
     if (maxWindows <= 1 || visibleCount <= 1) {
-        items = [['close', '关闭']];
+        items = [['fullscreen', '全屏'], ['close', '关闭']];
     } else if (maxWindows === 2 || visibleCount === 2) {
         items = [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
     } else {
@@ -686,7 +717,12 @@ function bindEvents() {
         const toggle = e.target.closest('[data-smartbar-toggle]');
         if (toggle) { setTerminalSmartbarOpen(!(terminalSmartbarOpen && terminalSmartbarSide === toggle.dataset.smartbarToggle), toggle.dataset.smartbarToggle); return; }
         if (e.target.closest('[data-smartbar-close]')) { setTerminalSmartbarOpen(false); return; }
-        if (e.target.closest('[data-smartbar-add]')) { terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen; setTerminalSmartbarOpen(true, terminalSmartbarSide); return; }
+        if (e.target.closest('[data-smartbar-add]')) {
+            terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen;
+            setTerminalSmartbarOpen(true, terminalSmartbarSide);
+            requestAnimationFrame(positionSmartbarPicker);
+            return;
+        }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
         const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
         if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); return; }

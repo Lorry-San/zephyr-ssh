@@ -2538,6 +2538,7 @@ function setupHorizontalScrollbarVisibility(...elements) {
 }
 
 function setupMobileKeyboardAvoidance() {
+    if (embeddedMode) return;
     if (!window.visualViewport && !navigator.virtualKeyboard && !isTouchKeyboardDevice()) return;
     try {
         if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;
