@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS app-build
+FROM node:20-alpine AS app-build
 
 WORKDIR /app
 
@@ -21,13 +21,18 @@ USER root
 WORKDIR /app
 
 # 复用官方 guacd 镜像提供的 guacd、RDP/VNC 插件和运行依赖；
-# 从 Node 官方镜像复制 Node.js 运行时，避免 Debian apt 源找不到 guacd/libguac-client-* 包。
+# guacamole/guacd:1.5.5 基于 Alpine，guacd 位于 /opt/guacamole/sbin。
+# 从 Alpine 版 Node 官方镜像复制 Node.js 运行时，避免 glibc/musl 不兼容。
+ENV PATH="/opt/guacamole/sbin:${PATH}"
 COPY --from=app-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
-    command -v guacd && \
-    node --version
+    echo "PATH=${PATH}" && \
+    echo "guacd=$(command -v guacd)" && \
+    guacd -v && \
+    node --version && \
+    npm --version
 
 COPY --from=app-build /app /app
 
