@@ -785,7 +785,7 @@ async function loadSettings() {
     settings = await api('/api/settings').catch(() => ({})); const sec = settings.security || {}, cap = settings.captcha || {}, mail = settings.mail || {}, beian = settings.beian || {};
     $('#versionText').textContent = settings.version || '3.0.0'; $('#icpInput').value = beian.icp ?? settings.icp ?? ''; $('#policeInput').value = beian.policeBeian ?? settings.policeBeian ?? ''; $('#policeUrlInput').value = beian.policeBeianUrl ?? settings.policeBeianUrl ?? ''; $('#showBeianInput').checked = (beian.show ?? settings.showBeian) !== false;
     $('#ipWhitelistEnabled').checked = !!sec.ipWhitelistEnabled; $('#ipWhitelist').value = sec.ipWhitelist || ''; $('#bruteForceEnabled').checked = sec.bruteForceEnabled !== false; $('#bruteForceMaxFailures').value = sec.bruteForceMaxFailures || 5; $('#bruteForceBanMinutes').value = sec.bruteForceBanMinutes || 15;
-    $('#captchaEnabled').checked = !!cap.enabled; $('#captchaProvider').value = cap.provider || 'turnstile'; $('#captchaSiteKey').value = cap.siteKey || cap.tencentCaptchaAppId || ''; $('#captchaSecretKey').value = cap.secretKey || '';
+    $('#captchaEnabled').checked = !!cap.enabled; $('#captchaProvider').value = cap.provider || 'turnstile'; $('#captchaSiteKey').value = cap.siteKey || cap.tencentCaptchaAppId || cap.aliyunCaptchaId || cap.aliyunSceneId || ''; $('#captchaSecretKey').value = cap.secretKey || cap.tencentAppSecretKey || cap.aliyunAccessKeySecret || '';
     $('#mailEnabled').checked = !!mail.enabled; $('#mailHost').value = mail.host || ''; $('#mailPort').value = mail.port || 465; $('#mailSecure').checked = mail.secure !== false; $('#mailUser').value = mail.user || ''; $('#mailPass').value = mail.pass || ''; $('#mailFrom').value = mail.from || ''; $('#mailAdminEmail').value = mail.adminEmail || ''; $('#notifyLoginSuccess').checked = mail.notifyLoginSuccess !== false; $('#notifyLoginFailure').checked = mail.notifyLoginFailure !== false; $('#geoLookupEnabled').checked = mail.geoLookupEnabled !== false;
     $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
@@ -798,7 +798,26 @@ function renderTotp() { $('#totpBox').innerHTML = `<div class="mini-item"><b>TOT
 function renderPasskeys() { $('#passkeyList').innerHTML = (securityStatus.passkeys || []).map((p) => `<div class="mini-item"><b>Passkey</b><span>${fmtTime(p.createdAt)}</span><button data-del-passkey="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无 Passkey</p>'; }
 function renderSecurityLists() { $('#ipBanList').innerHTML = ipBans.map((b) => `<div class="mini-item"><b>${escapeHtml(b.ip)}</b><span>失败 ${b.failedCount} · 解封 ${fmtTime(b.bannedUntil)}</span><button data-unban="${escapeHtml(b.ip)}">解除</button></div>`).join('') || '<p class="muted">暂无封禁 IP</p>'; $('#loginEventList').innerHTML = loginEvents.slice(0, 20).map((e) => `<div class="mini-item"><b>${e.success ? '成功' : '失败'} · ${escapeHtml(e.username || '-')}</b><span>${escapeHtml(e.ip || '')} · ${escapeHtml(e.reason || '')} · ${fmtTime(e.time)}</span></div>`).join('') || '<p class="muted">暂无登录事件</p>'; }
 async function saveSecurityPolicy(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ security: { ipWhitelistEnabled: $('#ipWhitelistEnabled').checked, ipWhitelist: $('#ipWhitelist').value, bruteForceEnabled: $('#bruteForceEnabled').checked, bruteForceMaxFailures: Number($('#bruteForceMaxFailures').value) || 5, bruteForceBanMinutes: Number($('#bruteForceBanMinutes').value) || 15 } }) }); toast('安全策略已保存'); }
-async function saveCaptcha(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ captcha: { enabled: $('#captchaEnabled').checked, provider: $('#captchaProvider').value, siteKey: $('#captchaSiteKey').value, secretKey: $('#captchaSecretKey').value, tencentCaptchaAppId: $('#captchaProvider').value === 'tencent' ? $('#captchaSiteKey').value : '' } }) }); toast('CAPTCHA 已保存'); }
+async function saveCaptcha(e) {
+    e.preventDefault();
+    const provider = $('#captchaProvider').value;
+    const siteKey = $('#captchaSiteKey').value.trim();
+    const secretKey = $('#captchaSecretKey').value.trim();
+    const captcha = {
+        enabled: $('#captchaEnabled').checked,
+        provider,
+        siteKey,
+        secretKey,
+        tencentCaptchaAppId: provider === 'tencent' ? siteKey : '',
+        tencentAppSecretKey: provider === 'tencent' ? secretKey : '',
+        aliyunCaptchaId: provider === 'aliyun' ? siteKey : '',
+        aliyunSceneId: provider === 'aliyun' ? siteKey : '',
+        aliyunAccessKeySecret: provider === 'aliyun' ? secretKey : ''
+    };
+    console.debug('[captcha-client]', 'save captcha settings', { provider, enabled: captcha.enabled, hasSiteKey: !!siteKey, hasSecretKey: !!secretKey });
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ captcha }) });
+    toast('CAPTCHA 已保存');
+}
 async function saveMail(e) {
     e.preventDefault();
     try {

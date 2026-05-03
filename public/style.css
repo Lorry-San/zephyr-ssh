@@ -233,6 +233,29 @@ body.app-body.terminal-mode {
 .login-card h1 { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 20px; }
 .auth-subtitle { text-align: center; color: var(--text-secondary); margin: -12px 0 18px; font-size: 13px; }
 .auth-options { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 14px; font-size: 13px; color: var(--text-secondary); }
+.captcha-box {
+    display: grid;
+    place-items: center;
+    min-height: 0;
+    margin: 2px 0 12px;
+    overflow: visible;
+}
+.captcha-box.force-hidden { display: none !important; }
+.captcha-box.loading::before {
+    content: '正在加载人机验证...';
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+.captcha-box.error {
+    min-height: 42px;
+    padding: 10px 12px;
+    border: 1px solid rgba(248,81,73,.35);
+    border-radius: var(--radius);
+    background: rgba(248,81,73,.08);
+    color: var(--danger);
+    font-size: 12px;
+    text-align: center;
+}
 .remember-me { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
 .remember-me input { width: 14px; height: 14px; accent-color: var(--accent); }
 .auth-options a { color: var(--text-secondary); font-size: 12px; text-decoration: none; }
@@ -290,11 +313,11 @@ body.terminal-mode .main-nav {
 .eyebrow { color: var(--accent-hover); font-size: 12px; text-transform: uppercase; letter-spacing: .16em; margin-bottom: 4px; }
 .add-btn { width: auto; min-width: 150px; }
 .action-bar { display: grid; grid-template-columns: 1fr 140px 140px 150px; gap: 10px; margin-bottom: 16px; }
-.search-input, .action-bar select, .settings-form input {
+.search-input, .action-bar select, .settings-form input, .settings-form select, .settings-form textarea {
     width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--surface); color: var(--text); outline: none;
 }
-.search-input:focus, .action-bar select:focus, .settings-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12); }
+.search-input:focus, .action-bar select:focus, .settings-form input:focus, .settings-form select:focus, .settings-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12); }
 .connection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 .connection-card, .activity-panel, .empty-card, .terminal-placeholder, .settings-content, .settings-menu {
     border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);

@@ -442,6 +442,8 @@ function safeSettings(s = storage.getSettings()) {
     if (copy.mail?.pass) copy.mail.pass = '******';
     if (copy.captcha?.secretKey) copy.captcha.secretKey = '******';
     if (copy.captcha?.tencentAppSecretKey) copy.captcha.tencentAppSecretKey = '******';
+    if (copy.captcha?.tencentSecretKey) copy.captcha.tencentSecretKey = '******';
+    if (copy.captcha?.aliyunAccessKeySecret) copy.captcha.aliyunAccessKeySecret = '******';
     return copy;
 }
 function mergeSecret(oldValue, newValue) { return newValue === '******' ? oldValue : (newValue ?? oldValue ?? ''); }
@@ -449,7 +451,15 @@ function normalizeSettingsInput(body) {
     const current = storage.getSettings();
     const next = { ...body };
     if (body.mail) next.mail = { ...(current.mail || {}), ...body.mail, pass: mergeSecret(current.mail?.pass, body.mail.pass) };
-    if (body.captcha) next.captcha = { ...(current.captcha || {}), ...body.captcha, secretKey: mergeSecret(current.captcha?.secretKey, body.captcha.secretKey), tencentAppSecretKey: mergeSecret(current.captcha?.tencentAppSecretKey, body.captcha.tencentAppSecretKey) };
+    if (body.captcha) next.captcha = {
+        ...(current.captcha || {}),
+        ...body.captcha,
+        provider: normalizeCaptchaProvider(body.captcha.provider || current.captcha?.provider),
+        secretKey: mergeSecret(current.captcha?.secretKey, body.captcha.secretKey),
+        tencentAppSecretKey: mergeSecret(current.captcha?.tencentAppSecretKey, body.captcha.tencentAppSecretKey),
+        tencentSecretKey: mergeSecret(current.captcha?.tencentSecretKey, body.captcha.tencentSecretKey),
+        aliyunAccessKeySecret: mergeSecret(current.captcha?.aliyunAccessKeySecret, body.captcha.aliyunAccessKeySecret)
+    };
     if (body.beian) {
         next.beian = { ...(current.beian || {}), ...body.beian };
         next.icp = next.beian.icp || '';
@@ -511,19 +521,166 @@ async function notifyLogin({ username, ip, userAgent, success, reason }) {
     sendMail(title, text).catch((err) => console.error('[MAIL] 登录通知失败:', err.message));
 }
 
+function normalizeCaptchaProvider(provider) {
+    const value = String(provider || 'turnstile').toLowerCase();
+    if (value === 'recaptcha' || value === 'google-recaptcha') return 'google';
+    if (['turnstile', 'hcaptcha', 'google', 'tencent', 'aliyun'].includes(value)) return value;
+    return 'turnstile';
+}
+
+function parseCaptchaToken(token) {
+    if (typeof token !== 'string') return token || {};
+    try { return JSON.parse(token); } catch { return token; }
+}
+
+function hmacSha256(key, value, encoding) {
+    return crypto.createHmac('sha256', key).update(value).digest(encoding);
+}
+
+function sha256Hex(value) {
+    return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function tencentTc3Sign({ secretId, secretKey, service, host, action, version, region = '', payload }) {
+    const algorithm = 'TC3-HMAC-SHA256';
+    const timestamp = Math.floor(Date.now() / 1000);
+    const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+    const canonicalHeaders = `content-type:application/json; charset=utf-8\nhost:${host}\nx-tc-action:${action.toLowerCase()}\n`;
+    const signedHeaders = 'content-type;host;x-tc-action';
+    const hashedRequestPayload = sha256Hex(payload);
+    const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${hashedRequestPayload}`;
+    const credentialScope = `${date}/${service}/tc3_request`;
+    const stringToSign = `${algorithm}\n${timestamp}\n${credentialScope}\n${sha256Hex(canonicalRequest)}`;
+    const secretDate = hmacSha256(`TC3${secretKey}`, date);
+    const secretService = hmacSha256(secretDate, service);
+    const secretSigning = hmacSha256(secretService, 'tc3_request');
+    const signature = hmacSha256(secretSigning, stringToSign, 'hex');
+    return {
+        authorization: `${algorithm} Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+        timestamp,
+        region,
+        version
+    };
+}
+
+async function verifyTencentCaptcha(captcha, token, remoteIp) {
+    const parsed = parseCaptchaToken(token);
+    const ticket = parsed?.ticket || parsed?.Ticket || '';
+    const randstr = parsed?.randstr || parsed?.Randstr || '';
+    const captchaAppId = captcha.tencentCaptchaAppId || captcha.siteKey || '';
+    const appSecretKey = captcha.tencentAppSecretKey || captcha.secretKey || '';
+    const secretId = captcha.tencentSecretId || process.env.TENCENT_SECRET_ID || '';
+    const secretKey = captcha.tencentSecretKey || process.env.TENCENT_SECRET_KEY || '';
+    if (!ticket || !randstr || !captchaAppId || !appSecretKey) return { ok: false, message: '腾讯云验证码参数不完整' };
+
+    const payload = JSON.stringify({ CaptchaType: 9, Ticket: ticket, Randstr: randstr, CaptchaAppId: Number(captchaAppId) || captchaAppId, AppSecretKey: appSecretKey, UserIp: remoteIp || '' });
+
+    if (!secretId || !secretKey) {
+        const params = new URLSearchParams({ aid: captchaAppId, AppSecretKey: appSecretKey, Ticket: ticket, Randstr: randstr, UserIP: remoteIp || '' });
+        const response = await fetch('https://ssl.captcha.qq.com/ticket/verify', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params });
+        const data = await response.json().catch(() => ({}));
+        return { ok: data.response === '1' || data.CaptchaCode === 1, message: data.err_msg || data.CaptchaMsg || '' };
+    }
+
+    const host = 'captcha.tencentcloudapi.com';
+    const service = 'captcha';
+    const action = 'DescribeCaptchaResult';
+    const version = '2019-07-22';
+    const signed = tencentTc3Sign({ secretId, secretKey, service, host, action, version, payload });
+    const response = await fetch(`https://${host}`, {
+        method: 'POST',
+        headers: {
+            Authorization: signed.authorization,
+            'Content-Type': 'application/json; charset=utf-8',
+            Host: host,
+            'X-TC-Action': action,
+            'X-TC-Timestamp': String(signed.timestamp),
+            'X-TC-Version': signed.version,
+            ...(signed.region ? { 'X-TC-Region': signed.region } : {})
+        },
+        body: payload
+    });
+    const data = await response.json().catch(() => ({}));
+    const result = data.Response || {};
+    return { ok: Number(result.CaptchaCode) === 1, message: result.CaptchaMsg || data.Response?.Error?.Message || '' };
+}
+
+function aliyunPercentEncode(value) {
+    return encodeURIComponent(String(value)).replace(/\+/g, '%20').replace(/\*/g, '%2A').replace(/%7E/g, '~');
+}
+
+function parseAliyunAccessKeys(captcha) {
+    const rawSecret = captcha.aliyunAccessKeySecret || captcha.secretKey || '';
+    const rawId = captcha.aliyunAccessKeyId || process.env.ALIYUN_ACCESS_KEY_ID || '';
+    if (rawSecret.includes(':')) {
+        const [accessKeyId, ...secretParts] = rawSecret.split(':');
+        return { accessKeyId: accessKeyId.trim(), accessKeySecret: secretParts.join(':').trim() };
+    }
+    return { accessKeyId: rawId, accessKeySecret: rawSecret };
+}
+
+async function verifyAliyunCaptcha(captcha, token) {
+    const captchaVerifyParam = typeof token === 'string' ? token : JSON.stringify(token || {});
+    const { accessKeyId, accessKeySecret } = parseAliyunAccessKeys(captcha);
+    if (!captchaVerifyParam || !accessKeyId || !accessKeySecret) return { ok: false, message: '阿里云验证码参数不完整：Secret Key 请填写 AccessKeyId:AccessKeySecret，或通过环境变量 ALIYUN_ACCESS_KEY_ID 提供 AccessKeyId' };
+    const params = {
+        AccessKeyId: accessKeyId,
+        Action: 'VerifyCaptcha',
+        CaptchaVerifyParam: captchaVerifyParam,
+        Format: 'JSON',
+        RegionId: captcha.aliyunRegionId || process.env.ALIYUN_CAPTCHA_REGION || 'cn-shanghai',
+        SignatureMethod: 'HMAC-SHA1',
+        SignatureNonce: crypto.randomUUID(),
+        SignatureVersion: '1.0',
+        Timestamp: new Date().toISOString(),
+        Version: '2023-03-05'
+    };
+    const canonicalizedQuery = Object.keys(params).sort().map((key) => `${aliyunPercentEncode(key)}=${aliyunPercentEncode(params[key])}`).join('&');
+    const stringToSign = `GET&%2F&${aliyunPercentEncode(canonicalizedQuery)}`;
+    params.Signature = crypto.createHmac('sha1', `${accessKeySecret}&`).update(stringToSign).digest('base64');
+    const url = `https://captcha.cn-shanghai.aliyuncs.com/?${Object.keys(params).sort().map((key) => `${aliyunPercentEncode(key)}=${aliyunPercentEncode(params[key])}`).join('&')}`;
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+    return { ok: data.Result === true || data.Result?.VerifyResult === true || data.Data?.Result === true || data.Success === true, message: data.Message || data.Code || '' };
+}
+
 async function verifyCaptcha(provider, token, remoteIp) {
     const captcha = storage.getSettings().captcha || {};
     if (!captcha.enabled) return true;
-    if (!token) return false;
-    if (provider === 'turnstile' || provider === 'hcaptcha') {
-        const url = provider === 'turnstile' ? 'https://challenges.cloudflare.com/turnstile/v0/siteverify' : 'https://hcaptcha.com/siteverify';
-        const body = new URLSearchParams({ secret: captcha.secretKey || '', response: token, remoteip: remoteIp });
-        const r = await fetch(url, { method: 'POST', body });
-        const data = await r.json().catch(() => ({}));
-        return !!data.success;
+    const normalizedProvider = normalizeCaptchaProvider(provider || captcha.provider);
+    if (!token) {
+        console.warn('[captcha-verify]', 'missing token', { provider: normalizedProvider, remoteIp });
+        return false;
     }
-    if (provider === 'tencent') return !!token && !captcha.tencentAppSecretKey;
-    return false;
+    try {
+        if (normalizedProvider === 'turnstile' || normalizedProvider === 'hcaptcha' || normalizedProvider === 'google') {
+            const url = normalizedProvider === 'turnstile'
+                ? 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
+                : normalizedProvider === 'hcaptcha'
+                    ? 'https://hcaptcha.com/siteverify'
+                    : 'https://www.google.com/recaptcha/api/siteverify';
+            const body = new URLSearchParams({ secret: captcha.secretKey || '', response: token, remoteip: remoteIp });
+            const r = await fetch(url, { method: 'POST', body });
+            const data = await r.json().catch(() => ({}));
+            console.info('[captcha-verify]', 'siteverify result', { provider: normalizedProvider, success: !!data.success, errors: data['error-codes'] || [] });
+            return !!data.success;
+        }
+        if (normalizedProvider === 'tencent') {
+            const result = await verifyTencentCaptcha(captcha, token, remoteIp);
+            console.info('[captcha-verify]', 'tencent result', { success: result.ok, message: result.message || '' });
+            return !!result.ok;
+        }
+        if (normalizedProvider === 'aliyun') {
+            const result = await verifyAliyunCaptcha(captcha, token);
+            console.info('[captcha-verify]', 'aliyun result', { success: result.ok, message: result.message || '' });
+            return !!result.ok;
+        }
+        console.warn('[captcha-verify]', 'unsupported provider', { provider: normalizedProvider });
+        return false;
+    } catch (err) {
+        console.error('[captcha-verify]', 'verification failed', { provider: normalizedProvider, error: err.message });
+        return false;
+    }
 }
 
 function ipAllowed(ip, listText) {
@@ -798,7 +955,22 @@ app.delete('/api/activities', requireAuth, (req, res) => { storage.clearActiviti
 app.get('/api/public/settings', (req, res) => {
     const s = storage.getSettings();
     const user = storage.getFirstUser();
-    res.json({ defaultUsername: user?.username || 'admin', icp: s.icp || s.beian?.icp || '', policeBeian: s.policeBeian || s.beian?.policeBeian || '', policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '', showBeian: s.showBeian !== false && s.beian?.show !== false, captcha: { enabled: !!s.captcha?.enabled, provider: s.captcha?.provider || 'turnstile', siteKey: s.captcha?.siteKey || '', tencentCaptchaAppId: s.captcha?.tencentCaptchaAppId || '' } });
+    const captcha = s.captcha || {};
+    res.json({
+        defaultUsername: user?.username || 'admin',
+        icp: s.icp || s.beian?.icp || '',
+        policeBeian: s.policeBeian || s.beian?.policeBeian || '',
+        policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '',
+        showBeian: s.showBeian !== false && s.beian?.show !== false,
+        captcha: {
+            enabled: !!captcha.enabled,
+            provider: normalizeCaptchaProvider(captcha.provider || 'turnstile'),
+            siteKey: captcha.siteKey || captcha.tencentCaptchaAppId || captcha.aliyunCaptchaId || captcha.aliyunSceneId || '',
+            tencentCaptchaAppId: captcha.tencentCaptchaAppId || captcha.siteKey || '',
+            aliyunCaptchaId: captcha.aliyunCaptchaId || captcha.siteKey || '',
+            aliyunSceneId: captcha.aliyunSceneId || captcha.siteKey || ''
+        }
+    });
 });
 
 app.get('/api/passkeys', requireAuth, (req, res) => res.json({ passkeys: storage.listPasskeys(req.session.username).map((p) => ({ id: p.id, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt })) }));

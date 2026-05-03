@@ -20,6 +20,150 @@ const beianFooter = $('#beianFooter');
 const REMEMBER_USERNAME_KEY = 'zephyr-remember-username';
 let tempTotpToken = '';
 let defaultUsername = 'admin';
+let publicSettings = {};
+let captchaConfig = { enabled: false, provider: 'turnstile', siteKey: '' };
+let captchaState = { widgetId: null, token: '', loadedProvider: '', loadingPromise: null };
+const CAPTCHA_SCRIPT_URLS = {
+    turnstile: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+    hcaptcha: 'https://js.hcaptcha.com/1/api.js?render=explicit',
+    google: 'https://www.google.com/recaptcha/api.js?render=explicit',
+    tencent: 'https://ssl.captcha.qq.com/TCaptcha.js',
+    aliyun: 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js'
+};
+
+function ensureCaptchaBox() {
+    let box = $('#captchaBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'captchaBox';
+        box.className = 'captcha-box force-hidden';
+        box.setAttribute('aria-live', 'polite');
+        loginForm.querySelector('.auth-options')?.insertAdjacentElement('afterend', box);
+    }
+    return box;
+}
+
+function loadScriptOnce(id, src) {
+    const existing = document.getElementById(id);
+    if (existing?.dataset.loaded === 'true') return Promise.resolve();
+    if (existing?.dataset.loading === 'true') return new Promise((resolve, reject) => {
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', () => reject(new Error('CAPTCHA 脚本加载失败')), { once: true });
+    });
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.id = id;
+        script.src = src;
+        script.async = true;
+        script.defer = true;
+        script.dataset.loading = 'true';
+        script.onload = () => { script.dataset.loaded = 'true'; script.dataset.loading = 'false'; resolve(); };
+        script.onerror = () => reject(new Error('CAPTCHA 脚本加载失败'));
+        document.head.appendChild(script);
+    });
+}
+
+function markCaptchaError(message) {
+    const box = ensureCaptchaBox();
+    box.className = 'captcha-box error';
+    box.textContent = message;
+    console.warn('[captcha-client]', message, captchaConfig);
+}
+
+function setCaptchaToken(token) {
+    captchaState.token = String(token || '');
+    console.debug('[captcha-client]', 'token updated', { provider: captchaConfig.provider, hasToken: !!captchaState.token });
+}
+
+async function renderCaptcha(config = captchaConfig) {
+    captchaConfig = { enabled: !!config.enabled, provider: config.provider || 'turnstile', siteKey: config.siteKey || config.tencentCaptchaAppId || config.aliyunCaptchaId || '' };
+    const box = ensureCaptchaBox();
+    captchaState.token = '';
+    captchaState.widgetId = null;
+    captchaState.loadedProvider = captchaConfig.provider;
+    box.innerHTML = '';
+    if (!captchaConfig.enabled) {
+        box.className = 'captcha-box force-hidden';
+        console.debug('[captcha-client]', 'captcha disabled');
+        return;
+    }
+    if (!captchaConfig.siteKey) {
+        markCaptchaError('CAPTCHA 已启用但未配置 Site Key / AppId');
+        return;
+    }
+    box.className = 'captcha-box loading';
+    console.debug('[captcha-client]', 'render captcha', { provider: captchaConfig.provider, hasSiteKey: !!captchaConfig.siteKey });
+    try {
+        await loadScriptOnce(`captcha-script-${captchaConfig.provider}`, CAPTCHA_SCRIPT_URLS[captchaConfig.provider]);
+        box.className = 'captcha-box';
+        if (captchaConfig.provider === 'turnstile') {
+            captchaState.widgetId = window.turnstile.render(box, { sitekey: captchaConfig.siteKey, callback: setCaptchaToken, 'expired-callback': () => setCaptchaToken(''), 'error-callback': () => setCaptchaToken('') });
+        } else if (captchaConfig.provider === 'hcaptcha') {
+            captchaState.widgetId = window.hcaptcha.render(box, { sitekey: captchaConfig.siteKey, callback: setCaptchaToken, 'expired-callback': () => setCaptchaToken(''), 'error-callback': () => setCaptchaToken('') });
+        } else if (captchaConfig.provider === 'google') {
+            captchaState.widgetId = window.grecaptcha.render(box, { sitekey: captchaConfig.siteKey, callback: setCaptchaToken, 'expired-callback': () => setCaptchaToken(''), 'error-callback': () => setCaptchaToken('') });
+        } else if (captchaConfig.provider === 'tencent') {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn';
+            button.textContent = '点击完成人机验证';
+            button.addEventListener('click', () => {
+                const captcha = new window.TencentCaptcha(captchaConfig.siteKey, (res) => {
+                    if (res.ret === 0) setCaptchaToken(JSON.stringify({ ticket: res.ticket, randstr: res.randstr }));
+                    else setCaptchaToken('');
+                });
+                captcha.show();
+            });
+            box.appendChild(button);
+        } else if (captchaConfig.provider === 'aliyun') {
+            const target = document.createElement('div');
+            const trigger = document.createElement('button');
+            target.id = 'aliyunCaptchaMount';
+            target.style.width = '100%';
+            trigger.id = 'aliyunCaptchaBtn';
+            trigger.type = 'button';
+            trigger.className = 'btn';
+            trigger.textContent = '点击完成人机验证';
+            box.append(target, trigger);
+            window.initAliyunCaptcha({
+                SceneId: captchaConfig.siteKey,
+                prefix: captchaConfig.siteKey,
+                mode: 'popup',
+                element: '#aliyunCaptchaMount',
+                button: '#aliyunCaptchaBtn',
+                captchaVerifyCallback: (captchaVerifyParam) => {
+                    setCaptchaToken(typeof captchaVerifyParam === 'string' ? captchaVerifyParam : JSON.stringify(captchaVerifyParam || {}));
+                    return { captchaResult: true };
+                },
+                onBizResultCallback: () => {},
+                getInstance: (instance) => { captchaState.widgetId = instance; }
+            });
+        } else {
+            markCaptchaError(`不支持的 CAPTCHA provider：${captchaConfig.provider}`);
+        }
+    } catch (err) {
+        markCaptchaError(err.message || 'CAPTCHA 初始化失败');
+    }
+}
+
+function resetCaptcha() {
+    const provider = captchaConfig.provider;
+    captchaState.token = '';
+    try {
+        if (provider === 'turnstile' && window.turnstile && captchaState.widgetId !== null) window.turnstile.reset(captchaState.widgetId);
+        else if (provider === 'hcaptcha' && window.hcaptcha && captchaState.widgetId !== null) window.hcaptcha.reset(captchaState.widgetId);
+        else if (provider === 'google' && window.grecaptcha && captchaState.widgetId !== null) window.grecaptcha.reset(captchaState.widgetId);
+        else if (provider === 'aliyun' && captchaState.widgetId?.refresh) captchaState.widgetId.refresh();
+    } catch (err) {
+        console.warn('[captcha-client]', 'reset failed', { provider, error: err.message });
+    }
+}
+
+function getCaptchaTokenOrThrow() {
+    if (!captchaConfig.enabled) return '';
+    if (!captchaState.token) throw new Error('请先完成人机验证');
+    return captchaState.token;
+}
 
 function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
@@ -78,9 +222,15 @@ function showChangePassword() {
     changePasswordCard.classList.remove('force-hidden');
     $('#newPassword').focus();
 }
-function showLogin() { [changePasswordCard, totpCard, forgotCard].forEach((el) => el.classList.add('force-hidden')); loginCard.classList.remove('force-hidden'); }
+function mountCaptchaFor(form) {
+    const box = ensureCaptchaBox();
+    const anchor = form?.querySelector('.auth-options') || form?.querySelector('.form-group:last-of-type');
+    if (anchor && box.parentElement !== form) anchor.insertAdjacentElement('afterend', box);
+    if (captchaConfig.enabled) resetCaptcha();
+}
+function showLogin() { [changePasswordCard, totpCard, forgotCard].forEach((el) => el.classList.add('force-hidden')); loginCard.classList.remove('force-hidden'); mountCaptchaFor(loginForm); }
 function showTotp(token) { tempTotpToken = token; loginCard.classList.add('force-hidden'); totpCard.classList.remove('force-hidden'); $('#totpCode').focus(); }
-function showForgot() { loginCard.classList.add('force-hidden'); forgotCard.classList.remove('force-hidden'); }
+function showForgot() { loginCard.classList.add('force-hidden'); forgotCard.classList.remove('force-hidden'); mountCaptchaFor(forgotRequestForm); }
 
 function base64urlToBuffer(value) { const s = String(value).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)); }
 function bufferToBase64url(buffer) { return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
@@ -88,12 +238,15 @@ function bufferToBase64url(buffer) { return btoa(String.fromCharCode(...new Uint
 async function loadBeian() {
     try {
         const s = await api('/api/public/settings');
+        publicSettings = s || {};
+        captchaConfig = publicSettings.captcha || { enabled: false, provider: 'turnstile', siteKey: '' };
         defaultUsername = s.defaultUsername || 'admin';
         const usernameInput = $('#username');
         if (usernameInput) usernameInput.placeholder = defaultUsername;
         const hint = $('.auth-hint');
         if (hint) hint.textContent = `默认账号：${defaultUsername} / admin。首次登录需修改密码。`;
         initRememberMe();
+        await renderCaptcha(captchaConfig);
         if (!s.showBeian || (!s.icp && !s.policeBeian)) { beianFooter.innerHTML = ''; return; }
         const parts = [];
         if (s.icp) parts.push(`<a href="https://beian.miit.gov.cn" target="_blank" rel="noreferrer">${s.icp}</a>`);
@@ -124,11 +277,13 @@ loginForm.addEventListener('submit', async (e) => {
     if ($('#rememberMe')?.checked) localStorage.setItem(REMEMBER_USERNAME_KEY, username);
     else localStorage.removeItem(REMEMBER_USERNAME_KEY);
     try {
-        const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, remember: !!$('#rememberMe')?.checked }) });
+        const captchaToken = getCaptchaTokenOrThrow();
+        const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, remember: !!$('#rememberMe')?.checked, captchaToken }) });
         if (data.requireTotp) return showTotp(data.tempToken);
         if (data.mustChangePassword) showChangePassword();
         else window.location.href = '/app.html';
     } catch (err) {
+        resetCaptcha();
         showError(errorBanner, err.message);
     }
 });
@@ -143,8 +298,8 @@ $('#forgotLink').addEventListener('click', (e) => { e.preventDefault(); showForg
 $('#backLoginLink').addEventListener('click', (e) => { e.preventDefault(); showLogin(); });
 forgotRequestForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api('/api/auth/forgot-password/request', { method: 'POST', body: JSON.stringify({ email: $('#forgotEmail').value }) }); forgotRequestForm.classList.add('force-hidden'); forgotResetForm.classList.remove('force-hidden'); showError(forgotErrorBanner, '如果邮箱匹配，验证码已发送'); }
-    catch (err) { showError(forgotErrorBanner, err.message); }
+    try { const captchaToken = getCaptchaTokenOrThrow(); await api('/api/auth/forgot-password/request', { method: 'POST', body: JSON.stringify({ email: $('#forgotEmail').value, captchaToken }) }); forgotRequestForm.classList.add('force-hidden'); forgotResetForm.classList.remove('force-hidden'); showError(forgotErrorBanner, '如果邮箱匹配，验证码已发送'); }
+    catch (err) { resetCaptcha(); showError(forgotErrorBanner, err.message); }
 });
 forgotResetForm.addEventListener('submit', async (e) => {
     e.preventDefault();
