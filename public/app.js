@@ -69,11 +69,18 @@ async function loadConnections() { const data = await api('/api/connections'); c
 function normalizeSelectedRouteIds(selected = '') {
     return Array.isArray(selected) ? selected.map(String).filter(Boolean) : String(selected || '').split(',').map((v) => v.trim()).filter(Boolean);
 }
+function connectionById(id) { return connections.find((c) => String(c.id) === String(id)); }
+function jumpHostLabel(j) {
+    const c = connectionById(j.connectionId);
+    return `${j.name}${c ? ` → ${c.name} (${c.host}:${c.port})` : ' → 连接不存在'}`;
+}
 function jumpConnectionOptions(selected = '') {
     const selectedId = String(selected || '');
     const currentEditingId = String(editingId || '');
-    const list = connections.filter((c) => c.protocol === 'SSH' && String(c.id) !== currentEditingId);
-    return '<option value="">请选择跳板机</option>' + list.map((c) => `<option value="${c.id}" ${selectedId === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.host)}:${escapeHtml(c.port)})</option>`).join('');
+    const list = jumpHosts.filter((j) => String(j.connectionId) !== currentEditingId);
+    if (list.length) return '<option value="">请选择跳板机</option>' + list.map((j) => `<option value="${j.id}" ${selectedId === String(j.id) ? 'selected' : ''}>${escapeHtml(jumpHostLabel(j))}</option>`).join('');
+    const legacy = connections.filter((c) => c.protocol === 'SSH' && String(c.id) !== currentEditingId);
+    return '<option value="">暂无跳板机配置，可临时选择 SSH 连接</option>' + legacy.map((c) => `<option value="${c.id}" ${selectedId === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.host)}:${escapeHtml(c.port)})</option>`).join('');
 }
 function renderJumpRouteRows(selectedIds = []) {
     const list = normalizeSelectedRouteIds(selectedIds);
@@ -84,7 +91,7 @@ function renderJumpRouteRows(selectedIds = []) {
             <select data-jump-route-select>${jumpConnectionOptions(id)}</select>
             <button type="button" class="jump-route-remove" data-remove-jump-route title="移除跳板机">×</button>
         </div>`).join('');
-    console.debug('[route-ui]', 'render jump rows', { selectedIds: list, availableJumpConnections: connections.filter((c) => c.protocol === 'SSH' && String(c.id) !== String(editingId || '')).length });
+    console.debug('[route-ui]', 'render jump rows', { selectedIds: list, availableJumpHosts: jumpHosts.length, legacySshConnections: connections.filter((c) => c.protocol === 'SSH' && String(c.id) !== String(editingId || '')).length });
 }
 function setRouteMode(mode = 'direct', selected = '') {
     const nextMode = ['direct', 'proxy', 'jump'].includes(mode) ? mode : 'direct';
@@ -809,10 +816,27 @@ async function saveTerminalLayout(e) {
 }
 async function setupTotp() { const r = await api('/api/security/totp/setup', { method: 'POST', body: '{}' }); $('#totpEnableForm').classList.remove('force-hidden'); $('#totpQrBox').innerHTML = `<img class="qr-img" src="${r.qr}"><p class="muted">密钥：${escapeHtml(r.secret)}</p>`; }
 async function registerPasskey() { try { if (!window.PublicKeyCredential) return toast('当前浏览器不支持 Passkey'); const options = await api('/api/passkeys/register/options', { method: 'POST', body: '{}' }); options.challenge = base64urlToBuffer(options.challenge); options.user.id = base64urlToBuffer(options.user.id); (options.excludeCredentials || []).forEach((c) => { c.id = base64urlToBuffer(c.id); }); const cred = await navigator.credentials.create({ publicKey: options }); if (!cred) return toast('Passkey 创建被取消'); const payload = { id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type, response: { clientDataJSON: bufferToBase64url(cred.response.clientDataJSON), attestationObject: bufferToBase64url(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } }; await api('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify(payload) }); toast('Passkey 已绑定'); await loadSecurityStatus(); } catch (err) { toast('Passkey 注册失败：' + err.message); } }
-async function loadNetwork() { proxies = (await api('/api/proxies')).proxies || []; renderNetwork(); updateRouteOptions(); }
-function renderNetwork() { $('#proxyList').innerHTML = proxies.map((p) => `<div class="mini-item"><b>${escapeHtml(p.name)}</b><span>${escapeHtml(p.host)}:${p.port}</span><button data-edit-proxy="${p.id}">编辑</button><button data-del-proxy="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无代理</p>'; }
+async function loadNetwork() {
+    const [proxyData, jumpHostData] = await Promise.all([api('/api/proxies'), api('/api/jump-hosts')]);
+    proxies = proxyData.proxies || [];
+    jumpHosts = jumpHostData.jumpHosts || [];
+    renderNetwork();
+    updateRouteOptions();
+}
+function renderJumpHostConnectionOptions(selected = '') {
+    const selectedId = String(selected || '');
+    const ssh = connections.filter((c) => c.protocol === 'SSH');
+    return '<option value="">请选择 SSH 连接</option>' + ssh.map((c) => `<option value="${c.id}" ${selectedId === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.host)}:${escapeHtml(c.port)})</option>`).join('');
+}
+function renderNetwork() {
+    $('#proxyList').innerHTML = proxies.map((p) => `<div class="mini-item"><b>${escapeHtml(p.name)}</b><span>${escapeHtml((p.type || 'socks5').toUpperCase())} · ${escapeHtml(p.host)}:${p.port}</span><button data-edit-proxy="${p.id}">编辑</button><button data-del-proxy="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无代理</p>';
+    const jumpSelect = $('#jumpHostConnection');
+    if (jumpSelect) jumpSelect.innerHTML = renderJumpHostConnectionOptions(jumpSelect.value);
+    $('#jumpHostList').innerHTML = jumpHosts.map((j) => `<div class="mini-item"><b>${escapeHtml(j.name)}</b><span>${escapeHtml(jumpHostLabel(j))}</span><button data-edit-jump-host="${j.id}">编辑</button><button data-del-jump-host="${j.id}">删除</button></div>`).join('') || '<p class="muted">暂无跳板机</p>';
+}
 function renderJumpOptions() { if ($('#jumpRouteConfig') && $('#connMode')?.value === 'jump') updateRouteOptions('jump', $$('#jumpRouteList [data-jump-route-select]').map((el) => el.value).filter(Boolean)); }
-async function saveProxy(e) { e.preventDefault(); const id = $('#proxyId').value, payload = { name: $('#proxyName').value, host: $('#proxyHost').value, port: Number($('#proxyPort').value), username: $('#proxyUsername').value, password: $('#proxyPassword').value }; await api(id ? `/api/proxies/${id}` : '/api/proxies', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); e.target.reset(); $('#proxyId').value = ''; await loadNetwork(); toast('代理已保存'); }
+async function saveProxy(e) { e.preventDefault(); const id = $('#proxyId').value, payload = { name: $('#proxyName').value, type: $('#proxyType').value, host: $('#proxyHost').value, port: Number($('#proxyPort').value), username: $('#proxyUsername').value, password: $('#proxyPassword').value }; console.debug('[route-ui]', 'save proxy payload', { id, ...payload, password: payload.password ? '******' : '' }); await api(id ? `/api/proxies/${id}` : '/api/proxies', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); e.target.reset(); $('#proxyId').value = ''; $('#proxyType').value = 'socks5'; await loadNetwork(); toast('代理已保存'); }
+async function saveJumpHost(e) { e.preventDefault(); const id = $('#jumpHostId').value, payload = { name: $('#jumpHostName').value.trim(), connectionId: $('#jumpHostConnection').value }; console.debug('[route-ui]', 'save jump host payload', { id, ...payload }); await api(id ? `/api/jump-hosts/${id}` : '/api/jump-hosts', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); e.target.reset(); $('#jumpHostId').value = ''; await loadNetwork(); toast('跳板机已保存'); }
 
 function bindEvents() {
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -926,8 +950,9 @@ function bindEvents() {
         enforceTerminalWorkspaceLimit(activeTerminalTab);
         renderTerminalTabs();
     });
-    $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy);
-    $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
+    $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpHostForm').addEventListener('submit', saveJumpHost);
+    $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyType').value = p.type || 'socks5'; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
+    $('#jumpHostList').addEventListener('click', async (e) => { const id = e.target.dataset.editJumpHost || e.target.dataset.delJumpHost; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJumpHost) { $('#jumpHostId').value = j.id; $('#jumpHostName').value = j.name; $('#jumpHostConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
     $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
     $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);

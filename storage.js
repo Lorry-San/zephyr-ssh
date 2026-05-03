@@ -21,7 +21,7 @@ function rowToConnection(row) {
 
 function rowToProxy(row) {
     if (!row) return null;
-    return { ...row, port: Number(row.port) || 1080, hasPassword: Boolean(row.password), password: row.password ? '******' : '' };
+    return { ...row, type: row.type || 'socks5', port: Number(row.port) || 1080, hasPassword: Boolean(row.password), password: row.password ? '******' : '' };
 }
 
 function rowToJumpHost(row) { return row ? { ...row } : null; }
@@ -102,6 +102,7 @@ function init({ hashPassword }) {
             name TEXT NOT NULL,
             host TEXT NOT NULL,
             port INTEGER NOT NULL,
+            type TEXT DEFAULT 'socks5',
             username TEXT,
             password TEXT,
             createdAt INTEGER,
@@ -157,6 +158,7 @@ function init({ hashPassword }) {
     addColumnIfMissing('users', 'failedLoginCount', 'INTEGER DEFAULT 0');
     addColumnIfMissing('users', 'lockedUntil', 'INTEGER');
     addColumnIfMissing('connections', 'jumpHostIds', "TEXT DEFAULT '[]'");
+    addColumnIfMissing('proxies', 'type', "TEXT DEFAULT 'socks5'");
 
     if (db.prepare('SELECT COUNT(*) AS c FROM users').get().c === 0) {
         const legacy = readJSONFile(USERS_FILE, { users: [] });
@@ -232,7 +234,7 @@ function clearActivities() { db.prepare('DELETE FROM activities').run(); }
 
 function listProxies() { return db.prepare('SELECT * FROM proxies ORDER BY createdAt DESC').all().map(rowToProxy); }
 function getProxyRaw(id) { return db.prepare('SELECT * FROM proxies WHERE id=?').get(id); }
-function saveProxy(p) { db.prepare(`INSERT OR REPLACE INTO proxies (id,name,host,port,username,password,createdAt,updatedAt) VALUES (@id,@name,@host,@port,@username,@password,@createdAt,@updatedAt)`).run(p); return rowToProxy(getProxyRaw(p.id)); }
+function saveProxy(p) { db.prepare(`INSERT OR REPLACE INTO proxies (id,name,host,port,type,username,password,createdAt,updatedAt) VALUES (@id,@name,@host,@port,@type,@username,@password,@createdAt,@updatedAt)`).run({ ...p, type: p.type || 'socks5' }); return rowToProxy(getProxyRaw(p.id)); }
 function deleteProxy(id) { db.prepare('DELETE FROM proxies WHERE id=?').run(id); }
 function listJumpHosts() { return db.prepare('SELECT * FROM jump_hosts ORDER BY createdAt DESC').all().map(rowToJumpHost); }
 function saveJumpHost(j) { db.prepare(`INSERT OR REPLACE INTO jump_hosts (id,name,connectionId,createdAt,updatedAt) VALUES (@id,@name,@connectionId,@createdAt,@updatedAt)`).run(j); return rowToJumpHost(db.prepare('SELECT * FROM jump_hosts WHERE id=?').get(j.id)); }

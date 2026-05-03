@@ -204,8 +204,14 @@ function readSocketChunk(socket, timeout) {
     });
 }
 
+function normalizeProxyType(type) {
+    const value = String(type || 'socks5').toLowerCase();
+    return ['socks5', 'http'].includes(value) ? value : 'socks5';
+}
+
 async function openSocks5Connection(proxy, targetHost, targetPort, timeout = 10000) {
     if (!proxy?.host || !proxy?.port) throw new Error('代理配置不完整');
+    console.debug('[proxy]', 'open SOCKS5 tunnel', { proxyId: proxy.id, proxy: proxy.name || proxy.host, targetHost, targetPort });
     const socket = net.createConnection(Number(proxy.port) || 1080, proxy.host);
     await waitForSocket(socket, timeout, 'SOCKS5 代理');
 
@@ -239,6 +245,34 @@ async function openSocks5Connection(proxy, targetHost, targetPort, timeout = 100
     chunk = await readSocketChunk(socket, timeout);
     if (chunk[1] !== 0x00) throw new Error(`SOCKS5 代理连接目标失败（状态 ${chunk[1]}）`);
     return socket;
+}
+
+async function openHttpProxyConnection(proxy, targetHost, targetPort, timeout = 10000) {
+    if (!proxy?.host || !proxy?.port) throw new Error('代理配置不完整');
+    console.debug('[proxy]', 'open HTTP CONNECT tunnel', { proxyId: proxy.id, proxy: proxy.name || proxy.host, targetHost, targetPort });
+    const socket = net.createConnection(Number(proxy.port) || 8080, proxy.host);
+    await waitForSocket(socket, timeout, 'HTTP 代理');
+    const target = `${targetHost}:${Number(targetPort) || 22}`;
+    const headers = [`CONNECT ${target} HTTP/1.1`, `Host: ${target}`, 'Proxy-Connection: Keep-Alive'];
+    if (proxy.username || proxy.password) {
+        const token = Buffer.from(`${proxy.username || ''}:${proxy.password || ''}`).toString('base64');
+        headers.push(`Proxy-Authorization: Basic ${token}`);
+    }
+    socket.write(`${headers.join('\r\n')}\r\n\r\n`);
+    const chunk = await readSocketChunk(socket, timeout);
+    const head = chunk.toString('latin1');
+    const status = head.match(/^HTTP\/\d(?:\.\d)?\s+(\d+)/i)?.[1];
+    if (status !== '200') {
+        socket.destroy();
+        throw new Error(`HTTP 代理 CONNECT 失败（状态 ${status || 'unknown'}）`);
+    }
+    return socket;
+}
+
+function openProxyConnection(proxy, targetHost, targetPort, timeout = 10000) {
+    const type = normalizeProxyType(proxy?.type);
+    if (type === 'http') return openHttpProxyConnection(proxy, targetHost, targetPort, timeout);
+    return openSocks5Connection(proxy, targetHost, targetPort, timeout);
 }
 
 function connectSSHClient(conn, { timeout = 10000, sock = undefined } = {}) {
@@ -289,17 +323,20 @@ function resolveRoutePlan(conn) {
     const jumpHostIds = normalizeJumpHostIds(conn);
     if (!jumpHostIds.length) throw new Error('未配置跳板机路径');
     if (jumpHostIds.length > 8) throw new Error('跳板机层级过多（最多 8 级）');
-    const hops = jumpHostIds.map((jumpConnectionId) => {
+    const jumpHostConfigs = storage.listJumpHosts();
+    const hops = jumpHostIds.map((rawJumpHostId) => {
+        const jumpHostConfig = jumpHostConfigs.find((j) => j.id === rawJumpHostId);
+        const jumpConnectionId = jumpHostConfig?.connectionId || rawJumpHostId;
         const hop = connections.find((c) => c.id === jumpConnectionId);
-        if (!hop) throw new Error(`跳板机连接不存在或已删除：${jumpConnectionId}`);
+        if (!hop) throw new Error(`跳板机连接不存在或已删除：${jumpHostConfig?.name || rawJumpHostId}`);
         if (hop.id === conn.id) throw new Error('跳板机不能引用当前目标连接');
         if (String(hop.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error(`跳板机必须是 SSH 连接：${hop.name || hop.host}`);
-        return { ...hop, routeName: hop.name || hop.host };
+        return { ...hop, routeName: jumpHostConfig?.name || hop.name || hop.host, jumpHostConfigId: jumpHostConfig?.id || null };
     });
-    console.debug('[route-plan]', 'resolved jump route from connections', {
+    console.debug('[route-plan]', 'resolved jump route', {
         target: conn.name || conn.host,
         jumpHostIds,
-        hops: hops.map((hop) => ({ id: hop.id, name: hop.name, host: hop.host }))
+        hops: hops.map((hop) => ({ jumpHostConfigId: hop.jumpHostConfigId, connectionId: hop.id, name: hop.routeName || hop.name, host: hop.host }))
     });
     const firstProxy = hops[0]?.connectionMode === 'proxy' && hops[0].proxyId ? storage.getProxyRaw(hops[0].proxyId) : null;
     if (hops[0]?.connectionMode === 'proxy' && !firstProxy) throw new Error(`首级跳板机代理配置不存在：${hops[0].name}`);
@@ -311,13 +348,13 @@ async function createRoutedSSHConnection(conn, timeout = 10000) {
     const clients = [];
     try {
         if (!plan.hops.length) {
-            const sock = plan.firstProxy ? await openSocks5Connection(plan.firstProxy, conn.host, conn.port, timeout) : undefined;
+            const sock = plan.firstProxy ? await openProxyConnection(plan.firstProxy, conn.host, conn.port, timeout) : undefined;
             const client = await connectSSHClient(conn, { timeout, sock });
             clients.push(client);
             return { client, clients, route: plan.firstProxy ? `代理 ${plan.firstProxy.name || plan.firstProxy.host} -> ${conn.name || conn.host}` : conn.name || conn.host };
         }
 
-        let firstSock = plan.firstProxy ? await openSocks5Connection(plan.firstProxy, plan.hops[0].host, plan.hops[0].port, timeout) : undefined;
+        let firstSock = plan.firstProxy ? await openProxyConnection(plan.firstProxy, plan.hops[0].host, plan.hops[0].port, timeout) : undefined;
         let currentClient = await connectSSHClient(plan.hops[0], { timeout, sock: firstSock });
         clients.push(currentClient);
         for (const next of [...plan.hops.slice(1), plan.target]) {
@@ -823,7 +860,8 @@ app.get('/api/proxies', requireAuth, (req, res) => res.json({ proxies: storage.l
 app.post('/api/proxies', requireAuth, (req, res) => {
     const b = req.body || {};
     if (!b.name || !b.host || !b.port) return res.status(400).json({ error: '名称、IP、端口不能为空' });
-    const proxy = storage.saveProxy({ id: crypto.randomUUID(), name: String(b.name), host: String(b.host), port: Number(b.port) || 1080, username: String(b.username || ''), password: String(b.password || ''), createdAt: Date.now(), updatedAt: Date.now() });
+    const proxy = storage.saveProxy({ id: crypto.randomUUID(), name: String(b.name), host: String(b.host), port: Number(b.port) || 1080, type: normalizeProxyType(b.type), username: String(b.username || ''), password: String(b.password || ''), createdAt: Date.now(), updatedAt: Date.now() });
+    console.debug('[proxy]', 'saved proxy', { id: proxy.id, name: proxy.name, host: proxy.host, port: proxy.port, type: proxy.type });
     addActivity(`新增代理：${proxy.name}`);
     res.json({ proxy });
 });
@@ -831,7 +869,8 @@ app.put('/api/proxies/:id', requireAuth, (req, res) => {
     const old = storage.getProxyRaw(req.params.id);
     if (!old) return res.status(404).json({ error: '代理不存在' });
     const b = req.body || {};
-    const proxy = storage.saveProxy({ ...old, name: String(b.name ?? old.name), host: String(b.host ?? old.host), port: Number(b.port ?? old.port) || 1080, username: String(b.username ?? old.username ?? ''), password: b.password === '******' ? old.password : String(b.password ?? old.password ?? ''), updatedAt: Date.now() });
+    const proxy = storage.saveProxy({ ...old, name: String(b.name ?? old.name), host: String(b.host ?? old.host), port: Number(b.port ?? old.port) || 1080, type: normalizeProxyType(b.type ?? old.type), username: String(b.username ?? old.username ?? ''), password: b.password === '******' ? old.password : String(b.password ?? old.password ?? ''), updatedAt: Date.now() });
+    console.debug('[proxy]', 'updated proxy', { id: proxy.id, name: proxy.name, host: proxy.host, port: proxy.port, type: proxy.type });
     addActivity(`编辑代理：${proxy.name}`);
     res.json({ proxy });
 });
