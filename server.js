@@ -2020,6 +2020,14 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             cleanup();
             let conn;
             try {
+                console.info('[SSH-DIAG] connect request received', {
+                    remoteAddress: req.socket.remoteAddress,
+                    hasConnectionId: !!connectionId,
+                    connectionId: connectionId || '',
+                    fallbackTarget: connectionId ? '' : `${host || ''}:${port || 22}`,
+                    hasFallbackPassword: !!password && password !== '******',
+                    hasFallbackPrivateKey: !!privateKey && privateKey !== '******',
+                });
                 if (connectionId) {
                     const session = currentSession(req);
                     if (!session) throw new Error('未登录或会话已过期');
@@ -2030,12 +2038,35 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     conn = { host, port: port || 22, username, password: password || '', privateKey: privateKey || '', connectionMode: 'direct' };
                 }
                 if (!conn.host || !conn.username) throw new Error('主机和用户名不能为空');
+                console.info('[SSH-DIAG] resolved connection config', {
+                    connectionId: conn.id || connectionId || '',
+                    name: conn.name || '',
+                    target: `${conn.host}:${Number(conn.port) || 22}`,
+                    username: conn.username || '',
+                    protocol: conn.protocol || 'SSH',
+                    mode: conn.connectionMode || 'direct',
+                    proxyId: conn.proxyId || '',
+                    jumpHostIds: normalizeJumpHostIds(conn),
+                    sshKeyId: conn.sshKeyId || '',
+                    hasPassword: !!conn.password,
+                    hasPrivateKey: !!conn.privateKey,
+                });
                 if (connectionId) console.log(`[SSH] 使用已保存路由连接 ${conn.name || conn.host}`);
                 const routed = await createRoutedSSHConnection(conn, 10000);
                 sshClient = routed.client;
                 sshClients = routed.clients || [routed.client];
                 console.log(`[SSH] 已连接: ${routed.route}`);
+                console.info('[SSH-DIAG] ssh ready before shell', {
+                    connectionId: conn.id || connectionId || '',
+                    route: routed.route,
+                    clientCount: sshClients.length,
+                });
             } catch (err) {
+                console.warn('[SSH-DIAG] ssh connection failed before shell', {
+                    connectionId: connectionId || '',
+                    error: err.message,
+                    stack: err.stack,
+                });
                 sendJSON({ type: 'error', message: `SSH 连接失败: ${err.message}` });
                 cleanup();
                 return;
@@ -2056,10 +2087,22 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             // 打开 shell
             sshClient.shell({ term: 'xterm-256color', rows: 24, cols: 80 }, (err, stream) => {
                 if (err) {
+                    console.warn('[SSH-DIAG] shell open failed after ssh ready', {
+                        connectionId: conn.id || connectionId || '',
+                        target: `${conn.host}:${Number(conn.port) || 22}`,
+                        username: conn.username || '',
+                        error: err.message,
+                        stack: err.stack,
+                    });
                     sendJSON({ type: 'error', message: `打开 Shell 失败: ${err.message}` });
                     cleanup();
                     return;
                 }
+                console.info('[SSH-DIAG] shell opened successfully', {
+                    connectionId: conn.id || connectionId || '',
+                    target: `${conn.host}:${Number(conn.port) || 22}`,
+                    username: conn.username || '',
+                });
                 sshStream = stream;
                 sendJSON({ type: 'ready' });
 
