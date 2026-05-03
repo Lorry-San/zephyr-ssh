@@ -1637,6 +1637,9 @@ function dockerServiceRestartCommand() {
 
 // 提供静态文件
 app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
+app.get('/vendor/@wterm/dom/terminal.css', (req, res) => {
+    res.type('text/css').sendFile(path.join(__dirname, 'node_modules', '@wterm', 'dom', 'src', 'terminal.css'));
+});
 app.use('/vendor/@wterm', express.static(path.join(__dirname, 'node_modules', '@wterm')));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -1745,6 +1748,21 @@ wss.on('connection', (ws, req) => {
             ws.send(JSON.stringify(obj));
         }
     };
+
+    let handleWsMessage = null;
+    const pendingWsMessages = [];
+    ws.on('message', (raw) => {
+        if (handleWsMessage) {
+            handleWsMessage(raw);
+            return;
+        }
+        pendingWsMessages.push(raw);
+        console.info('[WS-DIAG] queued early message before handler ready', {
+            remoteAddress: req.socket.remoteAddress,
+            pending: pendingWsMessages.length,
+            bytes: Buffer.byteLength(raw.toString()),
+        });
+    });
 
     // 启动实时监控推送
     function startStatsPush() {
@@ -2011,9 +2029,27 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         }
     }
 
-    ws.on('message', async (raw) => {
+    handleWsMessage = async (raw) => {
+        const rawText = raw.toString();
         let msg;
-        try { msg = JSON.parse(raw.toString()); } catch { return; }
+        try {
+            msg = JSON.parse(rawText);
+        } catch (err) {
+            console.warn('[WS-DIAG] received non-json message', {
+                remoteAddress: req.socket.remoteAddress,
+                bytes: Buffer.byteLength(rawText),
+                preview: rawText.slice(0, 80),
+                error: err.message,
+            });
+            return;
+        }
+        console.info('[WS-DIAG] message received', {
+            remoteAddress: req.socket.remoteAddress,
+            type: msg.type || '',
+            hasConnectionId: !!msg.connectionId,
+            connectionId: msg.connectionId || '',
+            bytes: Buffer.byteLength(rawText),
+        });
 
         // ------------------------- SSH 连接 -------------------------
         if (msg.type === 'connect') {
@@ -2320,7 +2356,16 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             });
             return;
         }
-    });
+    };
+
+    if (pendingWsMessages.length) {
+        console.info('[WS-DIAG] replay queued early messages', {
+            remoteAddress: req.socket.remoteAddress,
+            count: pendingWsMessages.length,
+        });
+        const queued = pendingWsMessages.splice(0);
+        queued.forEach((raw) => handleWsMessage(raw));
+    }
 
     ws.on('close', () => {
         console.log('[WS] 客户端断开');
