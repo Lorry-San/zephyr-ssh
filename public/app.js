@@ -415,7 +415,12 @@ function applyTerminalWindowPreset(tabId, action) {
         visibleCount: visibleTerminalTabs().length,
         maxWindows: getEffectiveTerminalMaxWindows()
     });
-    if (action === 'minimize') { minimizeTerminalSession(tabId); renderTerminalTabs(); return; }
+    if (action === 'minimize') {
+        exitTerminalFullscreen();
+        minimizeTerminalSession(tabId);
+        renderTerminalTabs();
+        return;
+    }
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
