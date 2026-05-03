@@ -799,7 +799,39 @@ function renderPasskeys() { $('#passkeyList').innerHTML = (securityStatus.passke
 function renderSecurityLists() { $('#ipBanList').innerHTML = ipBans.map((b) => `<div class="mini-item"><b>${escapeHtml(b.ip)}</b><span>失败 ${b.failedCount} · 解封 ${fmtTime(b.bannedUntil)}</span><button data-unban="${escapeHtml(b.ip)}">解除</button></div>`).join('') || '<p class="muted">暂无封禁 IP</p>'; $('#loginEventList').innerHTML = loginEvents.slice(0, 20).map((e) => `<div class="mini-item"><b>${e.success ? '成功' : '失败'} · ${escapeHtml(e.username || '-')}</b><span>${escapeHtml(e.ip || '')} · ${escapeHtml(e.reason || '')} · ${fmtTime(e.time)}</span></div>`).join('') || '<p class="muted">暂无登录事件</p>'; }
 async function saveSecurityPolicy(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ security: { ipWhitelistEnabled: $('#ipWhitelistEnabled').checked, ipWhitelist: $('#ipWhitelist').value, bruteForceEnabled: $('#bruteForceEnabled').checked, bruteForceMaxFailures: Number($('#bruteForceMaxFailures').value) || 5, bruteForceBanMinutes: Number($('#bruteForceBanMinutes').value) || 15 } }) }); toast('安全策略已保存'); }
 async function saveCaptcha(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ captcha: { enabled: $('#captchaEnabled').checked, provider: $('#captchaProvider').value, siteKey: $('#captchaSiteKey').value, secretKey: $('#captchaSecretKey').value, tencentCaptchaAppId: $('#captchaProvider').value === 'tencent' ? $('#captchaSiteKey').value : '' } }) }); toast('CAPTCHA 已保存'); }
-async function saveMail(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ mail: { enabled: $('#mailEnabled').checked, host: $('#mailHost').value, port: Number($('#mailPort').value) || 465, secure: $('#mailSecure').checked, user: $('#mailUser').value, pass: $('#mailPass').value, from: $('#mailFrom').value, adminEmail: $('#mailAdminEmail').value, notifyLoginSuccess: $('#notifyLoginSuccess').checked, notifyLoginFailure: $('#notifyLoginFailure').checked, geoLookupEnabled: $('#geoLookupEnabled').checked } }) }); toast('邮件设置已保存'); }
+async function saveMail(e) {
+    e.preventDefault();
+    try {
+        settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ mail: { enabled: $('#mailEnabled').checked, host: $('#mailHost').value.trim(), port: Number($('#mailPort').value) || 465, secure: $('#mailSecure').checked, user: $('#mailUser').value.trim(), pass: $('#mailPass').value, from: $('#mailFrom').value.trim(), adminEmail: $('#mailAdminEmail').value.trim(), notifyLoginSuccess: $('#notifyLoginSuccess').checked, notifyLoginFailure: $('#notifyLoginFailure').checked, geoLookupEnabled: $('#geoLookupEnabled').checked } }) });
+        $('#mailPass').type = 'password';
+        $('#toggleMailPassword').textContent = '👁️';
+        toast('邮件设置已保存');
+    } catch (err) {
+        toast(err.message || '邮件设置保存失败');
+    }
+}
+async function revealMailPass() {
+    const data = await api('/api/settings/mail/open', { method: 'POST', body: '{}' });
+    $('#mailPass').value = data.pass || '';
+    $('#mailPass').type = 'text';
+    $('#toggleMailPassword').textContent = '🙈';
+    toast(data.hasPass ? '已载入保存的 SMTP 密码' : '当前未保存 SMTP 密码');
+}
+async function testMail() {
+    const btn = $('#testMailBtn');
+    const oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        const result = await api('/api/settings/test-mail', { method: 'POST', body: JSON.stringify({ to: $('#mailAdminEmail').value.trim() }) });
+        toast(result.message || '测试邮件已发送');
+    } catch (err) {
+        toast(err.message || '测试邮件发送失败');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+}
 async function saveTerminalLayout(e) {
     e.preventDefault();
     const maxWindows = Math.min(3, Math.max(1, Number($('#terminalMaxWindows').value) || 3));
@@ -947,7 +979,9 @@ function bindEvents() {
     $('#addPasskeyBtn').addEventListener('click', () => registerPasskey().catch((err) => toast(err.message)));
     $('#passkeyList').addEventListener('click', async (e) => { const id = e.target.dataset.delPasskey; if (id && confirm('删除该 Passkey？')) { await api(`/api/passkeys/${id}`, { method: 'DELETE' }); await loadSecurityStatus(); } });
     $('#ipBanList').addEventListener('click', async (e) => { const ip = e.target.dataset.unban; if (ip) { await api(`/api/security/ip-bans/${encodeURIComponent(ip)}`, { method: 'DELETE' }); await loadSecurityLists(); toast('已解除封禁'); } });
-    $('#testMailBtn').addEventListener('click', async () => { await api('/api/settings/test-mail', { method: 'POST', body: JSON.stringify({ to: $('#mailAdminEmail').value }) }); toast('测试邮件已发送'); });
+    $('#toggleMailPassword').addEventListener('click', () => { const el = $('#mailPass'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleMailPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; });
+    $('#revealMailPass').addEventListener('click', () => revealMailPass().catch((err) => toast(err.message || '读取 SMTP 密码失败')));
+    $('#testMailBtn').addEventListener('click', () => testMail());
     $('#exportDataBtn').addEventListener('click', () => { location.href = '/api/data/export'; });
     $('#clearActivityBtn').addEventListener('click', async () => { if (!confirm('确定清理最近活动日志？')) return; await api('/api/activities', { method: 'DELETE' }); await loadConnections(); toast('活动日志已清理'); });
     $('#clearLoginEventsBtn').addEventListener('click', async () => { if (!confirm('确定清理登录事件日志？')) return; await api('/api/security/login-events', { method: 'DELETE' }); await loadSecurityLists(); toast('登录事件已清理'); });

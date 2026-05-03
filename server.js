@@ -469,12 +469,36 @@ function createSession(res, user, { remember = false } = {}) {
 }
 
 async function regionOf(ip) { return ip && ip !== 'unknown' ? '未查询' : ''; }
-function mailTransport(mail) { return nodemailer.createTransport({ host: mail.host, port: Number(mail.port) || 465, secure: mail.secure !== false, auth: mail.user ? { user: mail.user, pass: mail.pass || '' } : undefined }); }
+function publicMailDebug(mail = {}, to = '') {
+    return {
+        enabled: !!mail.enabled,
+        host: mail.host || '',
+        port: Number(mail.port) || 465,
+        secure: mail.secure !== false,
+        user: mail.user ? '******' : '',
+        from: mail.from || mail.user || '',
+        to: to || mail.adminEmail || '',
+        hasPass: !!mail.pass,
+    };
+}
+function validateMailConfig(mail = {}, to = '') {
+    const recipient = String(to || mail.adminEmail || '').trim();
+    if (!mail.enabled) throw new Error('邮件通知未启用，请先保存并启用邮件通知');
+    if (!mail.host) throw new Error('SMTP Host 未配置');
+    if (!recipient) throw new Error('收件人邮箱未配置，请填写后台管理员邮箱');
+    if (!mail.from && !mail.user) throw new Error('发件人或 SMTP 用户名未配置');
+    return recipient;
+}
+function mailTransport(mail) {
+    console.debug('[MAIL] 创建 SMTP 传输器:', publicMailDebug(mail));
+    return nodemailer.createTransport({ host: mail.host, port: Number(mail.port) || 465, secure: mail.secure !== false, auth: mail.user ? { user: mail.user, pass: mail.pass || '' } : undefined });
+}
 async function sendMail(subject, text, to) {
     const mail = storage.getSettings().mail || {};
-    if (!mail.enabled || !mail.host || !(to || mail.adminEmail)) return false;
-    await mailTransport(mail).sendMail({ from: mail.from || mail.user, to: to || mail.adminEmail, subject, text });
-    return true;
+    const recipient = validateMailConfig(mail, to);
+    const info = await mailTransport(mail).sendMail({ from: mail.from || mail.user, to: recipient, subject, text });
+    console.info('[MAIL] 邮件发送成功:', { to: recipient, subject, messageId: info?.messageId || '' });
+    return { ok: true, messageId: info?.messageId || '' };
 }
 async function notifyLogin({ username, ip, userAgent, success, reason }) {
     const s = storage.getSettings();
@@ -746,9 +770,23 @@ app.put('/api/settings', requireAuth, (req, res) => {
 });
 
 app.post('/api/settings/test-mail', requireAuth, async (req, res) => {
-    const to = req.body?.to || storage.getSettings().mail?.adminEmail;
-    try { await sendMail('Zephyr 测试邮件', `这是一封 Zephyr 测试邮件。\n时间：${new Date().toLocaleString()}`, to); res.json({ ok: true }); }
-    catch (err) { res.status(400).json({ error: err.message || '测试邮件发送失败' }); }
+    const to = String(req.body?.to || storage.getSettings().mail?.adminEmail || '').trim();
+    const mail = storage.getSettings().mail || {};
+    console.info('[MAIL] 开始发送测试邮件:', publicMailDebug(mail, to));
+    try {
+        const result = await sendMail('Zephyr 测试邮件', `这是一封 Zephyr 测试邮件。\n时间：${new Date().toLocaleString()}`, to);
+        addActivity(`发送测试邮件：${to || mail.adminEmail}`);
+        res.json({ ok: true, message: '测试邮件已发送', messageId: result.messageId || '' });
+    } catch (err) {
+        console.error('[MAIL] 测试邮件发送失败:', { ...publicMailDebug(mail, to), error: err.message });
+        res.status(400).json({ error: err.message || '测试邮件发送失败' });
+    }
+});
+
+app.post('/api/settings/mail/open', requireAuth, (req, res) => {
+    const mail = storage.getSettings().mail || {};
+    console.info('[MAIL] 读取已保存 SMTP 密码:', publicMailDebug(mail));
+    res.json({ pass: mail.pass || '', hasPass: !!mail.pass });
 });
 
 app.get('/api/security/ip-bans', requireAuth, (req, res) => res.json({ bans: storage.listIpBans() }));
