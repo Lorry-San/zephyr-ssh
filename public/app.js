@@ -137,25 +137,42 @@ function addJumpRouteRow() {
     console.debug('[route-ui]', 'add jump row', { before: ids.slice(0, -1), after: ids });
     renderJumpRouteRows(ids);
 }
+function updateProtocolFields({ preservePort = true } = {}) {
+    const protocol = $('#connProtocol')?.value || 'SSH';
+    const portInput = $('#connPort');
+    const usernameInput = $('#connUsername');
+    const defaultPort = protocol === 'RDP' ? 3389 : protocol === 'VNC' ? 5900 : 22;
+    if (portInput && (!preservePort || !Number(portInput.value))) portInput.value = defaultPort;
+    if (usernameInput) {
+        usernameInput.required = protocol === 'SSH';
+        usernameInput.placeholder = protocol === 'VNC' ? '用户名（可选，取决于 VNC 服务）' : '用户名';
+    }
+    $('#connSshKey')?.closest('.form-group')?.classList.toggle('force-hidden', protocol !== 'SSH');
+    $('#connPrivateKey')?.closest('.form-group')?.classList.toggle('force-hidden', protocol !== 'SSH');
+    $('.advanced-route-panel')?.classList.toggle('force-hidden', protocol !== 'SSH');
+    console.debug('[guac-client]', 'protocol fields updated', { protocol, defaultPort, usernameRequired: protocol === 'SSH' });
+}
 function openModal(conn = null) {
     editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
-    $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || 22; $('#connUsername').value = conn?.username || '';
+    $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || ($('#connProtocol').value === 'RDP' ? 3389 : $('#connProtocol').value === 'VNC' ? 5900 : 22); $('#connUsername').value = conn?.username || '';
     renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
-    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; $('#connectionModal').classList.add('show');
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn }); $('#connectionModal').classList.add('show');
 }
 function closeModal() { $('#connectionModal').classList.remove('show'); }
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
     const proxyId = $('#connRoute')?.value || '';
     const jumpHostIds = mode === 'jump' ? [...new Set($$('#jumpRouteList [data-jump-route-select]').map((el) => el.value).filter(Boolean))] : [];
-    const payload = { name: $('#connName').value.trim(), protocol: $('#connProtocol').value, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || 22, username: $('#connUsername').value.trim(), sshKeyId: $('#connSshKey')?.value || '', password: $('#connPassword').value, privateKey: $('#connPrivateKey').value, remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? proxyId : '', jumpHostId: mode === 'jump' ? (jumpHostIds[0] || '') : '', jumpHostIds };
+    const protocol = $('#connProtocol').value;
+    const defaultPort = protocol === 'RDP' ? 3389 : protocol === 'VNC' ? 5900 : 22;
+    const payload = { name: $('#connName').value.trim(), protocol, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || defaultPort, username: $('#connUsername').value.trim(), sshKeyId: protocol === 'SSH' ? ($('#connSshKey')?.value || '') : '', password: $('#connPassword').value, privateKey: protocol === 'SSH' ? $('#connPrivateKey').value : '', remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? proxyId : '', jumpHostId: mode === 'jump' ? (jumpHostIds[0] || '') : '', jumpHostIds };
     console.debug('[route-ui]', 'connection payload route', { mode, proxyId: payload.proxyId, jumpHostIds, sshKeyId: payload.sshKeyId });
     if (!forTest && editingId) { if (payload.password === '******') delete payload.password; if (payload.privateKey === '******') delete payload.privateKey; }
     return payload;
 }
-async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (payload.protocol !== 'SSH') toast('RDP/VNC 当前仅保存占位'); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
-async function testConnection() { try { const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...connectionPayload({ forTest: true }), connectionId: editingId || '', timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
+async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (payload.protocol === 'RDP') toast('RDP 将在 VNC 完成后接入'); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
+async function testConnection() { try { const payload = connectionPayload({ forTest: true }); console.debug('[guac-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port }); const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...payload, connectionId: editingId || '', timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
 
 async function revealConnectionSecrets() {
     if (!editingId || editingSecretLoaded) return;
@@ -170,10 +187,17 @@ async function revealConnectionSecrets() {
 
 async function openConnection(id) {
     const data = await api(`/api/connections/${id}/open`, { method: 'POST' }); const c = data.connection;
-    if (c.protocol !== 'SSH') { openPlaceholderTab(c); return; }
+    const protocol = String(c.protocol || 'SSH').toUpperCase();
+    if (protocol === 'RDP') { openPlaceholderTab(c); return; }
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: true, timestamp: Date.now() }));
-    terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+    if (protocol === 'VNC') {
+        sessionStorage.setItem(`zephyr_guac_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
+        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+        console.debug('[guac-client]', 'open VNC tab', { tabId, connectionId: c.id, host: c.host, port: c.port });
+    } else {
+        sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: true, timestamp: Date.now() }));
+        terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+    }
     openOrderStack.push(tabId);
     activeTerminalTab = tabId;
     touchTerminalSession(tabId);
@@ -302,12 +326,12 @@ function renderTerminalSmartbar() {
         return true;
     });
     const icon = (t, index) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" style="--dock-index:${index}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
-    const sshConnections = connections.filter((c) => c.protocol === 'SSH');
+    const launchableConnections = connections.filter((c) => ['SSH', 'VNC'].includes(String(c.protocol || 'SSH').toUpperCase()));
     const picker = terminalSmartbarPickerOpen ? `
         <div class="smartbar-picker" role="dialog" aria-label="选择服务器连接">
             <div class="smartbar-picker-head"><strong>选择服务器</strong><button data-smartbar-picker-close title="关闭">×</button></div>
             <div class="smartbar-picker-list">
-                ${sshConnections.length ? sshConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ssh"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH 服务器</div>'}
+                ${launchableConnections.length ? launchableConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ${terminalProtocolClass(c.protocol)}"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.protocol)} · ${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH/VNC 服务器</div>'}
             </div>
         </div>` : '';
     const smartbarRoot = $('#sessionTabs');
@@ -390,8 +414,10 @@ function createTerminalWindowElement(t) {
         const frame = document.createElement('iframe');
         frame.className = 'terminal-frame active';
         frame.dataset.frame = t.id;
-        frame.src = `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
-        frame.allow = 'fullscreen; virtual-keyboard';
+        frame.src = t.page === 'guacamole'
+            ? `/guacamole.html?embed=1&tabId=${encodeURIComponent(t.id)}`
+            : `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
+        frame.allow = 'fullscreen; virtual-keyboard; clipboard-read; clipboard-write';
         body.appendChild(frame);
     } else {
         const placeholder = document.createElement('div');
@@ -484,6 +510,7 @@ function closeTerminalTab(tabId) {
         recentUseStack = recentUseStack.filter((id) => id !== tabId);
         closingTerminalTabs.delete(tabId);
         sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
+        sessionStorage.removeItem(`zephyr_guac_params_${tabId}`);
         if (activeTerminalTab === tabId) activeTerminalTab = visualLayout[0] || terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || null;
         renderTerminalTabs();
     }, 260);
@@ -944,6 +971,7 @@ function bindEvents() {
     $$('.settings-tab').forEach((btn) => btn.addEventListener('click', () => { $$('.settings-tab').forEach((b) => b.classList.remove('active')); btn.classList.add('active'); $$('.settings-panel').forEach((p) => p.classList.remove('active')); $(`#settings-${btn.dataset.settings}`).classList.add('active'); }));
     $('#appThemeToggle').addEventListener('click', toggleTheme); $('#settingsThemeToggle').addEventListener('click', toggleTheme); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
     $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $$('.route-type-tab').forEach((btn) => btn.addEventListener('click', () => setRouteMode($('#connMode').value === btn.dataset.routeMode ? 'direct' : btn.dataset.routeMode))); $('#addJumpRouteBtn').addEventListener('click', addJumpRouteRow); $('#jumpRouteList').addEventListener('click', (e) => { if (!e.target.closest('[data-remove-jump-route]')) return; const ids = $$('#jumpRouteList [data-jump-route-select]').filter((el) => !el.closest('[data-jump-route-row]').contains(e.target)).map((el) => el.value).filter(Boolean); renderJumpRouteRows(ids); }); $('#testConnectionBtn').addEventListener('click', testConnection);
+    $('#connProtocol').addEventListener('change', () => updateProtocolFields({ preservePort: false }));
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
     $('#sessionTabs').addEventListener('click', (e) => {

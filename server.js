@@ -6,6 +6,7 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const nodemailer = require('nodemailer');
 const { TOTP, generateSecret, generateURI, verifySync } = require('otplib');
 const QRCode = require('qrcode');
@@ -23,6 +24,11 @@ const { getRemoteStats } = require('./stats');
 const storage = require('./storage');
 
 const PORT = process.env.PORT || 3000;
+const GUACD_HOST = process.env.GUACD_HOST || '127.0.0.1';
+const GUACD_PORT = Number(process.env.GUACD_PORT) || 4822;
+const GUACD_EMBEDDED = process.env.GUACD_EMBEDDED !== 'false';
+const GUACD_BIN = process.env.GUACD_BIN || 'guacd';
+const GUACD_LOG_LEVEL = process.env.GUACD_LOG_LEVEL || 'info';
 const app = express();
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -423,6 +429,227 @@ function testSSHConnection(conn, timeout = 10000) {
             .then((result) => { routed = result; finish({ ok: true, code: 'success', message: `连接成功（${result.route}）` }); })
             .catch((err) => finish({ ok: false, ...classifySSHError(err) }));
     });
+}
+
+function isLocalGuacdHost(host = GUACD_HOST) {
+    return ['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(String(host || '').toLowerCase());
+}
+
+function probeTcpPort(host, port, timeout = 700) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection(Number(port), host);
+        let done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            try { socket.destroy(); } catch {}
+            resolve(ok);
+        };
+        socket.setTimeout(timeout);
+        socket.once('connect', () => finish(true));
+        socket.once('timeout', () => finish(false));
+        socket.once('error', () => finish(false));
+    });
+}
+
+async function ensureEmbeddedGuacd() {
+    if (!GUACD_EMBEDDED) {
+        console.info('[guacd-embedded]', 'disabled by GUACD_EMBEDDED=false');
+        return null;
+    }
+    if (!isLocalGuacdHost()) {
+        console.info('[guacd-embedded]', 'skip embedded guacd for non-local host', { guacdHost: GUACD_HOST, guacdPort: GUACD_PORT });
+        return null;
+    }
+    if (await probeTcpPort(GUACD_HOST, GUACD_PORT)) {
+        console.info('[guacd-embedded]', 'guacd already listening', { guacdHost: GUACD_HOST, guacdPort: GUACD_PORT });
+        return null;
+    }
+
+    console.info('[guacd-embedded]', 'starting bundled guacd', { bin: GUACD_BIN, guacdHost: GUACD_HOST, guacdPort: GUACD_PORT, logLevel: GUACD_LOG_LEVEL });
+    const child = spawn(GUACD_BIN, ['-f', '-b', GUACD_HOST, '-l', String(GUACD_PORT), '-L', GUACD_LOG_LEVEL], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: process.env,
+    });
+
+    child.stdout.on('data', (chunk) => console.info('[guacd]', chunk.toString('utf8').trim()));
+    child.stderr.on('data', (chunk) => console.warn('[guacd]', chunk.toString('utf8').trim()));
+    child.on('error', (err) => console.error('[guacd-embedded]', 'failed to start guacd', { error: err.message, bin: GUACD_BIN }));
+    child.on('exit', (code, signal) => console.warn('[guacd-embedded]', 'guacd exited', { code, signal }));
+
+    process.on('exit', () => { try { child.kill('SIGTERM'); } catch {} });
+    process.on('SIGINT', () => { try { child.kill('SIGTERM'); } catch {}; process.exit(0); });
+    process.on('SIGTERM', () => { try { child.kill('SIGTERM'); } catch {}; process.exit(0); });
+
+    for (let i = 0; i < 20; i += 1) {
+        if (await probeTcpPort(GUACD_HOST, GUACD_PORT, 500)) {
+            console.info('[guacd-embedded]', 'bundled guacd ready', { guacdHost: GUACD_HOST, guacdPort: GUACD_PORT });
+            return child;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    console.warn('[guacd-embedded]', 'guacd did not become ready before timeout; VNC connect will report detailed errors');
+    return child;
+}
+
+function guacamoleProtocol(conn) {
+    const protocol = String(conn?.protocol || '').toLowerCase();
+    if (protocol === 'rdp' || protocol === 'vnc') return protocol;
+    throw new Error(`不支持的 Guacamole 协议：${conn?.protocol || '-'}`);
+}
+
+function guacamoleDefaultPort(protocol) {
+    return protocol === 'rdp' ? 3389 : protocol === 'vnc' ? 5900 : 0;
+}
+
+function guacInstruction(opcode, ...args) {
+    return [opcode, ...args].map((value) => {
+        const text = String(value ?? '');
+        return `${text.length}.${text}`;
+    }).join(',') + ';';
+}
+
+class GuacParser {
+    constructor(oninstruction) {
+        this.buffer = '';
+        this.elements = [];
+        this.oninstruction = oninstruction;
+    }
+
+    receive(chunk) {
+        this.buffer += String(chunk || '');
+        while (this.buffer.length) {
+            const lengthEnd = this.buffer.indexOf('.');
+            if (lengthEnd === -1) return;
+
+            const lengthText = this.buffer.slice(0, lengthEnd);
+            if (!/^\d+$/.test(lengthText)) throw new Error('guacd 返回了非法指令长度');
+            const length = Number.parseInt(lengthText, 10);
+            const elementStart = lengthEnd + 1;
+            const elementEnd = elementStart + length;
+            if (this.buffer.length <= elementEnd) return;
+
+            const terminator = this.buffer[elementEnd];
+            if (terminator !== ',' && terminator !== ';') throw new Error('guacd 返回了非法指令终止符');
+
+            this.elements.push(this.buffer.slice(elementStart, elementEnd));
+            this.buffer = this.buffer.slice(elementEnd + 1);
+
+            if (terminator === ';') {
+                const opcode = this.elements.shift();
+                const args = this.elements;
+                this.elements = [];
+                if (opcode) this.oninstruction?.(opcode, args);
+            }
+        }
+    }
+}
+
+function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96 } = {}) {
+    const protocol = guacamoleProtocol(conn);
+    const port = Number(conn.port) || guacamoleDefaultPort(protocol);
+    const base = {
+        hostname: String(conn.host || ''),
+        port: String(port),
+        username: String(conn.username || ''),
+        password: String(conn.password || ''),
+        width: String(Math.max(320, Number(width) || 1280)),
+        height: String(Math.max(240, Number(height) || 720)),
+        dpi: String(Math.max(72, Number(dpi) || 96)),
+        'enable-wallpaper': 'false',
+        'ignore-cert': 'true',
+        'server-layout': 'en-us-qwerty',
+        'color-depth': '24',
+        'resize-method': 'display-update',
+    };
+
+    if (protocol === 'rdp') {
+        base.security = 'any';
+        base['disable-auth'] = 'false';
+        base['enable-font-smoothing'] = 'true';
+        base['enable-desktop-composition'] = 'false';
+    }
+
+    if (protocol === 'vnc') {
+        base['encodings'] = 'tight zrle ultra copyrect hextile raw';
+        base['read-only'] = 'false';
+    }
+
+    return base;
+}
+
+function nextGuacdInstruction(socket, parser, timeout, label = 'guacd 握手') {
+    return new Promise((resolve, reject) => {
+        let done = false;
+        const timer = setTimeout(() => finish(new Error(`${label}超时`)), timeout);
+        const onData = (chunk) => {
+            try { parser.receive(chunk.toString('utf8')); } catch (err) { finish(err); }
+        };
+        const onError = (err) => finish(err);
+        const oldHandler = parser.oninstruction;
+        const finish = (err, instruction) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            socket.off('data', onData);
+            socket.off('error', onError);
+            parser.oninstruction = oldHandler;
+            if (err) reject(err); else resolve(instruction);
+        };
+        parser.oninstruction = (opcode, args) => finish(null, { opcode, args });
+        socket.on('data', onData);
+        socket.once('error', onError);
+    });
+}
+
+async function openGuacdSession(conn, display = {}, timeout = 10000) {
+    const protocol = guacamoleProtocol(conn);
+    if (!conn.host) throw new Error('主机不能为空');
+    if (conn.connectionMode && conn.connectionMode !== 'direct') {
+        console.warn('[guacamole]', 'RDP/VNC 暂不复用 Zephyr SSH 代理/跳板机路由，改由 guacd 直连目标', { connectionId: conn.id, mode: conn.connectionMode });
+    }
+    console.info('[guacd]', 'opening session', { guacdHost: GUACD_HOST, guacdPort: GUACD_PORT, protocol, target: `${conn.host}:${Number(conn.port) || guacamoleDefaultPort(protocol)}` });
+
+    const socket = net.createConnection(GUACD_PORT, GUACD_HOST);
+    socket.setEncoding('utf8');
+    await waitForSocket(socket, timeout, 'guacd');
+    const parser = new GuacParser();
+
+    socket.write(guacInstruction('select', protocol));
+    const argsInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd args');
+    if (argsInstruction.opcode !== 'args') throw new Error(`guacd 未返回 args 指令：${argsInstruction.opcode}`);
+
+    const params = guacamoleParameterMap(conn, display);
+    socket.write(guacInstruction('size', params.width, params.height, params.dpi));
+    socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
+    socket.write(guacInstruction('video'));
+    socket.write(guacInstruction('image', 'image/png', 'image/jpeg'));
+    socket.write(guacInstruction('connect', ...argsInstruction.args.map((name) => params[name] ?? '')));
+
+    const readyInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd ready');
+    if (readyInstruction.opcode !== 'ready') throw new Error(`guacd 连接目标失败：${readyInstruction.opcode} ${readyInstruction.args.join(' ')}`.trim());
+    const uuid = readyInstruction.args[0] || crypto.randomUUID();
+    console.info('[guacd]', 'session ready', { protocol, uuid, target: conn.name || conn.host });
+    return { socket, uuid };
+}
+
+async function testGuacamoleConnection(conn, timeout = 10000) {
+    const started = Date.now();
+    let session = null;
+    try {
+        session = await openGuacdSession(conn, { width: 1024, height: 768, dpi: 96 }, timeout);
+        return { ok: true, code: 'success', message: `${String(conn.protocol).toUpperCase()} 连接成功（guacd ${GUACD_HOST}:${GUACD_PORT}）`, durationMs: Date.now() - started };
+    } catch (err) {
+        const msg = String(err?.message || err || '连接失败');
+        const code = /timeout|超时/i.test(msg) ? 'timeout' : /ECONNREFUSED|refused/i.test(msg) ? 'refused' : /auth|认证|password/i.test(msg) ? 'auth_failed' : 'unknown';
+        console.warn('[guacamole-test]', 'connection failed', { protocol: conn.protocol, target: conn.host, code, error: msg });
+        return { ok: false, code, message: msg, durationMs: Date.now() - started };
+    } finally {
+        try { session?.socket?.write(guacInstruction('disconnect')); } catch {}
+        try { session?.socket?.end(); } catch {}
+        try { session?.socket?.destroy(); } catch {}
+    }
 }
 
 function runRemoteCommand(conn, command, timeoutSeconds = 30) {
@@ -879,14 +1106,15 @@ app.get('/api/connections', requireAuth, (req, res) => {
 app.post('/api/connections', requireAuth, (req, res) => {
     const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
     const body = req.body || {};
-    if (!body.name || !body.host || !body.username) return res.status(400).json({ error: '名称、主机、用户名不能为空' });
+    const protocol = String(body.protocol || 'SSH').toUpperCase();
+    if (!body.name || !body.host || (protocol === 'SSH' && !body.username)) return res.status(400).json({ error: protocol === 'SSH' ? '名称、主机、用户名不能为空' : '名称、主机不能为空' });
     const conn = {
         id: crypto.randomUUID(),
         name: String(body.name).trim(),
         host: String(body.host).trim(),
-        port: Number(body.port) || 22,
-        protocol: String(body.protocol || 'SSH').toUpperCase(),
-        username: String(body.username).trim(),
+        port: Number(body.port) || (protocol === 'RDP' ? 3389 : protocol === 'VNC' ? 5900 : 22),
+        protocol,
+        username: String(body.username || '').trim(),
         password: String(body.password || ''),
         privateKey: String(body.privateKey || ''),
         sshKeyId: String(body.sshKeyId || ''),
@@ -1113,8 +1341,12 @@ app.post('/api/connections/test', requireAuth, async (req, res) => {
         conn = { ...body, port: Number(body.port) || 22 };
         applyConnectionRouteFields(conn, body);
     }
-    if (!conn.host || !conn.username) return res.status(400).json({ error: '主机和用户名不能为空' });
-    const result = await testSSHConnection(conn, Math.max(1000, Math.min(Number(body.timeoutSeconds || 10) * 1000, 30000)));
+    const protocol = String(conn.protocol || 'SSH').toUpperCase();
+    if (!conn.host || (protocol === 'SSH' && !conn.username)) return res.status(400).json({ error: protocol === 'SSH' ? '主机和用户名不能为空' : '主机不能为空' });
+    const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutSeconds || 10) * 1000, 30000));
+    const result = protocol === 'SSH'
+        ? await testSSHConnection(conn, timeoutMs)
+        : await testGuacamoleConnection(conn, timeoutMs);
     addActivity(`测试连接：${conn.name || conn.host} - ${result.message}`);
     res.status(result.ok ? 200 : 400).json(result);
 });
@@ -1266,6 +1498,7 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
+app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // 健康检查
@@ -1281,6 +1514,78 @@ app.get('*', (req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ssh' });
+const guacWss = new WebSocketServer({ server, path: '/guacamole' });
+
+guacWss.on('connection', async (ws, req) => {
+    const started = Date.now();
+    let session = null;
+    let closed = false;
+    const closeGuac = (reason = 'cleanup') => {
+        if (closed) return;
+        closed = true;
+        console.info('[guacamole-ws]', 'closing session', { reason, uuid: session?.uuid || '-', durationMs: Date.now() - started });
+        try { session?.socket?.write(guacInstruction('disconnect')); } catch {}
+        try { session?.socket?.end(); } catch {}
+        try { session?.socket?.destroy(); } catch {}
+        try { if (ws.readyState === ws.OPEN) ws.close(); } catch {}
+    };
+
+    try {
+        const sessionUser = currentSession(req);
+        if (!sessionUser) throw new Error('未登录或会话已过期');
+
+        const url = new URL(req.url || '/guacamole', `http://${req.headers.host || 'localhost'}`);
+        const connectionId = url.searchParams.get('connectionId') || '';
+        const width = Number(url.searchParams.get('width')) || 1280;
+        const height = Number(url.searchParams.get('height')) || 720;
+        const dpi = Number(url.searchParams.get('dpi')) || 96;
+        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+        const conn = (store.connections || []).find((c) => c.id === connectionId);
+        if (!conn) throw new Error('连接不存在或已删除');
+
+        const protocol = guacamoleProtocol(conn);
+        if (protocol !== 'vnc') throw new Error(`当前阶段仅支持 VNC，收到协议：${conn.protocol || '-'}`);
+
+        console.info('[guacamole-ws]', 'opening browser tunnel', { connectionId, name: conn.name, protocol, width, height, dpi, user: sessionUser.username });
+        session = await openGuacdSession(conn, { width, height, dpi }, 15000);
+        if (ws.readyState === ws.OPEN) {
+            ws.send(guacInstruction('ready', session.uuid));
+            console.info('[guacamole-ws]', 'browser tunnel ready', { uuid: session.uuid, connectionId });
+        }
+
+        session.socket.on('data', (chunk) => {
+            if (ws.readyState === ws.OPEN) {
+                console.debug('[guacamole-ws]', 'guacd -> browser', { bytes: Buffer.byteLength(String(chunk || ''), 'utf8'), uuid: session.uuid });
+                ws.send(String(chunk));
+            }
+        });
+        session.socket.on('error', (err) => {
+            console.error('[guacamole-ws]', 'guacd socket error', { uuid: session?.uuid || '-', error: err.message });
+            if (ws.readyState === ws.OPEN) ws.close(1011, 'guacd error');
+        });
+        session.socket.on('close', () => {
+            console.info('[guacamole-ws]', 'guacd socket closed', { uuid: session?.uuid || '-' });
+            if (ws.readyState === ws.OPEN) ws.close();
+        });
+
+        ws.on('message', (raw) => {
+            const data = raw.toString('utf8');
+            console.debug('[guacamole-ws]', 'browser -> guacd', { bytes: Buffer.byteLength(data, 'utf8'), uuid: session?.uuid || '-' });
+            if (session?.socket?.writable) session.socket.write(data);
+        });
+        ws.on('close', () => closeGuac('browser-close'));
+        ws.on('error', (err) => {
+            console.error('[guacamole-ws]', 'browser websocket error', { error: err.message });
+            closeGuac('browser-error');
+        });
+    } catch (err) {
+        console.warn('[guacamole-ws]', 'failed to open tunnel', { error: err.message });
+        try {
+            if (ws.readyState === ws.OPEN) ws.close(1011, err.message.slice(0, 120));
+        } catch {}
+        closeGuac('open-failed');
+    }
+});
 
 wss.on('connection', (ws, req) => {
     console.log(`[WS] 客户端连接 ${req.socket.remoteAddress}`);
@@ -1288,6 +1593,9 @@ wss.on('connection', (ws, req) => {
     let sshClients = [];
     let sshStream = null;
     let sftpStream = null;
+    let guacdSocket = null;
+    let guacdParser = null;
+    let guacdSessionUuid = '';
     let statsTimer = null;
     let statsRunning = false;
     let remoteStatsState = {};
@@ -1342,6 +1650,15 @@ wss.on('connection', (ws, req) => {
     const cleanup = () => {
         stopStatsPush();
         stopDockerLogStreams();
+        if (guacdSocket) {
+            console.info('[guacamole]', 'closing guacd session', { uuid: guacdSessionUuid || '-' });
+            try { guacdSocket.write(guacInstruction('disconnect')); } catch {}
+            try { guacdSocket.end(); } catch {}
+            try { guacdSocket.destroy(); } catch {}
+            guacdSocket = null;
+            guacdParser = null;
+            guacdSessionUuid = '';
+        }
         if (sftpStream) {
             try { sftpStream.end(); } catch {}
             sftpStream = null;
@@ -1834,7 +2151,16 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
     });
 });
 
-server.listen(PORT, () => {
-    console.log(`🌬️  Zephyr 服务运行在 http://localhost:${PORT}`);
-    console.log(`   WebSocket 路径: /ssh`);
+async function startServer() {
+    await ensureEmbeddedGuacd();
+    server.listen(PORT, () => {
+        console.log(`🌬️  Zephyr 服务运行在 http://localhost:${PORT}`);
+        console.log(`   WebSocket 路径: /ssh`);
+        console.log(`   Guacamole/VNC 路径: /guacamole -> guacd ${GUACD_HOST}:${GUACD_PORT}`);
+    });
+}
+
+startServer().catch((err) => {
+    console.error('[startup] Zephyr 启动失败:', err);
+    process.exit(1);
 });

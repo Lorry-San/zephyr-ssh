@@ -180,7 +180,8 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 
-body:has(.terminal-page) {
+body:has(.terminal-page),
+body:has(.guac-page) {
     position: fixed;
     inset: 0;
     width: 100%;
@@ -3262,4 +3263,109 @@ html.keyboard-open .terminal-page {
     .panel-resize-handle { width: 26px; height: 26px; }
     .fm-editor-code-shell { gap: 6px; padding: 6px; }
     .fm-editor-minimap { width: 98px; flex-basis: 98px; }
+}
+
+/* ===== Guacamole / VNC 页面 ===== */
+.guac-page {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: var(--visual-vh, var(--stable-vh, 100vh));
+    max-height: var(--visual-vh, var(--stable-vh, 100vh));
+    min-height: 0;
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    overflow: hidden;
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+.guac-topbar {
+    position: relative;
+    z-index: 5;
+}
+
+.guac-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 20% 0%, rgba(88,166,255,.12), transparent 30%),
+        radial-gradient(circle at 82% 10%, rgba(240,136,62,.10), transparent 30%),
+        #05070a;
+    display: grid;
+    place-items: center;
+    outline: none;
+    contain: layout paint;
+}
+
+.guac-display-shell {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: none;
+    background:
+        linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255,255,255,.025) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.025) 75%),
+        #05070a;
+    background-size: 28px 28px;
+    background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+}
+
+.guac-display {
+    position: relative;
+    min-width: 1px;
+    min-height: 1px;
+    display: grid;
+    place-items: center;
+    transform-origin: center center;
+}
+
+.guac-display-element {
+    display: block;
+    transform-origin: 0 0;
+    outline: none;
+}
+
+.guac-display canvas,
+.guac-display img {
+    image-rendering: auto;
+    max-width: none;
+    max-height: none;
+}
+
+.guac-stage .terminal-overlay {
+    z-index: 10;
+}
+
+.guac-stage .terminal-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+@media (max-width: 480px), (pointer: coarse) {
+    .guac-page .terminal-topbar {
+        padding: 6px 10px;
+    }
+
+    .guac-stage {
+        margin: 4px;
+        border-radius: 10px;
+    }
+
+    .guac-display-shell {
+        place-items: center;
+    }
 }

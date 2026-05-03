@@ -13,7 +13,7 @@
 - 🧩 **MFA 多因素认证**：支持 TOTP 动态验证码与 Passkey / WebAuthn。
 - 🛡️ **登录防护**：支持 CAPTCHA、人机验证、登录失败记录、IP 防爆破封禁、IP 白名单。
 - **邮件通知**：支持 SMTP 测试邮件、登录成功/失败通知、忘记密码邮箱验证码重置。
-- 🗂️ **连接管理**：支持 SSH / RDP / VNC 连接卡片，其中 RDP/VNC 当前为占位管理能力。
+- 🗂️ **连接管理**：支持 SSH / VNC 连接打开与 SSH / RDP / VNC 连接卡片管理；VNC 基于 Apache Guacamole/guacd，RDP 将在后续接入。
 - 🏷️ **标签与备注**：支持连接标签、搜索、排序、Markdown 备注展示。
 - 🧭 **代理与跳板机**：支持代理池、跳板机配置以及连接路由方式选择。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
@@ -120,10 +120,28 @@ Docker 部署时推荐同时做到两点：
 | `PORT` | Web 服务监听端口；Docker 中通常保持 `3000`，通过 `-p 宿主机端口:3000` 对外暴露 | `3000` |
 | `ENCRYPTION_KEY` | 数据导出/导入备份加密密钥；生产环境务必改成强随机字符串，并妥善保存 | `please-change-this-key` |
 | `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，需要和浏览器访问地址一致 | `http://localhost:3000` |
+| `GUACD_HOST` | 内置/外部 guacd 地址；Docker 镜像默认内置 guacd，通常无需修改 | `127.0.0.1` |
+| `GUACD_PORT` | guacd 监听端口；内置 guacd 会自动使用该端口启动 | `4822` |
+| `GUACD_EMBEDDED` | 是否由 Zephyr 自动启动内置 guacd；如需改用外部 guacd 可设为 `false` 并配置 `GUACD_HOST` | `true` |
+| `GUACD_BIN` | guacd 可执行文件路径；Docker 镜像已内置 | `guacd` |
 
 > 使用 Passkey / WebAuthn 时，生产环境建议配置 HTTPS，并将 `PUBLIC_ORIGIN` 设置为真实访问地址，例如 `https://ssh.example.com`。
 >
 > 如果更换了 `ENCRYPTION_KEY`，旧备份文件需要使用导出时的旧密钥才能解密导入。
+
+### VNC / 内置 Guacamole 配置
+
+VNC 连接基于 Apache Guacamole 的 `guacd` 网关实现。项目 Docker 镜像已内置 `guacd`、VNC/RDP 客户端插件，并由 `server.js` 在启动时自动拉起本机 `guacd`，因此 Docker 部署无需再单独启动 `guacamole/guacd` 容器。
+
+本地开发运行 `npm start` 时，如果系统中已安装 `guacd`，Zephyr 会自动复用或启动本机 `guacd`。如果你的本地系统没有 `guacd`，可以安装系统包，或临时使用外部 guacd 并设置：
+
+```env
+GUACD_EMBEDDED=false
+GUACD_HOST=外部-guacd-地址
+GUACD_PORT=4822
+```
+
+VNC 连接由 guacd 访问目标主机，因此目标 VNC 主机和端口必须对 Zephyr 容器/内置 guacd 可达。
 
 ## 关于依赖文件
 
@@ -213,8 +231,10 @@ zephyr-ssh/
 │   ├── client.js        # 登录页逻辑
 │   ├── app.html         # 管理后台页面
 │   ├── app.js           # 管理后台逻辑
-│   ├── terminal.html    # 终端页面
-│   ├── terminal.js      # 终端核心逻辑
+│   ├── terminal.html    # SSH 终端页面
+│   ├── terminal.js      # SSH 终端核心逻辑
+│   ├── guacamole.html   # VNC 远程桌面页面
+│   ├── guacamole.js     # VNC / Guacamole 前端逻辑
 │   └── style.css        # 全局样式
 ├── data/                # 运行数据目录（数据库、配置、历史数据）
 │   ├── .env             # 环境变量配置

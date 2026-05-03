@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <title>Zephyr - VNC</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="guac-page">
+        <div class="terminal-topbar guac-topbar">
+            <div class="status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">连接中...</span>
+            </div>
+            <span class="info" id="connInfo"></span>
+            <div class="topbar-actions">
+                <button class="btn-sm" id="fitBtn" title="适应窗口">↔ 适应</button>
+                <button class="btn-sm" id="clipboardBtn" title="发送剪贴板文本">📋 剪贴板</button>
+                <button class="btn-sm" id="ctrlAltDelBtn" title="发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+                <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
+                <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
+            </div>
+        </div>
+        <div class="guac-stage" id="guacStage">
+            <div class="terminal-overlay" id="guacOverlay">
+                <div class="spinner"></div>
+                <span class="msg" id="overlayMsg">正在建立 VNC 连接...</span>
+            </div>
+            <div class="guac-display-shell" id="displayShell">
+                <div class="guac-display" id="display"></div>
+            </div>
+        </div>
+    </div>
+    <script src="guacamole.js" type="module"></script>
+</body>
+</html>

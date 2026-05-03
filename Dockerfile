@@ -1,9 +1,17 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        guacd \
+        libguac-client-vnc0 \
+        libguac-client-rdp0 && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json* ./
-RUN npm install --production
+RUN npm install --omit=dev
 
 # 复制 @wterm/dom 的 dist 目录（包含所有核心逻辑和内联 WASM）
 RUN mkdir -p public/vendor/@wterm/dom && \
