@@ -905,10 +905,10 @@ body.terminal-mode .app-shell {
 .terminal-window-menu {
     position: absolute;
     top: calc(100% + 7px);
-    left: calc(50% - 95px);
+    left: var(--terminal-window-menu-left, calc(50% - 95px));
     right: auto;
     z-index: 12;
-    width: 190px;
+    width: min(190px, calc(100% - 16px));
     display: none;
     padding: 8px;
     border: 1px solid var(--border);

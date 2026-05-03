@@ -337,6 +337,18 @@ function terminalWindowMenu(t) {
 function terminalWindowTitlebarHtml(t) {
     return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
 }
+function positionTerminalWindowMenu(titlebar) {
+    if (!titlebar?.classList.contains('menu-open')) return;
+    const button = titlebar.querySelector('.terminal-window-more');
+    const menu = titlebar.querySelector('.terminal-window-menu');
+    if (!button || !menu) return;
+    const titleRect = titlebar.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const left = (buttonRect.left + buttonRect.width / 2) - titleRect.left - (menuRect.width / 2);
+    const clampedLeft = Math.min(Math.max(left, 8), titleRect.width - menuRect.width - 8);
+    menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
+}
 function createTerminalWindowElement(t) {
     const article = document.createElement('article');
     article.className = 'terminal-window';
@@ -846,7 +858,9 @@ function bindEvents() {
                 terminalControlLongPress = false;
                 return;
             }
-            menuBtn.closest('.terminal-window-titlebar')?.classList.toggle('menu-open');
+            const titlebar = menuBtn.closest('.terminal-window-titlebar');
+            titlebar?.classList.toggle('menu-open');
+            requestAnimationFrame(() => positionTerminalWindowMenu(titlebar));
             return;
         }
         const action = e.target.closest('[data-window-action]');
@@ -898,6 +912,9 @@ function bindEvents() {
     systemThemeQuery.addEventListener('change', () => { if (!localStorage.getItem('zephyr-theme')) applyTheme(getSystemTheme()); });
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } if (e.data.type === 'activity') { noteTerminalWorkspaceActivity(); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
+    window.addEventListener('resize', () => {
+        document.querySelectorAll('.terminal-window-titlebar.menu-open').forEach(positionTerminalWindowMenu);
+    }, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });
     window.addEventListener('resize', () => {
         if (!terminalTabs.length) return;
