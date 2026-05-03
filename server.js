@@ -870,6 +870,7 @@ function normalizeSettingsInput(body) {
     if (body.beian) {
         next.beian = { ...(current.beian || {}), ...body.beian };
         next.icp = next.beian.icp || '';
+        next.icpUrl = next.beian.icpUrl || '';
         next.policeBeian = next.beian.policeBeian || '';
         next.policeBeianUrl = next.beian.policeBeianUrl || '';
         next.showBeian = next.beian.show !== false;
@@ -1404,6 +1405,7 @@ app.get('/api/public/settings', (req, res) => {
     res.json({
         defaultUsername: user?.username || 'admin',
         icp: s.icp || s.beian?.icp || '',
+        icpUrl: s.icpUrl || s.beian?.icpUrl || '',
         policeBeian: s.policeBeian || s.beian?.policeBeian || '',
         policeBeianUrl: s.policeBeianUrl || s.beian?.policeBeianUrl || '',
         showBeian: s.showBeian !== false && s.beian?.show !== false,

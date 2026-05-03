@@ -69,7 +69,8 @@
                     <div class="settings-menu">
                         <button class="settings-tab active" data-settings="security">安全设置</button>
                         <button class="settings-tab" data-settings="beian">备案信息</button>
-                        <button class="settings-tab" data-settings="network">代理设置</button>
+                        <button class="settings-tab" data-settings="network">代理池</button>
+                        <button class="settings-tab" data-settings="ssh-keys">SSH 密钥库</button>
                         <button class="settings-tab" data-settings="data">数据管理</button>
                         <button class="settings-tab" data-settings="appearance">外观设置</button>
                         <button class="settings-tab" data-settings="mail">邮件通知</button>
@@ -114,6 +115,7 @@
                             <h2>备案信息设置</h2>
                             <form id="beianForm" class="settings-form">
                                 <input id="icpInput" placeholder="ICP 备案号，例如：粤ICP备xxxx号">
+                                <input id="icpUrlInput" placeholder="ICP 备案链接，例如：https://beian.miit.gov.cn">
                                 <input id="policeInput" placeholder="公安备案号，例如：粤公网安备 xxxx号">
                                 <input id="policeUrlInput" placeholder="公安备案链接">
                                 <label class="check-line"><input type="checkbox" id="showBeianInput" checked> 登录页显示备案信息</label>
@@ -126,6 +128,8 @@
                                 <input type="hidden" id="proxyId"><input id="proxyName" placeholder="名称"><select id="proxyType"><option value="socks5">SOCKS5</option><option value="http">HTTP CONNECT</option></select><input id="proxyHost" placeholder="IP / 主机"><input id="proxyPort" type="number" value="1080"><input id="proxyUsername" placeholder="用户名"><input id="proxyPassword" placeholder="密码"><button class="btn btn-primary" type="submit">保存代理</button>
                             </form>
                             <div class="mini-list" id="proxyList"></div>
+                        </div>
+                        <div class="settings-panel" id="settings-ssh-keys">
                             <h2>SSH 密钥库</h2>
                             <form id="sshKeyForm" class="settings-form">
                                 <input type="hidden" id="sshKeyId">
@@ -172,7 +176,7 @@
                 <div class="route-proxy-config force-hidden" id="proxyRouteConfig">
                     <label class="advanced-route-label" for="connRoute">代理服务器配置</label>
                     <select id="connRoute"><option value="">请选择代理服务器</option></select>
-                    <p class="field-hint">代理服务器需在“设置 → 代理设置”中单独配置。</p>
+                    <p class="field-hint">代理服务器需在“设置 → 代理池”中单独配置。</p>
                 </div>
                 <div class="jump-route-config force-hidden" id="jumpRouteConfig">
                     <label class="advanced-route-label">跳板机链配置</label>

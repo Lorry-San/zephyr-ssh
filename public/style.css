@@ -276,6 +276,16 @@ body.app-body.terminal-mode {
     justify-content: center;
 }
 
+.beian-footer a {
+    color: #999;
+    text-decoration: none;
+}
+
+.beian-footer a:hover {
+    color: #777;
+    text-decoration: underline;
+}
+
 /* ===== Zephyr 管理后台第一版 ===== */
 .app-shell { min-height: 100vh; background: var(--bg); color: var(--text); }
 .main-nav {

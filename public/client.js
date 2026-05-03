@@ -249,7 +249,9 @@ async function loadBeian() {
         await renderCaptcha(captchaConfig);
         if (!s.showBeian || (!s.icp && !s.policeBeian)) { beianFooter.innerHTML = ''; return; }
         const parts = [];
-        if (s.icp) parts.push(`<a href="https://beian.miit.gov.cn" target="_blank" rel="noreferrer">${s.icp}</a>`);
+        const icpUrl = s.icpUrl || 'https://beian.miit.gov.cn';
+        console.debug('[beian-client]', 'render beian footer', { hasIcp: !!s.icp, icpUrl, hasPolice: !!s.policeBeian, policeUrl: s.policeBeianUrl || '' });
+        if (s.icp) parts.push(`<a href="${icpUrl}" target="_blank" rel="noreferrer">${s.icp}</a>`);
         if (s.policeBeian) parts.push(`<a href="${s.policeBeianUrl || 'https://www.beian.gov.cn/portal/registerSystemInfo'}" target="_blank" rel="noreferrer">🛡️ ${s.policeBeian}</a>`);
         beianFooter.innerHTML = parts.join('');
     } catch { beianFooter.innerHTML = ''; }
