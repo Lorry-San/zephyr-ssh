@@ -289,15 +289,17 @@ function resolveRoutePlan(conn) {
     const jumpHostIds = normalizeJumpHostIds(conn);
     if (!jumpHostIds.length) throw new Error('未配置跳板机路径');
     if (jumpHostIds.length > 8) throw new Error('跳板机层级过多（最多 8 级）');
-    const jumpHosts = storage.listJumpHosts();
-    const hops = jumpHostIds.map((jumpHostId) => {
-        const jump = jumpHosts.find((j) => j.id === jumpHostId);
-        if (!jump) throw new Error(`跳板机配置不存在：${jumpHostId}`);
-        const hop = connections.find((c) => c.id === jump.connectionId);
-        if (!hop) throw new Error(`跳板机关联的 SSH 连接不存在：${jump.name}`);
+    const hops = jumpHostIds.map((jumpConnectionId) => {
+        const hop = connections.find((c) => c.id === jumpConnectionId);
+        if (!hop) throw new Error(`跳板机连接不存在或已删除：${jumpConnectionId}`);
         if (hop.id === conn.id) throw new Error('跳板机不能引用当前目标连接');
-        if (String(hop.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error(`跳板机必须关联 SSH 连接：${jump.name}`);
-        return { ...hop, routeName: jump.name };
+        if (String(hop.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error(`跳板机必须是 SSH 连接：${hop.name || hop.host}`);
+        return { ...hop, routeName: hop.name || hop.host };
+    });
+    console.debug('[route-plan]', 'resolved jump route from connections', {
+        target: conn.name || conn.host,
+        jumpHostIds,
+        hops: hops.map((hop) => ({ id: hop.id, name: hop.name, host: hop.host }))
     });
     const firstProxy = hops[0]?.connectionMode === 'proxy' && hops[0].proxyId ? storage.getProxyRaw(hops[0].proxyId) : null;
     if (hops[0]?.connectionMode === 'proxy' && !firstProxy) throw new Error(`首级跳板机代理配置不存在：${hops[0].name}`);

@@ -69,7 +69,7 @@
                     <div class="settings-menu">
                         <button class="settings-tab active" data-settings="security">安全设置</button>
                         <button class="settings-tab" data-settings="beian">备案信息</button>
-                        <button class="settings-tab" data-settings="network">代理与跳板机</button>
+                        <button class="settings-tab" data-settings="network">代理设置</button>
                         <button class="settings-tab" data-settings="data">数据管理</button>
                         <button class="settings-tab" data-settings="appearance">外观设置</button>
                         <button class="settings-tab" data-settings="mail">邮件通知</button>
@@ -126,9 +126,6 @@
                                 <input type="hidden" id="proxyId"><input id="proxyName" placeholder="名称"><input id="proxyHost" placeholder="IP / 主机"><input id="proxyPort" type="number" value="1080"><input id="proxyUsername" placeholder="用户名"><input id="proxyPassword" placeholder="密码"><button class="btn btn-primary" type="submit">保存代理</button>
                             </form>
                             <div class="mini-list" id="proxyList"></div>
-                            <h2>跳板机</h2>
-                            <form id="jumpForm" class="settings-form inline-form"><input type="hidden" id="jumpId"><input id="jumpName" placeholder="名称"><select id="jumpConnection"></select><button class="btn btn-primary" type="submit">保存跳板机</button></form>
-                            <div class="mini-list" id="jumpList"></div>
                         </div>
                         <div class="settings-panel" id="settings-data"><h2>数据导入导出</h2><p class="muted">导出文件使用 data/.env 中 ENCRYPTION_KEY 加密。</p><button class="btn btn-primary" id="exportDataBtn">开始导出</button><form id="importDataForm" class="settings-form"><input type="file" id="backupFile" accept=".enc"><input type="password" id="importLoginPassword" placeholder="当前登录密码"><input type="password" id="backupPassword" placeholder="备份解密密码（ENCRYPTION_KEY）"><button class="btn danger">导入备份</button></form></div>
                         <div class="settings-panel" id="settings-mail"><h2>邮件通知</h2><form id="mailForm" class="settings-form"><label class="check-line"><input type="checkbox" id="mailEnabled"> 启用邮件通知</label><input id="mailHost" placeholder="SMTP Host"><input id="mailPort" type="number" placeholder="SMTP Port"><label class="check-line"><input type="checkbox" id="mailSecure"> SSL/TLS</label><input id="mailUser" placeholder="SMTP 用户名"><input id="mailPass" type="password" placeholder="SMTP 密码"><input id="mailFrom" placeholder="发件人"><input id="mailAdminEmail" type="email" placeholder="后台管理员邮箱"><label class="check-line"><input type="checkbox" id="notifyLoginSuccess"> 登录成功通知</label><label class="check-line"><input type="checkbox" id="notifyLoginFailure"> 登录失败通知</label><label class="check-line"><input type="checkbox" id="geoLookupEnabled"> IP 地区查询</label><button class="btn btn-primary">保存邮件设置</button><button class="btn" type="button" id="testMailBtn">测试邮件</button></form><div class="panel-title-row"><h2>登录事件</h2><button class="tool-btn danger" type="button" id="clearLoginEventsBtn">清理日志</button></div><div class="mini-list" id="loginEventList"></div></div>
@@ -151,7 +148,27 @@
             <div class="form-row"><div class="form-group"><label>IP / 主机</label><input id="connHost" required></div><div class="form-group port-group"><label>端口</label><input id="connPort" type="number" value="22" min="1" max="65535"></div></div>
             <div class="form-group"><label>用户名</label><input id="connUsername" required></div>
             <div class="form-group"><label>标签（逗号分隔）</label><input id="connTags" placeholder="生产, 数据库, 海外"></div>
-            <div class="form-row"><div class="form-group"><label>连接方式</label><select id="connMode"><option value="direct">直连</option><option value="proxy">通过代理</option><option value="jump">通过跳板机</option></select></div><div class="form-group"><label>代理/跳板</label><select id="connRoute"><option value="">无</option></select><div class="route-order-actions force-hidden" id="routeOrderActions"><button type="button" class="tool-btn" id="routeUpBtn">上移</button><button type="button" class="tool-btn" id="routeDownBtn">下移</button><span class="field-hint">跳板机按列表顺序依次连接</span></div></div></div>
+            <section class="advanced-route-panel" aria-label="高级选项">
+                <h3>高级选项</h3>
+                <div class="advanced-route-divider"></div>
+                <label class="advanced-route-label">代理类型:</label>
+                <input type="hidden" id="connMode" value="direct">
+                <div class="route-type-tabs" role="tablist" aria-label="代理类型">
+                    <button type="button" class="route-type-tab" data-route-mode="proxy" role="tab">代理服务器</button>
+                    <button type="button" class="route-type-tab" data-route-mode="jump" role="tab">跳板机</button>
+                </div>
+                <div class="route-proxy-config force-hidden" id="proxyRouteConfig">
+                    <label class="advanced-route-label" for="connRoute">代理服务器配置</label>
+                    <select id="connRoute"><option value="">请选择代理服务器</option></select>
+                    <p class="field-hint">代理服务器仍需在“设置 → 代理与跳板机”中单独配置。</p>
+                </div>
+                <div class="jump-route-config force-hidden" id="jumpRouteConfig">
+                    <label class="advanced-route-label">跳板机链配置</label>
+                    <div class="jump-route-list" id="jumpRouteList"></div>
+                    <button type="button" class="add-jump-route-btn" id="addJumpRouteBtn">＋ 添加跳板机</button>
+                    <p class="field-hint">连接列表中的 SSH 机器默认都可作为跳板机，按上方顺序依次连接。</p>
+                </div>
+            </section>
             <div class="form-group password-field"><label>密码</label><input id="connPassword" type="password"><button type="button" id="toggleConnPassword">👁️</button></div>
             <div class="form-group"><label>私钥</label><textarea id="connPrivateKey" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea><button type="button" class="link-btn" id="revealConnSecrets">查看已保存密码/私钥</button><p class="field-hint">编辑时默认隐藏敏感信息；留空或保持星号不会覆盖已保存凭据。</p></div>
             <div class="form-group"><label>备注（支持 Markdown）</label><textarea id="connRemark" placeholder="例如：**生产环境**\n`docker ps`"></textarea></div>
