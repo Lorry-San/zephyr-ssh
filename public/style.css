@@ -455,22 +455,8 @@ body.terminal-mode .app-shell {
 }
 .smartbar-handle::before,
 .smartbar-handle::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    width: 14px;
-    height: 14px;
-    pointer-events: none;
-}
-.smartbar-handle::before {
-    left: -14px;
-    border-top-right-radius: 11px;
-    box-shadow: 7px 0 0 0 var(--smartbar-tab-bg), 7px -1px 0 0 rgba(139,148,158,.12);
-}
-.smartbar-handle::after {
-    right: -14px;
-    border-top-left-radius: 11px;
-    box-shadow: -7px 0 0 0 var(--smartbar-tab-bg), -7px -1px 0 0 rgba(139,148,158,.12);
+    content: none;
+    display: none;
 }
 .smartbar-handle span {
     display: block;
@@ -1237,7 +1223,42 @@ body.app-body > .toast.show { opacity: 1; transform: translate3d(0,0,0) scale(1)
     .add-btn { width: 100%; }
     .action-bar { grid-template-columns: 1fr; }
     .settings-layout { grid-template-columns: 1fr; }
-    .settings-menu { grid-auto-flow: column; overflow-x: auto; }
+    .settings-menu {
+        grid-auto-flow: column;
+        grid-auto-columns: max-content;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+    .settings-menu .settings-tab {
+        white-space: nowrap;
+        min-width: max-content;
+    }
+    .settings-content {
+        padding: 14px;
+        overflow-wrap: anywhere;
+    }
+    .settings-form,
+    .inline-form {
+        max-width: none;
+        grid-template-columns: 1fr;
+    }
+    .mini-item {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px;
+        align-items: stretch;
+    }
+    .mini-item b,
+    .mini-item span {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .mini-item button {
+        width: 100%;
+        justify-self: stretch;
+        min-height: 34px;
+    }
     .modal-actions { flex-direction: column-reverse; }
     .modal-actions .btn { width: 100%; }
     .activity-item { flex-direction: column; }
@@ -2909,6 +2930,24 @@ html.keyboard-open .terminal-page {
     .fm-editor-minimap { width: 112px; flex-basis: 112px; }
     .fm-editor-actions { flex-wrap: wrap; }
     .fm-editor-actions .btn { min-width: 90px; }
+    #view-settings .settings-content {
+        padding: 12px;
+    }
+    #view-settings input,
+    #view-settings textarea,
+    #view-settings select {
+        min-width: 0;
+        max-width: 100%;
+    }
+    #view-settings .check-line {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        line-height: 1.45;
+    }
+    #view-settings .check-line input {
+        flex: 0 0 auto;
+        margin-top: 2px;
+    }
     #view-remote .section-head { margin-bottom: 12px; }
     .remote-servers,
     .remote-command,
