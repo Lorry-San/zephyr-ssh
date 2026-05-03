@@ -1637,6 +1637,7 @@ function dockerServiceRestartCommand() {
 
 // 提供静态文件
 app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
+app.use('/vendor/@wterm', express.static(path.join(__dirname, 'node_modules', '@wterm')));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // 健康检查
