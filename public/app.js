@@ -274,6 +274,7 @@ function renderTerminalSmartbar() {
 function terminalWindowMenu(t) {
     const maxWindows = getEffectiveTerminalMaxWindows();
     const visibleCount = visibleTerminalTabs().length;
+    const compact = isCompactTerminalWorkspace();
     const workspace = $('#terminalWorkspace');
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     const winFullscreen = fullscreenElement?.classList?.contains('terminal-window') || fullscreenElement === workspace;
@@ -281,7 +282,7 @@ function terminalWindowMenu(t) {
     const fullscreenItem = (customFullscreen || winFullscreen) ? ['exit-fullscreen', '退出全屏'] : ['fullscreen', '全屏'];
     let items;
     if (maxWindows <= 1 || visibleCount <= 1) {
-        items = [fullscreenItem, ['close', '关闭']];
+        items = compact ? [fullscreenItem, ['minimize', '最小化'], ['close', '关闭']] : [['minimize', '最小化'], ['close', '关闭']];
     } else if (maxWindows === 2 || visibleCount === 2) {
         items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
     } else {
@@ -407,6 +408,13 @@ function closeTerminalTab(tabId) {
 
 function applyTerminalWindowPreset(tabId, action) {
     const t = getTerminalSession(tabId); if (!t) return;
+    console.debug('[terminal-layout]', 'window action', {
+        tabId,
+        action,
+        compact: isCompactTerminalWorkspace(),
+        visibleCount: visibleTerminalTabs().length,
+        maxWindows: getEffectiveTerminalMaxWindows()
+    });
     if (action === 'minimize') { minimizeTerminalSession(tabId); renderTerminalTabs(); return; }
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
@@ -525,6 +533,15 @@ function hideFullscreenLoading({ delay = 520 } = {}) {
 }
 
 async function fullscreenTerminalTab(tabId) {
+    const compact = isCompactTerminalWorkspace();
+    const visibleBefore = visibleTerminalTabs().map((t) => t.id);
+    console.debug('[terminal-layout]', 'fullscreen requested', {
+        tabId,
+        compact,
+        visibleCount: visibleBefore.length,
+        maxWindows: getEffectiveTerminalMaxWindows()
+    });
+
     restoreTerminalSession(tabId);
     activeTerminalTab = tabId;
     touchTerminalSession(tabId);
@@ -532,9 +549,9 @@ async function fullscreenTerminalTab(tabId) {
     const workspace = $('#terminalWorkspace');
     const win = workspace?.querySelector(`.terminal-window[data-window="${CSS.escape(tabId)}"]`);
     if (!workspace || !win) return;
-    showFullscreenLoading(isCompactTerminalWorkspace() ? '正在进入移动端全屏...' : '正在进入浏览器全屏...');
+    showFullscreenLoading(compact ? '正在进入移动端全屏...' : '正在切换为单窗口...');
     try {
-        if (isCompactTerminalWorkspace()) {
+        if (compact) {
             workspace.classList.toggle('custom-fullscreen');
             document.body.classList.toggle('terminal-custom-fullscreen-open', workspace.classList.contains('custom-fullscreen'));
             renderTerminalTabs();
@@ -543,18 +560,24 @@ async function fullscreenTerminalTab(tabId) {
                 win.querySelector('.terminal-frame')?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'focus-terminal' }, '*');
             }, 120);
         } else {
-            const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-            if (fullscreenElement === win || fullscreenElement === workspace) {
-                if (document.exitFullscreen) await document.exitFullscreen();
-                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                return;
-            }
-            if (win.requestFullscreen) await win.requestFullscreen();
-            else if (win.webkitRequestFullscreen) win.webkitRequestFullscreen();
-            else {
-                hideFullscreenLoading({ delay: 0 });
-                toast('当前浏览器不支持全屏 API');
-            }
+            const minimizedIds = visibleBefore.filter((id) => id !== tabId);
+            minimizedIds.forEach((id) => {
+                const session = getTerminalSession(id);
+                if (session) session.minimized = true;
+            });
+            visualLayout = [tabId];
+            activeTerminalTab = tabId;
+            syncVisualLayout({ preserve: false });
+            console.debug('[terminal-layout]', 'desktop fullscreen uses single-window layout', {
+                tabId,
+                minimizedIds,
+                visualLayout: [...visualLayout]
+            });
+            renderTerminalTabs();
+            hideFullscreenLoading({ delay: 220 });
+            window.setTimeout(() => {
+                workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(tabId)}"]`)?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'focus-terminal' }, '*');
+            }, 120);
         }
     } catch (err) {
         hideFullscreenLoading({ delay: 0 });
