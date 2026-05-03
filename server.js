@@ -403,6 +403,95 @@ async function createRoutedSSHConnection(conn, timeout = 10000) {
     }
 }
 
+function listenLocalTcpForward({ route, targetLabel, openTargetStream, onClose }) {
+    return new Promise((resolve, reject) => {
+        const sockets = new Set();
+        const server = net.createServer(async (localSocket) => {
+            let remoteSocket = null;
+            sockets.add(localSocket);
+            localSocket.on('close', () => sockets.delete(localSocket));
+            localSocket.on('error', (err) => console.warn('[tcp-forward]', 'local socket error', { route, target: targetLabel, error: err.message }));
+
+            try {
+                remoteSocket = await openTargetStream();
+                sockets.add(remoteSocket);
+                remoteSocket.on('close', () => sockets.delete(remoteSocket));
+                remoteSocket.on('error', (err) => console.warn('[tcp-forward]', 'remote socket error', { route, target: targetLabel, error: err.message }));
+                localSocket.pipe(remoteSocket);
+                remoteSocket.pipe(localSocket);
+            } catch (err) {
+                console.warn('[tcp-forward]', 'failed to open target stream', { route, target: targetLabel, error: err.message });
+                try { localSocket.destroy(err); } catch {}
+                try { remoteSocket?.destroy?.(); } catch {}
+            }
+        });
+
+        const close = () => {
+            console.info('[tcp-forward]', 'closing local forward', { route, target: targetLabel });
+            try { server.close(); } catch {}
+            sockets.forEach((socket) => {
+                try { socket.destroy(); } catch {}
+            });
+            try { onClose?.(); } catch {}
+        };
+
+        server.once('error', (err) => {
+            close();
+            reject(err);
+        });
+
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            console.info('[tcp-forward]', 'local forward ready', { local: `127.0.0.1:${address.port}`, route, target: targetLabel });
+            resolve({ host: '127.0.0.1', port: address.port, route, close });
+        });
+    });
+}
+
+async function createRoutedTcpForward(conn, targetPort, timeout = 10000) {
+    const plan = resolveRoutePlan(conn);
+    const targetHost = String(conn.host || '');
+    const port = Number(targetPort) || Number(conn.port) || 0;
+    const targetLabel = `${targetHost}:${port}`;
+    const clients = [];
+
+    try {
+        if (!plan.hops.length) {
+            if (!plan.firstProxy) {
+                return null;
+            }
+
+            const route = `代理 ${plan.firstProxy.name || plan.firstProxy.host} -> ${conn.name || targetLabel}`;
+            return await listenLocalTcpForward({
+                route,
+                targetLabel,
+                openTargetStream: () => openProxyConnection(plan.firstProxy, targetHost, port, timeout),
+            });
+        }
+
+        const firstSock = plan.firstProxy ? await openProxyConnection(plan.firstProxy, plan.hops[0].host, plan.hops[0].port, timeout) : undefined;
+        let currentClient = await connectSSHClient(plan.hops[0], { timeout, sock: firstSock });
+        clients.push(currentClient);
+
+        for (const hop of plan.hops.slice(1)) {
+            const tunnel = await forwardOut(currentClient, hop.host, hop.port);
+            currentClient = await connectSSHClient(hop, { timeout, sock: tunnel });
+            clients.push(currentClient);
+        }
+
+        const route = [...plan.hops.map((h) => h.routeName || h.name || h.host), conn.name || targetLabel].join(' -> ');
+        return await listenLocalTcpForward({
+            route,
+            targetLabel,
+            openTargetStream: () => forwardOut(currentClient, targetHost, port),
+            onClose: () => clients.reverse().forEach((client) => { try { client.end(); } catch {} }),
+        });
+    } catch (err) {
+        clients.reverse().forEach((client) => { try { client.end(); } catch {} });
+        throw err;
+    }
+}
+
 function classifySSHError(err) {
     const msg = String(err?.message || err || '连接失败');
     if (/timed out|timeout/i.test(msg)) return { code: 'timeout', message: '连接超时' };
@@ -606,32 +695,61 @@ function nextGuacdInstruction(socket, parser, timeout, label = 'guacd 握手') {
 async function openGuacdSession(conn, display = {}, timeout = 10000) {
     const protocol = guacamoleProtocol(conn);
     if (!conn.host) throw new Error('主机不能为空');
-    if (conn.connectionMode && conn.connectionMode !== 'direct') {
-        console.warn('[guacamole]', 'RDP/VNC 暂不复用 Zephyr SSH 代理/跳板机路由，改由 guacd 直连目标', { connectionId: conn.id, mode: conn.connectionMode });
+
+    const targetPort = Number(conn.port) || guacamoleDefaultPort(protocol);
+    let routedForward = null;
+    let effectiveConn = conn;
+    let socket = null;
+
+    try {
+        routedForward = await createRoutedTcpForward(conn, targetPort, timeout);
+        if (routedForward) {
+            effectiveConn = { ...conn, host: routedForward.host, port: routedForward.port };
+            console.info('[guacamole]', 'RDP/VNC using routed local forward', {
+                connectionId: conn.id,
+                mode: conn.connectionMode || 'direct',
+                protocol,
+                route: routedForward.route,
+                originalTarget: `${conn.host}:${targetPort}`,
+                guacdTarget: `${routedForward.host}:${routedForward.port}`,
+            });
+        }
+
+        console.info('[guacd]', 'opening session', {
+            guacdHost: GUACD_HOST,
+            guacdPort: GUACD_PORT,
+            protocol,
+            target: `${effectiveConn.host}:${Number(effectiveConn.port) || guacamoleDefaultPort(protocol)}`,
+            originalTarget: `${conn.host}:${targetPort}`,
+            route: routedForward?.route || 'direct',
+        });
+
+        socket = net.createConnection(GUACD_PORT, GUACD_HOST);
+        socket.setEncoding('utf8');
+        await waitForSocket(socket, timeout, 'guacd');
+        const parser = new GuacParser();
+
+        socket.write(guacInstruction('select', protocol));
+        const argsInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd args');
+        if (argsInstruction.opcode !== 'args') throw new Error(`guacd 未返回 args 指令：${argsInstruction.opcode}`);
+
+        const params = guacamoleParameterMap(effectiveConn, display);
+        socket.write(guacInstruction('size', params.width, params.height, params.dpi));
+        socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
+        socket.write(guacInstruction('video'));
+        socket.write(guacInstruction('image', 'image/png', 'image/jpeg'));
+        socket.write(guacInstruction('connect', ...argsInstruction.args.map((name) => params[name] ?? '')));
+
+        const readyInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd ready');
+        if (readyInstruction.opcode !== 'ready') throw new Error(`guacd 连接目标失败：${readyInstruction.opcode} ${readyInstruction.args.join(' ')}`.trim());
+        const uuid = readyInstruction.args[0] || crypto.randomUUID();
+        console.info('[guacd]', 'session ready', { protocol, uuid, target: conn.name || conn.host, route: routedForward?.route || 'direct' });
+        return { socket, uuid, routedForward };
+    } catch (err) {
+        try { socket?.destroy(); } catch {}
+        try { routedForward?.close?.(); } catch {}
+        throw err;
     }
-    console.info('[guacd]', 'opening session', { guacdHost: GUACD_HOST, guacdPort: GUACD_PORT, protocol, target: `${conn.host}:${Number(conn.port) || guacamoleDefaultPort(protocol)}` });
-
-    const socket = net.createConnection(GUACD_PORT, GUACD_HOST);
-    socket.setEncoding('utf8');
-    await waitForSocket(socket, timeout, 'guacd');
-    const parser = new GuacParser();
-
-    socket.write(guacInstruction('select', protocol));
-    const argsInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd args');
-    if (argsInstruction.opcode !== 'args') throw new Error(`guacd 未返回 args 指令：${argsInstruction.opcode}`);
-
-    const params = guacamoleParameterMap(conn, display);
-    socket.write(guacInstruction('size', params.width, params.height, params.dpi));
-    socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
-    socket.write(guacInstruction('video'));
-    socket.write(guacInstruction('image', 'image/png', 'image/jpeg'));
-    socket.write(guacInstruction('connect', ...argsInstruction.args.map((name) => params[name] ?? '')));
-
-    const readyInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd ready');
-    if (readyInstruction.opcode !== 'ready') throw new Error(`guacd 连接目标失败：${readyInstruction.opcode} ${readyInstruction.args.join(' ')}`.trim());
-    const uuid = readyInstruction.args[0] || crypto.randomUUID();
-    console.info('[guacd]', 'session ready', { protocol, uuid, target: conn.name || conn.host });
-    return { socket, uuid };
 }
 
 async function testGuacamoleConnection(conn, timeout = 10000) {
@@ -649,6 +767,7 @@ async function testGuacamoleConnection(conn, timeout = 10000) {
         try { session?.socket?.write(guacInstruction('disconnect')); } catch {}
         try { session?.socket?.end(); } catch {}
         try { session?.socket?.destroy(); } catch {}
+        try { session?.routedForward?.close?.(); } catch {}
     }
 }
 
@@ -1419,21 +1538,40 @@ app.post('/api/ssh-keys/:id/open', requireAuth, (req, res) => {
 });
 app.delete('/api/ssh-keys/:id', requireAuth, (req, res) => { storage.deleteSshKey(req.params.id); addActivity('删除 SSH 密钥'); res.json({ ok: true }); });
 
+function ensureSshJumpConnection(connectionId) {
+    const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+    const conn = (store.connections || []).find((c) => c.id === String(connectionId || ''));
+    if (!conn) throw new Error('跳板机连接不存在或已删除');
+    if (String(conn.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error('跳板机只能选择 SSH 连接，VNC/RDP 只能作为目标通过跳板访问');
+    return conn;
+}
+
 app.get('/api/jump-hosts', requireAuth, (req, res) => res.json({ jumpHosts: storage.listJumpHosts() }));
 app.post('/api/jump-hosts', requireAuth, (req, res) => {
     const b = req.body || {};
     if (!b.name || !b.connectionId) return res.status(400).json({ error: '名称和 SSH 连接不能为空' });
-    const jumpHost = storage.saveJumpHost({ id: crypto.randomUUID(), name: String(b.name), connectionId: String(b.connectionId), createdAt: Date.now(), updatedAt: Date.now() });
-    addActivity(`新增跳板机：${jumpHost.name}`);
-    res.json({ jumpHost });
+    try {
+        ensureSshJumpConnection(b.connectionId);
+        const jumpHost = storage.saveJumpHost({ id: crypto.randomUUID(), name: String(b.name), connectionId: String(b.connectionId), createdAt: Date.now(), updatedAt: Date.now() });
+        addActivity(`新增跳板机：${jumpHost.name}`);
+        res.json({ jumpHost });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '跳板机配置无效' });
+    }
 });
 app.put('/api/jump-hosts/:id', requireAuth, (req, res) => {
     const old = storage.listJumpHosts().find((j) => j.id === req.params.id);
     if (!old) return res.status(404).json({ error: '跳板机不存在' });
     const b = req.body || {};
-    const jumpHost = storage.saveJumpHost({ ...old, name: String(b.name ?? old.name), connectionId: String(b.connectionId ?? old.connectionId), updatedAt: Date.now() });
-    addActivity(`编辑跳板机：${jumpHost.name}`);
-    res.json({ jumpHost });
+    const nextConnectionId = String(b.connectionId ?? old.connectionId);
+    try {
+        ensureSshJumpConnection(nextConnectionId);
+        const jumpHost = storage.saveJumpHost({ ...old, name: String(b.name ?? old.name), connectionId: nextConnectionId, updatedAt: Date.now() });
+        addActivity(`编辑跳板机：${jumpHost.name}`);
+        res.json({ jumpHost });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '跳板机配置无效' });
+    }
 });
 app.delete('/api/jump-hosts/:id', requireAuth, (req, res) => { storage.deleteJumpHost(req.params.id); addActivity('删除跳板机'); res.json({ ok: true }); });
 
@@ -1527,6 +1665,7 @@ guacWss.on('connection', async (ws, req) => {
         try { session?.socket?.write(guacInstruction('disconnect')); } catch {}
         try { session?.socket?.end(); } catch {}
         try { session?.socket?.destroy(); } catch {}
+        try { session?.routedForward?.close?.(); } catch {}
         try { if (ws.readyState === ws.OPEN) ws.close(); } catch {}
     };
 
