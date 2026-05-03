@@ -26,16 +26,54 @@
 
 ### 方式一：Docker 镜像运行
 
+> **重要：生产部署请先写 `.env`，并持久化 `/app/data`。**
+> Zephyr 的 SQLite 数据库、运行配置和备份文件都在容器内 `/app/data`。如果启动容器时没有挂载这个目录，删除/重建容器后数据会丢失。
+
+推荐使用宿主机目录挂载，`.env` 写在宿主机上，然后通过 `--env-file` 显式引用：
+
 ```bash
+# 1. 创建部署目录和持久化数据目录
+mkdir -p ./zephyr-data
+
+# 2. 先写生产环境配置
+cat > ./zephyr-data/.env <<'EOF'
+ENCRYPTION_KEY=请替换为足够长的随机密钥
+PUBLIC_ORIGIN=https://ssh.example.com
+PORT=3000
+EOF
+
+# 3. 拉取并运行镜像
 docker pull ghcr.io/lanlan13-14/zephyr-ssh:latest
 
 docker run -d \
   --name zephyr-ssh \
+  --env-file ./zephyr-data/.env \
+  -p 3000:3000 \
+  -v "$(pwd)/zephyr-data:/app/data" \
+  --restart unless-stopped \
+  ghcr.io/lanlan13-14/zephyr-ssh:latest
+```
+
+如果只是本机测试，也可以使用 Docker 命名卷，但仍建议先准备 `.env`：
+
+```bash
+mkdir -p ./zephyr-data
+cat > ./zephyr-data/.env <<'EOF'
+ENCRYPTION_KEY=please-change-this-key
+PUBLIC_ORIGIN=http://localhost:3000
+PORT=3000
+EOF
+
+docker run -d \
+  --name zephyr-ssh \
+  --env-file ./zephyr-data/.env \
   -p 3000:3000 \
   -v zephyr-ssh-data:/app/data \
   --restart unless-stopped \
   ghcr.io/lanlan13-14/zephyr-ssh:latest
 ```
+
+> 使用命名卷时，`./zephyr-data/.env` 只负责给 Docker 注入环境变量；容器首次启动还会在命名卷内生成 `/app/data/.env`。生产环境更推荐上面的宿主机目录挂载方式，方便直接备份和检查 `zephyr.db`、`.env`。
 
 访问：`http://your-server-ip:3000`
 
@@ -62,21 +100,30 @@ npm start
 
 ## ⚙️ 配置说明
 
-项目启动时会自动创建 `data/.env`，用于保存运行环境配置：
+生产环境请手动准备 `.env`，不要依赖默认占位值：
 
 ```env
-ENCRYPTION_KEY=please-change-this-key
-PUBLIC_ORIGIN=http://localhost:3000
+ENCRYPTION_KEY=请替换为足够长的随机密钥
+PUBLIC_ORIGIN=https://ssh.example.com
 PORT=3000
 ```
 
+Docker 部署时推荐同时做到两点：
+
+1. 用 `--env-file ./zephyr-data/.env` 让 Docker 启动时显式读取配置。
+2. 用 `-v "$(pwd)/zephyr-data:/app/data"` 将同一个目录挂载到容器 `/app/data`，让 `.env`、`zephyr.db`、WAL 文件和备份文件都持久化。
+
+程序启动时也会读取 `data/.env`；如果文件不存在，会自动生成默认占位文件，方便本地测试。但生产环境必须在首次启动前或首次启动后立即修改，并重启容器使配置生效。
+
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `PORT` | Web 服务监听端口 | `3000` |
-| `ENCRYPTION_KEY` | 数据导出加密密钥；生产环境务必修改 | `please-change-this-key` |
-| `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源 | `http://localhost:3000` |
+| `PORT` | Web 服务监听端口；Docker 中通常保持 `3000`，通过 `-p 宿主机端口:3000` 对外暴露 | `3000` |
+| `ENCRYPTION_KEY` | 数据导出/导入备份加密密钥；生产环境务必改成强随机字符串，并妥善保存 | `please-change-this-key` |
+| `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，需要和浏览器访问地址一致 | `http://localhost:3000` |
 
 > 使用 Passkey / WebAuthn 时，生产环境建议配置 HTTPS，并将 `PUBLIC_ORIGIN` 设置为真实访问地址，例如 `https://ssh.example.com`。
+>
+> 如果更换了 `ENCRYPTION_KEY`，旧备份文件需要使用导出时的旧密钥才能解密导入。
 
 ## 关于依赖文件
 
@@ -90,14 +137,71 @@ PORT=3000
 构建镜像前建议确认本地运行数据不会被打进镜像。项目已提供 `.dockerignore`，默认排除 `data/`、`node_modules/` 等本地文件；镜像首次启动时会自动创建默认管理员：`admin / admin`。
 
 ```bash
+mkdir -p ./zephyr-data
+
+cat > ./zephyr-data/.env <<'EOF'
+ENCRYPTION_KEY=请替换为足够长的随机密钥
+PUBLIC_ORIGIN=https://ssh.example.com
+PORT=3000
+EOF
+
 docker build -t zephyr-ssh:local .
 
 docker run -d \
   --name zephyr-ssh \
+  --env-file ./zephyr-data/.env \
+  -p 3000:3000 \
+  -v "$(pwd)/zephyr-data:/app/data" \
+  --restart unless-stopped \
+  zephyr-ssh:local
+```
+
+## 更新 Docker 容器时保留数据
+
+更新镜像或重建容器时，必须复用原来的 `./zephyr-data:/app/data` 挂载目录，不能换目录，也不要删除该目录。
+
+```bash
+# 拉取新镜像
+docker pull ghcr.io/lanlan13-14/zephyr-ssh:latest
+
+# 删除旧容器；这里只删除容器，不删除 ./zephyr-data
+docker rm -f zephyr-ssh
+
+# 使用同一个 .env 和同一个数据目录重新启动
+docker run -d \
+  --name zephyr-ssh \
+  --env-file ./zephyr-data/.env \
+  -p 3000:3000 \
+  -v "$(pwd)/zephyr-data:/app/data" \
+  --restart unless-stopped \
+  ghcr.io/lanlan13-14/zephyr-ssh:latest
+```
+
+如果之前使用的是命名卷，更新时必须继续挂载同一个卷名：
+
+```bash
+docker rm -f zephyr-ssh
+
+docker run -d \
+  --name zephyr-ssh \
+  --env-file ./zephyr-data/.env \
   -p 3000:3000 \
   -v zephyr-ssh-data:/app/data \
   --restart unless-stopped \
-  zephyr-ssh:local
+  ghcr.io/lanlan13-14/zephyr-ssh:latest
+```
+
+排查数据是否已经正确持久化：
+
+```bash
+# 查看容器是否挂载了 /app/data
+docker inspect zephyr-ssh --format '{{json .Mounts}}'
+
+# 宿主机目录挂载时，确认数据库和 .env 在宿主机目录中
+ls -la ./zephyr-data
+
+# 命名卷挂载时，查看卷信息
+docker volume inspect zephyr-ssh-data
 ```
 
 ## 项目结构
