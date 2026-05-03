@@ -274,13 +274,18 @@ function renderTerminalSmartbar() {
 function terminalWindowMenu(t) {
     const maxWindows = getEffectiveTerminalMaxWindows();
     const visibleCount = visibleTerminalTabs().length;
+    const workspace = $('#terminalWorkspace');
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    const winFullscreen = fullscreenElement?.classList?.contains('terminal-window') || fullscreenElement === workspace;
+    const customFullscreen = workspace?.classList.contains('custom-fullscreen');
+    const fullscreenItem = (customFullscreen || winFullscreen) ? ['exit-fullscreen', '退出全屏'] : ['fullscreen', '全屏'];
     let items;
     if (maxWindows <= 1 || visibleCount <= 1) {
-        items = [['fullscreen', '全屏'], ['close', '关闭']];
+        items = [fullscreenItem, ['close', '关闭']];
     } else if (maxWindows === 2 || visibleCount === 2) {
-        items = [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
+        items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
     } else {
-        items = [['fullscreen', '全屏'], ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
+        items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
     }
     return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
 }
@@ -368,8 +373,24 @@ function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     requestAnimationFrame(() => broadcastThemeToTerminals(document.documentElement.getAttribute('data-theme') || getPreferredTheme()));
 }
 
+function exitTerminalFullscreen() {
+    const workspace = $('#terminalWorkspace');
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    if (workspace?.classList.contains('custom-fullscreen')) {
+        resetTerminalWorkspaceKeyboard();
+        workspace.classList.remove('custom-fullscreen');
+        document.body.classList.remove('terminal-custom-fullscreen-open');
+        renderTerminalTabs({ rebuildWorkspace: false });
+    }
+    if (fullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen().catch?.(() => {});
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+}
+
 function closeTerminalTab(tabId) {
     if (!terminalTabs.some((t) => t.id === tabId) || closingTerminalTabs.has(tabId)) return;
+    if (activeTerminalTab === tabId) exitTerminalFullscreen();
     closingTerminalTabs.add(tabId);
     renderTerminalTabs({ rebuildWorkspace: false });
     window.setTimeout(() => {
@@ -388,6 +409,7 @@ function applyTerminalWindowPreset(tabId, action) {
     const t = getTerminalSession(tabId); if (!t) return;
     if (action === 'minimize') { minimizeTerminalSession(tabId); renderTerminalTabs(); return; }
     if (action === 'close') { closeTerminalTab(tabId); return; }
+    if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
     restoreTerminalSession(tabId);
     const workspace = $('#terminalWorkspace');

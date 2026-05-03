@@ -396,12 +396,19 @@ function setStableViewportHeight({ force = false } = {}) {
 setStableViewportHeight({ force: true });
 
 // ---------- 主题管理 ----------
+const TERMINAL_THEME_OVERRIDE_KEY = 'zephyr-terminal-theme-override';
+function hasTerminalThemeOverride() {
+    const saved = localStorage.getItem(TERMINAL_THEME_OVERRIDE_KEY);
+    return saved === 'light' || saved === 'dark';
+}
 function getPreferredTheme() {
+    const terminalOverride = localStorage.getItem(TERMINAL_THEME_OVERRIDE_KEY);
+    if (terminalOverride === 'light' || terminalOverride === 'dark') return terminalOverride;
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
-function applyTheme(theme, { persist = false } = {}) {
+function applyTheme(theme, { persist = false, terminalOverride = false } = {}) {
     if (document.documentElement.getAttribute('data-theme') !== theme) {
         document.documentElement.classList.add('theme-transitioning');
         window.clearTimeout(applyTheme._transitionTimer);
@@ -410,7 +417,8 @@ function applyTheme(theme, { persist = false } = {}) {
         }, 300);
     }
     document.documentElement.setAttribute('data-theme', theme);
-    if (persist) localStorage.setItem('zephyr-theme', theme);
+    if (terminalOverride) localStorage.setItem(TERMINAL_THEME_OVERRIDE_KEY, theme);
+    else if (persist) localStorage.setItem('zephyr-theme', theme);
     themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 applyTheme(getPreferredTheme());
@@ -456,7 +464,7 @@ wtermThemeToggle?.addEventListener('click', () => {
 
 themeToggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme');
-    applyTheme(current === 'dark' ? 'light' : 'dark', { persist: true });
+    applyTheme(current === 'dark' ? 'light' : 'dark', { terminalOverride: true });
 });
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
@@ -468,7 +476,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e)
 window.addEventListener('message', (e) => {
     if (e.data?.source !== 'zephyr-app') return;
     if (e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
-        applyTheme(e.data.theme);
+        if (!hasTerminalThemeOverride()) applyTheme(e.data.theme);
     }
     if (e.data.type === 'focus-terminal') {
         try { term?.focus?.(); } catch (_) {}
