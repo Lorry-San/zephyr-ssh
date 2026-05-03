@@ -33,6 +33,7 @@ const SSH_STATS_ENABLED = process.env.SSH_STATS_ENABLED !== 'false';
 const app = express();
 
 const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'zephyr.db');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -1688,8 +1689,34 @@ app.get('*', (req, res) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ssh' });
-const guacWss = new WebSocketServer({ server, path: '/guacamole' });
+const wsServerOptions = {
+    noServer: true,
+    perMessageDeflate: false,
+    maxPayload: 10 * 1024 * 1024,
+};
+const wss = new WebSocketServer(wsServerOptions);
+const guacWss = new WebSocketServer(wsServerOptions);
+
+server.on('upgrade', (req, socket, head) => {
+    let pathname = '';
+    try {
+        pathname = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`).pathname;
+    } catch {
+        pathname = req.url || '';
+    }
+
+    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : null;
+    if (!targetWss) {
+        console.warn('[WS-DIAG] rejected websocket upgrade for unknown path', { url: req.url || '' });
+        try { socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); } catch {}
+        try { socket.destroy(); } catch {}
+        return;
+    }
+
+    targetWss.handleUpgrade(req, socket, head, (ws) => {
+        targetWss.emit('connection', ws, req);
+    });
+});
 
 guacWss.on('connection', async (ws, req) => {
     const started = Date.now();
@@ -2110,20 +2137,31 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     hasFallbackPassword: !!password && password !== '******',
                     hasFallbackPrivateKey: !!privateKey && privateKey !== '******',
                 });
+                let connectionSource = 'fallback-message';
+                let storeConnectionCount = null;
                 if (connectionId) {
                     const session = currentSession(req);
                     if (!session) throw new Error('未登录或会话已过期');
                     const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+                    storeConnectionCount = (store.connections || []).length;
                     conn = (store.connections || []).find((c) => c.id === connectionId);
                     if (!conn) throw new Error('连接不存在或已删除');
+                    connectionSource = 'sqlite-by-connectionId';
                 } else {
                     conn = { host, port: port || 22, username, password: password || '', privateKey: privateKey || '', connectionMode: 'direct' };
                 }
                 if (!conn.host || !conn.username) throw new Error('主机和用户名不能为空');
                 console.info('[SSH-DIAG] resolved connection config', {
                     connectionId: conn.id || connectionId || '',
+                    requestedConnectionId: connectionId || '',
+                    source: connectionSource,
+                    dataDir: DATA_DIR,
+                    dbFile: DB_FILE,
+                    storeConnectionCount,
                     name: conn.name || '',
                     target: `${conn.host}:${Number(conn.port) || 22}`,
+                    host: conn.host || '',
+                    port: Number(conn.port) || 22,
                     username: conn.username || '',
                     protocol: conn.protocol || 'SSH',
                     mode: conn.connectionMode || 'direct',
@@ -2426,6 +2464,16 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 async function startServer() {
     await ensureEmbeddedGuacd();
     server.listen(PORT, () => {
+        let dataDirEntries = [];
+        try { dataDirEntries = fs.readdirSync(DATA_DIR).sort(); } catch {}
+        console.info('[DATA-DIAG] runtime data directory', {
+            dataDir: DATA_DIR,
+            dbFile: DB_FILE,
+            dbExists: fs.existsSync(DB_FILE),
+            envFileExists: fs.existsSync(path.join(DATA_DIR, '.env')),
+            entries: dataDirEntries,
+            dockerHint: 'Docker 部署请确认宿主机数据卷已挂载到 /app/data，否则连接数据会随容器重建而丢失。',
+        });
         console.log(`🌬️  Zephyr 服务运行在 http://localhost:${PORT}`);
         console.log(`   WebSocket 路径: /ssh`);
         console.log(`   Guacamole/VNC 路径: /guacamole -> guacd ${GUACD_HOST}:${GUACD_PORT}`);

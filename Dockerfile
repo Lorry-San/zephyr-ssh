@@ -14,7 +14,7 @@ RUN mkdir -p /tmp/native-runtime-libs && \
     cat /etc/alpine-release && \
     node --version && \
     npm --version && \
-    (ldd node_modules/better-sqlite3/build/Release/better_sqlite3.node || true) && \
+    test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node && \
     if command -v strings >/dev/null 2>&1; then strings /tmp/native-runtime-libs/libstdc++.so.6 | grep -E 'GLIBCXX_|CXXABI_' | sort -V | tail -20; else echo "strings command not available; skip libstdc++ symbol dump"; fi && \
     node -e "require('better-sqlite3'); console.log('better-sqlite3 native module loaded in app-build')"
 
@@ -52,7 +52,7 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && 
     guacd -v && \
     node --version && \
     npm --version && \
-    (ldd /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node || true) && \
+    test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node && \
     if command -v strings >/dev/null 2>&1; then strings /usr/lib/libstdc++.so.6 | grep -E 'GLIBCXX_|CXXABI_' | sort -V | tail -20; else echo "strings command not available; skip libstdc++ symbol dump"; fi && \
     node -e "require('better-sqlite3'); console.log('better-sqlite3 native module loaded in runtime image')"
 
