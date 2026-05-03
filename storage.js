@@ -58,7 +58,12 @@ function defaultSettings(legacySettings = {}) {
         mail: { enabled: false, host: '', port: 465, secure: true, user: '', pass: '', from: '', adminEmail: '', notifyLoginSuccess: true, notifyLoginFailure: true, geoLookupEnabled: true },
         beian: { show: legacySettings.showBeian !== false, icp: legacySettings.icp || '', policeBeian: legacySettings.policeBeian || '', policeBeianUrl: legacySettings.policeBeianUrl || 'https://www.beian.gov.cn/portal/registerSystemInfo' },
         dataManage: { exportEncryptHint: true },
-        appearance: { theme: 'auto' },
+        appearance: {
+            brandName: 'Zephyr',
+            brandIcon: '🌬️',
+            theme: 'auto',
+            autoThemeEnabled: true,
+        },
         icp: legacySettings.icp || '',
         policeBeian: legacySettings.policeBeian || '',
         policeBeianUrl: legacySettings.policeBeianUrl || 'https://www.beian.gov.cn/portal/registerSystemInfo',

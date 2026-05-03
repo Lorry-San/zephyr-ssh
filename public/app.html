@@ -10,7 +10,7 @@
 <body class="app-body">
     <div class="app-shell">
         <header class="main-nav">
-            <a class="brand" href="#dashboard"><span>🌬️</span><strong>Zephyr</strong></a>
+            <a class="brand" href="#dashboard"><span id="brandIcon">🌬️</span><strong id="brandName">Zephyr</strong></a>
             <nav class="nav-tabs" aria-label="主导航">
                 <button class="nav-tab active" data-view="dashboard">仪表盘</button>
                 <button class="nav-tab" data-view="terminal">终端</button>
@@ -93,7 +93,23 @@
                         </div>
                         <div class="settings-panel" id="settings-appearance">
                             <h2>外观设置</h2>
-                            <button class="btn" id="settingsThemeToggle">切换深色/浅色模式</button>
+                            <form id="appearanceForm" class="settings-form">
+                                <label>左上角标题</label>
+                                <input id="brandNameInput" maxlength="40" placeholder="Zephyr">
+                                <label>左上角图标</label>
+                                <div class="brand-upload-row">
+                                    <div class="brand-icon-preview" id="brandIconPreview" aria-label="当前图标">🌬️</div>
+                                    <input id="brandIconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">
+                                </div>
+                                <p class="field-hint">图标支持上传常见图片格式，建议使用正方形 PNG/SVG；保存后会同步到页面标题、favicon 与登录页。</p>
+                                <label class="check-line"><input type="checkbox" id="autoThemeEnabled"> 自动跟随系统深色/浅色模式</label>
+                                <p class="field-hint">开启后默认根据系统外观自动切换；关闭后可手动固定深色或浅色。</p>
+                                <div class="form-actions">
+                                    <button class="btn btn-primary" type="submit">保存外观</button>
+                                    <button class="btn" type="button" id="settingsThemeToggle">切换深色/浅色模式</button>
+                                    <button class="btn danger" type="button" id="resetAppearanceBtn">重置名称和图标</button>
+                                </div>
+                            </form>
                             <h2>终端工作台</h2>
                             <form id="terminalLayoutForm" class="settings-form">
                                 <label>终端页面最多显示窗口数</label>

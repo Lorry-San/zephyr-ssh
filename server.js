@@ -867,6 +867,27 @@ function normalizeSettingsInput(body) {
         tencentSecretKey: mergeSecret(current.captcha?.tencentSecretKey, body.captcha.tencentSecretKey),
         aliyunAccessKeySecret: mergeSecret(current.captcha?.aliyunAccessKeySecret, body.captcha.aliyunAccessKeySecret)
     };
+    if (body.appearance) {
+        const currentAppearance = current.appearance || {};
+        const brandName = String(body.appearance.brandName ?? currentAppearance.brandName ?? 'Zephyr').trim().slice(0, 40) || 'Zephyr';
+        const rawIcon = String(body.appearance.brandIcon ?? currentAppearance.brandIcon ?? '🌬️').trim();
+        const isAllowedIcon = rawIcon === '🌬️' || /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(rawIcon);
+        const theme = body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto';
+        next.appearance = {
+            ...currentAppearance,
+            ...body.appearance,
+            brandName,
+            brandIcon: isAllowedIcon ? rawIcon : (currentAppearance.brandIcon || '🌬️'),
+            theme,
+            autoThemeEnabled: body.appearance.autoThemeEnabled !== false,
+        };
+        console.info('[appearance-settings]', 'normalized appearance settings', {
+            brandName,
+            customIcon: next.appearance.brandIcon !== '🌬️',
+            theme: next.appearance.theme,
+            autoThemeEnabled: next.appearance.autoThemeEnabled,
+        });
+    }
     if (body.beian) {
         next.beian = { ...(current.beian || {}), ...body.beian };
         next.icp = next.beian.icp || '';
@@ -886,7 +907,48 @@ function createSession(res, user, { remember = false } = {}) {
     return sid;
 }
 
-async function regionOf(ip) { return ip && ip !== 'unknown' ? '未查询' : ''; }
+function isPrivateOrLocalIp(ip) {
+    try {
+        if (!ip || ip === 'unknown') return true;
+        const addr = ipaddr.parse(ip);
+        const range = addr.range();
+        return ['private', 'loopback', 'linkLocal', 'uniqueLocal', 'unspecified'].includes(range);
+    } catch {
+        return true;
+    }
+}
+
+async function regionOf(ip) {
+    const normalizedIp = String(ip || '').trim();
+    if (!normalizedIp || normalizedIp === 'unknown') return '';
+    if (isPrivateOrLocalIp(normalizedIp)) {
+        console.info('[IP-GEO] 跳过本地/私有地址查询', { ip: normalizedIp });
+        return '本地/内网';
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+        const url = `http://ip-api.com/json/${encodeURIComponent(normalizedIp)}?fields=status,country,city,message,query`;
+        console.info('[IP-GEO] 开始查询 IP 地区', { ip: normalizedIp, provider: 'ip-api.com' });
+        const response = await fetch(url, { signal: controller.signal });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.status !== 'success') {
+            console.warn('[IP-GEO] 查询失败', { ip: normalizedIp, httpStatus: response.status, status: data.status || '', message: data.message || '' });
+            return '未查询';
+        }
+        const country = String(data.country || '').trim();
+        const city = String(data.city || '').trim();
+        const region = [country, city].filter(Boolean).join('/');
+        console.info('[IP-GEO] 查询成功', { ip: normalizedIp, query: data.query || '', region: region || '未查询' });
+        return region || '未查询';
+    } catch (err) {
+        console.warn('[IP-GEO] 查询异常', { ip: normalizedIp, error: err.message });
+        return '未查询';
+    } finally {
+        clearTimeout(timer);
+    }
+}
 function publicMailDebug(mail = {}, to = '') {
     return {
         enabled: !!mail.enabled,
@@ -1402,8 +1464,15 @@ app.get('/api/public/settings', (req, res) => {
     const s = storage.getSettings();
     const user = storage.getFirstUser();
     const captcha = s.captcha || {};
+    const appearance = s.appearance || {};
     res.json({
         defaultUsername: user?.username || 'admin',
+        appearance: {
+            brandName: String(appearance.brandName || 'Zephyr').slice(0, 40) || 'Zephyr',
+            brandIcon: String(appearance.brandIcon || '🌬️'),
+            theme: appearance.theme === 'light' || appearance.theme === 'dark' ? appearance.theme : 'auto',
+            autoThemeEnabled: appearance.autoThemeEnabled !== false,
+        },
         icp: s.icp || s.beian?.icp || '',
         icpUrl: s.icpUrl || s.beian?.icpUrl || '',
         policeBeian: s.policeBeian || s.beian?.policeBeian || '',

@@ -21,6 +21,9 @@ let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
 const SMARTBAR_AUTO_HIDE_MS = 30000;
 const TERMINAL_EDGE_SNAP_PX = 56;
+const DEFAULT_BRAND_NAME = 'Zephyr';
+const DEFAULT_BRAND_ICON = '🌬️';
+let pendingBrandIcon = DEFAULT_BRAND_ICON;
 
 function api(path, options = {}) {
     return fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options })
@@ -29,11 +32,106 @@ function api(path, options = {}) {
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 const systemThemeQuery = matchMedia('(prefers-color-scheme: dark)');
 function getSystemTheme() { return systemThemeQuery.matches ? 'dark' : 'light'; }
-function getPreferredTheme() { const saved = localStorage.getItem('zephyr-theme'); return saved === 'light' || saved === 'dark' ? saved : getSystemTheme(); }
+function getAppearance() { return settings?.appearance || {}; }
+function isAutoThemeEnabled() { return getAppearance().autoThemeEnabled !== false; }
+function getPreferredTheme() {
+    const appearance = getAppearance();
+    if (isAutoThemeEnabled() || appearance.theme === 'auto') return getSystemTheme();
+    if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
+    const saved = localStorage.getItem('zephyr-theme');
+    return saved === 'light' || saved === 'dark' ? saved : getSystemTheme();
+}
 function broadcastThemeToTerminals(theme) { $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme }, '*')); }
-function applyTheme(theme, { persist = false } = {}) { document.documentElement.classList.add('theme-transitioning'); window.clearTimeout(applyTheme._timer); applyTheme._timer = window.setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 360); document.documentElement.setAttribute('data-theme', theme); if (persist) localStorage.setItem('zephyr-theme', theme); $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙'; $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙'; broadcastThemeToTerminals(theme); }
-function toggleTheme() { applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', { persist: true }); }
+function applyTheme(theme, { persist = false } = {}) {
+    const root = document.documentElement;
+    const previousTheme = root.getAttribute('data-theme') || getSystemTheme();
+    const changed = previousTheme !== theme;
+    root.classList.remove('theme-transitioning');
+    void root.offsetWidth;
+    root.classList.add('theme-transitioning');
+    document.body?.classList.toggle('theme-ripple-active', changed);
+    window.clearTimeout(applyTheme._timer);
+    applyTheme._timer = window.setTimeout(() => {
+        root.classList.remove('theme-transitioning');
+        document.body?.classList.remove('theme-ripple-active');
+    }, 560);
+    root.setAttribute('data-theme', theme);
+    if (persist) localStorage.setItem('zephyr-theme', theme);
+    $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+    $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+    console.debug('[appearance-client]', 'theme transition applied', { previousTheme, theme, changed });
+    broadcastThemeToTerminals(theme);
+}
+async function toggleTheme() {
+    const nextTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('zephyr-theme', nextTheme);
+    const appearance = { ...getAppearance(), theme: nextTheme, autoThemeEnabled: false };
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) }).catch((err) => { toast(err.message); return settings; });
+    $('#autoThemeEnabled').checked = false;
+    applyTheme(nextTheme, { persist: true });
+    console.debug('[appearance-client]', 'manual theme selected', { theme: nextTheme, autoThemeEnabled: false });
+}
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+function iconHtml(icon = DEFAULT_BRAND_ICON) { return String(icon).startsWith('data:image/') ? `<img src="${icon}" alt="">` : escapeHtml(icon || DEFAULT_BRAND_ICON); }
+function faviconHref(icon = DEFAULT_BRAND_ICON) {
+    if (String(icon).startsWith('data:image/')) return icon;
+    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${icon || DEFAULT_BRAND_ICON}</text></svg>`)}`;
+}
+function setFavicon(icon = DEFAULT_BRAND_ICON) {
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+    }
+    link.href = faviconHref(icon);
+}
+function applyAppearance(appearance = getAppearance()) {
+    const brandName = String(appearance.brandName || DEFAULT_BRAND_NAME).trim() || DEFAULT_BRAND_NAME;
+    const brandIcon = String(appearance.brandIcon || DEFAULT_BRAND_ICON).trim() || DEFAULT_BRAND_ICON;
+    pendingBrandIcon = brandIcon;
+    $('#brandName').textContent = brandName;
+    $('#brandIcon').innerHTML = iconHtml(brandIcon);
+    $('#brandNameInput').value = brandName;
+    $('#brandIconPreview').innerHTML = iconHtml(brandIcon);
+    $('#autoThemeEnabled').checked = appearance.autoThemeEnabled !== false;
+    document.title = brandName;
+    setFavicon(brandIcon);
+    console.debug('[appearance-client]', 'appearance applied', { brandName, customIcon: brandIcon !== DEFAULT_BRAND_ICON, autoThemeEnabled: appearance.autoThemeEnabled !== false, theme: appearance.theme || 'auto' });
+}
+function readImageAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        if (!file) return resolve('');
+        if (!/^image\/(png|jpeg|gif|webp|svg\+xml)$/i.test(file.type)) return reject(new Error('仅支持 PNG/JPEG/GIF/WebP/SVG 图标'));
+        if (file.size > 512 * 1024) return reject(new Error('图标文件不能超过 512KB'));
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('读取图标失败'));
+        reader.readAsDataURL(file);
+    });
+}
+async function saveAppearance(e) {
+    e.preventDefault();
+    const autoThemeEnabled = $('#autoThemeEnabled').checked;
+    const theme = autoThemeEnabled ? 'auto' : (document.documentElement.getAttribute('data-theme') || getSystemTheme());
+    const appearance = { ...getAppearance(), brandName: $('#brandNameInput').value.trim() || DEFAULT_BRAND_NAME, brandIcon: pendingBrandIcon || DEFAULT_BRAND_ICON, autoThemeEnabled, theme };
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) });
+    localStorage.removeItem('zephyr-theme');
+    if (!autoThemeEnabled) localStorage.setItem('zephyr-theme', theme);
+    applyAppearance(settings.appearance || appearance);
+    applyTheme(getPreferredTheme());
+    console.info('[appearance-client]', 'appearance saved', { brandName: appearance.brandName, customIcon: appearance.brandIcon !== DEFAULT_BRAND_ICON, autoThemeEnabled, theme });
+    toast('外观设置已保存');
+}
+async function resetAppearance() {
+    const appearance = { ...getAppearance(), brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON };
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) });
+    $('#brandIconFile').value = '';
+    applyAppearance(settings.appearance || appearance);
+    applyTheme(getPreferredTheme());
+    console.info('[appearance-client]', 'brand reset to defaults');
+    toast('名称和图标已重置');
+}
 function renderMarkdown(md) { let s = escapeHtml(md); s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); return s.replace(/\n/g, '<br>'); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
 function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
@@ -76,6 +174,24 @@ function renderConnections() {
     renderRemoteServers(); renderJumpOptions();
 }
 async function loadConnections() { const data = await api('/api/connections'); connections = data.connections || []; activities = data.activities || []; renderConnections(); }
+function waitForConnectionCardExit(card, connectionId) {
+    if (!card) return Promise.resolve();
+    card.querySelectorAll('button').forEach((btn) => { btn.disabled = true; });
+    card.classList.add('deleting');
+    console.debug('[connection-card]', 'delete exit animation start', { connectionId });
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            card.removeEventListener('animationend', finish);
+            console.debug('[connection-card]', 'delete exit animation end', { connectionId });
+            resolve();
+        };
+        card.addEventListener('animationend', finish, { once: true });
+        window.setTimeout(finish, 380);
+    });
+}
 
 function normalizeSelectedRouteIds(selected = '') {
     return Array.isArray(selected) ? selected.map(String).filter(Boolean) : String(selected || '').split(',').map((v) => v.trim()).filter(Boolean);
@@ -164,9 +280,20 @@ function openModal(conn = null) {
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || ($('#connProtocol').value === 'RDP' ? 3389 : $('#connProtocol').value === 'VNC' ? 5900 : 22); $('#connUsername').value = conn?.username || '';
     renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
-    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn }); $('#connectionModal').classList.add('show');
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn }); const modal = $('#connectionModal'); modal.classList.remove('closing'); modal.classList.add('show'); console.debug('[connection-modal]', 'open', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '' });
 }
-function closeModal() { $('#connectionModal').classList.remove('show'); setConnectionTestLatency(); }
+function closeModal() {
+    const modal = $('#connectionModal');
+    if (!modal?.classList.contains('show') || modal.classList.contains('closing')) return;
+    modal.classList.add('closing');
+    setConnectionTestLatency();
+    console.debug('[connection-modal]', 'closing animation start', { connectionId: editingId || '' });
+    window.clearTimeout(closeModal._timer);
+    closeModal._timer = window.setTimeout(() => {
+        modal.classList.remove('show', 'closing');
+        console.debug('[connection-modal]', 'closed after animation');
+    }, 260);
+}
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
     const proxyId = $('#connRoute')?.value || '';
@@ -864,6 +991,9 @@ async function loadSettings() {
     $('#mailEnabled').checked = !!mail.enabled; $('#mailHost').value = mail.host || ''; $('#mailPort').value = mail.port || 465; $('#mailSecure').checked = mail.secure !== false; $('#mailUser').value = mail.user || ''; $('#mailPass').value = mail.pass || ''; $('#mailFrom').value = mail.from || ''; $('#mailAdminEmail').value = mail.adminEmail || ''; $('#notifyLoginSuccess').checked = mail.notifyLoginSuccess !== false; $('#notifyLoginFailure').checked = mail.notifyLoginFailure !== false; $('#geoLookupEnabled').checked = mail.geoLookupEnabled !== false;
     $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
+    settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(settings.appearance || {}) };
+    applyAppearance(settings.appearance);
+    applyTheme(getPreferredTheme());
     await loadSecurityStatus(); await loadSecurityLists();
 }
 async function saveBeian(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ beian: { icp: $('#icpInput').value, icpUrl: $('#icpUrlInput').value, policeBeian: $('#policeInput').value, policeBeianUrl: $('#policeUrlInput').value, show: $('#showBeianInput').checked } }) }); toast('备案信息已保存'); }
@@ -1008,11 +1138,29 @@ async function openSshKeySecret(id) {
 function bindEvents() {
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     $$('.settings-tab').forEach((btn) => btn.addEventListener('click', () => { $$('.settings-tab').forEach((b) => b.classList.remove('active')); btn.classList.add('active'); $$('.settings-panel').forEach((p) => p.classList.remove('active')); $(`#settings-${btn.dataset.settings}`).classList.add('active'); }));
-    $('#appThemeToggle').addEventListener('click', toggleTheme); $('#settingsThemeToggle').addEventListener('click', toggleTheme); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
+    $('#appThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#settingsThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
     $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $$('.route-type-tab').forEach((btn) => btn.addEventListener('click', () => setRouteMode($('#connMode').value === btn.dataset.routeMode ? 'direct' : btn.dataset.routeMode))); $('#addJumpRouteBtn').addEventListener('click', addJumpRouteRow); $('#jumpRouteList').addEventListener('click', (e) => { if (!e.target.closest('[data-remove-jump-route]')) return; const ids = $$('#jumpRouteList [data-jump-route-select]').filter((el) => !el.closest('[data-jump-route-row]').contains(e.target)).map((el) => el.value).filter(Boolean); renderJumpRouteRows(ids); }); $('#testConnectionBtn').addEventListener('click', testConnection);
     $('#connProtocol').addEventListener('change', () => updateProtocolFields({ preservePort: false }));
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
-    $('#connectionGrid').addEventListener('click', async (e) => { const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect; if (edit) openModal(connections.find((c) => c.id === edit)); if (del && confirm('确定删除该连接？')) { await api(`/api/connections/${del}`, { method: 'DELETE' }); await loadConnections(); toast('连接已删除'); } if (connect) openConnection(connect).catch((err) => toast(err.message)); });
+    $('#connectionGrid').addEventListener('click', async (e) => {
+        const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect;
+        if (edit) openModal(connections.find((c) => c.id === edit));
+        if (del && confirm('确定删除该连接？')) {
+            const card = e.target.closest('.connection-card');
+            try {
+                await waitForConnectionCardExit(card, del);
+                await api(`/api/connections/${del}`, { method: 'DELETE' });
+                await loadConnections();
+                toast('连接已删除');
+            } catch (err) {
+                card?.classList.remove('deleting');
+                card?.querySelectorAll('button').forEach((btn) => { btn.disabled = false; });
+                console.debug('[connection-card]', 'delete failed, animation reverted', { connectionId: del, message: err.message });
+                toast(err.message);
+            }
+        }
+        if (connect) openConnection(connect).catch((err) => toast(err.message));
+    });
     $('#sessionTabs').addEventListener('click', (e) => {
         const toggle = e.target.closest('[data-smartbar-toggle]');
         if (toggle) { setTerminalSmartbarOpen(!(terminalSmartbarOpen && terminalSmartbarSide === toggle.dataset.smartbarToggle), toggle.dataset.smartbarToggle); return; }
@@ -1101,7 +1249,13 @@ function bindEvents() {
             showFullscreenLoading('正在退出全屏...'), hideFullscreenLoading({ delay: 680 });
         }
     }));
-    systemThemeQuery.addEventListener('change', () => { if (!localStorage.getItem('zephyr-theme')) applyTheme(getSystemTheme()); });
+    systemThemeQuery.addEventListener('change', () => {
+        if (isAutoThemeEnabled()) {
+            const theme = getSystemTheme();
+            console.debug('[appearance-client]', 'system theme changed', { theme });
+            applyTheme(theme);
+        }
+    });
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } if (e.data.type === 'activity') { noteTerminalWorkspaceActivity(); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.addEventListener('resize', () => {
@@ -1119,11 +1273,13 @@ function bindEvents() {
         renderTerminalTabs();
     });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#sshKeyForm').addEventListener('submit', saveSshKey); $('#resetSshKeyForm').addEventListener('click', resetSshKeyForm);
+    $('#brandIconFile').addEventListener('change', async (e) => { try { const dataUrl = await readImageAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; pendingBrandIcon = dataUrl; $('#brandIconPreview').innerHTML = iconHtml(dataUrl); console.debug('[appearance-client]', 'brand icon file loaded', { size: e.target.files?.[0]?.size || 0, type: e.target.files?.[0]?.type || '' }); } catch (err) { e.target.value = ''; toast(err.message); } });
+    $('#resetAppearanceBtn').addEventListener('click', () => resetAppearance().catch((err) => toast(err.message)));
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.openProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyType').value = p.type || 'socks5'; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (e.target.dataset.openProxy) { await openProxySecret(id); } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#sshKeyList').addEventListener('click', async (e) => { const editId = e.target.dataset.editSshKey, openId = e.target.dataset.openSshKey, delId = e.target.dataset.delSshKey; if (editId) { const k = sshKeys.find((x) => x.id === editId); if (!k) return; $('#sshKeyId').value = k.id; $('#sshKeyName').value = k.name || ''; $('#sshKeyPrivateKey').value = k.hasPrivateKey ? '******' : ''; $('#sshKeyPassphrase').value = k.hasPassphrase ? '******' : ''; $('#sshKeyRemark').value = k.remark || ''; return; } if (openId) { await openSshKeySecret(openId); return; } if (delId && confirm('删除该 SSH 密钥？已选择它的连接将无法再使用该密钥。')) { await api(`/api/ssh-keys/${delId}`, { method: 'DELETE' }); await loadNetwork(); toast('SSH 密钥已删除'); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
     $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
-    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);
+    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#appearanceForm').addEventListener('submit', saveAppearance); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);
     $('#totpBox').addEventListener('click', (e) => { if (e.target.id === 'setupTotpBtn') setupTotp().catch((err) => toast(err.message)); });
     $('#totpEnableForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/totp/enable', { method: 'POST', body: JSON.stringify({ code: $('#totpEnableCode').value }) }); toast('TOTP 已开启'); $('#totpEnableForm').classList.add('force-hidden'); await loadSecurityStatus(); });
     $('#totpDisableForm').addEventListener('submit', async (e) => { e.preventDefault(); if (!confirm('确定关闭 TOTP？')) return; await api('/api/security/totp/disable', { method: 'POST', body: JSON.stringify({ currentPassword: $('#totpDisablePassword').value, code: $('#totpDisableCode').value }) }); e.target.reset(); toast('TOTP 已关闭'); await loadSecurityStatus(); });

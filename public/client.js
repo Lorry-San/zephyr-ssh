@@ -18,6 +18,8 @@ const totpErrorBanner = $('#totpErrorBanner');
 const forgotErrorBanner = $('#forgotErrorBanner');
 const beianFooter = $('#beianFooter');
 const REMEMBER_USERNAME_KEY = 'zephyr-remember-username';
+const DEFAULT_BRAND_NAME = 'Zephyr';
+const DEFAULT_BRAND_ICON = '🌬️';
 let tempTotpToken = '';
 let defaultUsername = 'admin';
 let publicSettings = {};
@@ -165,10 +167,41 @@ function getCaptchaTokenOrThrow() {
     return captchaState.token;
 }
 
+function isAutoThemeEnabled() { return publicSettings.appearance?.autoThemeEnabled !== false; }
+function getSystemTheme() { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 function getPreferredTheme() {
+    const appearance = publicSettings.appearance || {};
+    if (isAutoThemeEnabled() || appearance.theme === 'auto') return getSystemTheme();
+    if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
     const saved = localStorage.getItem('zephyr-theme');
-    if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return saved === 'light' || saved === 'dark' ? saved : getSystemTheme();
+}
+
+function iconHtml(icon = DEFAULT_BRAND_ICON) {
+    return String(icon).startsWith('data:image/') ? `<img src="${icon}" alt="">` : String(icon || DEFAULT_BRAND_ICON);
+}
+function faviconHref(icon = DEFAULT_BRAND_ICON) {
+    if (String(icon).startsWith('data:image/')) return icon;
+    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${icon || DEFAULT_BRAND_ICON}</text></svg>`)}`;
+}
+function setFavicon(icon = DEFAULT_BRAND_ICON) {
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+    }
+    link.href = faviconHref(icon);
+}
+function applyBrand(appearance = {}) {
+    const brandName = String(appearance.brandName || DEFAULT_BRAND_NAME).trim() || DEFAULT_BRAND_NAME;
+    const brandIcon = String(appearance.brandIcon || DEFAULT_BRAND_ICON).trim() || DEFAULT_BRAND_ICON;
+    document.title = `${brandName} - 登录`;
+    setFavicon(brandIcon);
+    document.querySelectorAll('.login-card .logo').forEach((el) => { el.innerHTML = iconHtml(brandIcon); });
+    const loginTitle = loginCard?.querySelector('h1');
+    if (loginTitle) loginTitle.textContent = brandName;
+    console.debug('[appearance-client]', 'public brand applied', { brandName, customIcon: brandIcon !== DEFAULT_BRAND_ICON });
 }
 
 function applyTheme(theme, { persist = false } = {}) {
@@ -189,7 +222,8 @@ themeToggleTotp?.addEventListener('click', toggleTheme);
 themeToggleForgot?.addEventListener('click', toggleTheme);
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    if (!localStorage.getItem('zephyr-theme')) {
+    if (isAutoThemeEnabled()) {
+        console.debug('[appearance-client]', 'public system theme changed', { theme: e.matches ? 'dark' : 'light' });
         applyTheme(e.matches ? 'dark' : 'light');
     }
 });
@@ -239,6 +273,9 @@ async function loadBeian() {
     try {
         const s = await api('/api/public/settings');
         publicSettings = s || {};
+        publicSettings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(publicSettings.appearance || {}) };
+        applyBrand(publicSettings.appearance);
+        applyTheme(getPreferredTheme());
         captchaConfig = publicSettings.captcha || { enabled: false, provider: 'turnstile', siteKey: '' };
         defaultUsername = s.defaultUsername || 'admin';
         const usernameInput = $('#username');
