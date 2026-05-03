@@ -2519,14 +2519,15 @@ html.keyboard-open .terminal-page {
     inset: 0 auto 0 0;
     width: var(--editor-indent-guide-width, 0px);
     pointer-events: none;
+    opacity: 0.95;
     background-image: repeating-linear-gradient(
         to right,
         transparent 0,
         transparent calc(var(--editor-indent-step, 32px) - 1px),
-        rgba(139,148,158,0.24) calc(var(--editor-indent-step, 32px) - 1px),
-        rgba(139,148,158,0.24) var(--editor-indent-step, 32px)
+        rgba(139,148,158,0.18) calc(var(--editor-indent-step, 32px) - 1px),
+        rgba(139,148,158,0.18) var(--editor-indent-step, 32px)
     );
-    background-position-x: calc(var(--editor-indent-offset, 0px) - var(--editor-indent-step, 32px));
+    background-position: 0 0;
     background-size: var(--editor-indent-step, 32px) 100%;
 }
 :root[data-theme="light"] .fm-indent-guide-line::before {
@@ -2534,8 +2535,8 @@ html.keyboard-open .terminal-page {
         to right,
         transparent 0,
         transparent calc(var(--editor-indent-step, 32px) - 1px),
-        rgba(101,109,118,0.26) calc(var(--editor-indent-step, 32px) - 1px),
-        rgba(101,109,118,0.26) var(--editor-indent-step, 32px)
+        rgba(101,109,118,0.22) calc(var(--editor-indent-step, 32px) - 1px),
+        rgba(101,109,118,0.22) var(--editor-indent-step, 32px)
     );
 }
 .fm-editor-line-numbers {

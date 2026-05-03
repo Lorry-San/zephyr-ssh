@@ -1487,6 +1487,32 @@ function getEditorCharWidth() {
     return Number.isFinite(width) && width > 0 ? width : fontSize * 0.62;
 }
 
+function getEditorIndentGuideColumns(lines, index, tabSize) {
+    const line = String(lines[index] ?? '');
+    if (line.trim()) return getLeadingIndentColumns(line, tabSize);
+
+    // VSCode 风格：空白行不会简单变成 0，而是继承相邻代码块中较小的缩进层级，
+    // 这样块内部空行的参考线保持连续，但块之间不会错误贯穿。
+    let previous = 0;
+    for (let i = index - 1; i >= 0; i--) {
+        if (String(lines[i] ?? '').trim()) {
+            previous = getLeadingIndentColumns(lines[i], tabSize);
+            break;
+        }
+    }
+
+    let next = 0;
+    for (let i = index + 1; i < lines.length; i++) {
+        if (String(lines[i] ?? '').trim()) {
+            next = getLeadingIndentColumns(lines[i], tabSize);
+            break;
+        }
+    }
+
+    if (previous && next) return Math.min(previous, next);
+    return previous || next || 0;
+}
+
 function renderEditorIndentGuides(lines = getEditorLines(fmEditorTextarea?.value || ''), visualRows = getEditorVisualRows(lines)) {
     const layer = ensureEditorIndentGuides();
     if (!layer || !fmEditorTextarea) return;
@@ -1494,21 +1520,26 @@ function renderEditorIndentGuides(lines = getEditorLines(fmEditorTextarea?.value
     const lineHeight = parseFloat(getComputedStyle(fmEditorTextarea).lineHeight) || 20.15;
     const charWidth = getEditorCharWidth();
     const step = Math.max(1, tabSize * charWidth);
-    const signature = `${lines.length}:${tabSize}:${step.toFixed(2)}:${visualRows.join(',')}:${lines.map((line) => getLeadingIndentColumns(line, tabSize)).join(',')}`;
+    const guideColumns = lines.map((_, index) => getEditorIndentGuideColumns(lines, index, tabSize));
+    const signature = `${lines.length}:${tabSize}:${step.toFixed(2)}:${visualRows.join(',')}:${guideColumns.join(',')}`;
     if (layer._signature === signature) return;
     layer._signature = signature;
     layer.style.setProperty('--editor-indent-step', `${step}px`);
     layer.innerHTML = lines.map((line, index) => {
-        const columns = getLeadingIndentColumns(line, tabSize);
+        const columns = guideColumns[index];
         const levels = Math.floor(columns / tabSize);
         const rowHeight = Math.max(1, visualRows[index] || 1) * lineHeight;
-        if (levels <= 0) {
-            return `<span class="fm-indent-guide-line" style="--editor-indent-line-height:${rowHeight}px"></span>`;
-        }
-        const width = levels * step;
-        const offset = charWidth * tabSize;
-        return `<span class="fm-indent-guide-line" style="--editor-indent-line-height:${rowHeight}px;--editor-indent-guide-width:${width}px;--editor-indent-offset:${offset}px"></span>`;
+        const guideWidth = Math.max(0, levels * step);
+        return `<span class="fm-indent-guide-line" style="--editor-indent-line-height:${rowHeight}px;--editor-indent-guide-width:${guideWidth}px"></span>`;
     }).join('');
+
+    console.debug('[EditorIndentGuides]', {
+        lines: lines.length,
+        tabSize,
+        charWidth: Number(charWidth.toFixed(3)),
+        step: Number(step.toFixed(3)),
+        sampleGuideColumns: guideColumns.slice(0, 20),
+    });
 }
 
 function renderEditorLineNumbers(lines = getEditorLines(fmEditorTextarea?.value || ''), visualRows = getEditorVisualRows(lines)) {
