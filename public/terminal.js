@@ -2990,7 +2990,8 @@ function openPanelLayoutMenu(button, panel) {
         const maxMenuWidth = Math.max(160, vvWidth - 16);
         menu.style.width = `${Math.min(284, maxMenuWidth)}px`;
         const menuRect = menu.getBoundingClientRect();
-        const left = anchorX - menuRect.width / 2;
+        const buttonSlotOffset = menuRect.width / 5;
+        const left = anchorX - menuRect.width / 2 - buttonSlotOffset;
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
         const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
@@ -2998,6 +2999,13 @@ function openPanelLayoutMenu(button, panel) {
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
+        console.debug('[PanelLayoutMenuAlign]', {
+            anchorX: Number(anchorX.toFixed(2)),
+            left: Number(left.toFixed(2)),
+            menuWidth: Number(menuRect.width.toFixed(2)),
+            buttonSlotOffset: Number(buttonSlotOffset.toFixed(2)),
+            originX: Number(originX.toFixed(2)),
+        });
         menu.style.setProperty('--menu-origin-x', `${originX}px`);
         menu.style.setProperty('--menu-origin-y', opensBelow ? '0px' : `${menuRect.height}px`);
         menu.style.setProperty('--menu-enter-y', opensBelow ? '-12px' : '12px');
