@@ -1536,6 +1536,17 @@ app.put('/api/proxies/:id', requireAuth, (req, res) => {
     addActivity(`编辑代理：${proxy.name}`);
     res.json({ proxy });
 });
+app.post('/api/proxies/:id/open', requireAuth, (req, res) => {
+    try {
+        const auth = verifySensitiveAccess(req, req.body?.secret);
+        const proxy = storage.getProxyRaw(req.params.id);
+        if (!proxy) return res.status(404).json({ error: '代理不存在' });
+        console.info('[secret-open] reveal proxy', { id: proxy.id, name: proxy.name, hasPassword: !!proxy.password, authMethod: auth.method });
+        res.json({ proxy: { ...proxy, hasPassword: !!proxy.password } });
+    } catch (err) {
+        res.status(403).json({ error: err.message || '验证失败' });
+    }
+});
 app.delete('/api/proxies/:id', requireAuth, (req, res) => { storage.deleteProxy(req.params.id); addActivity('删除代理'); res.json({ ok: true }); });
 
 app.get('/api/ssh-keys', requireAuth, (req, res) => res.json({ sshKeys: storage.listSshKeys() }));

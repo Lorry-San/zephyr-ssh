@@ -267,8 +267,9 @@ function initRememberMe() {
     const remembered = localStorage.getItem(REMEMBER_USERNAME_KEY) || '';
     const usernameInput = $('#username');
     if (!usernameInput) return;
-    usernameInput.value = remembered || defaultUsername;
+    usernameInput.value = remembered || '';
     $('#rememberMe').checked = !!remembered;
+    console.debug('[login-client]', 'remember username initialized', { hasRemembered: !!remembered, defaultUsernameHintOnly: true });
     (remembered ? $('#password') : usernameInput)?.focus();
 }
 
