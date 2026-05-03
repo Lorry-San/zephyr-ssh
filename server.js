@@ -153,12 +153,39 @@ function applyConnectionRouteFields(conn, body) {
     return conn;
 }
 
+function verifySensitiveAccess(req, secretInput) {
+    const user = storage.getUser(req.session?.username);
+    if (!user) throw new Error('未登录或会话已过期');
+    const value = String(secretInput || '').trim();
+    if (user.totpEnabled) {
+        if (!verifySync({ secret: user.totpSecret || '', token: value }).valid) throw new Error('动态验证码错误');
+        return { method: 'totp', username: user.username };
+    }
+    if (!verifyPassword(value, user.passwordHash)) throw new Error('登录密码错误');
+    return { method: 'password', username: user.username };
+}
+
+function resolveSshKeyForConnection(conn) {
+    if (!conn?.sshKeyId) return conn;
+    const key = storage.getSshKeyRaw(conn.sshKeyId);
+    if (!key) {
+        console.warn('[ssh-key] selected key missing', { connectionId: conn.id, sshKeyId: conn.sshKeyId });
+        return conn;
+    }
+    const resolved = { ...conn };
+    if (!resolved.privateKey || resolved.privateKey === '******') resolved.privateKey = key.privateKey || '';
+    if ((!resolved.password || resolved.password === '******') && key.passphrase) resolved.password = key.passphrase || '';
+    console.debug('[ssh-key] resolved key for connection', { connectionId: conn.id, sshKeyId: conn.sshKeyId, keyName: key.name, hasPrivateKey: !!resolved.privateKey, hasPassphrase: !!key.passphrase });
+    return resolved;
+}
+
 function buildSSHConfig(conn, timeout = 10000) {
-    const cfg = { host: conn.host, port: Number(conn.port) || 22, username: conn.username, readyTimeout: timeout, keepaliveInterval: 10000 };
-    if (conn.privateKey && conn.privateKey.includes('-----BEGIN')) {
-        cfg.privateKey = conn.privateKey;
-        if (conn.password) cfg.passphrase = conn.password;
-    } else if (conn.password) cfg.password = conn.password;
+    const resolvedConn = resolveSshKeyForConnection(conn);
+    const cfg = { host: resolvedConn.host, port: Number(resolvedConn.port) || 22, username: resolvedConn.username, readyTimeout: timeout, keepaliveInterval: 10000 };
+    if (resolvedConn.privateKey && resolvedConn.privateKey.includes('-----BEGIN')) {
+        cfg.privateKey = resolvedConn.privateKey;
+        if (resolvedConn.password) cfg.passphrase = resolvedConn.password;
+    } else if (resolvedConn.password) cfg.password = resolvedConn.password;
     else throw new Error('缺少认证凭据');
     return cfg;
 }
@@ -862,6 +889,7 @@ app.post('/api/connections', requireAuth, (req, res) => {
         username: String(body.username).trim(),
         password: String(body.password || ''),
         privateKey: String(body.privateKey || ''),
+        sshKeyId: String(body.sshKeyId || ''),
         remark: String(body.remark || ''),
         tags: Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : String(body.tags || '').split(',').map((v) => v.trim()).filter(Boolean),
         connectionMode: ['direct', 'proxy', 'jump'].includes(body.connectionMode) ? body.connectionMode : 'direct',
@@ -887,6 +915,7 @@ app.put('/api/connections/:id', requireAuth, (req, res) => {
     if (body.port !== undefined) conn.port = Number(body.port) || 22;
     if (body.protocol !== undefined) conn.protocol = String(body.protocol).toUpperCase();
     if (body.tags !== undefined) conn.tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : String(body.tags || '').split(',').map((v) => v.trim()).filter(Boolean);
+    if (body.sshKeyId !== undefined) conn.sshKeyId = String(body.sshKeyId || '');
     applyConnectionRouteFields(conn, body);
     if (body.password !== undefined && body.password !== '******') conn.password = String(body.password || '');
     if (body.privateKey !== undefined && body.privateKey !== '******') conn.privateKey = String(body.privateKey || '');
@@ -909,11 +938,21 @@ app.post('/api/connections/:id/open', requireAuth, (req, res) => {
     const store = readJSON(CONNECTIONS_FILE, { connections: [], activities: [] });
     const conn = (store.connections || []).find((c) => c.id === req.params.id);
     if (!conn) return res.status(404).json({ error: '连接不存在' });
-    conn.jumpHostIds = normalizeJumpHostIds(conn);
-    conn.lastConnectedAt = Date.now();
-    store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `打开连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
-    writeJSON(CONNECTIONS_FILE, store);
-    res.json({ connection: conn });
+    const reveal = req.body?.purpose === 'reveal' || req.body?.secret !== undefined;
+    try {
+        if (reveal) {
+            const auth = verifySensitiveAccess(req, req.body?.secret);
+            console.info('[secret-open] reveal connection secrets', { connectionId: conn.id, name: conn.name, authMethod: auth.method });
+            return res.json({ connection: { ...conn, jumpHostIds: normalizeJumpHostIds(conn) } });
+        }
+        conn.jumpHostIds = normalizeJumpHostIds(conn);
+        conn.lastConnectedAt = Date.now();
+        store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message: `打开连接：${conn.name}` }, ...(store.activities || [])].slice(0, 20);
+        writeJSON(CONNECTIONS_FILE, store);
+        res.json({ connection: publicConnection(conn) });
+    } catch (err) {
+        res.status(403).json({ error: err.message || '验证失败' });
+    }
 });
 
 app.get('/api/settings', requireAuth, (req, res) => res.json(safeSettings(readJSON(SETTINGS_FILE, { version: '3.0.0' }))));
@@ -941,9 +980,34 @@ app.post('/api/settings/test-mail', requireAuth, async (req, res) => {
 });
 
 app.post('/api/settings/mail/open', requireAuth, (req, res) => {
-    const mail = storage.getSettings().mail || {};
-    console.info('[MAIL] 读取已保存 SMTP 密码:', publicMailDebug(mail));
-    res.json({ pass: mail.pass || '', hasPass: !!mail.pass });
+    try {
+        const auth = verifySensitiveAccess(req, req.body?.secret);
+        const mail = storage.getSettings().mail || {};
+        console.info('[MAIL] 读取已保存 SMTP 密码:', { ...publicMailDebug(mail), authMethod: auth.method });
+        res.json({ pass: mail.pass || '', hasPass: !!mail.pass });
+    } catch (err) {
+        res.status(403).json({ error: err.message || '验证失败' });
+    }
+});
+
+app.post('/api/settings/captcha/open', requireAuth, (req, res) => {
+    try {
+        const auth = verifySensitiveAccess(req, req.body?.secret);
+        const captcha = storage.getSettings().captcha || {};
+        const normalizedProvider = normalizeCaptchaProvider(captcha.provider || 'turnstile');
+        const secretKey = captcha.secretKey || captcha.tencentAppSecretKey || captcha.aliyunAccessKeySecret || '';
+        console.info('[captcha-open] reveal saved captcha secret', { provider: normalizedProvider, hasSecretKey: !!secretKey, authMethod: auth.method });
+        res.json({
+            provider: normalizedProvider,
+            secretKey,
+            tencentAppSecretKey: captcha.tencentAppSecretKey || captcha.secretKey || '',
+            tencentSecretKey: captcha.tencentSecretKey || '',
+            aliyunAccessKeySecret: captcha.aliyunAccessKeySecret || captcha.secretKey || '',
+            hasSecretKey: !!secretKey
+        });
+    } catch (err) {
+        res.status(403).json({ error: err.message || '验证失败' });
+    }
 });
 
 app.get('/api/security/ip-bans', requireAuth, (req, res) => res.json({ bans: storage.listIpBans() }));
@@ -1041,6 +1105,7 @@ app.post('/api/connections/test', requireAuth, async (req, res) => {
         ['name', 'host', 'username', 'remark'].forEach((key) => { if (body[key] !== undefined) conn[key] = String(body[key]); });
         if (body.port !== undefined) conn.port = Number(body.port) || 22;
         if (body.protocol !== undefined) conn.protocol = String(body.protocol).toUpperCase();
+        if (body.sshKeyId !== undefined) conn.sshKeyId = String(body.sshKeyId || '');
         if (body.password !== undefined && body.password !== '******') conn.password = String(body.password || '');
         if (body.privateKey !== undefined && body.privateKey !== '******') conn.privateKey = String(body.privateKey || '');
         applyConnectionRouteFields(conn, body);
@@ -1085,6 +1150,42 @@ app.put('/api/proxies/:id', requireAuth, (req, res) => {
     res.json({ proxy });
 });
 app.delete('/api/proxies/:id', requireAuth, (req, res) => { storage.deleteProxy(req.params.id); addActivity('删除代理'); res.json({ ok: true }); });
+
+app.get('/api/ssh-keys', requireAuth, (req, res) => res.json({ sshKeys: storage.listSshKeys() }));
+app.post('/api/ssh-keys', requireAuth, (req, res) => {
+    const b = req.body || {};
+    if (!String(b.name || '').trim()) return res.status(400).json({ error: '密钥名称不能为空' });
+    if (!String(b.privateKey || '').includes('-----BEGIN')) return res.status(400).json({ error: '请填写有效的 SSH 私钥' });
+    const sshKey = storage.saveSshKey({ id: crypto.randomUUID(), name: String(b.name).trim(), privateKey: String(b.privateKey), passphrase: String(b.passphrase || ''), remark: String(b.remark || ''), createdAt: Date.now(), updatedAt: Date.now() });
+    console.debug('[ssh-key] saved key', { id: sshKey.id, name: sshKey.name, hasPrivateKey: sshKey.hasPrivateKey, hasPassphrase: sshKey.hasPassphrase });
+    addActivity(`新增 SSH 密钥：${sshKey.name}`);
+    res.json({ sshKey });
+});
+app.put('/api/ssh-keys/:id', requireAuth, (req, res) => {
+    const old = storage.getSshKeyRaw(req.params.id);
+    if (!old) return res.status(404).json({ error: 'SSH 密钥不存在' });
+    const b = req.body || {};
+    const privateKey = b.privateKey === '******' || b.privateKey === undefined ? old.privateKey : String(b.privateKey || '');
+    const passphrase = b.passphrase === '******' || b.passphrase === undefined ? old.passphrase : String(b.passphrase || '');
+    if (!String((b.name ?? old.name) || '').trim()) return res.status(400).json({ error: '密钥名称不能为空' });
+    if (!privateKey.includes('-----BEGIN')) return res.status(400).json({ error: '请填写有效的 SSH 私钥' });
+    const sshKey = storage.saveSshKey({ ...old, name: String(b.name ?? old.name).trim(), privateKey, passphrase, remark: String(b.remark ?? old.remark ?? ''), updatedAt: Date.now() });
+    console.debug('[ssh-key] updated key', { id: sshKey.id, name: sshKey.name, hasPrivateKey: sshKey.hasPrivateKey, hasPassphrase: sshKey.hasPassphrase });
+    addActivity(`编辑 SSH 密钥：${sshKey.name}`);
+    res.json({ sshKey });
+});
+app.post('/api/ssh-keys/:id/open', requireAuth, (req, res) => {
+    try {
+        const auth = verifySensitiveAccess(req, req.body?.secret);
+        const key = storage.getSshKeyRaw(req.params.id);
+        if (!key) return res.status(404).json({ error: 'SSH 密钥不存在' });
+        console.info('[secret-open] reveal ssh key', { id: key.id, name: key.name, authMethod: auth.method });
+        res.json({ sshKey: { ...key, hasPrivateKey: !!key.privateKey, hasPassphrase: !!key.passphrase } });
+    } catch (err) {
+        res.status(403).json({ error: err.message || '验证失败' });
+    }
+});
+app.delete('/api/ssh-keys/:id', requireAuth, (req, res) => { storage.deleteSshKey(req.params.id); addActivity('删除 SSH 密钥'); res.json({ ok: true }); });
 
 app.get('/api/jump-hosts', requireAuth, (req, res) => res.json({ jumpHosts: storage.listJumpHosts() }));
 app.post('/api/jump-hosts', requireAuth, (req, res) => {

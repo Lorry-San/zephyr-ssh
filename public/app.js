@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-let connections = [], activities = [], proxies = [], jumpHosts = [], settings = {};
+let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [], settings = {};
 let editingId = null;
 let editingSecretLoaded = false;
 let terminalTabs = [], activeTerminalTab = null;
@@ -36,6 +36,17 @@ function toggleTheme() { applyTheme(document.documentElement.getAttribute('data-
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function renderMarkdown(md) { let s = escapeHtml(md); s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); return s.replace(/\n/g, '<br>'); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
+function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
+    const usingTotp = !!securityStatus.user?.totpEnabled;
+    const message = usingTotp
+        ? `${actionText}\n请输入 6 位 TOTP 动态验证码：`
+        : `${actionText}\n请输入当前登录密码：`;
+    const secret = prompt(message);
+    if (secret === null) throw new Error('已取消验证');
+    if (!String(secret).trim()) throw new Error(usingTotp ? '请输入动态验证码' : '请输入当前登录密码');
+    console.debug('[secret-open]', 'sensitive reveal requested', { actionText, authType: usingTotp ? 'totp' : 'password' });
+    return secret;
+}
 function switchView(name) {
     $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
@@ -101,6 +112,15 @@ function setRouteMode(mode = 'direct', selected = '') {
     $('#jumpRouteConfig')?.classList.toggle('force-hidden', nextMode !== 'jump');
     updateRouteOptions(nextMode, selected);
 }
+function renderSshKeyOptions(selected = '') {
+    const select = $('#connSshKey');
+    if (!select) return;
+    const selectedId = String(selected || '');
+    select.innerHTML = '<option value="">不使用密钥库</option>' + sshKeys.map((k) => `<option value="${k.id}" ${selectedId === String(k.id) ? 'selected' : ''}>${escapeHtml(k.name)}${k.hasPassphrase ? '（有口令）' : ''}</option>`).join('');
+    select.value = selectedId;
+    console.debug('[ssh-key-ui]', 'render connection key options', { selectedId, keyCount: sshKeys.length });
+}
+
 function updateRouteOptions(mode = $('#connMode').value, selected = '') {
     const selectedIds = normalizeSelectedRouteIds(selected);
     const route = $('#connRoute');
@@ -120,16 +140,17 @@ function addJumpRouteRow() {
 function openModal(conn = null) {
     editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || 22; $('#connUsername').value = conn?.username || '';
+    renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
-    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey)); $('#connRemark').value = conn?.remark || ''; $('#connectionModal').classList.add('show');
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; $('#connectionModal').classList.add('show');
 }
 function closeModal() { $('#connectionModal').classList.remove('show'); }
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
     const proxyId = $('#connRoute')?.value || '';
     const jumpHostIds = mode === 'jump' ? [...new Set($$('#jumpRouteList [data-jump-route-select]').map((el) => el.value).filter(Boolean))] : [];
-    const payload = { name: $('#connName').value.trim(), protocol: $('#connProtocol').value, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || 22, username: $('#connUsername').value.trim(), password: $('#connPassword').value, privateKey: $('#connPrivateKey').value, remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? proxyId : '', jumpHostId: mode === 'jump' ? (jumpHostIds[0] || '') : '', jumpHostIds };
-    console.debug('[route-ui]', 'connection payload route', { mode, proxyId: payload.proxyId, jumpHostIds });
+    const payload = { name: $('#connName').value.trim(), protocol: $('#connProtocol').value, host: $('#connHost').value.trim(), port: Number($('#connPort').value) || 22, username: $('#connUsername').value.trim(), sshKeyId: $('#connSshKey')?.value || '', password: $('#connPassword').value, privateKey: $('#connPrivateKey').value, remark: $('#connRemark').value, tags: parseTags($('#connTags').value), connectionMode: mode, proxyId: mode === 'proxy' ? proxyId : '', jumpHostId: mode === 'jump' ? (jumpHostIds[0] || '') : '', jumpHostIds };
+    console.debug('[route-ui]', 'connection payload route', { mode, proxyId: payload.proxyId, jumpHostIds, sshKeyId: payload.sshKeyId });
     if (!forTest && editingId) { if (payload.password === '******') delete payload.password; if (payload.privateKey === '******') delete payload.privateKey; }
     return payload;
 }
@@ -138,10 +159,12 @@ async function testConnection() { try { const result = await api('/api/connectio
 
 async function revealConnectionSecrets() {
     if (!editingId || editingSecretLoaded) return;
-    const data = await api(`/api/connections/${editingId}/open`, { method: 'POST' });
+    const secret = requestSensitiveSecret('查看已保存连接密码/私钥');
+    const data = await api(`/api/connections/${editingId}/open`, { method: 'POST', body: JSON.stringify({ purpose: 'reveal', secret }) });
     $('#connPassword').value = data.connection?.password || '';
     $('#connPrivateKey').value = data.connection?.privateKey || '';
     editingSecretLoaded = true;
+    console.debug('[secret-open]', 'connection secrets loaded', { connectionId: editingId, hasPassword: !!data.connection?.password, hasPrivateKey: !!data.connection?.privateKey });
     toast('已载入保存的密码/私钥');
 }
 
@@ -149,7 +172,7 @@ async function openConnection(id) {
     const data = await api(`/api/connections/${id}/open`, { method: 'POST' }); const c = data.connection;
     if (c.protocol !== 'SSH') { openPlaceholderTab(c); return; }
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, password: c.password || '', privateKey: c.privateKey || '', init: '', tabId, embedded: true, timestamp: Date.now() }));
+    sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: true, timestamp: Date.now() }));
     terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
     openOrderStack.push(tabId);
     activeTerminalTab = tabId;
@@ -818,6 +841,15 @@ async function saveCaptcha(e) {
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ captcha }) });
     toast('CAPTCHA 已保存');
 }
+async function revealCaptchaSecret() {
+    const secret = requestSensitiveSecret('查看已保存 CAPTCHA 密钥');
+    const data = await api('/api/settings/captcha/open', { method: 'POST', body: JSON.stringify({ secret }) });
+    $('#captchaSecretKey').value = data.secretKey || '';
+    $('#captchaSecretKey').type = 'text';
+    $('#toggleCaptchaSecret').textContent = '🙈';
+    console.debug('[captcha-client]', 'captcha secret loaded', { provider: data.provider, hasSecretKey: !!data.hasSecretKey });
+    toast(data.hasSecretKey ? '已载入保存的 CAPTCHA 密钥' : '当前未保存 CAPTCHA 密钥');
+}
 async function saveMail(e) {
     e.preventDefault();
     try {
@@ -830,10 +862,12 @@ async function saveMail(e) {
     }
 }
 async function revealMailPass() {
-    const data = await api('/api/settings/mail/open', { method: 'POST', body: '{}' });
+    const secret = requestSensitiveSecret('查看已保存 SMTP 密码');
+    const data = await api('/api/settings/mail/open', { method: 'POST', body: JSON.stringify({ secret }) });
     $('#mailPass').value = data.pass || '';
     $('#mailPass').type = 'text';
     $('#toggleMailPassword').textContent = '🙈';
+    console.debug('[secret-open]', 'mail password loaded', { hasPass: !!data.hasPass });
     toast(data.hasPass ? '已载入保存的 SMTP 密码' : '当前未保存 SMTP 密码');
 }
 async function testMail() {
@@ -865,15 +899,45 @@ async function saveTerminalLayout(e) {
 async function setupTotp() { const r = await api('/api/security/totp/setup', { method: 'POST', body: '{}' }); $('#totpEnableForm').classList.remove('force-hidden'); $('#totpQrBox').innerHTML = `<img class="qr-img" src="${r.qr}"><p class="muted">密钥：${escapeHtml(r.secret)}</p>`; }
 async function registerPasskey() { try { if (!window.PublicKeyCredential) return toast('当前浏览器不支持 Passkey'); const options = await api('/api/passkeys/register/options', { method: 'POST', body: '{}' }); options.challenge = base64urlToBuffer(options.challenge); options.user.id = base64urlToBuffer(options.user.id); (options.excludeCredentials || []).forEach((c) => { c.id = base64urlToBuffer(c.id); }); const cred = await navigator.credentials.create({ publicKey: options }); if (!cred) return toast('Passkey 创建被取消'); const payload = { id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type, response: { clientDataJSON: bufferToBase64url(cred.response.clientDataJSON), attestationObject: bufferToBase64url(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } }; await api('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify(payload) }); toast('Passkey 已绑定'); await loadSecurityStatus(); } catch (err) { toast('Passkey 注册失败：' + err.message); } }
 async function loadNetwork() {
-    proxies = (await api('/api/proxies')).proxies || [];
+    const [proxyData, keyData] = await Promise.all([
+        api('/api/proxies'),
+        api('/api/ssh-keys').catch(() => ({ sshKeys: [] }))
+    ]);
+    proxies = proxyData.proxies || [];
+    sshKeys = keyData.sshKeys || [];
     renderNetwork();
     updateRouteOptions();
+    renderSshKeyOptions($('#connSshKey')?.value || '');
 }
 function renderNetwork() {
     $('#proxyList').innerHTML = proxies.map((p) => `<div class="mini-item"><b>${escapeHtml(p.name)}</b><span>${escapeHtml((p.type || 'socks5').toUpperCase())} · ${escapeHtml(p.host)}:${p.port}</span><button data-edit-proxy="${p.id}">编辑</button><button data-del-proxy="${p.id}">删除</button></div>`).join('') || '<p class="muted">暂无代理</p>';
+    $('#sshKeyList').innerHTML = sshKeys.map((k) => `<div class="mini-item"><b>${escapeHtml(k.name)}</b><span>${k.hasPrivateKey ? '已保存私钥' : '无私钥'}${k.hasPassphrase ? ' · 有口令' : ''}${k.remark ? ` · ${escapeHtml(k.remark)}` : ''}</span><button data-edit-ssh-key="${k.id}">编辑</button><button data-open-ssh-key="${k.id}">查看</button><button data-del-ssh-key="${k.id}">删除</button></div>`).join('') || '<p class="muted">暂无 SSH 密钥</p>';
 }
 function renderJumpOptions() { if ($('#jumpRouteConfig') && $('#connMode')?.value === 'jump') updateRouteOptions('jump', $$('#jumpRouteList [data-jump-route-select]').map((el) => el.value).filter(Boolean)); }
 async function saveProxy(e) { e.preventDefault(); const id = $('#proxyId').value, payload = { name: $('#proxyName').value, type: $('#proxyType').value, host: $('#proxyHost').value, port: Number($('#proxyPort').value), username: $('#proxyUsername').value, password: $('#proxyPassword').value }; console.debug('[route-ui]', 'save proxy payload', { id, ...payload, password: payload.password ? '******' : '' }); await api(id ? `/api/proxies/${id}` : '/api/proxies', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); e.target.reset(); $('#proxyId').value = ''; $('#proxyType').value = 'socks5'; await loadNetwork(); toast('代理已保存'); }
+function resetSshKeyForm() { $('#sshKeyForm').reset(); $('#sshKeyId').value = ''; $('#sshKeyPrivateKey').value = ''; $('#sshKeyPassphrase').value = ''; }
+async function saveSshKey(e) {
+    e.preventDefault();
+    const id = $('#sshKeyId').value;
+    const payload = { name: $('#sshKeyName').value.trim(), privateKey: $('#sshKeyPrivateKey').value, passphrase: $('#sshKeyPassphrase').value, remark: $('#sshKeyRemark').value.trim() };
+    console.debug('[ssh-key-ui]', 'save ssh key payload', { id, name: payload.name, hasPrivateKey: !!payload.privateKey && payload.privateKey !== '******', hasPassphrase: !!payload.passphrase && payload.passphrase !== '******' });
+    await api(id ? `/api/ssh-keys/${id}` : '/api/ssh-keys', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    resetSshKeyForm();
+    await loadNetwork();
+    toast('SSH 密钥已保存');
+}
+async function openSshKeySecret(id) {
+    const secret = requestSensitiveSecret('查看已保存 SSH 密钥');
+    const data = await api(`/api/ssh-keys/${id}/open`, { method: 'POST', body: JSON.stringify({ secret }) });
+    const k = data.sshKey || {};
+    $('#sshKeyId').value = k.id || '';
+    $('#sshKeyName').value = k.name || '';
+    $('#sshKeyPrivateKey').value = k.privateKey || '';
+    $('#sshKeyPassphrase').value = k.passphrase || '';
+    $('#sshKeyRemark').value = k.remark || '';
+    console.debug('[ssh-key-ui]', 'ssh key secret loaded', { id, hasPrivateKey: !!k.privateKey, hasPassphrase: !!k.passphrase });
+    toast('已载入 SSH 密钥内容');
+}
 
 function bindEvents() {
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -987,8 +1051,9 @@ function bindEvents() {
         enforceTerminalWorkspaceLimit(activeTerminalTab);
         renderTerminalTabs();
     });
-    $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy);
+    $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#sshKeyForm').addEventListener('submit', saveSshKey); $('#resetSshKeyForm').addEventListener('click', resetSshKeyForm);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyType').value = p.type || 'socks5'; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
+    $('#sshKeyList').addEventListener('click', async (e) => { const editId = e.target.dataset.editSshKey, openId = e.target.dataset.openSshKey, delId = e.target.dataset.delSshKey; if (editId) { const k = sshKeys.find((x) => x.id === editId); if (!k) return; $('#sshKeyId').value = k.id; $('#sshKeyName').value = k.name || ''; $('#sshKeyPrivateKey').value = k.hasPrivateKey ? '******' : ''; $('#sshKeyPassphrase').value = k.hasPassphrase ? '******' : ''; $('#sshKeyRemark').value = k.remark || ''; return; } if (openId) { await openSshKeySecret(openId); return; } if (delId && confirm('删除该 SSH 密钥？已选择它的连接将无法再使用该密钥。')) { await api(`/api/ssh-keys/${delId}`, { method: 'DELETE' }); await loadNetwork(); toast('SSH 密钥已删除'); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
     $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
     $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);
@@ -998,6 +1063,8 @@ function bindEvents() {
     $('#addPasskeyBtn').addEventListener('click', () => registerPasskey().catch((err) => toast(err.message)));
     $('#passkeyList').addEventListener('click', async (e) => { const id = e.target.dataset.delPasskey; if (id && confirm('删除该 Passkey？')) { await api(`/api/passkeys/${id}`, { method: 'DELETE' }); await loadSecurityStatus(); } });
     $('#ipBanList').addEventListener('click', async (e) => { const ip = e.target.dataset.unban; if (ip) { await api(`/api/security/ip-bans/${encodeURIComponent(ip)}`, { method: 'DELETE' }); await loadSecurityLists(); toast('已解除封禁'); } });
+    $('#toggleCaptchaSecret').addEventListener('click', () => { const el = $('#captchaSecretKey'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleCaptchaSecret').textContent = el.type === 'password' ? '👁️' : '🙈'; });
+    $('#revealCaptchaSecret').addEventListener('click', () => revealCaptchaSecret().catch((err) => toast(err.message || '读取 CAPTCHA 密钥失败')));
     $('#toggleMailPassword').addEventListener('click', () => { const el = $('#mailPass'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleMailPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; });
     $('#revealMailPass').addEventListener('click', () => revealMailPass().catch((err) => toast(err.message || '读取 SMTP 密码失败')));
     $('#testMailBtn').addEventListener('click', () => testMail());
