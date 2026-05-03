@@ -380,7 +380,7 @@ function exitTerminalFullscreen() {
         resetTerminalWorkspaceKeyboard();
         workspace.classList.remove('custom-fullscreen');
         document.body.classList.remove('terminal-custom-fullscreen-open');
-        renderTerminalTabs({ rebuildWorkspace: false });
+        renderTerminalTabs();
     }
     if (fullscreenElement) {
         if (document.exitFullscreen) document.exitFullscreen().catch?.(() => {});
@@ -537,6 +537,7 @@ async function fullscreenTerminalTab(tabId) {
         if (isCompactTerminalWorkspace()) {
             workspace.classList.toggle('custom-fullscreen');
             document.body.classList.toggle('terminal-custom-fullscreen-open', workspace.classList.contains('custom-fullscreen'));
+            renderTerminalTabs();
             hideFullscreenLoading({ delay: 360 });
             window.setTimeout(() => {
                 win.querySelector('.terminal-frame')?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'focus-terminal' }, '*');
