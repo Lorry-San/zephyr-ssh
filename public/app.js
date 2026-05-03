@@ -597,12 +597,14 @@ function startWorkspaceSplitterDrag(e, axis) {
     const splitter = e.target.closest('[data-splitter]');
     const rect = workspace.getBoundingClientRect();
 
+    const splitterGapHalf = 6;
+
     const applyPosition = (clientX, clientY) => {
         if (axis === 'x') {
-            const pct = Math.min(82, Math.max(24, ((clientX - rect.left) / rect.width) * 100));
+            const pct = Math.min(82, Math.max(24, ((clientX - rect.left - splitterGapHalf) / rect.width) * 100));
             workspace.style.setProperty('--workspace-split-x', `${pct.toFixed(2)}%`);
         } else {
-            const pct = Math.min(78, Math.max(22, ((clientY - rect.top) / rect.height) * 100));
+            const pct = Math.min(78, Math.max(22, ((clientY - rect.top - splitterGapHalf) / rect.height) * 100));
             workspace.style.setProperty('--workspace-split-y', `${pct.toFixed(2)}%`);
         }
     };

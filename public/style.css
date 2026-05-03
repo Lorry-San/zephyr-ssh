@@ -531,14 +531,15 @@ body.terminal-mode .app-shell {
     gap: clamp(8px, 1vw, 14px);
     min-width: 0;
     max-width: 100%;
-    min-height: 86px;
+    min-height: 90px;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
-    padding: 10px 4px 2px;
+    padding: 12px 14px 4px;
     perspective: 900px;
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
+    scroll-padding-inline: 14px;
 }
 .smartbar-dock::-webkit-scrollbar { display: none; }
 .terminal-smartbar.from-left .smartbar-dock,
@@ -958,22 +959,27 @@ body.terminal-mode .app-shell {
 }
 .terminal-window-body .terminal-placeholder.active { display: grid; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; }
 .workspace-splitter {
-    --splitter-track: rgba(31,35,40,.18);
-    --splitter-handle: rgba(17,24,39,.74);
-    --splitter-handle-active: rgba(17,24,39,.92);
+    --splitter-bar-bg: color-mix(in srgb, var(--surface) 88%, transparent);
+    --splitter-bar-border: rgba(139,148,158,.42);
+    --splitter-handle: rgba(107,114,128,.88);
+    --splitter-handle-active: rgba(75,85,99,.96);
     position: absolute;
     z-index: 9;
     border-radius: 0;
-    background: transparent;
+    background: var(--splitter-bar-bg);
     opacity: 1;
     transition:
         left .48s cubic-bezier(.16,1,.3,1),
         top .48s cubic-bezier(.16,1,.3,1),
-        transform .48s cubic-bezier(.16,1,.3,1);
+        transform .48s cubic-bezier(.16,1,.3,1),
+        background-color .24s ease,
+        border-color .24s ease;
     touch-action: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.20),
+        inset 0 -1px 0 rgba(0,0,0,.08);
+    backdrop-filter: blur(20px) saturate(1.35);
+    -webkit-backdrop-filter: blur(20px) saturate(1.35);
 }
 .terminal-workspace.splitting .workspace-splitter,
 .workspace-splitter.dragging {
@@ -981,7 +987,6 @@ body.terminal-mode .app-shell {
 }
 .workspace-splitter:hover,
 .terminal-workspace.splitting .workspace-splitter {
-    --splitter-track: rgba(31,35,40,.24);
     --splitter-handle: var(--splitter-handle-active);
 }
 .workspace-splitter::before,
@@ -996,53 +1001,49 @@ body.terminal-mode .app-shell {
 .workspace-splitter::before {
     z-index: 1;
     border-radius: 999px;
-    background: var(--splitter-track);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
-    transition: background .26s ease, transform .26s cubic-bezier(.16,1,.3,1);
+    background: rgba(255,255,255,.16);
 }
 .workspace-splitter::after {
     z-index: 2;
     border-radius: 999px;
     background: var(--splitter-handle);
-    box-shadow:
-        0 6px 18px rgba(0,0,0,.22),
-        inset 0 1px 0 rgba(255,255,255,.35);
-    transition: background .26s ease, transform .26s cubic-bezier(.16,1,.3,1), box-shadow .26s ease;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.30);
+    transition: background .20s ease;
 }
 .workspace-splitter.vertical {
     top: 0;
     bottom: 0;
-    left: var(--workspace-split-x);
-    width: 28px;
+    left: calc(var(--workspace-split-x) + 6px);
+    width: 12px;
+    border-left: 1px solid var(--splitter-bar-border);
+    border-right: 1px solid var(--splitter-bar-border);
     transform: translateX(-50%);
     cursor: col-resize;
 }
-.workspace-splitter.vertical::before { width: 4px; height: 100%; }
+.workspace-splitter.vertical::before { width: 2px; height: 100%; }
 .workspace-splitter.vertical::after {
-    width: 9px;
-    height: min(72px, 24vh);
+    width: 5px;
+    height: min(74px, 24vh);
 }
 .workspace-splitter.horizontal {
     left: calc(var(--workspace-split-x) + 12px);
     right: 0;
-    top: var(--workspace-split-y);
-    height: 28px;
+    top: calc(var(--workspace-split-y) + 6px);
+    height: 12px;
+    border-top: 1px solid var(--splitter-bar-border);
+    border-bottom: 1px solid var(--splitter-bar-border);
     transform: translateY(-50%);
     cursor: row-resize;
 }
-.workspace-splitter.horizontal::before { width: 100%; height: 4px; }
+.workspace-splitter.horizontal::before { width: 100%; height: 2px; }
 .workspace-splitter.horizontal::after {
-    width: min(72px, 24vw);
-    height: 9px;
+    width: min(74px, 24vw);
+    height: 5px;
 }
-.workspace-splitter.arming::after { transform: translate(-50%, -50%) scale(1.08); }
+.workspace-splitter.arming::after,
 .workspace-splitter.dragging::after,
 .terminal-workspace.splitting .workspace-splitter::after {
-    transform: translate(-50%, -50%) scale(1.12);
-    box-shadow:
-        0 8px 22px rgba(0,0,0,.28),
-        0 0 0 5px rgba(88,166,255,.10),
-        inset 0 1px 0 rgba(255,255,255,.38);
+    background: var(--splitter-handle-active);
 }
 .terminal-workspace.custom-fullscreen {
     position: fixed;
@@ -1263,11 +1264,12 @@ body.app-body > .toast.show { opacity: 1; transform: translate3d(0,0,0) scale(1)
     }
     .smartbar-dock {
         justify-content: flex-start;
-        min-height: 94px;
+        min-height: 92px;
         overflow-x: auto;
-        overflow-y: visible;
-        padding-inline: 8px;
+        overflow-y: hidden;
+        padding: 12px 14px 4px;
         gap: 8px;
+        scroll-padding-inline: 14px;
     }
     .smartbar-session,
     .smartbar-add {
