@@ -2353,20 +2353,35 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             return;
         }
 
-        // 删除（文件或空目录）
+        // 删除（文件或目录；目录支持递归删除非空内容）
         if (msg.type === 'sftp-delete') {
-            sftpStream.stat(msg.path, (err, stats) => {
+            const targetPath = String(msg.path || '');
+            if (!targetPath || targetPath === '/') {
+                console.warn('[sftp-delete]', '拒绝删除危险路径', { path: targetPath });
+                sendJSON({ type: 'sftp-delete', path: msg.path, success: false, error: '拒绝删除空路径或根目录' });
+                return;
+            }
+
+            sftpStream.stat(targetPath, async (err, stats) => {
                 if (err) {
-                    sendJSON({ type: 'sftp-delete', path: msg.path, success: false, error: err.message });
+                    console.warn('[sftp-delete]', 'stat failed', { path: targetPath, error: err.message });
+                    sendJSON({ type: 'sftp-delete', path: targetPath, success: false, error: err.message });
                     return;
                 }
                 if (stats.isDirectory()) {
-                    sftpStream.rmdir(msg.path, (err2) => {
-                        sendJSON({ type: 'sftp-delete', path: msg.path, success: !err2, error: err2 ? err2.message : null });
-                    });
+                    try {
+                        console.info('[sftp-delete]', 'recursive directory delete requested', { path: targetPath });
+                        await execRemoteCommand(sshClient, `rm -rf -- ${shellQuote(targetPath)}`);
+                        sendJSON({ type: 'sftp-delete', path: targetPath, success: true, error: null });
+                    } catch (err2) {
+                        console.warn('[sftp-delete]', 'recursive directory delete failed', { path: targetPath, error: err2.message });
+                        sendJSON({ type: 'sftp-delete', path: targetPath, success: false, error: err2.message });
+                    }
                 } else {
-                    sftpStream.unlink(msg.path, (err2) => {
-                        sendJSON({ type: 'sftp-delete', path: msg.path, success: !err2, error: err2 ? err2.message : null });
+                    sftpStream.unlink(targetPath, (err2) => {
+                        if (err2) console.warn('[sftp-delete]', 'file delete failed', { path: targetPath, error: err2.message });
+                        else console.info('[sftp-delete]', 'file deleted', { path: targetPath });
+                        sendJSON({ type: 'sftp-delete', path: targetPath, success: !err2, error: err2 ? err2.message : null });
                     });
                 }
             });

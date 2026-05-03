@@ -152,14 +152,21 @@ function updateProtocolFields({ preservePort = true } = {}) {
     $('.advanced-route-panel')?.classList.remove('force-hidden');
     console.debug('[guac-client]', 'protocol fields updated', { protocol, defaultPort, usernameRequired: protocol === 'SSH', routePanelEnabled: true });
 }
+function setConnectionTestLatency(text = '', state = '') {
+    const el = $('#connectionTestLatency');
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.state = state;
+}
 function openModal(conn = null) {
     editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
+    setConnectionTestLatency();
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || ($('#connProtocol').value === 'RDP' ? 3389 : $('#connProtocol').value === 'VNC' ? 5900 : 22); $('#connUsername').value = conn?.username || '';
     renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
     $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn }); $('#connectionModal').classList.add('show');
 }
-function closeModal() { $('#connectionModal').classList.remove('show'); }
+function closeModal() { $('#connectionModal').classList.remove('show'); setConnectionTestLatency(); }
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
     const proxyId = $('#connRoute')?.value || '';
@@ -172,7 +179,26 @@ function connectionPayload({ forTest = false } = {}) {
     return payload;
 }
 async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
-async function testConnection() { try { const payload = connectionPayload({ forTest: true }); console.debug('[guac-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port }); const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...payload, connectionId: editingId || '', timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
+async function testConnection() {
+    const btn = $('#testConnectionBtn');
+    const oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '测试中...';
+    setConnectionTestLatency('测试中...', 'pending');
+    try {
+        const payload = connectionPayload({ forTest: true });
+        console.debug('[guac-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port });
+        const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...payload, connectionId: editingId || '', timeoutSeconds: 10 }) });
+        setConnectionTestLatency(`连接延迟：${result.durationMs}ms`, 'success');
+        toast(result.message || '连接测试成功');
+    } catch (err) {
+        setConnectionTestLatency('测试失败', 'error');
+        toast(err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
+    }
+}
 
 async function revealConnectionSecrets() {
     if (!editingId || editingSecretLoaded) return;
