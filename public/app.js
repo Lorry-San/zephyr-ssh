@@ -171,7 +171,7 @@ function connectionPayload({ forTest = false } = {}) {
     if (!forTest && editingId) { if (payload.password === '******') delete payload.password; if (payload.privateKey === '******') delete payload.privateKey; }
     return payload;
 }
-async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (payload.protocol === 'RDP') toast('RDP 将在 VNC 完成后接入'); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
+async function saveConnection(e) { e.preventDefault(); const payload = connectionPayload(); if (editingId) await api(`/api/connections/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) }); else await api('/api/connections', { method: 'POST', body: JSON.stringify(payload) }); closeModal(); toast('连接已保存'); await loadConnections(); }
 async function testConnection() { try { const payload = connectionPayload({ forTest: true }); console.debug('[guac-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port }); const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...payload, connectionId: editingId || '', timeoutSeconds: 10 }) }); toast(`${result.message}，耗时 ${result.durationMs}ms`); } catch (err) { toast(err.message); } }
 
 async function revealConnectionSecrets() {
@@ -188,12 +188,11 @@ async function revealConnectionSecrets() {
 async function openConnection(id) {
     const data = await api(`/api/connections/${id}/open`, { method: 'POST' }); const c = data.connection;
     const protocol = String(c.protocol || 'SSH').toUpperCase();
-    if (protocol === 'RDP') { openPlaceholderTab(c); return; }
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    if (protocol === 'VNC') {
+    if (['RDP', 'VNC'].includes(protocol)) {
         sessionStorage.setItem(`zephyr_guac_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
         terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
-        console.debug('[guac-client]', 'open VNC tab', { tabId, connectionId: c.id, host: c.host, port: c.port });
+        console.debug('[guac-client]', 'open guacamole tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: true, timestamp: Date.now() }));
         terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
@@ -326,12 +325,12 @@ function renderTerminalSmartbar() {
         return true;
     });
     const icon = (t, index) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" style="--dock-index:${index}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
-    const launchableConnections = connections.filter((c) => ['SSH', 'VNC'].includes(String(c.protocol || 'SSH').toUpperCase()));
+    const launchableConnections = connections.filter((c) => ['SSH', 'RDP', 'VNC'].includes(String(c.protocol || 'SSH').toUpperCase()));
     const picker = terminalSmartbarPickerOpen ? `
         <div class="smartbar-picker" role="dialog" aria-label="选择服务器连接">
             <div class="smartbar-picker-head"><strong>选择服务器</strong><button data-smartbar-picker-close title="关闭">×</button></div>
             <div class="smartbar-picker-list">
-                ${launchableConnections.length ? launchableConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ${terminalProtocolClass(c.protocol)}"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.protocol)} · ${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH/VNC 服务器</div>'}
+                ${launchableConnections.length ? launchableConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ${terminalProtocolClass(c.protocol)}"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.protocol)} · ${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH/RDP/VNC 服务器</div>'}
             </div>
         </div>` : '';
     const smartbarRoot = $('#sessionTabs');

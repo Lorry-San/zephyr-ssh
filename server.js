@@ -1544,9 +1544,8 @@ guacWss.on('connection', async (ws, req) => {
         if (!conn) throw new Error('连接不存在或已删除');
 
         const protocol = guacamoleProtocol(conn);
-        if (protocol !== 'vnc') throw new Error(`当前阶段仅支持 VNC，收到协议：${conn.protocol || '-'}`);
 
-        console.info('[guacamole-ws]', 'opening browser tunnel', { connectionId, name: conn.name, protocol, width, height, dpi, user: sessionUser.username });
+        console.info('[guacamole-ws]', 'opening browser tunnel', { connectionId, name: conn.name, protocol, target: `${conn.host}:${Number(conn.port) || guacamoleDefaultPort(protocol)}`, width, height, dpi, user: sessionUser.username });
         session = await openGuacdSession(conn, { width, height, dpi }, 15000);
         if (ws.readyState === ws.OPEN) {
             ws.send(guacInstruction('ready', session.uuid));

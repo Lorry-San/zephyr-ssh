@@ -39,6 +39,14 @@ function loadParams() {
     }
 }
 
+function protocolLabel() {
+    return String(params?.protocol || 'VNC').toUpperCase() === 'RDP' ? 'RDP' : 'VNC';
+}
+
+function protocolDefaultPort() {
+    return protocolLabel() === 'RDP' ? 3389 : 5900;
+}
+
 function notifyParentStatus(status) {
     if (embeddedMode && window.parent && window.parent !== window) {
         window.parent.postMessage({ source: 'zephyr-terminal', tabId: params?.tabId || tabId, status }, '*');
@@ -52,29 +60,30 @@ function notifyParentActivity() {
 }
 
 function setStatus(state, message = '') {
+    const label = protocolLabel();
     notifyParentStatus(state === 'connected' ? 'connected' : state === 'error' ? 'error' : state === 'disconnected' ? 'closed' : 'connecting');
     statusDot.className = 'status-dot';
     if (state === 'connected') {
         connected = true;
         statusDot.classList.add('connected');
-        statusText.textContent = message || 'VNC 已连接';
+        statusText.textContent = message || `${label} 已连接`;
         overlay.classList.add('hidden');
     } else if (state === 'error') {
         connected = false;
         statusDot.classList.add('disconnected');
         statusText.textContent = '错误';
-        overlayMsg.textContent = message || 'VNC 连接失败';
+        overlayMsg.textContent = message || `${label} 连接失败`;
         overlay.classList.remove('hidden');
     } else if (state === 'disconnected') {
         connected = false;
         statusDot.classList.add('disconnected');
         statusText.textContent = message || '已断开';
-        overlayMsg.textContent = message || 'VNC 连接已断开';
+        overlayMsg.textContent = message || `${label} 连接已断开`;
         overlay.classList.remove('hidden');
     } else {
         connected = false;
         statusText.textContent = message || '连接中...';
-        overlayMsg.textContent = message || '正在建立 VNC 连接...';
+        overlayMsg.textContent = message || `正在建立 ${label} 连接...`;
         overlay.classList.remove('hidden');
     }
 }
@@ -182,7 +191,7 @@ class RawGuacWebSocketTunnel {
         });
 
         this.socket.addEventListener('error', () => {
-            const err = new Error('VNC WebSocket 隧道异常');
+            const err = new Error(`${protocolLabel()} WebSocket 隧道异常`);
             console.error('[guac-client]', err.message);
             this.onerror?.(err);
         });
@@ -247,8 +256,8 @@ function wsUrl() {
 
 function updateInfo() {
     const parts = [
-        params.protocol || 'VNC',
-        params.host ? `${params.host}:${params.port || 5900}` : '',
+        protocolLabel(),
+        params.host ? `${params.host}:${params.port || protocolDefaultPort()}` : '',
         params.username || '',
     ].filter(Boolean);
     connInfo.textContent = parts.join(' · ');
@@ -292,18 +301,20 @@ function scheduleResize() {
 
 async function connect() {
     params = loadParams();
+    const label = protocolLabel();
     if (!params.connectionId) {
-        setStatus('error', '缺少 VNC 连接参数');
+        setStatus('error', `缺少 ${label} 连接参数`);
         return;
     }
 
     disconnect(false);
     updateInfo();
-    setStatus('connecting', '正在加载 VNC 客户端...');
+    setStatus('connecting', `正在加载 ${label} 客户端...`);
+    console.info('[guac-client]', 'connect requested', { protocol: label, connectionId: params.connectionId, host: params.host, port: params.port || protocolDefaultPort() });
 
     try {
         const G = await loadGuacamole();
-        setStatus('connecting', '正在连接 guacd/VNC...');
+        setStatus('connecting', `正在连接 guacd/${label}...`);
 
         displayRoot.innerHTML = '';
         tunnel = new RawGuacWebSocketTunnel(wsUrl());
@@ -315,16 +326,16 @@ async function connect() {
 
         client.onerror = (error) => {
             console.error('[guac-client]', 'client error', error);
-            setStatus('error', error?.message || String(error) || 'VNC 客户端错误');
+            setStatus('error', error?.message || String(error) || `${label} 客户端错误`);
         };
 
         client.onstatechange = (state) => {
-            console.info('[guac-client]', 'client state changed', { state });
+            console.info('[guac-client]', 'client state changed', { protocol: label, state });
             if (state === 3) {
-                setStatus('connected', 'VNC 已连接');
+                setStatus('connected', `${label} 已连接`);
                 applyDisplayScale();
             } else if (state === 4 || state === 5) {
-                setStatus('disconnected', 'VNC 已断开');
+                setStatus('disconnected', `${label} 已断开`);
             }
         };
 
@@ -353,7 +364,7 @@ async function connect() {
         client.connect();
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
-        setStatus('error', err.message || 'VNC 连接失败');
+        setStatus('error', err.message || `${label} 连接失败`);
     }
 }
 
@@ -378,18 +389,19 @@ function disconnect(userInitiated = true) {
     tunnel = null;
     connected = false;
     if (userInitiated) {
-        setStatus('disconnected', 'VNC 连接已断开');
+        setStatus('disconnected', `${protocolLabel()} 连接已断开`);
         sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params');
     }
 }
 
 async function sendClipboard() {
-    if (!client || !connected) return setStatus('error', 'VNC 尚未连接');
+    const label = protocolLabel();
+    if (!client || !connected) return setStatus('error', `${label} 尚未连接`);
     let text = '';
     try {
         text = await navigator.clipboard.readText();
     } catch {
-        text = prompt('请输入要发送到远程 VNC 的剪贴板文本：') || '';
+        text = prompt(`请输入要发送到远程 ${label} 的剪贴板文本：`) || '';
     }
     if (!text) return;
     const stream = client.createClipboardStream('text/plain');

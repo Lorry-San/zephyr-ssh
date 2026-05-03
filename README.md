@@ -13,7 +13,7 @@
 - 🧩 **MFA 多因素认证**：支持 TOTP 动态验证码与 Passkey / WebAuthn。
 - 🛡️ **登录防护**：支持 CAPTCHA、人机验证、登录失败记录、IP 防爆破封禁、IP 白名单。
 - **邮件通知**：支持 SMTP 测试邮件、登录成功/失败通知、忘记密码邮箱验证码重置。
-- 🗂️ **连接管理**：支持 SSH / VNC 连接打开与 SSH / RDP / VNC 连接卡片管理；VNC 基于 Apache Guacamole/guacd，RDP 将在后续接入。
+- 🗂️ **连接管理**：支持 SSH / RDP / VNC 连接卡片管理与浏览器内打开；RDP/VNC 基于 Apache Guacamole/guacd 实现。
 - 🏷️ **标签与备注**：支持连接标签、搜索、排序、Markdown 备注展示。
 - 🧭 **代理与跳板机**：支持代理池、跳板机配置以及连接路由方式选择。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
@@ -129,11 +129,34 @@ Docker 部署时推荐同时做到两点：
 >
 > 如果更换了 `ENCRYPTION_KEY`，旧备份文件需要使用导出时的旧密钥才能解密导入。
 
-### VNC / 内置 Guacamole 配置
+### RDP / VNC / 内置 Guacamole 配置
 
-VNC 连接基于 Apache Guacamole 的 `guacd` 网关实现。项目 Docker 镜像已内置 `guacd`、VNC/RDP 客户端插件，并由 `server.js` 在启动时自动拉起本机 `guacd`，因此 Docker 部署无需再单独启动 `guacamole/guacd` 容器。
+RDP 和 VNC 连接基于 Apache Guacamole 的 `guacd` 网关实现，浏览器端通过 Zephyr 的 `/guacamole` WebSocket 隧道接入，无需直接暴露目标主机的 RDP/VNC 端口到公网。
 
-本地开发运行 `npm start` 时，如果系统中已安装 `guacd`，Zephyr 会自动复用或启动本机 `guacd`。如果你的本地系统没有 `guacd`，可以安装系统包，或临时使用外部 guacd 并设置：
+项目 Docker 镜像已内置：
+
+- `guacd`
+- `libguac-client-rdp0`
+- `libguac-client-vnc0`
+
+`server.js` 启动时会自动检测并拉起本机 `guacd`，因此 Docker 部署通常不需要再单独启动 `guacamole/guacd` 容器。
+
+默认端口：
+
+| 协议 | 默认端口 | 说明 |
+| --- | --- | --- |
+| `RDP` | `3389` | Windows 远程桌面；通过 guacd 的 RDP 插件连接 |
+| `VNC` | `5900` | VNC Server；通过 guacd 的 VNC 插件连接 |
+| `SSH` | `22` | WebSSH 终端；不经过 guacd |
+
+本地开发运行 `npm start` 时，如果系统中已安装 `guacd` 及对应客户端插件，Zephyr 会自动复用或启动本机 `guacd`。如果本地系统没有 `guacd`，可以安装系统包，例如 Debian/Ubuntu：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y guacd libguac-client-rdp0 libguac-client-vnc0
+```
+
+也可以临时使用外部 guacd，并设置：
 
 ```env
 GUACD_EMBEDDED=false
@@ -141,7 +164,31 @@ GUACD_HOST=外部-guacd-地址
 GUACD_PORT=4822
 ```
 
-VNC 连接由 guacd 访问目标主机，因此目标 VNC 主机和端口必须对 Zephyr 容器/内置 guacd 可达。
+RDP/VNC 连接由 `guacd` 访问目标主机，因此目标主机和端口必须对 Zephyr 容器/内置 guacd 可达。例如：
+
+- Docker 部署时，容器内的 `guacd` 需要能访问目标 Windows 主机的 `3389` 端口。
+- 目标 Windows 主机需要开启远程桌面，并允许对应账号登录。
+- 目标 VNC 主机需要启动 VNC Server，并允许 `5900` 或自定义端口访问。
+- 当前 RDP/VNC 不复用 Zephyr 的 SSH 跳板机链路；如需跨网段访问，请让 `guacd` 所在环境具备网络可达性，或配置外部 guacd。
+
+### 添加和打开 RDP/VNC 连接
+
+1. 登录后台后进入连接列表，点击“添加服务器”。
+2. 协议选择：
+   - `SSH`：浏览器 WebSSH 终端。
+   - `RDP`：Windows 远程桌面，默认端口 `3389`。
+   - `VNC`：VNC 远程桌面，默认端口 `5900`。
+3. 填写名称、主机、端口、用户名、密码等信息。
+4. 点击“测试连接”可验证目标是否可达。
+5. 保存后点击连接卡片的“连接”，RDP/VNC 会在终端工作区中以 Guacamole 远程桌面窗口打开。
+
+RDP 常见排查项：
+
+- Windows 目标主机是否已开启“远程桌面”。
+- 防火墙或安全组是否允许 Zephyr/guacd 所在机器访问 `3389`。
+- 账号是否允许远程桌面登录。
+- 如果目标使用自签名证书，Zephyr 默认通过 `ignore-cert=true` 交由 guacd 忽略证书校验。
+- 如果页面提示 guacd 连接失败，可查看服务端日志中的 `[guacamole-ws]`、`[guacd]`、`[guacamole-test]` 关键字。
 
 ## 关于依赖文件
 
@@ -233,8 +280,8 @@ zephyr-ssh/
 │   ├── app.js           # 管理后台逻辑
 │   ├── terminal.html    # SSH 终端页面
 │   ├── terminal.js      # SSH 终端核心逻辑
-│   ├── guacamole.html   # VNC 远程桌面页面
-│   ├── guacamole.js     # VNC / Guacamole 前端逻辑
+│   ├── guacamole.html   # RDP/VNC 远程桌面页面
+│   ├── guacamole.js     # RDP/VNC / Guacamole 前端逻辑
 │   └── style.css        # 全局样式
 ├── data/                # 运行数据目录（数据库、配置、历史数据）
 │   ├── .env             # 环境变量配置
@@ -277,4 +324,5 @@ data/*.enc
 - 🖥️ [wterm](https://github.com/vercel-labs/wterm)
 - 🔐 [ssh2](https://github.com/mscdex/ssh2)
 - 🔑 [SimpleWebAuthn](https://simplewebauthn.dev/)
+- 🖥️ [Apache Guacamole](https://guacamole.apache.org/)
 - 🗄️ [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
