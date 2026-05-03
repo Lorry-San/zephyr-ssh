@@ -417,6 +417,15 @@ AccessKeyId:AccessKeySecret
 
 2. 通过环境变量提供 `ALIYUN_ACCESS_KEY_ID`，后台 Secret Key 填写 `AccessKeySecret`。
 
+如果仅需要最简单的webssh，使用v1.0.75即可
+```bash
+docker run -d \
+  --name zephyr-ssh \
+  -p 3000:3000 \
+  --restart unless-stopped \
+  ghcr.io/lanlan13-14/zephyr-ssh:v1.0.75
+```
+
 ---
 
 ## 致谢
