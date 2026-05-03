@@ -126,12 +126,6 @@
                                 <input type="hidden" id="proxyId"><input id="proxyName" placeholder="名称"><select id="proxyType"><option value="socks5">SOCKS5</option><option value="http">HTTP CONNECT</option></select><input id="proxyHost" placeholder="IP / 主机"><input id="proxyPort" type="number" value="1080"><input id="proxyUsername" placeholder="用户名"><input id="proxyPassword" placeholder="密码"><button class="btn btn-primary" type="submit">保存代理</button>
                             </form>
                             <div class="mini-list" id="proxyList"></div>
-                            <h2>跳板机池</h2>
-                            <form id="jumpHostForm" class="settings-form inline-form">
-                                <input type="hidden" id="jumpHostId"><input id="jumpHostName" placeholder="名称"><select id="jumpHostConnection"><option value="">请选择 SSH 连接</option></select><button class="btn btn-primary" type="submit">保存跳板机</button>
-                            </form>
-                            <p class="field-hint">跳板机池引用已有 SSH 连接；在服务器编辑弹窗中可按顺序选择多个跳板机组成链路。</p>
-                            <div class="mini-list" id="jumpHostList"></div>
                         </div>
                         <div class="settings-panel" id="settings-data"><h2>数据导入导出</h2><p class="muted">导出文件使用 data/.env 中 ENCRYPTION_KEY 加密。</p><button class="btn btn-primary" id="exportDataBtn">开始导出</button><form id="importDataForm" class="settings-form"><input type="file" id="backupFile" accept=".enc"><input type="password" id="importLoginPassword" placeholder="当前登录密码"><input type="password" id="backupPassword" placeholder="备份解密密码（ENCRYPTION_KEY）"><button class="btn danger">导入备份</button></form></div>
                         <div class="settings-panel" id="settings-mail"><h2>邮件通知</h2><form id="mailForm" class="settings-form"><label class="check-line"><input type="checkbox" id="mailEnabled"> 启用邮件通知</label><input id="mailHost" placeholder="SMTP Host"><input id="mailPort" type="number" placeholder="SMTP Port"><label class="check-line"><input type="checkbox" id="mailSecure"> SSL/TLS</label><input id="mailUser" placeholder="SMTP 用户名"><input id="mailPass" type="password" placeholder="SMTP 密码"><input id="mailFrom" placeholder="发件人"><input id="mailAdminEmail" type="email" placeholder="后台管理员邮箱"><label class="check-line"><input type="checkbox" id="notifyLoginSuccess"> 登录成功通知</label><label class="check-line"><input type="checkbox" id="notifyLoginFailure"> 登录失败通知</label><label class="check-line"><input type="checkbox" id="geoLookupEnabled"> IP 地区查询</label><button class="btn btn-primary">保存邮件设置</button><button class="btn" type="button" id="testMailBtn">测试邮件</button></form><div class="panel-title-row"><h2>登录事件</h2><button class="tool-btn danger" type="button" id="clearLoginEventsBtn">清理日志</button></div><div class="mini-list" id="loginEventList"></div></div>
@@ -172,7 +166,7 @@
                     <label class="advanced-route-label">跳板机链配置</label>
                     <div class="jump-route-list" id="jumpRouteList"></div>
                     <button type="button" class="add-jump-route-btn" id="addJumpRouteBtn">＋ 添加跳板机</button>
-                    <p class="field-hint">请先在“设置 → 代理设置 → 跳板机池”中配置跳板机，然后按上方顺序依次连接。</p>
+                    <p class="field-hint">服务器列表中的 SSH 连接都可作为跳板机，按上方顺序依次建立多级 SSH 隧道。</p>
                 </div>
             </section>
             <div class="form-group password-field"><label>密码</label><input id="connPassword" type="password"><button type="button" id="toggleConnPassword">👁️</button></div>
