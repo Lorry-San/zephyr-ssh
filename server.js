@@ -29,6 +29,7 @@ const GUACD_PORT = Number(process.env.GUACD_PORT) || 4822;
 const GUACD_EMBEDDED = process.env.GUACD_EMBEDDED !== 'false';
 const GUACD_BIN = process.env.GUACD_BIN || 'guacd';
 const GUACD_LOG_LEVEL = process.env.GUACD_LOG_LEVEL || 'info';
+const SSH_STATS_ENABLED = process.env.SSH_STATS_ENABLED !== 'false';
 const app = express();
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -187,12 +188,30 @@ function resolveSshKeyForConnection(conn) {
 
 function buildSSHConfig(conn, timeout = 10000) {
     const resolvedConn = resolveSshKeyForConnection(conn);
-    const cfg = { host: resolvedConn.host, port: Number(resolvedConn.port) || 22, username: resolvedConn.username, readyTimeout: timeout, keepaliveInterval: 10000 };
-    if (resolvedConn.privateKey && resolvedConn.privateKey.includes('-----BEGIN')) {
-        cfg.privateKey = resolvedConn.privateKey;
-        if (resolvedConn.password) cfg.passphrase = resolvedConn.password;
-    } else if (resolvedConn.password) cfg.password = resolvedConn.password;
-    else throw new Error('缺少认证凭据');
+    const host = String(resolvedConn.host || '').trim();
+    const username = String(resolvedConn.username || '').trim();
+    const port = Number(resolvedConn.port) || 22;
+    const privateKey = resolvedConn.privateKey && resolvedConn.privateKey !== '******' ? String(resolvedConn.privateKey) : '';
+    const password = resolvedConn.password && resolvedConn.password !== '******' ? String(resolvedConn.password) : '';
+    const hasPrivateKey = privateKey.includes('-----BEGIN');
+    const hasPassword = Boolean(password);
+    const cfg = { host, port, username, readyTimeout: timeout, keepaliveInterval: 10000 };
+    console.info('[SSH-DIAG] build ssh config', {
+        connectionId: resolvedConn.id || '',
+        name: resolvedConn.name || '',
+        target: `${host}:${port}`,
+        username,
+        mode: resolvedConn.connectionMode || 'direct',
+        sshKeyId: resolvedConn.sshKeyId || '',
+        authMethods: { password: hasPassword && !hasPrivateKey, privateKey: hasPrivateKey, passphrase: hasPrivateKey && hasPassword },
+        timeout,
+    });
+    if (!host || !username) throw new Error('主机和用户名不能为空');
+    if (hasPrivateKey) {
+        cfg.privateKey = privateKey;
+        if (hasPassword) cfg.passphrase = password;
+    } else if (hasPassword) cfg.password = password;
+    else throw new Error(`缺少认证凭据（password=${hasPassword}, privateKey=${hasPrivateKey}, sshKeyId=${resolvedConn.sshKeyId || '-'})`);
     return cfg;
 }
 
@@ -311,6 +330,7 @@ function openProxyConnection(proxy, targetHost, targetPort, timeout = 10000) {
 function connectSSHClient(conn, { timeout = 10000, sock = undefined } = {}) {
     return new Promise((resolve, reject) => {
         const client = new Client();
+        const label = `${conn?.name || conn?.host || 'unknown'}@${conn?.host || '-'}:${Number(conn?.port) || 22}`;
         let settled = false;
         const finish = (err) => {
             if (settled) return;
@@ -318,14 +338,27 @@ function connectSSHClient(conn, { timeout = 10000, sock = undefined } = {}) {
             client.off('ready', onReady);
             client.off('error', onError);
             if (err) {
+                console.warn('[SSH-DIAG] ssh client connect failed', {
+                    connectionId: conn?.id || '',
+                    label,
+                    code: err.code || '',
+                    level: err.level || '',
+                    description: err.description || '',
+                    message: err.message,
+                });
                 try { client.end(); } catch {}
                 reject(err);
-            } else resolve(client);
+            } else {
+                console.info('[SSH-DIAG] ssh client ready', { connectionId: conn?.id || '', label, viaSocket: !!sock });
+                resolve(client);
+            }
         };
         const onReady = () => finish();
         const onError = (err) => finish(err);
         client.once('ready', onReady);
         client.once('error', onError);
+        client.once('end', () => console.info('[SSH-DIAG] ssh client end', { connectionId: conn?.id || '', label }));
+        client.once('close', () => console.info('[SSH-DIAG] ssh client close', { connectionId: conn?.id || '', label, settled }));
         try {
             const cfg = buildSSHConfig(conn, timeout);
             if (sock) cfg.sock = sock;
@@ -1766,16 +1799,28 @@ wss.on('connection', (ws, req) => {
 
     // 启动实时监控推送
     function startStatsPush() {
+        if (!SSH_STATS_ENABLED) {
+            console.info('[STATS] realtime stats disabled by SSH_STATS_ENABLED=false');
+            return;
+        }
         if (statsTimer) return;
+        console.info('[STATS] realtime stats started');
         const pushStats = async () => {
             if (ws.readyState !== ws.OPEN || !sshClient || statsRunning) return;
             statsRunning = true;
+            const startedAt = Date.now();
             try {
                 const result = await getRemoteStats(sshClient, remoteStatsState);
                 remoteStatsState = result.state;
                 sendJSON({ type: 'stats', data: result.stats });
+                console.debug('[STATS] remote stats pushed', { durationMs: Date.now() - startedAt });
             } catch (err) {
-                console.error('[STATS] 读取远程统计失败:', err.message);
+                console.error('[STATS] 读取远程统计失败:', {
+                    message: err.message,
+                    code: err.code || '',
+                    level: err.level || '',
+                    durationMs: Date.now() - startedAt,
+                });
                 sendJSON({ type: 'stats-error', message: err.message || '读取远程统计失败' });
             } finally {
                 statsRunning = false;
