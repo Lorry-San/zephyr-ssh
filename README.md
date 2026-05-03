@@ -250,6 +250,8 @@ data/*.db-wal
 data/*.enc
 ```
 
+注意：阿里云验证码后端校验需要 AccessKey。当前实现支持在后台 Secret Key 中填写 `AccessKeyId:AccessKeySecret`，或通过环境变量 `ALIYUN_ACCESS_KEY_ID` 提供 AccessKeyId、后台 Secret Key 填 AccessKeySecret
+
 ## 🙏 致谢
 
 - 🖥️ [wterm](https://github.com/vercel-labs/wterm)
