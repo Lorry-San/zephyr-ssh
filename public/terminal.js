@@ -368,6 +368,14 @@ function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate
 }
 
 function setStableViewportHeight({ force = false } = {}) {
+    if (embeddedMode) {
+        document.documentElement.style.setProperty('--stable-vh', '100vh');
+        document.documentElement.style.setProperty('--visual-vh', '100vh');
+        document.documentElement.style.setProperty('--visual-offset-top', '0px');
+        document.documentElement.style.setProperty('--keyboard-inset', '0px');
+        document.documentElement.classList.remove('keyboard-open', 'viewport-updating');
+        return;
+    }
     const { keyboardOpen } = getViewportKeyboardMetrics();
     if (!force && keyboardOpen) return;
     const height = Math.round(Math.max(
@@ -2408,6 +2416,7 @@ function markKeyboardFocusInactive() {
 }
 
 function updateViewportInsets() {
+    if (embeddedMode) return;
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     if (!isKeyboardAvoidanceTarget() && !mobileKeyboardOpen) return;

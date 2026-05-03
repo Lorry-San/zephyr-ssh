@@ -318,7 +318,9 @@ function renderTerminalWorkspace() {
     const visible = visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
     const count = visible.length;
     const workspace = $('#terminalWorkspace');
-    workspace.className = `terminal-workspace terminal-workspace-grid layout-${Math.min(count, 3)} ${isCompactTerminalWorkspace() ? 'compact' : ''}`;
+    const preservedWorkspaceClasses = ['custom-fullscreen', 'keyboard-open', 'fullscreen-transitioning', 'fullscreen-loading']
+        .filter((className) => workspace.classList.contains(className));
+    workspace.className = `terminal-workspace terminal-workspace-grid layout-${Math.min(count, 3)} ${isCompactTerminalWorkspace() ? 'compact' : ''} ${preservedWorkspaceClasses.join(' ')}`;
     if (!count) {
         workspace.innerHTML = '<div class="terminal-placeholder">暂无会话。点击仪表盘中的“连接”打开 SSH 会话。</div>';
         return;
@@ -803,7 +805,16 @@ function bindEvents() {
     window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } if (e.data.type === 'activity') { noteTerminalWorkspaceActivity(); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateFullscreenKeyboardFromViewport, { passive: true });
-    window.addEventListener('resize', () => { if (terminalTabs.length) { enforceTerminalWorkspaceLimit(activeTerminalTab); renderTerminalTabs(); } });
+    window.addEventListener('resize', () => {
+        if (!terminalTabs.length) return;
+        if (isCompactTerminalWorkspace()) {
+            renderTerminalSmartbar();
+            renderTerminalTabs({ rebuildWorkspace: false });
+            return;
+        }
+        enforceTerminalWorkspaceLimit(activeTerminalTab);
+        renderTerminalTabs();
+    });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#jumpForm').addEventListener('submit', saveJump);
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#jumpList').addEventListener('click', async (e) => { const id = e.target.dataset.editJump || e.target.dataset.delJump; if (!id) return; const j = jumpHosts.find((x) => x.id === id); if (e.target.dataset.editJump) { $('#jumpId').value = j.id; $('#jumpName').value = j.name; $('#jumpConnection').value = j.connectionId; } else if (confirm('删除跳板机？')) { await api(`/api/jump-hosts/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
