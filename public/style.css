@@ -2103,10 +2103,10 @@ html.keyboard-open .terminal-page {
     pointer-events: auto;
 }
 .panel-traffic-btn {
-    width: 58px;
-    height: 18px;
+    width: 52px;
+    height: 24px;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
     display: inline-flex;
     align-items: center;
@@ -2170,7 +2170,7 @@ html.keyboard-open .terminal-page {
 .panel-layout-menu {
     position: fixed;
     z-index: 100;
-    width: min(228px, calc(100vw - 16px));
+    width: min(284px, calc(100vw - 16px));
     min-height: 74px;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -2182,7 +2182,7 @@ html.keyboard-open .terminal-page {
     transform-origin: var(--menu-origin-x, 50%) var(--menu-origin-y, 0px);
     animation: panelMenuIn 0.42s cubic-bezier(0.16, 1, 0.3, 1);
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     will-change: transform, opacity, filter;
     overflow: visible;
@@ -2267,6 +2267,28 @@ html.keyboard-open .terminal-page {
 }
 .panel-layout-icon.left::after { left: 0; border-radius: 4px 0 0 4px; }
 .panel-layout-icon.right::after { right: 0; border-inline-end: 0; border-inline-start: 2px solid var(--accent); border-radius: 0 4px 4px 0; }
+.panel-layout-close:hover,
+.panel-layout-close:active {
+    background: rgba(248,81,73,0.14) !important;
+}
+.panel-layout-icon.close {
+    border-color: rgba(248,81,73,0.72);
+    background: rgba(248,81,73,0.08);
+}
+.panel-layout-icon.close::before,
+.panel-layout-icon.close::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 18px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--danger);
+    transform-origin: center;
+}
+.panel-layout-icon.close::before { transform: translate(-50%, -50%) rotate(45deg); }
+.panel-layout-icon.close::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .panel-resize-handle {
     position: absolute;
     bottom: 6px;
@@ -2375,6 +2397,11 @@ html.keyboard-open .terminal-page {
 .fm-editor-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; min-width: 0; }
 .fm-editor-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-editor-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+#fmCloseBtn,
+#infoCloseBtn,
+#dockerCloseBtn {
+    display: none !important;
+}
 .fm-editor-toolbar {
     display: flex;
     align-items: center;

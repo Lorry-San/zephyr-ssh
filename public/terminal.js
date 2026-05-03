@@ -2945,6 +2945,7 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="half" title="半屏" aria-label="半屏"><span class="panel-layout-icon half"></span></button>
         <button data-layout="left-quarter" title="左侧四分之一" aria-label="左侧四分之一"><span class="panel-layout-icon left"></span></button>
         <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
+        <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
     `;
     document.body.appendChild(menu);
     const placeMenu = () => {
@@ -2981,6 +2982,13 @@ function openPanelLayoutMenu(button, panel) {
     menu.addEventListener('click', (e) => {
         const item = e.target.closest('[data-layout]');
         if (!item) return;
+        if (item.dataset.layout === 'close') {
+            if (panel === fileManager) hideFileManager();
+            else if (panel === infoModal) hideInfoModal();
+            else if (panel === dockerPanel) hideDockerPanel();
+            closePanelLayoutMenu();
+            return;
+        }
         applyPanelLayout(panel, item.dataset.layout);
         closePanelLayoutMenu();
     });
