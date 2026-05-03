@@ -1,14 +1,6 @@
-FROM node:20-bookworm-slim
+FROM node:20-bookworm-slim AS app-build
 
 WORKDIR /app
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ca-certificates \
-        guacd \
-        libguac-client-vnc0 \
-        libguac-client-rdp0 && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
@@ -23,5 +15,27 @@ RUN mkdir -p public/vendor/@wterm/core && \
 
 COPY . .
 
+FROM guacamole/guacd:1.5.5
+
+USER root
+WORKDIR /app
+
+# 复用官方 guacd 镜像提供的 guacd、RDP/VNC 插件和运行依赖；
+# 从 Node 官方镜像复制 Node.js 运行时，避免 Debian apt 源找不到 guacd/libguac-client-* 包。
+COPY --from=app-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    command -v guacd && \
+    node --version
+
+COPY --from=app-build /app /app
+
+ENV GUACD_EMBEDDED=true
+ENV GUACD_HOST=127.0.0.1
+ENV GUACD_PORT=4822
+ENV GUACD_BIN=guacd
+
 EXPOSE 3000
+
 CMD ["node", "server.js"]
