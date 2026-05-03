@@ -75,6 +75,7 @@ const fmEditorMain = $('#fmEditorMain');
 const fmEditorTextarea = $('#fmEditorTextarea');
 let fmEditorLineNumbers = $('#fmEditorLineNumbers');
 const fmEditorHighlight = $('#fmEditorHighlight');
+let fmEditorIndentGuides = $('#fmEditorIndentGuides');
 const fmEditorMinimap = $('#fmEditorMinimap');
 const fmEditorMinimapCode = $('#fmEditorMinimapCode');
 const fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
@@ -1408,6 +1409,9 @@ function syncEditorCodeScroll() {
     if (fmEditorHighlight) {
         fmEditorHighlight.style.transform = `translate3d(${-fmEditorTextarea.scrollLeft}px, ${-fmEditorTextarea.scrollTop}px, 0)`;
     }
+    if (fmEditorIndentGuides) {
+        fmEditorIndentGuides.style.transform = `translate3d(${-fmEditorTextarea.scrollLeft}px, ${-fmEditorTextarea.scrollTop}px, 0)`;
+    }
     if (fmEditorLineNumbers) {
         fmEditorLineNumbers.style.transform = `translate3d(0, ${-fmEditorTextarea.scrollTop}px, 0)`;
     }
@@ -1421,6 +1425,7 @@ function renderEditorCodeLayers() {
     const visualRows = getEditorVisualRows(lines);
     const highlighted = highlightCode(text, editorLanguage);
     if (fmEditorHighlight) fmEditorHighlight.innerHTML = highlighted;
+    renderEditorIndentGuides(lines, visualRows);
     renderEditorLineNumbers(lines, visualRows);
     syncEditorMinimapMetrics();
     if (fmEditorMinimapCode && !editorMinimapHidden) fmEditorMinimapCode.innerHTML = renderMinimapCode(lines, editorLanguage, visualRows);
@@ -1437,6 +1442,73 @@ function ensureEditorLineNumbers() {
         fmEditorMain.insertBefore(fmEditorLineNumbers, fmEditorMain.firstChild);
     }
     return fmEditorLineNumbers;
+}
+
+function ensureEditorIndentGuides() {
+    if (!fmEditorMain) return null;
+    if (!fmEditorIndentGuides) {
+        fmEditorIndentGuides = document.createElement('pre');
+        fmEditorIndentGuides.id = 'fmEditorIndentGuides';
+        fmEditorIndentGuides.className = 'fm-editor-indent-guides';
+        fmEditorIndentGuides.setAttribute('aria-hidden', 'true');
+        fmEditorMain.insertBefore(fmEditorIndentGuides, fmEditorHighlight || fmEditorTextarea);
+    }
+    return fmEditorIndentGuides;
+}
+
+function getLeadingIndentColumns(line = '', tabSize = Number(fmEditorTabSize?.value) || 4) {
+    let columns = 0;
+    for (const ch of String(line)) {
+        if (ch === ' ') columns += 1;
+        else if (ch === '\t') columns += tabSize - (columns % tabSize || 0);
+        else break;
+    }
+    return columns;
+}
+
+function getEditorCharWidth() {
+    if (!fmEditorTextarea) return 8;
+    const computed = getComputedStyle(fmEditorTextarea);
+    const fontSize = parseFloat(computed.fontSize) || 13;
+    const probe = document.createElement('span');
+    probe.textContent = 'mmmmmmmmmm';
+    probe.style.position = 'fixed';
+    probe.style.left = '-9999px';
+    probe.style.top = '-9999px';
+    probe.style.visibility = 'hidden';
+    probe.style.font = computed.font;
+    probe.style.fontFamily = computed.fontFamily;
+    probe.style.fontSize = computed.fontSize;
+    probe.style.fontWeight = computed.fontWeight;
+    probe.style.letterSpacing = computed.letterSpacing;
+    document.body.appendChild(probe);
+    const width = probe.getBoundingClientRect().width / 10;
+    probe.remove();
+    return Number.isFinite(width) && width > 0 ? width : fontSize * 0.62;
+}
+
+function renderEditorIndentGuides(lines = getEditorLines(fmEditorTextarea?.value || ''), visualRows = getEditorVisualRows(lines)) {
+    const layer = ensureEditorIndentGuides();
+    if (!layer || !fmEditorTextarea) return;
+    const tabSize = Number(fmEditorTabSize?.value) || 4;
+    const lineHeight = parseFloat(getComputedStyle(fmEditorTextarea).lineHeight) || 20.15;
+    const charWidth = getEditorCharWidth();
+    const step = Math.max(1, tabSize * charWidth);
+    const signature = `${lines.length}:${tabSize}:${step.toFixed(2)}:${visualRows.join(',')}:${lines.map((line) => getLeadingIndentColumns(line, tabSize)).join(',')}`;
+    if (layer._signature === signature) return;
+    layer._signature = signature;
+    layer.style.setProperty('--editor-indent-step', `${step}px`);
+    layer.innerHTML = lines.map((line, index) => {
+        const columns = getLeadingIndentColumns(line, tabSize);
+        const levels = Math.floor(columns / tabSize);
+        const rowHeight = Math.max(1, visualRows[index] || 1) * lineHeight;
+        if (levels <= 0) {
+            return `<span class="fm-indent-guide-line" style="--editor-indent-line-height:${rowHeight}px"></span>`;
+        }
+        const width = levels * step;
+        const offset = charWidth * tabSize;
+        return `<span class="fm-indent-guide-line" style="--editor-indent-line-height:${rowHeight}px;--editor-indent-guide-width:${width}px;--editor-indent-offset:${offset}px"></span>`;
+    }).join('');
 }
 
 function renderEditorLineNumbers(lines = getEditorLines(fmEditorTextarea?.value || ''), visualRows = getEditorVisualRows(lines)) {
@@ -3131,21 +3203,77 @@ function processModifiers(data) {
     }
     return result;
 }
-function sendData(data) {
+function normalizeTerminalInputNewlines(data = '') {
+    return String(data).replace(/\r\n/g, '\r').replace(/\n/g, '\r');
+}
+function logTerminalPasteDiagnostics(source, text = '') {
+    const raw = String(text);
+    if (!raw.includes('\n') && !raw.includes('\r')) return;
+    console.info('[TerminalPaste]', {
+        source,
+        length: raw.length,
+        lf: (raw.match(/\n/g) || []).length,
+        cr: (raw.match(/\r/g) || []).length,
+        preview: raw.slice(0, 120).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
+    });
+}
+function sendData(data, { normalizeNewlines = false } = {}) {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        markTerminalUserInput(data);
-        wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(data) }));
+        const payload = normalizeNewlines ? normalizeTerminalInputNewlines(data) : data;
+        markTerminalUserInput(payload);
+        wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(payload) }));
     }
+}
+function resizeCommandInput() {
+    if (!cmdInput) return;
+    cmdInput.style.height = 'auto';
+    const maxHeight = parseFloat(getComputedStyle(cmdInput).maxHeight) || 112;
+    cmdInput.style.height = `${Math.min(maxHeight, Math.max(34, cmdInput.scrollHeight))}px`;
 }
 function sendCommand() {
     const text = cmdInput.value;
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        sendData(text + '\r\n');
+        logTerminalPasteDiagnostics('command-box-send', text);
+        sendData(text + '\r', { normalizeNewlines: true });
     }
     cmdInput.value = '';
+    resizeCommandInput();
 }
-cmdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendCommand(); } });
+function handleTerminalPaste(e) {
+    if (document.activeElement === cmdInput) return;
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if (!text) return;
+    e.preventDefault();
+    logTerminalPasteDiagnostics('wterm-paste', text);
+    sendData(text, { normalizeNewlines: true });
+    try { term?.focus?.(); } catch (_) {}
+}
+cmdInput.addEventListener('input', resizeCommandInput);
+cmdInput.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if (!text.includes('\n') && !text.includes('\r')) {
+        window.setTimeout(resizeCommandInput, 0);
+        return;
+    }
+    e.preventDefault();
+    logTerminalPasteDiagnostics('command-box-paste', text);
+    const { selectionStart, selectionEnd, value } = cmdInput;
+    cmdInput.value = value.slice(0, selectionStart) + text + value.slice(selectionEnd);
+    const nextPos = selectionStart + text.length;
+    cmdInput.selectionStart = cmdInput.selectionEnd = nextPos;
+    resizeCommandInput();
+});
+cmdInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (e.shiftKey) {
+        window.setTimeout(resizeCommandInput, 0);
+        return;
+    }
+    e.preventDefault();
+    sendCommand();
+});
 cmdSendBtn.addEventListener('click', sendCommand);
+resizeCommandInput();
 
 document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -3167,6 +3295,7 @@ wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (!selection || selection.toString().length === 0) term?.focus?.();
 });
+wtermWrapper.addEventListener('paste', handleTerminalPaste);
 ['pointerdown', 'touchstart'].forEach((eventName) => {
     wtermWrapper.addEventListener(eventName, () => {
         window.setTimeout(() => {
@@ -3346,13 +3475,13 @@ async function initWTerm(connectionToken = activeConnectionToken) {
             cols: 80, rows: 24, autoResize: true, cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
-            onData: (data) => sendData(data),
+            onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }),
             onResize: (cols, rows) => sendTerminalResize(cols, rows),
         });
     } catch {
         term = new WTermClass(wtermWrapper);
-        if (typeof term.onData === 'function') term.onData(data => sendData(data));
-        else if (typeof term.on === 'function') term.on('data', data => sendData(data));
+        if (typeof term.onData === 'function') term.onData(data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }));
+        else if (typeof term.on === 'function') term.on('data', data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }));
     }
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
