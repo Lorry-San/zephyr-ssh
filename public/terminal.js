@@ -2957,7 +2957,7 @@ function openPanelLayoutMenu(button, panel) {
         const vvHeight = viewport?.height || window.innerHeight;
         const anchorX = rect.left + rect.width / 2;
         const maxMenuWidth = Math.max(160, vvWidth - 16);
-        menu.style.width = `${Math.min(228, maxMenuWidth)}px`;
+        menu.style.width = `${Math.min(284, maxMenuWidth)}px`;
         const menuRect = menu.getBoundingClientRect();
         const idealLeft = anchorX - menuRect.width / 2;
         const minLeft = vvLeft + 8;
