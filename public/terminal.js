@@ -173,6 +173,86 @@ let suppressNextLayoutClick = false;
 let viewportAnimationRaf = 0;
 let viewportAnimationResizeTimer = 0;
 let cachedSelectionText = '';
+let mobileTerminalSelectionMode = false;
+let mobileTerminalSelectionTimer = 0;
+let mobileTerminalSelectionRestoreTimer = 0;
+let terminalTouchFocusTimer = 0;
+let terminalTouchStartX = 0;
+let terminalTouchStartY = 0;
+let terminalTouchMoved = false;
+const TERMINAL_COPY_DIAGNOSTICS = false;
+
+function logTerminalCopyDiagnostics(event, details = {}) {
+    if (!TERMINAL_COPY_DIAGNOSTICS) return;
+    try {
+        const selection = window.getSelection?.();
+        const viewport = window.visualViewport;
+        console.info('[TerminalCopyDiagnostics]', {
+            event,
+            touchKeyboardDevice: isTouchKeyboardDevice?.(),
+            activeElement: document.activeElement?.id || document.activeElement?.className || document.activeElement?.tagName,
+            selectionCollapsed: selection?.isCollapsed,
+            selectionLength: selection?.toString?.().length || 0,
+            cachedSelectionLength: cachedSelectionText.length,
+            mobileKeyboardOpen,
+            keyboardFocusLikely,
+            mobileTerminalSelectionMode,
+            viewportHeight: Math.round(viewport?.height || 0),
+            viewportOffsetTop: Math.round(viewport?.offsetTop || 0),
+            innerHeight: Math.round(window.innerHeight || 0),
+            ...details,
+        });
+    } catch (err) {
+        console.info('[TerminalCopyDiagnostics]', event, details, err);
+    }
+}
+
+function hasLiveTerminalSelection() {
+    const selection = window.getSelection?.();
+    return Boolean(selection && !selection.isCollapsed && (selection.toString?.().length || 0) > 0);
+}
+
+function blurTerminalInputsForSelection() {
+    try { cmdInput?.blur?.(); } catch (_) {}
+    try { document.activeElement?.blur?.(); } catch (_) {}
+}
+
+function enterMobileTerminalSelectionMode(reason = 'selection') {
+    if (!isTouchKeyboardDevice()) return;
+    window.clearTimeout(mobileTerminalSelectionRestoreTimer);
+    window.clearTimeout(terminalTouchFocusTimer);
+    window.clearTimeout(mobileTerminalSelectionTimer);
+    const wasActive = mobileTerminalSelectionMode;
+    mobileTerminalSelectionMode = true;
+    keyboardFocusLikely = false;
+    blurTerminalInputsForSelection();
+    if (mobileKeyboardOpen || getViewportKeyboardMetrics().keyboardInset > 8) {
+        finalizeKeyboardClose({ force: true });
+    }
+    document.documentElement.classList.add('terminal-selection-mode');
+    logTerminalCopyDiagnostics(wasActive ? 'selection-mode-keep' : 'selection-mode-enter', { reason });
+}
+
+function scheduleExitMobileTerminalSelectionMode(delay = 900) {
+    window.clearTimeout(mobileTerminalSelectionRestoreTimer);
+    mobileTerminalSelectionRestoreTimer = window.setTimeout(() => {
+        if (hasLiveTerminalSelection()) {
+            scheduleExitMobileTerminalSelectionMode(900);
+            return;
+        }
+        mobileTerminalSelectionMode = false;
+        document.documentElement.classList.remove('terminal-selection-mode');
+        logTerminalCopyDiagnostics('selection-mode-exit');
+    }, delay);
+}
+
+function scheduleMobileLongPressSelectionGuard(reason = 'touchstart') {
+    if (!isTouchKeyboardDevice()) return;
+    window.clearTimeout(mobileTerminalSelectionTimer);
+    mobileTerminalSelectionTimer = window.setTimeout(() => {
+        enterMobileTerminalSelectionMode(reason);
+    }, 260);
+}
 
 const viewportAnimationState = {
     currentHeight: 0,
@@ -591,6 +671,7 @@ setupTerminalPinchZoom();
 copyBtn.addEventListener('click', async () => {
     const text = getCopyableSelectionText();
     if (!text) return;
+    enterMobileTerminalSelectionMode('copy-button');
     const originalText = copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(text);
@@ -605,6 +686,7 @@ copyBtn.addEventListener('click', async () => {
         try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; } catch (_) { copyBtn.textContent = '❌ 失败'; }
         document.body.removeChild(ta);
     }
+    scheduleExitMobileTerminalSelectionMode(1200);
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
@@ -646,9 +728,20 @@ function getCopyableSelectionText() {
 
 document.addEventListener('selectionchange', () => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed) return;
+    if (!selection) return;
+    logTerminalCopyDiagnostics('selectionchange', {
+        collapsed: selection.isCollapsed,
+        textLength: selection.toString?.().length || 0,
+    });
+    if (selection.isCollapsed) {
+        if (mobileTerminalSelectionMode) scheduleExitMobileTerminalSelectionMode(900);
+        return;
+    }
     const text = normalizeCopiedTerminalText(getSelectionTextFromRanges(selection) || selection.toString());
-    if (text) cachedSelectionText = text;
+    if (text) {
+        cachedSelectionText = text;
+        enterMobileTerminalSelectionMode('selectionchange');
+    }
 }, { passive: true });
 
 // ---------- Ctrl+C 智能判断 ----------
@@ -2528,10 +2621,18 @@ function markKeyboardFocusInactive() {
 
 function updateViewportInsets() {
     if (embeddedMode) return;
+    if (mobileTerminalSelectionMode) return;
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     if (!isKeyboardAvoidanceTarget() && !mobileKeyboardOpen) return;
     const metrics = getViewportKeyboardMetrics();
+    logTerminalCopyDiagnostics('updateViewportInsets', {
+        keyboardInset: metrics.keyboardInset,
+        keyboardOpenMetric: metrics.keyboardOpen,
+        wantsAvoidance: metrics.wantsAvoidance,
+        layoutHeight: metrics.layoutHeight,
+        metricViewportHeight: metrics.viewportHeight,
+    });
     const visuallyRestored = isViewportVisuallyRestored(metrics);
     // 如果键盘高度小于 100px，认为没有标准软键盘遮挡。
     // Android 通过“返回/收起键盘”隐藏键盘时，输入框可能仍保持 focus；旧逻辑会因为
@@ -2673,6 +2774,9 @@ function setupMobileKeyboardAvoidance() {
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusInactive();
     }, true);
     cmdInput?.addEventListener('focus', () => {
+        mobileTerminalSelectionMode = false;
+        document.documentElement.classList.remove('terminal-selection-mode');
+        window.clearTimeout(mobileTerminalSelectionRestoreTimer);
         keyboardViewportBaseline = Math.max(
             window.innerHeight || 0,
             document.documentElement.clientHeight || 0,
@@ -3337,15 +3441,55 @@ const comboSequences = { 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', '
 // 保留选区
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
-    if (!selection || selection.toString().length === 0) term?.focus?.();
+    if (mobileTerminalSelectionMode || selection?.toString?.().length > 0) return;
+    term?.focus?.();
 });
 wtermWrapper.addEventListener('paste', handleTerminalPaste);
 ['pointerdown', 'touchstart'].forEach((eventName) => {
-    wtermWrapper.addEventListener(eventName, () => {
-        window.setTimeout(() => {
+    wtermWrapper.addEventListener(eventName, (e) => {
+        terminalTouchMoved = false;
+        terminalTouchStartX = e.clientX ?? e.touches?.[0]?.clientX ?? 0;
+        terminalTouchStartY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
+        scheduleMobileLongPressSelectionGuard(eventName);
+        logTerminalCopyDiagnostics('wterm-wrapper-touch-start', {
+            eventName,
+            pointerType: e.pointerType || '',
+            touches: e.touches?.length || 0,
+        });
+
+        window.clearTimeout(terminalTouchFocusTimer);
+        terminalTouchFocusTimer = window.setTimeout(() => {
+            const hasSelection = hasLiveTerminalSelection();
+            if (mobileTerminalSelectionMode || terminalTouchMoved || hasSelection) {
+                if (hasSelection) enterMobileTerminalSelectionMode('touch-has-selection');
+                notifyParentActivity();
+                return;
+            }
             try { term?.focus?.(); } catch (_) {}
             notifyParentActivity();
-        }, 0);
+        }, 180);
+    }, { passive: true });
+});
+
+['pointermove', 'touchmove'].forEach((eventName) => {
+    wtermWrapper.addEventListener(eventName, (e) => {
+        const x = e.clientX ?? e.touches?.[0]?.clientX ?? terminalTouchStartX;
+        const y = e.clientY ?? e.touches?.[0]?.clientY ?? terminalTouchStartY;
+        if (Math.hypot(x - terminalTouchStartX, y - terminalTouchStartY) > 8) {
+            terminalTouchMoved = true;
+            window.clearTimeout(terminalTouchFocusTimer);
+            window.clearTimeout(mobileTerminalSelectionTimer);
+        }
+    }, { passive: true });
+});
+
+['pointerup', 'touchend', 'touchcancel'].forEach((eventName) => {
+    wtermWrapper.addEventListener(eventName, () => {
+        window.clearTimeout(mobileTerminalSelectionTimer);
+        window.setTimeout(() => {
+            if (hasLiveTerminalSelection()) enterMobileTerminalSelectionMode(eventName);
+            else if (mobileTerminalSelectionMode) scheduleExitMobileTerminalSelectionMode(900);
+        }, 80);
     }, { passive: true });
 });
 
