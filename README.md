@@ -1,48 +1,103 @@
 # 🌬️ Zephyr-SSH
 
-> Zephyr 是一个基于 Node.js 的 WebSSH 终端管理系统，提供浏览器 SSH 终端、连接资产管理、远程批量执行、安全登录、Passkey / TOTP、多因素认证、数据备份导入导出等能力。
+> Zephyr-SSH 是一个基于 Node.js 的浏览器服务器管理平台，提供 WebSSH 终端、SSH / RDP / VNC 连接管理、SSH 跳板与代理路由、安全登录、多因素认证、远程批量执行、数据备份导入导出等能力。
 
-当前项目版本：**3.0.0**
+当前版本：**3.0.0**
 
-## ✨ 功能特性
+---
 
-- 🖥️ **WebSSH 终端**：基于 `ssh2` + WebSocket，支持浏览器内打开 SSH 会话。
-- 🌊 **顺滑文本选择**：基于 `@wterm/dom` DOM 渲染，终端文本可像普通网页一样拖选复制。
-- 📱 **移动端友好**：支持移动端长按、拖拽选择与系统复制菜单。
+## 目录
+
+- [功能特性](#功能特性)
+- [协议与路由能力](#协议与路由能力)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [RDP / VNC / Guacamole](#rdp--vnc--guacamole)
+- [Docker 自行构建](#docker-自行构建)
+- [更新容器并保留数据](#更新容器并保留数据)
+- [项目结构](#项目结构)
+- [安全建议](#安全建议)
+- [依赖与数据说明](#依赖与数据说明)
+- [致谢](#致谢)
+
+---
+
+## 功能特性
+
+### 连接与终端
+
+- 🖥️ **WebSSH 终端**：基于 `ssh2` + WebSocket，在浏览器中打开 SSH Shell。
+- 🌊 **DOM 终端渲染**：基于 `@wterm/dom`，终端文本可像普通网页一样拖选复制。
+- 📱 **移动端友好**：支持移动端长按、拖拽选择和系统复制菜单。
+- 🗂️ **连接资产管理**：支持 SSH / RDP / VNC 连接管理、搜索、排序、标签和备注。
+- 🖥️ **RDP / VNC 远程桌面**：基于 Apache Guacamole / `guacd`，在浏览器内打开远程桌面。
+- 🧭 **代理与跳板路由**：支持 SOCKS5 / HTTP CONNECT 代理、SSH 跳板机和多级 SSH 跳板链路。
+- ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
+- 🧰 **远程运维能力**：支持远程状态监控、Docker 容器/镜像查看、日志查看、镜像拉取等 SSH 运维操作。
+
+### 安全与账号
+
 - 🔐 **安全登录体系**：默认管理员、首次登录强制改密、登录会话、密码修改。
 - 🧩 **MFA 多因素认证**：支持 TOTP 动态验证码与 Passkey / WebAuthn。
 - 🛡️ **登录防护**：支持 CAPTCHA、人机验证、登录失败记录、IP 防爆破封禁、IP 白名单。
-- **邮件通知**：支持 SMTP 测试邮件、登录成功/失败通知、忘记密码邮箱验证码重置。
-- 🗂️ **连接管理**：支持 SSH / RDP / VNC 连接卡片管理与浏览器内打开；RDP/VNC 基于 Apache Guacamole/guacd 实现。
-- 🏷️ **标签与备注**：支持连接标签、搜索、排序、Markdown 备注展示。
-- 🧭 **代理与跳板机**：支持代理池、跳板机配置以及连接路由方式选择。
-- ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
-- 💾 **SQLite 数据存储**：使用 `better-sqlite3` 持久化用户、连接、设置、安全事件等数据。
-- 📦 **数据治理**：支持加密备份导出、备份导入，并在导入前生成本地数据库备份。
+- ✉️ **邮件通知**：支持 SMTP 测试邮件、登录成功/失败通知、忘记密码邮箱验证码重置。
 - 🧾 **备案信息**：支持 ICP / 公安备案信息配置与登录页展示。
-- 🐳 **Docker 部署**：提供 Dockerfile，可构建镜像部署。
 
-## 🚀 快速开始
+### 数据与部署
+
+- 💾 **SQLite 数据存储**：使用 `better-sqlite3` 持久化用户、连接、设置、安全事件等数据。
+- 📦 **数据备份**：支持加密备份导出、备份导入，并在导入前自动生成本地数据库备份。
+- 🐳 **Docker 部署**：Docker 镜像内置 Node.js 运行时与 `guacd`，可直接部署使用。
+
+---
+
+## 协议与路由能力
+
+| 协议 | 作为目标连接 | 可通过代理访问 | 可通过 SSH 跳板访问 | 可作为跳板机 |
+| --- | --- | --- | --- | --- |
+| `SSH` | ✅ | ✅ | ✅ | ✅ |
+| `RDP` | ✅ | ✅ | ✅ | ❌ |
+| `VNC` | ✅ | ✅ | ✅ | ❌ |
+
+说明：
+
+- **SSH** 既可以作为目标连接，也可以作为跳板机。
+- **RDP / VNC** 可以作为目标连接，并且可以通过 SSH 跳板链路访问。
+- **RDP / VNC 不能作为跳板机**。跳板机只能选择 SSH 连接。
+- RDP / VNC 通过跳板访问时，Zephyr 会在服务端建立临时 TCP 转发，让 `guacd` 连接本地临时端口，再经由 SSH 跳板链路访问目标 RDP/VNC 主机端口。
+
+RDP/VNC 经 SSH 跳板访问链路：
+
+```text
+浏览器
+  -> Zephyr /guacamole WebSocket
+  -> guacd
+  -> 127.0.0.1:临时端口
+  -> SSH 跳板链路
+  -> 目标 RDP/VNC 主机
+```
+
+---
+
+## 快速开始
 
 ### 方式一：Docker 镜像运行
 
-> **重要：生产部署请先写 `.env`，并持久化 `/app/data`。**
-> Zephyr 的 SQLite 数据库、运行配置和备份文件都在容器内 `/app/data`。如果启动容器时没有挂载这个目录，删除/重建容器后数据会丢失。
+> 生产部署请务必持久化 `/app/data`，并提前准备 `.env`。
 
-推荐使用宿主机目录挂载，`.env` 写在宿主机上，然后通过 `--env-file` 显式引用：
+Zephyr 的 SQLite 数据库、运行配置和备份文件都在容器内 `/app/data`。如果没有挂载该目录，删除或重建容器会导致数据丢失。
+
+推荐使用宿主机目录挂载：
 
 ```bash
-# 1. 创建部署目录和持久化数据目录
 mkdir -p ./zephyr-data
 
-# 2. 先写生产环境配置
 cat > ./zephyr-data/.env <<'EOF'
 ENCRYPTION_KEY=请替换为足够长的随机密钥
 PUBLIC_ORIGIN=https://ssh.example.com
 PORT=3000
 EOF
 
-# 3. 拉取并运行镜像
 docker pull ghcr.io/lanlan13-14/zephyr-ssh:latest
 
 docker run -d \
@@ -54,28 +109,11 @@ docker run -d \
   ghcr.io/lanlan13-14/zephyr-ssh:latest
 ```
 
-如果只是本机测试，也可以使用 Docker 命名卷，但仍建议先准备 `.env`：
+访问：
 
-```bash
-mkdir -p ./zephyr-data
-cat > ./zephyr-data/.env <<'EOF'
-ENCRYPTION_KEY=please-change-this-key
-PUBLIC_ORIGIN=http://localhost:3000
-PORT=3000
-EOF
-
-docker run -d \
-  --name zephyr-ssh \
-  --env-file ./zephyr-data/.env \
-  -p 3000:3000 \
-  -v zephyr-ssh-data:/app/data \
-  --restart unless-stopped \
-  ghcr.io/lanlan13-14/zephyr-ssh:latest
+```text
+http://your-server-ip:3000
 ```
-
-> 使用命名卷时，`./zephyr-data/.env` 只负责给 Docker 注入环境变量；容器首次启动还会在命名卷内生成 `/app/data/.env`。生产环境更推荐上面的宿主机目录挂载方式，方便直接备份和检查 `zephyr.db`、`.env`。
-
-访问：`http://your-server-ip:3000`
 
 默认账号：
 
@@ -89,18 +127,25 @@ docker run -d \
 ### 方式二：本地开发运行
 
 ```bash
-# 安装依赖
 npm install
-
-# 启动服务
 npm start
 ```
 
-浏览器访问：`http://localhost:3000`
+浏览器访问：
 
-## ⚙️ 配置说明
+```text
+http://localhost:3000
+```
 
-生产环境请手动准备 `.env`，不要依赖默认占位值：
+本地开发运行 RDP/VNC 时，需要本机可用的 `guacd`，或配置外部 `guacd`。Docker 镜像部署时已内置 `guacd`，通常无需额外配置。
+
+---
+
+## 配置说明
+
+Zephyr 会读取 `data/.env`，也可以通过 Docker `--env-file` 注入环境变量。
+
+生产环境建议提前准备：
 
 ```env
 ENCRYPTION_KEY=请替换为足够长的随机密钥
@@ -108,42 +153,71 @@ PUBLIC_ORIGIN=https://ssh.example.com
 PORT=3000
 ```
 
-Docker 部署时推荐同时做到两点：
-
-1. 用 `--env-file ./zephyr-data/.env` 让 Docker 启动时显式读取配置。
-2. 用 `-v "$(pwd)/zephyr-data:/app/data"` 将同一个目录挂载到容器 `/app/data`，让 `.env`、`zephyr.db`、WAL 文件和备份文件都持久化。
-
-程序启动时也会读取 `data/.env`；如果文件不存在，会自动生成默认占位文件，方便本地测试。但生产环境必须在首次启动前或首次启动后立即修改，并重启容器使配置生效。
-
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `PORT` | Web 服务监听端口；Docker 中通常保持 `3000`，通过 `-p 宿主机端口:3000` 对外暴露 | `3000` |
-| `ENCRYPTION_KEY` | 数据导出/导入备份加密密钥；生产环境务必改成强随机字符串，并妥善保存 | `please-change-this-key` |
-| `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，需要和浏览器访问地址一致 | `http://localhost:3000` |
-| `GUACD_HOST` | 内置/外部 guacd 地址；Docker 镜像默认内置 guacd，通常无需修改 | `127.0.0.1` |
-| `GUACD_PORT` | guacd 监听端口；内置 guacd 会自动使用该端口启动 | `4822` |
-| `GUACD_EMBEDDED` | 是否由 Zephyr 自动启动内置 guacd；如需改用外部 guacd 可设为 `false` 并配置 `GUACD_HOST` | `true` |
-| `GUACD_BIN` | guacd 可执行文件路径；Docker 镜像已内置 | `guacd` |
+| `PORT` | Web 服务监听端口；Docker 内通常保持 `3000` | `3000` |
+| `ENCRYPTION_KEY` | 备份导出/导入加密密钥，生产环境必须改为强随机字符串 | `please-change-this-key` |
+| `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，应与浏览器访问地址一致 | `http://localhost:3000` |
+| `GUACD_HOST` | guacd 地址；Docker 镜像默认使用内置本机 guacd | `127.0.0.1` |
+| `GUACD_PORT` | guacd 监听端口 | `4822` |
+| `GUACD_EMBEDDED` | 是否由 Zephyr 自动启动内置 guacd | `true` |
+| `GUACD_BIN` | guacd 可执行文件路径 | `guacd` |
+| `GUACD_LOG_LEVEL` | guacd 日志级别 | `info` |
 
-> 使用 Passkey / WebAuthn 时，生产环境建议配置 HTTPS，并将 `PUBLIC_ORIGIN` 设置为真实访问地址，例如 `https://ssh.example.com`。
->
-> 如果更换了 `ENCRYPTION_KEY`，旧备份文件需要使用导出时的旧密钥才能解密导入。
+注意：
 
-### RDP / VNC / 内置 Guacamole 配置
+- 使用 Passkey / WebAuthn 时，生产环境建议启用 HTTPS。
+- `PUBLIC_ORIGIN` 必须与实际访问地址一致，例如 `https://ssh.example.com`。
+- `ENCRYPTION_KEY` 用于加密备份文件。旧备份需要使用导出时的旧密钥才能解密导入。
+- 程序首次启动如果发现 `data/.env` 不存在，会生成默认占位文件；生产环境不要长期使用默认密钥。
 
-RDP 和 VNC 连接基于 Apache Guacamole 的 `guacd` 网关实现，浏览器端通过 Zephyr 的 `/guacamole` WebSocket 隧道接入，无需直接暴露目标主机的 RDP/VNC 端口到公网。
+---
 
-项目 Docker 镜像的运行层基于官方 `guacamole/guacd` 镜像，已包含 `guacd` 以及 RDP/VNC 所需客户端插件。`server.js` 启动时会自动检测并拉起本机 `guacd`，因此 Docker 部署通常不需要再单独启动 `guacamole/guacd` 容器。
+## RDP / VNC / Guacamole
 
-默认端口：
+RDP 和 VNC 连接基于 Apache Guacamole 的 `guacd` 网关实现。浏览器端通过 Zephyr 的 `/guacamole` WebSocket 隧道接入，无需直接把目标 RDP/VNC 端口暴露到公网。
+
+### Docker 镜像内置 guacd
+
+项目 Docker 镜像运行层基于官方 `guacamole/guacd:1.5.5`，已包含：
+
+- `guacd`
+- RDP 客户端插件
+- VNC 客户端插件
+- 相关运行依赖
+
+Zephyr 启动时会自动检测并启动本机 `guacd`，Docker 部署通常不需要额外启动 `guacamole/guacd` 容器。
+
+### 默认端口
 
 | 协议 | 默认端口 | 说明 |
 | --- | --- | --- |
-| `RDP` | `3389` | Windows 远程桌面；通过 guacd 的 RDP 插件连接 |
-| `VNC` | `5900` | VNC Server；通过 guacd 的 VNC 插件连接 |
-| `SSH` | `22` | WebSSH 终端；不经过 guacd |
+| `SSH` | `22` | WebSSH 终端，不经过 guacd |
+| `RDP` | `3389` | Windows 远程桌面，经 guacd RDP 插件 |
+| `VNC` | `5900` | VNC Server，经 guacd VNC 插件 |
 
-本地开发运行 `npm start` 时，如果系统中已安装 `guacd` 及对应客户端插件，Zephyr 会自动复用或启动本机 `guacd`。不同 Linux 发行版的 Guacamole 包名差异较大；如果系统仓库没有可用包，推荐直接使用官方 guacd 容器作为外部 guacd：
+### RDP/VNC 使用跳板
+
+RDP/VNC 本身不是 SSH 协议，也不能作为 SSH 跳板机；但 Zephyr 支持通过 SSH 跳板链路访问 RDP/VNC 目标端口。
+
+配置方式：
+
+1. 先创建一个 SSH 连接，作为跳板机。
+2. 在“网络 / 跳板机”中创建跳板机配置，并选择该 SSH 连接。
+3. 创建或编辑 RDP/VNC 连接。
+4. 在高级路由中选择“跳板机”，选择刚才创建的 SSH 跳板机。
+5. 保存并测试连接。
+
+限制说明：
+
+- 跳板机候选项只会显示 SSH 连接。
+- RDP/VNC 不能被选为跳板机。
+- RDP/VNC 可以作为最终目标，通过 SSH 跳板访问。
+- 多级跳板中的每一级都必须是 SSH 连接。
+
+### 外部 guacd
+
+本地开发或特殊部署时，也可以使用外部 guacd：
 
 ```bash
 docker run -d \
@@ -153,7 +227,7 @@ docker run -d \
   guacamole/guacd:1.5.5
 ```
 
-然后在 Zephyr 的 `.env` 中设置：
+然后在 Zephyr `.env` 中配置：
 
 ```env
 GUACD_EMBEDDED=false
@@ -161,42 +235,36 @@ GUACD_HOST=127.0.0.1
 GUACD_PORT=4822
 ```
 
-RDP/VNC 连接由 `guacd` 访问目标主机，因此目标主机和端口必须对 Zephyr 容器/内置 guacd 可达。例如：
+### 常见排查
 
-- Docker 部署时，容器内的 `guacd` 需要能访问目标 Windows 主机的 `3389` 端口。
-- 目标 Windows 主机需要开启远程桌面，并允许对应账号登录。
-- 目标 VNC 主机需要启动 VNC Server，并允许 `5900` 或自定义端口访问。
-- 当前 RDP/VNC 不复用 Zephyr 的 SSH 跳板机链路；如需跨网段访问，请让 `guacd` 所在环境具备网络可达性，或配置外部 guacd。
+RDP：
 
-### 添加和打开 RDP/VNC 连接
-
-1. 登录后台后进入连接列表，点击“添加服务器”。
-2. 协议选择：
-   - `SSH`：浏览器 WebSSH 终端。
-   - `RDP`：Windows 远程桌面，默认端口 `3389`。
-   - `VNC`：VNC 远程桌面，默认端口 `5900`。
-3. 填写名称、主机、端口、用户名、密码等信息。
-4. 点击“测试连接”可验证目标是否可达。
-5. 保存后点击连接卡片的“连接”，RDP/VNC 会在终端工作区中以 Guacamole 远程桌面窗口打开。
-
-RDP 常见排查项：
-
-- Windows 目标主机是否已开启“远程桌面”。
-- 防火墙或安全组是否允许 Zephyr/guacd 所在机器访问 `3389`。
+- Windows 是否已开启“远程桌面”。
+- Windows 防火墙或云安全组是否允许访问 `3389`。
 - 账号是否允许远程桌面登录。
-- 如果目标使用自签名证书，Zephyr 默认通过 `ignore-cert=true` 交由 guacd 忽略证书校验。
-- 如果页面提示 guacd 连接失败，可查看服务端日志中的 `[guacamole-ws]`、`[guacd]`、`[guacamole-test]` 关键字。
+- 如果使用自签名证书，Zephyr 默认设置 `ignore-cert=true`。
 
-## 关于依赖文件
+VNC：
 
-- `node_modules/`：**可以删除**。这是本地安装目录，不建议提交到 Git。删除后执行 `npm install` 即可重新生成。
-- `package-lock.json`：**不建议删除**。它锁定依赖版本，能保证本地、CI、Docker 构建环境安装出一致依赖；建议提交到 Git。
+- 目标主机是否已启动 VNC Server。
+- VNC 端口是否为 `5900` 或配置中的自定义端口。
+- VNC 密码是否正确。
+- 防火墙或安全组是否允许访问对应端口。
 
-如果只是想清理仓库，应删除/忽略 `node_modules/`，保留 `package-lock.json`。
+服务端日志关键字：
 
-## 自行构建 Docker 镜像
+```text
+[guacd]
+[guacamole]
+[guacamole-ws]
+[guacamole-test]
+[tcp-forward]
+[route-plan]
+```
 
-构建镜像前建议确认本地运行数据不会被打进镜像。项目已提供 `.dockerignore`，默认排除 `data/`、`node_modules/` 等本地文件；镜像首次启动时会自动创建默认管理员：`admin / admin`。
+---
+
+## Docker 自行构建
 
 ```bash
 mkdir -p ./zephyr-data
@@ -218,18 +286,27 @@ docker run -d \
   zephyr-ssh:local
 ```
 
-## 更新 Docker 容器时保留数据
+Dockerfile 说明：
 
-更新镜像或重建容器时，必须复用原来的 `./zephyr-data:/app/data` 挂载目录，不能换目录，也不要删除该目录。
+- 构建阶段使用 `node:20-alpine`。
+- 运行阶段基于 `guacamole/guacd:1.5.5`。
+- 镜像内复制 Node.js 运行时和生产依赖。
+- 镜像内置 guacd、RDP/VNC 插件和运行依赖。
+- 构建时会验证 `guacd`、`node`、`npm` 是否可执行。
+
+---
+
+## 更新容器并保留数据
+
+更新时必须复用原来的数据目录或命名卷。
+
+宿主机目录挂载方式：
 
 ```bash
-# 拉取新镜像
 docker pull ghcr.io/lanlan13-14/zephyr-ssh:latest
 
-# 删除旧容器；这里只删除容器，不删除 ./zephyr-data
 docker rm -f zephyr-ssh
 
-# 使用同一个 .env 和同一个数据目录重新启动
 docker run -d \
   --name zephyr-ssh \
   --env-file ./zephyr-data/.env \
@@ -239,7 +316,7 @@ docker run -d \
   ghcr.io/lanlan13-14/zephyr-ssh:latest
 ```
 
-如果之前使用的是命名卷，更新时必须继续挂载同一个卷名：
+命名卷方式：
 
 ```bash
 docker rm -f zephyr-ssh
@@ -253,18 +330,15 @@ docker run -d \
   ghcr.io/lanlan13-14/zephyr-ssh:latest
 ```
 
-排查数据是否已经正确持久化：
+检查持久化是否正确：
 
 ```bash
-# 查看容器是否挂载了 /app/data
 docker inspect zephyr-ssh --format '{{json .Mounts}}'
-
-# 宿主机目录挂载时，确认数据库和 .env 在宿主机目录中
 ls -la ./zephyr-data
-
-# 命名卷挂载时，查看卷信息
 docker volume inspect zephyr-ssh-data
 ```
+
+---
 
 ## 项目结构
 
@@ -276,34 +350,49 @@ zephyr-ssh/
 │   ├── app.html         # 管理后台页面
 │   ├── app.js           # 管理后台逻辑
 │   ├── terminal.html    # SSH 终端页面
-│   ├── terminal.js      # SSH 终端核心逻辑
+│   ├── terminal.js      # SSH 终端逻辑
 │   ├── guacamole.html   # RDP/VNC 远程桌面页面
-│   ├── guacamole.js     # RDP/VNC / Guacamole 前端逻辑
+│   ├── guacamole.js     # Guacamole 前端逻辑
 │   └── style.css        # 全局样式
-├── data/                # 运行数据目录（数据库、配置、历史数据）
+├── data/                # 运行数据目录
 │   ├── .env             # 环境变量配置
 │   └── zephyr.db        # SQLite 数据库
-├── server.js            # 后端服务与 API
+├── server.js            # 后端服务、API、WebSocket、协议路由
 ├── storage.js           # SQLite 存储层
 ├── stats.js             # 远程状态采集
 ├── package.json         # 项目依赖与脚本
-├── package-lock.json    # 锁定依赖版本，建议保留并提交
+├── package-lock.json    # 锁定依赖版本
 ├── Dockerfile           # Docker 构建文件
 └── README.md            # 项目说明
 ```
 
+---
+
 ## 安全建议
 
 1. 首次登录后立即修改默认管理员密码。
-2. 生产环境必须修改 `data/.env` 中的 `ENCRYPTION_KEY`。
-3. 启用 Passkey / TOTP 前，确认系统时间准确。
+2. 生产环境必须修改 `ENCRYPTION_KEY`。
+3. 启用 Passkey / TOTP 前，确认服务器系统时间准确。
 4. Passkey / WebAuthn 推荐在 HTTPS 环境下使用。
-5. 开启 IP 白名单前，请确认当前访问 IP 已包含在白名单内，避免误锁。
-6. 不要提交 `data/.env`、`data/*.db`、备份文件和真实连接凭据。
+5. 开启 IP 白名单前，确认当前访问 IP 已包含在白名单内，避免误锁。
+6. 不要提交 `data/.env`、数据库文件、备份文件和真实连接凭据。
+7. 不要把 Zephyr 直接暴露在不可信网络中，建议放在 HTTPS 反向代理之后。
+8. 定期导出加密备份，并妥善保存备份密钥。
+9. 删除或重建 Docker 容器前，确认 `/app/data` 已正确持久化。
 
-## 🧹 推荐 Git 忽略项
+---
 
-建议忽略本地依赖和运行数据：
+## 依赖与数据说明
+
+### 可以删除的文件
+
+- `node_modules/`：本地依赖目录，可以删除；重新执行 `npm install` 即可恢复。
+
+### 不建议删除的文件
+
+- `package-lock.json`：锁定依赖版本，保证本地、CI、Docker 构建环境一致，建议提交到 Git。
+
+### 推荐 Git 忽略项
 
 ```gitignore
 node_modules/
@@ -314,12 +403,26 @@ data/*.db-wal
 data/*.enc
 ```
 
-注意：阿里云验证码后端校验需要 AccessKey。当前实现支持在后台 Secret Key 中填写 `AccessKeyId:AccessKeySecret`，或通过环境变量 `ALIYUN_ACCESS_KEY_ID` 提供 AccessKeyId、后台 Secret Key 填 AccessKeySecret
+---
 
-## 🙏 致谢
+## 备注
 
-- 🖥️ [wterm](https://github.com/vercel-labs/wterm)
-- 🔐 [ssh2](https://github.com/mscdex/ssh2)
-- 🔑 [SimpleWebAuthn](https://simplewebauthn.dev/)
-- 🖥️ [Apache Guacamole](https://guacamole.apache.org/)
-- 🗄️ [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
+阿里云验证码后端校验需要 AccessKey。当前实现支持两种方式：
+
+1. 在后台 Secret Key 中填写：
+
+```text
+AccessKeyId:AccessKeySecret
+```
+
+2. 通过环境变量提供 `ALIYUN_ACCESS_KEY_ID`，后台 Secret Key 填写 `AccessKeySecret`。
+
+---
+
+## 致谢
+
+- [wterm](https://github.com/vercel-labs/wterm)
+- [ssh2](https://github.com/mscdex/ssh2)
+- [SimpleWebAuthn](https://simplewebauthn.dev/)
+- [Apache Guacamole](https://guacamole.apache.org/)
+- [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)
