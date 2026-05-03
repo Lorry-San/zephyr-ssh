@@ -69,6 +69,10 @@ async function loadConnections() { const data = await api('/api/connections'); c
 function normalizeSelectedRouteIds(selected = '') {
     return Array.isArray(selected) ? selected.map(String).filter(Boolean) : String(selected || '').split(',').map((v) => v.trim()).filter(Boolean);
 }
+function normalizeRouteRowIds(selected = '') {
+    const list = Array.isArray(selected) ? selected.map((v) => String(v || '')) : normalizeSelectedRouteIds(selected);
+    return list.length ? list : [''];
+}
 function jumpConnectionOptions(selected = '') {
     const selectedId = String(selected || '');
     const currentEditingId = String(editingId || '');
@@ -76,8 +80,7 @@ function jumpConnectionOptions(selected = '') {
     return '<option value="">请选择跳板机</option>' + list.map((c) => `<option value="${c.id}" ${selectedId === String(c.id) ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.host)}:${escapeHtml(c.port)})</option>`).join('');
 }
 function renderJumpRouteRows(selectedIds = []) {
-    const list = normalizeSelectedRouteIds(selectedIds);
-    if (!list.length) list.push('');
+    const list = normalizeRouteRowIds(selectedIds);
     $('#jumpRouteList').innerHTML = list.map((id, index) => `
         <div class="jump-route-row" data-jump-route-row>
             <label>跳板机 ${index + 1}:</label>
