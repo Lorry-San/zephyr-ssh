@@ -1321,15 +1321,10 @@ body.connection-transition-closing .app-shell {
 }
 .connection-transition-layer {
     position: fixed;
-    inset: 0;
     z-index: 100;
     display: none;
     pointer-events: none;
-    transform-origin: top left;
-    background:
-        radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
-        radial-gradient(circle at 82% 8%, color-mix(in srgb, var(--success) 7%, transparent), transparent 28%),
-        var(--surface);
+    background: var(--surface);
     border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
     border-radius: 18px;
     overflow: hidden;
@@ -1348,10 +1343,11 @@ body.connection-transition-closing .app-shell {
     display: none;
     place-items: center;
     padding: 18px;
-    background: transparent;
+    background: rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(12px) saturate(150%);
     opacity: 0;
     pointer-events: none;
-    transition: opacity .18s ease;
+    transition: opacity .24s cubic-bezier(0.22,1,0.36,1);
 }
 .modal-backdrop.show {
     display: grid;
@@ -1375,16 +1371,20 @@ body.connection-transition-closing .app-shell {
     padding: 18px;
     box-shadow: 0 28px 90px rgba(0,0,0,.42);
     opacity: 0;
-    transform: none;
-    filter: none;
-    transition: opacity .26s ease;
-    will-change: opacity;
+    transform: translateY(-20px) scale(0.98);
+    filter: blur(4px);
+    transition: opacity .32s ease, transform .34s cubic-bezier(0.22,1,0.36,1), filter .28s ease;
+    will-change: opacity, transform, filter;
 }
 .modal-backdrop.show.app-visible .connection-modal {
     opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: none;
 }
 .modal-backdrop.closing .connection-modal {
     opacity: 0;
+    transform: translateY(-20px) scale(0.98);
+    filter: blur(4px);
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .icon-btn { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
