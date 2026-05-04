@@ -17,7 +17,6 @@ const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const mobileKeyboardInput = $('#mobileKeyboardInput');
 const clipboardPanel = $('#clipboardPanel');
-const clipboardCloseBtn = $('#clipboardCloseBtn');
 const clipboardText = $('#clipboardText');
 const clipboardReadLocalBtn = $('#clipboardReadLocalBtn');
 const clipboardSendBtn = $('#clipboardSendBtn');
@@ -886,6 +885,8 @@ function togglePanel(panel, force) {
     const shouldShow = force ?? panel.hidden;
     panel.hidden = !shouldShow;
     panel.classList.toggle('open', shouldShow);
+    if (panel === clipboardPanel) clipboardBtn?.classList.toggle('active', shouldShow);
+    if (panel === shortcutsPanel) shortcutsBtn?.classList.toggle('active', shouldShow);
     if (shouldShow) bringPanelToFront(panel);
     else closePanelLayoutMenu();
     console.info('[guac-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
@@ -1114,6 +1115,19 @@ function focusMobileKeyboard() {
     console.info('[guac-client]', 'mobile keyboard focused');
 }
 
+function blurMobileKeyboard() {
+    if (!mobileKeyboardInput) return;
+    mobileKeyboardInput.blur();
+    keyboardBtn?.classList.remove('active');
+    console.info('[guac-client]', 'mobile keyboard blurred');
+}
+
+function toggleMobileKeyboard() {
+    const keyboardOpen = document.activeElement === mobileKeyboardInput || keyboardBtn?.classList.contains('active');
+    if (keyboardOpen) blurMobileKeyboard();
+    else focusMobileKeyboard();
+}
+
 function handleMobileKeyboardInput() {
     const value = mobileKeyboardInput.value || '';
     let prefix = 0;
@@ -1205,10 +1219,8 @@ fitBtn.addEventListener('click', () => {
 
 clipboardBtn.addEventListener('click', () => {
     togglePanel(clipboardPanel);
-    togglePanel(shortcutsPanel, false);
     if (!clipboardPanel.hidden) clipboardText?.focus?.();
 });
-clipboardCloseBtn?.addEventListener('click', () => togglePanel(clipboardPanel, false));
 clipboardReadLocalBtn?.addEventListener('click', () => readLocalClipboardIntoPanel());
 clipboardSendBtn?.addEventListener('click', () => {
     const text = clipboardText?.value || '';
@@ -1216,7 +1228,7 @@ clipboardSendBtn?.addEventListener('click', () => {
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
 
-keyboardBtn?.addEventListener('click', focusMobileKeyboard);
+keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
 mobileKeyboardInput?.addEventListener('input', handleMobileKeyboardInput);
 mobileKeyboardInput?.addEventListener('blur', () => keyboardBtn?.classList.remove('active'));
 mobileKeyboardInput?.addEventListener('keydown', (event) => {
@@ -1228,7 +1240,6 @@ mobileKeyboardInput?.addEventListener('keydown', (event) => {
 
 shortcutsBtn?.addEventListener('click', () => {
     togglePanel(shortcutsPanel);
-    togglePanel(clipboardPanel, false);
 });
 shortcutGrid?.addEventListener('pointerdown', (event) => {
     const btn = event.target.closest('[data-keyseq]');
