@@ -10,9 +10,23 @@ const displayRoot = $('#display');
 const displayShell = $('#displayShell');
 const fitBtn = $('#fitBtn');
 const clipboardBtn = $('#clipboardBtn');
+const keyboardBtn = $('#keyboardBtn');
+const shortcutsBtn = $('#shortcutsBtn');
 const ctrlAltDelBtn = $('#ctrlAltDelBtn');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
+const mobileKeyboardInput = $('#mobileKeyboardInput');
+const clipboardPanel = $('#clipboardPanel');
+const clipboardCloseBtn = $('#clipboardCloseBtn');
+const clipboardText = $('#clipboardText');
+const clipboardReadLocalBtn = $('#clipboardReadLocalBtn');
+const clipboardSendBtn = $('#clipboardSendBtn');
+const remoteClipboardText = $('#remoteClipboardText');
+const clipboardCopyRemoteBtn = $('#clipboardCopyRemoteBtn');
+const clipboardHint = $('#clipboardHint');
+const shortcutsPanel = $('#shortcutsPanel');
+const shortcutsCloseBtn = $('#shortcutsCloseBtn');
+const shortcutGrid = $('#shortcutGrid');
 
 const urlParams = new URLSearchParams(location.search);
 const tabId = urlParams.get('tabId') || '';
@@ -29,6 +43,30 @@ let fitToWindow = true;
 let displayWidth = 0;
 let displayHeight = 0;
 let resizeTimer = 0;
+let mobileInputMirror = '';
+let lastRemoteClipboard = '';
+let clipboardAutoWriteOk = false;
+let clipboardAutoWriteFailed = false;
+
+const KEY = {
+    BACKSPACE: 0xff08,
+    TAB: 0xff09,
+    ENTER: 0xff0d,
+    ESC: 0xff1b,
+    HOME: 0xff50,
+    LEFT: 0xff51,
+    UP: 0xff52,
+    RIGHT: 0xff53,
+    DOWN: 0xff54,
+    PAGE_UP: 0xff55,
+    PAGE_DOWN: 0xff56,
+    END: 0xff57,
+    DELETE: 0xffff,
+    CTRL: 0xffe3,
+    SHIFT: 0xffe1,
+    ALT: 0xffe9,
+    SUPER: 0xffeb,
+};
 
 function loadParams() {
     const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
@@ -352,15 +390,23 @@ async function connect() {
             client.sendMouseState(mouseState);
         };
 
+        client.onclipboard = (stream, mimetype) => {
+            console.info('[guac-client]', 'remote clipboard stream received', { mimetype });
+            receiveRemoteClipboard(stream, mimetype);
+        };
+
         keyboard = new G.Keyboard(document);
         keyboard.onkeydown = (keysym) => {
             notifyParentActivity();
+            console.debug('[guac-client]', 'keyboard down', { keysym });
             client.sendKeyEvent(1, keysym);
         };
         keyboard.onkeyup = (keysym) => {
+            console.debug('[guac-client]', 'keyboard up', { keysym });
             client.sendKeyEvent(0, keysym);
         };
 
+        stage?.focus?.({ preventScroll: true });
         client.connect();
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
@@ -392,6 +438,187 @@ function disconnect(userInitiated = true) {
         setStatus('disconnected', `${protocolLabel()} 连接已断开`);
         sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params');
     }
+}
+
+function togglePanel(panel, force) {
+    if (!panel) return;
+    const shouldShow = force ?? panel.hidden;
+    panel.hidden = !shouldShow;
+    if (shouldShow) panel.classList.add('open');
+    else panel.classList.remove('open');
+}
+
+function setClipboardHint(message, level = 'info') {
+    if (!clipboardHint) return;
+    clipboardHint.textContent = message;
+    clipboardHint.dataset.level = level;
+}
+
+function sendRemoteClipboardText(text) {
+    const label = protocolLabel();
+    if (!client || !connected) {
+        setStatus('error', `${label} 尚未连接`);
+        return false;
+    }
+    if (!text) return false;
+    const G = Guacamole;
+    const stream = client.createClipboardStream('text/plain');
+    const writer = new G.StringWriter(stream);
+    writer.sendText(text);
+    writer.sendEnd();
+    console.info('[guac-client]', 'local clipboard sent to remote', { length: text.length });
+    notifyParentActivity();
+    return true;
+}
+
+async function readLocalClipboardIntoPanel() {
+    try {
+        const text = await navigator.clipboard.readText();
+        clipboardText.value = text;
+        console.info('[guac-client]', 'local clipboard read', { length: text.length });
+        setClipboardHint('已读取本机剪贴板', 'success');
+    } catch (err) {
+        console.warn('[guac-client]', 'local clipboard read failed', { error: err.message });
+        setClipboardHint('浏览器拒绝读取，请手动粘贴', 'warning');
+        clipboardText?.focus?.();
+    }
+}
+
+async function copyRemoteClipboardToLocal() {
+    if (!lastRemoteClipboard) {
+        setClipboardHint('还没有收到远程剪贴板', 'warning');
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(lastRemoteClipboard);
+        clipboardAutoWriteOk = true;
+        setClipboardHint('远程剪贴板已复制到本机', 'success');
+        console.info('[guac-client]', 'remote clipboard copied to local clipboard', { length: lastRemoteClipboard.length });
+    } catch (err) {
+        clipboardAutoWriteFailed = true;
+        setClipboardHint('自动复制被浏览器拦截，请长按/全选手动复制', 'warning');
+        console.warn('[guac-client]', 'remote clipboard copy to local failed', { error: err.message });
+        remoteClipboardText?.focus?.();
+        remoteClipboardText?.select?.();
+    }
+}
+
+function receiveRemoteClipboard(stream, mimetype) {
+    const isText = !mimetype || /^text\//i.test(mimetype);
+    if (!isText) {
+        console.warn('[guac-client]', 'remote clipboard ignored: unsupported mimetype', { mimetype });
+        setClipboardHint(`收到非文本剪贴板：${mimetype || 'unknown'}`, 'warning');
+        return;
+    }
+
+    const reader = new Guacamole.StringReader(stream);
+    const chunks = [];
+    reader.ontext = (text) => {
+        chunks.push(text);
+        console.debug('[guac-client]', 'remote clipboard chunk', { length: text.length });
+    };
+    reader.onend = async () => {
+        lastRemoteClipboard = chunks.join('');
+        if (remoteClipboardText) remoteClipboardText.value = lastRemoteClipboard;
+        setClipboardHint(`收到远程剪贴板 ${lastRemoteClipboard.length} 字符`, 'success');
+        console.info('[guac-client]', 'remote clipboard received', { length: lastRemoteClipboard.length, mimetype });
+
+        try {
+            await navigator.clipboard.writeText(lastRemoteClipboard);
+            clipboardAutoWriteOk = true;
+            clipboardAutoWriteFailed = false;
+            setClipboardHint('远程剪贴板已自动同步到本机', 'success');
+            console.info('[guac-client]', 'remote clipboard auto-written to local', { length: lastRemoteClipboard.length });
+        } catch (err) {
+            clipboardAutoWriteFailed = true;
+            setClipboardHint('已收到远程剪贴板；点“复制到本机”完成同步', 'warning');
+            console.warn('[guac-client]', 'remote clipboard auto-write blocked', { error: err.message });
+        }
+    };
+}
+
+function sendKeyDownUp(keysym) {
+    if (!client || !connected) return;
+    console.debug('[guac-client]', 'shortcut key', { keysym });
+    client.sendKeyEvent(1, keysym);
+    client.sendKeyEvent(0, keysym);
+    notifyParentActivity();
+}
+
+function sendKeyCombo(...keysyms) {
+    if (!client || !connected) return;
+    console.info('[guac-client]', 'shortcut combo', { keysyms });
+    keysyms.forEach((keysym) => client.sendKeyEvent(1, keysym));
+    [...keysyms].reverse().forEach((keysym) => client.sendKeyEvent(0, keysym));
+    notifyParentActivity();
+}
+
+function asciiKeysym(char) {
+    if (!char) return 0;
+    if (char === '\n' || char === '\r') return KEY.ENTER;
+    if (char === '\t') return KEY.TAB;
+    const code = char.codePointAt(0);
+    if (code <= 0xff) return code;
+    return code <= 0x10ffff ? (0x01000000 | code) : 0;
+}
+
+function sendTextToRemote(text) {
+    if (!text || !client || !connected) return;
+    for (const char of text) {
+        const keysym = asciiKeysym(char);
+        if (keysym) sendKeyDownUp(keysym);
+    }
+    console.info('[guac-client]', 'mobile keyboard text sent', { length: text.length });
+}
+
+function focusMobileKeyboard() {
+    if (!mobileKeyboardInput) return;
+    mobileKeyboardInput.value = mobileInputMirror = '';
+    mobileKeyboardInput.focus({ preventScroll: true });
+    keyboardBtn?.classList.add('active');
+    console.info('[guac-client]', 'mobile keyboard focused');
+}
+
+function handleMobileKeyboardInput() {
+    const value = mobileKeyboardInput.value || '';
+    let prefix = 0;
+    while (prefix < value.length && prefix < mobileInputMirror.length && value[prefix] === mobileInputMirror[prefix]) prefix += 1;
+
+    const removed = mobileInputMirror.length - prefix;
+    const added = value.slice(prefix);
+    for (let i = 0; i < removed; i += 1) sendKeyDownUp(KEY.BACKSPACE);
+    sendTextToRemote(added);
+
+    mobileInputMirror = value;
+    if (value.length > 80) {
+        mobileKeyboardInput.value = mobileInputMirror = '';
+    }
+}
+
+function runShortcut(name) {
+    const lower = String(name || '').toLowerCase();
+    const ctrlChar = (char) => char.toLowerCase().codePointAt(0);
+    const actions = {
+        esc: () => sendKeyDownUp(KEY.ESC),
+        tab: () => sendKeyDownUp(KEY.TAB),
+        enter: () => sendKeyDownUp(KEY.ENTER),
+        backspace: () => sendKeyDownUp(KEY.BACKSPACE),
+        win: () => sendKeyDownUp(KEY.SUPER),
+        'alt-tab': () => sendKeyCombo(KEY.ALT, KEY.TAB),
+        'ctrl-c': () => sendKeyCombo(KEY.CTRL, ctrlChar('c')),
+        'ctrl-v': () => sendKeyCombo(KEY.CTRL, ctrlChar('v')),
+        'ctrl-a': () => sendKeyCombo(KEY.CTRL, ctrlChar('a')),
+        'ctrl-z': () => sendKeyCombo(KEY.CTRL, ctrlChar('z')),
+        up: () => sendKeyDownUp(KEY.UP),
+        down: () => sendKeyDownUp(KEY.DOWN),
+        left: () => sendKeyDownUp(KEY.LEFT),
+        right: () => sendKeyDownUp(KEY.RIGHT),
+        home: () => sendKeyDownUp(KEY.HOME),
+        end: () => sendKeyDownUp(KEY.END),
+        pageup: () => sendKeyDownUp(KEY.PAGE_UP),
+        pagedown: () => sendKeyDownUp(KEY.PAGE_DOWN),
+    };
+    actions[lower]?.();
 }
 
 async function sendClipboard() {
@@ -432,7 +659,44 @@ fitBtn.addEventListener('click', () => {
     applyDisplayScale();
 });
 
-clipboardBtn.addEventListener('click', () => sendClipboard().catch((err) => setStatus('error', err.message)));
+clipboardBtn.addEventListener('click', () => {
+    togglePanel(clipboardPanel);
+    togglePanel(shortcutsPanel, false);
+    if (!clipboardPanel.hidden) clipboardText?.focus?.();
+});
+clipboardCloseBtn?.addEventListener('click', () => togglePanel(clipboardPanel, false));
+clipboardReadLocalBtn?.addEventListener('click', () => readLocalClipboardIntoPanel());
+clipboardSendBtn?.addEventListener('click', () => {
+    const text = clipboardText?.value || '';
+    if (sendRemoteClipboardText(text)) setClipboardHint(`已发送 ${text.length} 字符到远程`, 'success');
+});
+clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
+
+keyboardBtn?.addEventListener('click', focusMobileKeyboard);
+mobileKeyboardInput?.addEventListener('input', handleMobileKeyboardInput);
+mobileKeyboardInput?.addEventListener('blur', () => keyboardBtn?.classList.remove('active'));
+mobileKeyboardInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Backspace' && !mobileKeyboardInput.value) {
+        event.preventDefault();
+        sendKeyDownUp(KEY.BACKSPACE);
+    }
+});
+
+shortcutsBtn?.addEventListener('click', () => {
+    togglePanel(shortcutsPanel);
+    togglePanel(clipboardPanel, false);
+});
+shortcutsCloseBtn?.addEventListener('click', () => togglePanel(shortcutsPanel, false));
+shortcutGrid?.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-keyseq]');
+    if (!btn) return;
+    runShortcut(btn.dataset.keyseq);
+});
+
+stage?.addEventListener('pointerdown', () => {
+    stage.focus({ preventScroll: true });
+    notifyParentActivity();
+});
 ctrlAltDelBtn.addEventListener('click', sendCtrlAltDel);
 reconnectBtn.addEventListener('click', () => connect());
 disconnectBtn.addEventListener('click', () => disconnect(true));
@@ -441,7 +705,10 @@ window.addEventListener('beforeunload', () => disconnect(false));
 window.addEventListener('message', (event) => {
     if (event.data?.source !== 'zephyr-app') return;
     if (event.data.type === 'theme-change') document.documentElement.setAttribute('data-theme', event.data.theme);
-    if (event.data.type === 'focus-terminal') stage?.focus?.();
+    if (event.data.type === 'focus-terminal') {
+        stage?.focus?.({ preventScroll: true });
+        focusMobileKeyboard();
+    }
 });
 
 fitBtn.classList.add('active');
