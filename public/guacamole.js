@@ -25,7 +25,6 @@ const remoteClipboardText = $('#remoteClipboardText');
 const clipboardCopyRemoteBtn = $('#clipboardCopyRemoteBtn');
 const clipboardHint = $('#clipboardHint');
 const shortcutsPanel = $('#shortcutsPanel');
-const shortcutsCloseBtn = $('#shortcutsCloseBtn');
 const shortcutGrid = $('#shortcutGrid');
 
 const urlParams = new URLSearchParams(location.search);
@@ -1231,7 +1230,6 @@ shortcutsBtn?.addEventListener('click', () => {
     togglePanel(shortcutsPanel);
     togglePanel(clipboardPanel, false);
 });
-shortcutsCloseBtn?.addEventListener('click', () => togglePanel(shortcutsPanel, false));
 shortcutGrid?.addEventListener('pointerdown', (event) => {
     const btn = event.target.closest('[data-keyseq]');
     if (!btn) return;

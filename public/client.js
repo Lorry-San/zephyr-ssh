@@ -279,9 +279,10 @@ async function loadBeian() {
         captchaConfig = publicSettings.captcha || { enabled: false, provider: 'turnstile', siteKey: '' };
         defaultUsername = s.defaultUsername || 'admin';
         const usernameInput = $('#username');
-        if (usernameInput) usernameInput.placeholder = defaultUsername;
+        if (usernameInput) usernameInput.removeAttribute('placeholder');
+        $('#password')?.removeAttribute('placeholder');
         const hint = $('.auth-hint');
-        if (hint) hint.textContent = `默认账号：${defaultUsername} / admin。首次登录需修改密码。`;
+        if (hint) hint.textContent = '';
         initRememberMe();
         await renderCaptcha(captchaConfig);
         if (!s.showBeian || (!s.icp && !s.policeBeian)) { beianFooter.innerHTML = ''; return; }
