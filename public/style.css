@@ -1310,13 +1310,13 @@ body.disable-interaction {
     user-select: none;
 }
 body.connection-home-blur .app-shell {
-    filter: blur(10px) saturate(.88) brightness(.78);
-    transform: scale(.992);
+    filter: brightness(.94) saturate(.96);
+    transform: scale(.986);
 }
 body.connection-transition-opening .app-shell,
 body.connection-transition-closing .app-shell {
     transition:
-        filter .42s cubic-bezier(.16,1,.3,1),
+        filter .38s cubic-bezier(.16,1,.3,1),
         transform .50s cubic-bezier(.22,1,.36,1);
 }
 .connection-transition-layer {
@@ -1327,38 +1327,19 @@ body.connection-transition-closing .app-shell {
     pointer-events: none;
     transform-origin: top left;
     background:
-        radial-gradient(circle at 22% 0%, rgba(88,166,255,.18), transparent 34%),
-        radial-gradient(circle at 78% 10%, rgba(63,185,80,.12), transparent 30%),
-        color-mix(in srgb, var(--surface) 96%, var(--bg));
-    border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+        radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
+        radial-gradient(circle at 82% 8%, color-mix(in srgb, var(--success) 7%, transparent), transparent 28%),
+        var(--surface);
+    border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
     border-radius: 18px;
-    clip-path: inset(0 round 18px);
-    will-change: transform, opacity, clip-path, border-radius, box-shadow;
+    overflow: hidden;
+    will-change: transform, opacity, border-radius, box-shadow;
     contain: paint;
 }
-.connection-transition-layer::before {
-    content: '＋';
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 78px;
-    height: 78px;
-    display: grid;
-    place-items: center;
-    border-radius: 22px;
-    transform: translate(-50%, -50%);
-    color: var(--accent-hover);
-    font-size: 40px;
-    font-weight: 500;
-    background:
-        radial-gradient(circle at 30% 18%, rgba(255,255,255,.22), transparent 36%),
-        linear-gradient(145deg, color-mix(in srgb, var(--surface) 88%, transparent), color-mix(in srgb, var(--bg) 86%, transparent));
-    box-shadow: 0 18px 48px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.10);
-    opacity: .92;
-    transition: opacity .18s ease;
-}
-.connection-transition-layer[style*="scale(1)"]::before {
-    opacity: 0;
+.connection-transition-layer::before,
+.connection-transition-layer::after {
+    content: none;
+    display: none;
 }
 .modal-backdrop {
     position: fixed;
@@ -1367,15 +1348,10 @@ body.connection-transition-closing .app-shell {
     display: none;
     place-items: center;
     padding: 18px;
-    background: rgba(0,0,0,.48);
+    background: transparent;
     opacity: 0;
     pointer-events: none;
-    backdrop-filter: blur(0);
-    -webkit-backdrop-filter: blur(0);
-    transition:
-        opacity .22s ease,
-        backdrop-filter .32s ease,
-        -webkit-backdrop-filter .32s ease;
+    transition: opacity .18s ease;
 }
 .modal-backdrop.show {
     display: grid;
@@ -1383,15 +1359,11 @@ body.connection-transition-closing .app-shell {
 .modal-backdrop.show.app-visible {
     opacity: 1;
     pointer-events: auto;
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
 }
 .modal-backdrop.closing {
     display: grid;
     opacity: 0;
     pointer-events: none;
-    backdrop-filter: blur(0);
-    -webkit-backdrop-filter: blur(0);
 }
 .connection-modal {
     width: min(620px, 100%);

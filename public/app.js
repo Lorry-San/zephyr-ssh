@@ -304,7 +304,6 @@ function resetConnectionTransitionLayer(layer) {
     layer.style.transition = 'none';
     layer.style.transform = '';
     layer.style.opacity = '';
-    layer.style.clipPath = '';
     layer.style.borderRadius = '';
     layer.style.boxShadow = '';
 }
@@ -340,15 +339,13 @@ function openModal(conn = null, trigger = null) {
     layer.style.transform = start.value;
     layer.style.opacity = '1';
     layer.style.borderRadius = '18px';
-    layer.style.clipPath = 'inset(0 round 18px)';
-    layer.style.boxShadow = '0 8px 24px rgba(0,0,0,.24)';
+    layer.style.boxShadow = '0 8px 22px rgba(0,0,0,.20)';
     layer.offsetHeight;
     console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', rect, viewport, scale: start.scale });
-    layer.style.transition = 'transform 0.5s cubic-bezier(0.22,1,0.36,1), clip-path 0.4s ease 0.16s, border-radius 0.4s ease 0.16s, box-shadow 0.5s cubic-bezier(0.22,1,0.36,1), opacity 0.22s ease 0.30s';
+    layer.style.transition = 'transform 0.5s cubic-bezier(0.22,1,0.36,1), border-radius 0.4s ease 0.16s, box-shadow 0.5s cubic-bezier(0.22,1,0.36,1), opacity 0.18s ease 0.34s';
     layer.style.transform = 'translate(0,0) scale(1)';
     layer.style.borderRadius = '0px';
-    layer.style.clipPath = 'inset(0 round 0px)';
-    layer.style.boxShadow = '0 34px 96px rgba(0,0,0,.44)';
+    layer.style.boxShadow = '0 22px 64px rgba(0,0,0,.24)';
     layer.style.opacity = '0';
     openModal._homeBlurTimer = window.setTimeout(() => {
         document.body.classList.add('connection-home-blur');
@@ -387,15 +384,13 @@ function closeModal() {
     layer.style.transform = 'translate(0,0) scale(1)';
     layer.style.opacity = '1';
     layer.style.borderRadius = '0px';
-    layer.style.clipPath = 'inset(0 round 0px)';
-    layer.style.boxShadow = '0 34px 96px rgba(0,0,0,.44)';
+    layer.style.boxShadow = '0 22px 64px rgba(0,0,0,.24)';
     layer.offsetHeight;
     console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', rect, viewport, scale: end.scale });
-    layer.style.transition = 'transform 0.46s cubic-bezier(0.2,0.8,0.2,1), clip-path 0.34s ease 0.12s, border-radius 0.34s ease 0.12s, box-shadow 0.46s cubic-bezier(0.2,0.8,0.2,1), opacity 0.18s ease 0.32s';
+    layer.style.transition = 'transform 0.46s cubic-bezier(0.2,0.8,0.2,1), border-radius 0.34s ease 0.12s, box-shadow 0.46s cubic-bezier(0.2,0.8,0.2,1), opacity 0.16s ease 0.34s';
     layer.style.transform = end.value;
     layer.style.borderRadius = '18px';
-    layer.style.clipPath = 'inset(0 round 18px)';
-    layer.style.boxShadow = '0 8px 24px rgba(0,0,0,.24)';
+    layer.style.boxShadow = '0 8px 22px rgba(0,0,0,.20)';
     layer.style.opacity = '0';
     closeModal._restoreIconTimer = window.setTimeout(() => {
         connectionModalTrigger?.style?.removeProperty('opacity');
