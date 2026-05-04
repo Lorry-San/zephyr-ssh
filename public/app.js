@@ -291,17 +291,6 @@ function connectionTransitionTargetRect(trigger = connectionModalTrigger) {
     const viewport = viewportMetrics();
     return { left: viewport.width - 86, top: 82, width: 62, height: 62, source: null };
 }
-function connectionTransitionTransform(sourceRect, targetRect) {
-    const sourceCenterX = (sourceRect.left || 0) + (sourceRect.width || 0) / 2;
-    const sourceCenterY = (sourceRect.top || 0) + (sourceRect.height || 0) / 2;
-    const targetCenterX = (targetRect.left || 0) + (targetRect.width || 0) / 2;
-    const targetCenterY = (targetRect.top || 0) + (targetRect.height || 0) / 2;
-    const scale = Math.max(0.08, Math.min(1, (sourceRect.width || targetRect.width || 1) / (targetRect.width || 1)));
-    return {
-        scale,
-        value: `translate(${Math.round(sourceCenterX - targetCenterX)}px, ${Math.round(sourceCenterY - targetCenterY)}px) scale(${scale})`
-    };
-}
 function resetConnectionTransitionLayer(layer) {
     if (!layer) return;
     layer.style.display = 'none';
@@ -339,26 +328,27 @@ function openModal(conn = null, trigger = null) {
     document.body.classList.add('disable-interaction', 'connection-transition-opening');
     connectionModalTrigger?.style?.setProperty('opacity', '0');
     const viewport = viewportMetrics();
-    const targetRect = { left: viewport.left, top: viewport.top, width: viewport.width, height: viewport.height };
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
-    const start = connectionTransitionTransform(sourceRect, targetRect);
+    const targetRect = { left: viewport.left, top: viewport.top, width: viewport.width, height: viewport.height };
     layer.style.display = 'block';
     layer.style.transition = 'none';
+    layer.style.left = `${Math.round(sourceRect.left)}px`;
+    layer.style.top = `${Math.round(sourceRect.top)}px`;
+    layer.style.width = `${Math.round(sourceRect.width)}px`;
+    layer.style.height = `${Math.round(sourceRect.height)}px`;
+    layer.style.transform = 'none';
+    layer.style.opacity = '1';
+    layer.style.borderRadius = '18px';
+    layer.style.boxShadow = '0 14px 36px rgba(0,0,0,.18)';
+    layer.offsetHeight;
+    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', sourceRect, targetRect });
+    layer.style.transition = 'left 0.42s cubic-bezier(0.3, 0, 0.3, 1), top 0.42s cubic-bezier(0.3, 0, 0.3, 1), width 0.42s cubic-bezier(0.3, 0, 0.3, 1), height 0.42s cubic-bezier(0.3, 0, 0.3, 1), border-radius 0.42s cubic-bezier(0.3, 0, 0.3, 1), box-shadow 0.42s cubic-bezier(0.3, 0, 0.3, 1), opacity 0.28s ease 0s';
     layer.style.left = `${Math.round(targetRect.left)}px`;
     layer.style.top = `${Math.round(targetRect.top)}px`;
     layer.style.width = `${Math.round(targetRect.width)}px`;
     layer.style.height = `${Math.round(targetRect.height)}px`;
-    layer.style.transformOrigin = 'center center';
-    layer.style.transform = start.value;
-    layer.style.opacity = '0.96';
-    layer.style.borderRadius = '20px';
-    layer.style.boxShadow = '0 18px 58px rgba(0,0,0,.18)';
-    layer.offsetHeight;
-    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', targetRect, sourceRect, scale: start.scale });
-    layer.style.transition = 'transform 0.52s cubic-bezier(0.3,0,0.3,1), border-radius 0.4s cubic-bezier(0.3,0,0.3,1), box-shadow 0.52s cubic-bezier(0.3,0,0.3,1), opacity 0.28s ease 0s';
-    layer.style.transform = 'translate(0, 0) scale(1)';
     layer.style.borderRadius = '0px';
-    layer.style.boxShadow = '0 28px 96px rgba(0,0,0,.24)';
+    layer.style.boxShadow = '0 28px 92px rgba(0,0,0,.24)';
     layer.style.opacity = '0.24';
     openModal._homeBlurTimer = window.setTimeout(() => {
         document.body.classList.add('connection-home-blur');
@@ -382,7 +372,6 @@ function closeModal() {
     const viewport = viewportMetrics();
     const targetRect = { left: viewport.left, top: viewport.top, width: viewport.width, height: viewport.height };
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
-    const end = connectionTransitionTransform(sourceRect, targetRect);
     window.clearTimeout(openModal._homeBlurTimer);
     window.clearTimeout(openModal._appTimer);
     window.clearTimeout(openModal._finishTimer);
@@ -398,18 +387,20 @@ function closeModal() {
     layer.style.top = `${Math.round(targetRect.top)}px`;
     layer.style.width = `${Math.round(targetRect.width)}px`;
     layer.style.height = `${Math.round(targetRect.height)}px`;
-    layer.style.transformOrigin = 'center center';
-    layer.style.transform = 'translate(0, 0) scale(1)';
+    layer.style.transform = 'none';
     layer.style.opacity = '0.24';
     layer.style.borderRadius = '0px';
     layer.style.boxShadow = '0 28px 96px rgba(0,0,0,.24)';
     layer.offsetHeight;
-    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', targetRect, sourceRect, scale: end.scale });
-    layer.style.transition = 'transform 0.46s cubic-bezier(0.3,0,0.3,1), border-radius 0.4s cubic-bezier(0.3,0,0.3,1), box-shadow 0.46s cubic-bezier(0.3,0,0.3,1), opacity 0.32s ease 0s';
-    layer.style.transform = end.value;
-    layer.style.borderRadius = '20px';
-    layer.style.boxShadow = '0 18px 58px rgba(0,0,0,.18)';
-    layer.style.opacity = '0.92';
+    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', targetRect, sourceRect });
+    layer.style.transition = 'left 0.42s cubic-bezier(0.3, 0, 0.3, 1), top 0.42s cubic-bezier(0.3, 0, 0.3, 1), width 0.42s cubic-bezier(0.3, 0, 0.3, 1), height 0.42s cubic-bezier(0.3, 0, 0.3, 1), border-radius 0.42s cubic-bezier(0.3, 0, 0.3, 1), box-shadow 0.42s cubic-bezier(0.3, 0, 0.3, 1), opacity 0.32s ease 0s';
+    layer.style.left = `${Math.round(sourceRect.left)}px`;
+    layer.style.top = `${Math.round(sourceRect.top)}px`;
+    layer.style.width = `${Math.round(sourceRect.width)}px`;
+    layer.style.height = `${Math.round(sourceRect.height)}px`;
+    layer.style.borderRadius = '18px';
+    layer.style.boxShadow = '0 14px 36px rgba(0,0,0,.18)';
+    layer.style.opacity = '1';
     closeModal._restoreIconTimer = window.setTimeout(() => {
         connectionModalTrigger?.style?.removeProperty('opacity');
         console.debug('[connection-transition]', 'close:icon-restored', { delayMs: 260 });
