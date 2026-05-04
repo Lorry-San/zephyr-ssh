@@ -13,6 +13,7 @@
 - [快速开始](#快速开始)
 - [配置说明](#配置说明)
 - [RDP / VNC / Guacamole](#rdp--vnc--guacamole)
+- [Docker Compose 部署](#docker-compose-部署)
 - [Docker 自行构建](#docker-自行构建)
 - [更新容器并保留数据](#更新容器并保留数据)
 - [项目结构](#项目结构)
@@ -260,6 +261,187 @@ VNC：
 [guacamole-test]
 [tcp-forward]
 [route-plan]
+```
+
+---
+
+## Docker Compose 部署
+
+Docker Compose 适合长期部署和后续升级维护。下面示例使用官方镜像，并把运行数据持久化到宿主机 `./zephyr-data` 目录。
+
+### 1. 准备数据目录和环境变量
+
+```bash
+mkdir -p ./zephyr-data
+
+cat > ./zephyr-data/.env <<'EOF'
+ENCRYPTION_KEY=请替换为足够长的随机密钥
+PUBLIC_ORIGIN=https://ssh.example.com
+PORT=3000
+EOF
+```
+
+配置说明：
+
+- `ENCRYPTION_KEY`：生产环境必须改成强随机字符串，用于加密备份文件。
+- `PUBLIC_ORIGIN`：必须改成用户实际访问地址；如果通过域名和 HTTPS 访问，应填写 `https://你的域名`。
+- `PORT`：容器内 Web 服务监听端口，通常保持 `3000`。
+
+### 2. 创建 compose.yaml
+
+在部署目录创建 `compose.yaml`：
+
+```yaml
+services:
+  zephyr-ssh:
+    image: ghcr.io/lanlan13-14/zephyr-ssh:latest
+    container_name: zephyr-ssh
+    restart: unless-stopped
+    env_file:
+      - ./zephyr-data/.env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./zephyr-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+> Docker 镜像已内置 `guacd`、RDP/VNC 插件和相关运行依赖，通常不需要额外启动 `guacamole/guacd` 容器。
+
+### 3. 启动服务
+
+```bash
+docker compose up -d
+```
+
+查看容器状态：
+
+```bash
+docker compose ps
+```
+
+查看日志：
+
+```bash
+docker compose logs -f zephyr-ssh
+```
+
+访问：
+
+```text
+http://your-server-ip:3000
+```
+
+默认账号：
+
+```text
+用户名：admin
+密码：admin
+```
+
+首次登录后系统会要求修改默认密码。
+
+### 4. 停止、重启和删除容器
+
+停止服务：
+
+```bash
+docker compose stop
+```
+
+重启服务：
+
+```bash
+docker compose restart
+```
+
+删除容器但保留数据：
+
+```bash
+docker compose down
+```
+
+`./zephyr-data` 中的数据不会因为 `docker compose down` 被删除。不要删除该目录，否则会丢失数据库、配置和备份文件。
+
+### 5. 升级镜像
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+升级前建议先在后台导出加密备份，或备份整个 `./zephyr-data` 目录。
+
+### 6. 使用 HTTPS 反向代理
+
+如果通过 Nginx、Caddy、Traefik 等反向代理提供 HTTPS 访问：
+
+1. `PUBLIC_ORIGIN` 应设置为最终浏览器访问地址，例如 `https://ssh.example.com`。
+2. 反向代理必须支持 WebSocket 转发，否则 SSH 终端、RDP/VNC 远程桌面等实时连接会异常。
+3. 如果需要导入较大的备份文件或上传较大数据，反向代理需要放宽请求体大小限制。
+4. Passkey / WebAuthn 建议在 HTTPS 环境下使用。
+
+Nginx 代理关键配置示例：
+
+```nginx
+# 放在 http/server/location 块均可，按实际 Nginx 配置结构调整。
+# 如果需要更大的上传限制，可以继续调高，例如 1g。
+client_max_body_size 512m;
+
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+
+    # 保留真实访问来源和协议，便于 PUBLIC_ORIGIN、审计日志和安全策略正确工作。
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # 必须转发 WebSocket Upgrade 头。
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    # 长连接场景建议调大超时时间，避免 SSH/RDP/VNC 会话被反向代理提前断开。
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+```
+
+### 7. 使用命名卷部署（可选）
+
+如果不想把数据目录放在当前部署目录，也可以使用 Docker 命名卷：
+
+```yaml
+services:
+  zephyr-ssh:
+    image: ghcr.io/lanlan13-14/zephyr-ssh:latest
+    container_name: zephyr-ssh
+    restart: unless-stopped
+    env_file:
+      - ./zephyr-data/.env
+    ports:
+      - "3000:3000"
+    volumes:
+      - zephyr-ssh-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  zephyr-ssh-data:
+```
+
+检查数据卷：
+
+```bash
+docker volume inspect zephyr-ssh-data
 ```
 
 ---
