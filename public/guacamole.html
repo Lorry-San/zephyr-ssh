@@ -29,50 +29,64 @@
             <textarea id="mobileKeyboardInput" class="guac-mobile-keyboard-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="远程桌面软键盘输入"></textarea>
 
             <div class="guac-floating-panel clipboard-panel" id="clipboardPanel" hidden>
-                <div class="guac-panel-head">
-                    <strong>跨设备剪贴板</strong>
-                    <button class="icon-btn" id="clipboardCloseBtn" title="关闭剪贴板面板">×</button>
+                <div class="panel-drag-handle" data-drag-panel="clipboardPanel" title="拖动移动窗口">
+                    <button class="panel-traffic-btn" data-layout-panel="clipboardPanel" title="窗口布局"><span></span></button>
                 </div>
-                <label class="guac-panel-label" for="clipboardText">本机 → 远程</label>
-                <textarea id="clipboardText" class="guac-panel-textarea" placeholder="输入或粘贴要发送到远程桌面的文本"></textarea>
-                <div class="guac-panel-actions">
-                    <button class="btn-sm" id="clipboardReadLocalBtn">读取本机</button>
-                    <button class="btn-sm active" id="clipboardSendBtn">发送到远程</button>
+                <div class="guac-panel-content">
+                    <div class="guac-panel-head panel-titlebar">
+                        <strong>跨设备剪贴板</strong>
+                        <button class="icon-btn" id="clipboardCloseBtn" title="关闭剪贴板面板">×</button>
+                    </div>
+                    <label class="guac-panel-label" for="clipboardText">本机 → 远程</label>
+                    <textarea id="clipboardText" class="guac-panel-textarea" placeholder="输入或粘贴要发送到远程桌面的文本"></textarea>
+                    <div class="guac-panel-actions">
+                        <button class="btn-sm" id="clipboardReadLocalBtn">读取本机</button>
+                        <button class="btn-sm active" id="clipboardSendBtn">发送到远程</button>
+                    </div>
+                    <label class="guac-panel-label" for="remoteClipboardText">远程 → 本机</label>
+                    <textarea id="remoteClipboardText" class="guac-panel-textarea" readonly placeholder="远程复制文本后会显示在这里"></textarea>
+                    <div class="guac-panel-actions">
+                        <button class="btn-sm" id="clipboardCopyRemoteBtn">复制到本机</button>
+                        <span class="guac-panel-hint" id="clipboardHint">等待远程剪贴板...</span>
+                    </div>
                 </div>
-                <label class="guac-panel-label" for="remoteClipboardText">远程 → 本机</label>
-                <textarea id="remoteClipboardText" class="guac-panel-textarea" readonly placeholder="远程复制文本后会显示在这里"></textarea>
-                <div class="guac-panel-actions">
-                    <button class="btn-sm" id="clipboardCopyRemoteBtn">复制到本机</button>
-                    <span class="guac-panel-hint" id="clipboardHint">等待远程剪贴板...</span>
-                </div>
+                <div class="panel-resize-handle left" data-resize-panel="clipboardPanel" data-resize-edge="left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-resize-panel="clipboardPanel" data-resize-edge="right" title="拖动调整大小"></div>
             </div>
 
             <div class="guac-floating-panel shortcuts-panel" id="shortcutsPanel" hidden>
-                <div class="guac-panel-head">
-                    <strong>快捷键 / 手机辅助</strong>
-                    <button class="icon-btn" id="shortcutsCloseBtn" title="关闭快捷键面板">×</button>
+                <div class="panel-drag-handle" data-drag-panel="shortcutsPanel" title="拖动移动窗口">
+                    <button class="panel-traffic-btn" data-layout-panel="shortcutsPanel" title="窗口布局"><span></span></button>
                 </div>
-                <div class="guac-shortcut-grid" id="shortcutGrid">
-                    <button class="tool-btn" data-keyseq="esc">Esc</button>
-                    <button class="tool-btn" data-keyseq="tab">Tab</button>
-                    <button class="tool-btn" data-keyseq="enter">Enter</button>
-                    <button class="tool-btn" data-keyseq="backspace">Backspace</button>
-                    <button class="tool-btn" data-keyseq="win">Win</button>
-                    <button class="tool-btn" data-keyseq="alt-tab">Alt+Tab</button>
-                    <button class="tool-btn" data-keyseq="ctrl-c">Ctrl+C</button>
-                    <button class="tool-btn" data-keyseq="ctrl-v">Ctrl+V</button>
-                    <button class="tool-btn" data-keyseq="ctrl-a">Ctrl+A</button>
-                    <button class="tool-btn" data-keyseq="ctrl-z">Ctrl+Z</button>
-                    <button class="tool-btn" data-keyseq="up">↑</button>
-                    <button class="tool-btn" data-keyseq="down">↓</button>
-                    <button class="tool-btn" data-keyseq="left">←</button>
-                    <button class="tool-btn" data-keyseq="right">→</button>
-                    <button class="tool-btn" data-keyseq="home">Home</button>
-                    <button class="tool-btn" data-keyseq="end">End</button>
-                    <button class="tool-btn" data-keyseq="pageup">PgUp</button>
-                    <button class="tool-btn" data-keyseq="pagedown">PgDn</button>
+                <div class="guac-panel-content">
+                    <div class="guac-panel-head panel-titlebar">
+                        <strong>快捷键 / 手机辅助</strong>
+                        <button class="icon-btn" id="shortcutsCloseBtn" title="关闭快捷键面板">×</button>
+                    </div>
+                    <div class="guac-shortcut-grid" id="shortcutGrid">
+                        <button class="tool-btn" data-keyseq="esc">Esc</button>
+                        <button class="tool-btn" data-keyseq="tab">Tab</button>
+                        <button class="tool-btn" data-keyseq="enter">Enter</button>
+                        <button class="tool-btn" data-keyseq="backspace">Backspace</button>
+                        <button class="tool-btn" data-keyseq="win">Win</button>
+                        <button class="tool-btn" data-keyseq="alt-tab">Alt+Tab</button>
+                        <button class="tool-btn" data-keyseq="ctrl-c">Ctrl+C</button>
+                        <button class="tool-btn" data-keyseq="ctrl-v">Ctrl+V</button>
+                        <button class="tool-btn" data-keyseq="ctrl-a">Ctrl+A</button>
+                        <button class="tool-btn" data-keyseq="ctrl-z">Ctrl+Z</button>
+                        <button class="tool-btn" data-keyseq="up">↑</button>
+                        <button class="tool-btn" data-keyseq="down">↓</button>
+                        <button class="tool-btn" data-keyseq="left">←</button>
+                        <button class="tool-btn" data-keyseq="right">→</button>
+                        <button class="tool-btn" data-keyseq="home">Home</button>
+                        <button class="tool-btn" data-keyseq="end">End</button>
+                        <button class="tool-btn" data-keyseq="pageup">PgUp</button>
+                        <button class="tool-btn" data-keyseq="pagedown">PgDn</button>
+                    </div>
+                    <div class="guac-panel-hint">提示：单指点远程桌面会发送鼠标左键点击；点“⌨ 键盘”可唤起手机输入法。</div>
                 </div>
-                <div class="guac-panel-hint">提示：点“⌨ 键盘”可唤起手机输入法；文本会实时发送到远程桌面。</div>
+                <div class="panel-resize-handle left" data-resize-panel="shortcutsPanel" data-resize-edge="left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-resize-panel="shortcutsPanel" data-resize-edge="right" title="拖动调整大小"></div>
             </div>
 
             <div class="terminal-overlay" id="guacOverlay">

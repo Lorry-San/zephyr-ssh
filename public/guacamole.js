@@ -47,6 +47,9 @@ let mobileInputMirror = '';
 let lastRemoteClipboard = '';
 let clipboardAutoWriteOk = false;
 let clipboardAutoWriteFailed = false;
+let panelLayoutMenu = null;
+let suppressNextLayoutClick = false;
+let touchClickCandidate = null;
 
 const KEY = {
     BACKSPACE: 0xff08,
@@ -337,6 +340,101 @@ function scheduleResize() {
     }, 180);
 }
 
+function getRemotePointerPosition(event) {
+    const displayEl = displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot;
+    const rect = displayEl?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    const rawX = event.clientX - rect.left;
+    const rawY = event.clientY - rect.top;
+    if (rawX < -2 || rawY < -2 || rawX > rect.width + 2 || rawY > rect.height + 2) return null;
+    const remoteWidth = displayWidth || client?.getDisplay?.()?.getWidth?.() || rect.width;
+    const remoteHeight = displayHeight || client?.getDisplay?.()?.getHeight?.() || rect.height;
+    const x = Math.max(0, Math.min(remoteWidth - 1, Math.round(rawX * remoteWidth / rect.width)));
+    const y = Math.max(0, Math.min(remoteHeight - 1, Math.round(rawY * remoteHeight / rect.height)));
+    return { x, y, rawX, rawY, rectWidth: rect.width, rectHeight: rect.height, remoteWidth, remoteHeight };
+}
+
+function createMouseState(x, y, left = false) {
+    if (Guacamole?.Mouse?.State) return new Guacamole.Mouse.State(x, y, left, false, false, false, false);
+    return { x, y, left, middle: false, right: false, up: false, down: false };
+}
+
+function sendRemoteMouseClick(position, source = 'touch') {
+    if (!client || !connected || !position) return false;
+    const down = createMouseState(position.x, position.y, true);
+    const up = createMouseState(position.x, position.y, false);
+    console.info('[guac-client]', 'remote mouse click mapped', {
+        source,
+        x: position.x,
+        y: position.y,
+        rawX: Number(position.rawX.toFixed(1)),
+        rawY: Number(position.rawY.toFixed(1)),
+        rectWidth: Number(position.rectWidth.toFixed(1)),
+        rectHeight: Number(position.rectHeight.toFixed(1)),
+        remoteWidth: position.remoteWidth,
+        remoteHeight: position.remoteHeight,
+    });
+    client.sendMouseState(down);
+    window.setTimeout(() => {
+        try {
+            client?.sendMouseState?.(up);
+            console.debug('[guac-client]', 'remote mouse click sent', { source, x: position.x, y: position.y });
+        } catch (err) {
+            console.error('[guac-client]', 'remote mouse click release failed', { error: err.message });
+        }
+    }, 45);
+    notifyParentActivity();
+    return true;
+}
+
+function setupMobilePointerMouse() {
+    stage?.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
+        const position = getRemotePointerPosition(event);
+        if (!position) return;
+        event.preventDefault();
+        event.stopPropagation();
+        touchClickCandidate = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            position,
+            startedAt: performance.now(),
+        };
+        stage.setPointerCapture?.(event.pointerId);
+        stage.focus({ preventScroll: true });
+        console.debug('[guac-client]', 'mobile pointer candidate', { x: position.x, y: position.y, pointerType: event.pointerType });
+    }, { passive: false, capture: true });
+
+    stage?.addEventListener('pointermove', (event) => {
+        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
+        const dx = event.clientX - touchClickCandidate.startX;
+        const dy = event.clientY - touchClickCandidate.startY;
+        if (Math.hypot(dx, dy) > 14) {
+            console.debug('[guac-client]', 'mobile pointer candidate cancelled by move', { dx: Number(dx.toFixed(1)), dy: Number(dy.toFixed(1)) });
+            touchClickCandidate = null;
+        }
+    }, { passive: true });
+
+    stage?.addEventListener('pointerup', (event) => {
+        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const candidate = touchClickCandidate;
+        touchClickCandidate = null;
+        const dx = event.clientX - candidate.startX;
+        const dy = event.clientY - candidate.startY;
+        if (Math.hypot(dx, dy) <= 14 && performance.now() - candidate.startedAt < 850) {
+            sendRemoteMouseClick(candidate.position, event.pointerType || 'touch');
+        }
+    }, { passive: false, capture: true });
+
+    stage?.addEventListener('pointercancel', (event) => {
+        if (touchClickCandidate?.pointerId === event.pointerId) touchClickCandidate = null;
+    }, { passive: true });
+}
+
 async function connect() {
     params = loadParams();
     const label = protocolLabel();
@@ -440,12 +538,358 @@ function disconnect(userInitiated = true) {
     }
 }
 
+function isCompactScreen() {
+    return window.matchMedia('(max-width: 700px), (pointer: coarse)').matches;
+}
+
+function floatingPanels() {
+    return [clipboardPanel, shortcutsPanel].filter(Boolean);
+}
+
+function getDefaultPanelOptions(panel) {
+    const parentRect = panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+    if (isCompactScreen()) {
+        return {
+            left: 8,
+            top: 44,
+            width: Math.max(280, parentRect.width - 16),
+            height: Math.max(260, Math.min(parentRect.height - 58, panel === shortcutsPanel ? 360 : 430)),
+        };
+    }
+    if (panel === shortcutsPanel) {
+        return { width: Math.min(460, parentRect.width - 24), height: Math.min(360, parentRect.height - 80), left: 18, top: 54 };
+    }
+    return { width: Math.min(440, parentRect.width - 24), height: Math.min(500, parentRect.height - 80), left: Math.max(18, parentRect.width - 460), top: 54 };
+}
+
+function ensureFloatingPanel(panel, defaults = {}) {
+    if (!panel || panel.dataset.floatingReady === '1') return;
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const width = defaults.width || Math.min(parentRect.width * 0.72, 760);
+    const height = defaults.height || Math.min(parentRect.height * 0.72, 560);
+    const left = defaults.left ?? Math.max(12, (parentRect.width - width) / 2);
+    const top = defaults.top ?? 52;
+
+    Object.assign(panel.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        right: 'auto',
+        bottom: 'auto',
+        width: `${width}px`,
+        height: `${height}px`,
+    });
+    panel.dataset.floatingReady = '1';
+    console.info('[guac-client]', 'floating panel initialized', { id: panel.id, left, top, width, height });
+}
+
+function clampPanel(panel) {
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const minVisible = isCompactScreen() ? 140 : 80;
+    const left = Math.min(Math.max(rect.left - parentRect.left, -rect.width + minVisible), parentRect.width - minVisible);
+    const top = Math.min(Math.max(rect.top - parentRect.top, 8), parentRect.height - minVisible);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
+
+function bringPanelToFront(panel) {
+    if (!panel) return;
+    const wasFront = panel.classList.contains('front');
+    floatingPanels().forEach((item) => {
+        item.classList.remove('front');
+        if (item !== panel) item.classList.remove('front-switching');
+    });
+    panel.classList.add('front');
+    if (!wasFront) {
+        panel.classList.remove('front-switching');
+        void panel.offsetWidth;
+        panel.classList.add('front-switching');
+        window.clearTimeout(panel._frontSwitchTimer);
+        panel._frontSwitchTimer = window.setTimeout(() => panel.classList.remove('front-switching'), 360);
+    }
+    console.debug('[guac-client]', 'floating panel front', { id: panel.id });
+}
+
+function applyPanelLayout(panel, layout) {
+    if (!panel) return;
+    const parentRect = panel.parentElement.getBoundingClientRect();
+    const margin = isCompactScreen() ? 6 : 12;
+    const topbar = isCompactScreen() ? 38 : 52;
+    let left = margin;
+    let top = topbar;
+    let width = parentRect.width - margin * 2;
+    let height = parentRect.height - topbar - margin;
+
+    if (layout === 'half') {
+        width = parentRect.width;
+        height = Math.max(260, parentRect.height / 2);
+        left = 0;
+        top = parentRect.height - height;
+    } else if (layout === 'left-quarter') {
+        width = Math.max(260, parentRect.width / 4);
+        height = parentRect.height - topbar;
+        left = 0;
+        top = topbar;
+    } else if (layout === 'right-quarter') {
+        width = Math.max(260, parentRect.width / 4);
+        height = parentRect.height - topbar;
+        left = parentRect.width - width;
+        top = topbar;
+    }
+
+    panel.classList.add('layout-animating');
+    window.clearTimeout(panel._layoutAnimationTimer);
+    Object.assign(panel.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        right: 'auto',
+        bottom: 'auto',
+        width: `${width}px`,
+        height: `${height}px`,
+    });
+    bringPanelToFront(panel);
+    panel._layoutAnimationTimer = window.setTimeout(() => {
+        panel.classList.remove('layout-animating');
+        clampPanel(panel);
+    }, 480);
+    console.info('[guac-client]', 'floating panel layout applied', { id: panel.id, layout, left, top, width, height });
+}
+
+function closePanelLayoutMenu() {
+    panelLayoutMenu?.remove();
+    panelLayoutMenu = null;
+}
+
+function openPanelLayoutMenu(button, panel) {
+    closePanelLayoutMenu();
+    const menu = document.createElement('div');
+    menu.className = 'panel-layout-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '窗口布局');
+    menu.innerHTML = `
+        <button data-layout="full" title="全屏" aria-label="全屏"><span class="panel-layout-icon full"></span></button>
+        <button data-layout="half" title="半屏" aria-label="半屏"><span class="panel-layout-icon half"></span></button>
+        <button data-layout="left-quarter" title="左侧四分之一" aria-label="左侧四分之一"><span class="panel-layout-icon left"></span></button>
+        <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
+        <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
+    `;
+    document.body.appendChild(menu);
+    const placeMenu = () => {
+        const rect = button.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const vvLeft = viewport?.offsetLeft || 0;
+        const vvTop = viewport?.offsetTop || 0;
+        const vvWidth = viewport?.width || window.innerWidth;
+        const vvHeight = viewport?.height || window.innerHeight;
+        const anchorX = rect.left + rect.width / 2;
+        menu.style.width = `${Math.min(284, Math.max(160, vvWidth - 16))}px`;
+        const menuRect = menu.getBoundingClientRect();
+        const buttonSlotOffset = menuRect.width / 5;
+        const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, anchorX - menuRect.width / 2 - buttonSlotOffset));
+        const belowTop = rect.bottom + 8;
+        const aboveTop = rect.top - menuRect.height - 8;
+        const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
+        const top = opensBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
+        menu.style.setProperty('--menu-origin-x', `${originX}px`);
+        menu.style.setProperty('--menu-origin-y', opensBelow ? '0px' : `${menuRect.height}px`);
+        menu.style.setProperty('--menu-enter-y', opensBelow ? '-12px' : '12px');
+        menu.style.setProperty('--menu-overshoot-y', opensBelow ? '1px' : '-1px');
+        menu.style.setProperty('--menu-settle-y', opensBelow ? '-0.5px' : '0.5px');
+        menu.dataset.placement = opensBelow ? 'below' : 'above';
+        console.debug('[guac-client]', 'floating panel menu aligned', { panel: panel.id, left, top, originX });
+    };
+    placeMenu();
+    requestAnimationFrame(placeMenu);
+    menu.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-layout]');
+        if (!item) return;
+        if (item.dataset.layout === 'close') togglePanel(panel, false);
+        else applyPanelLayout(panel, item.dataset.layout);
+        closePanelLayoutMenu();
+    });
+    panelLayoutMenu = menu;
+}
+
+function setupPanelLayoutMenu() {
+    document.querySelectorAll('[data-layout-panel]').forEach((button) => {
+        const panel = document.getElementById(button.dataset.layoutPanel);
+        if (!panel) return;
+        button.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closePanelLayoutMenu();
+            bringPanelToFront(panel);
+            button.classList.add('pressing');
+            panel.classList.add('dragging');
+            button.setPointerCapture?.(event.pointerId);
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+            let moved = false;
+
+            const onMove = (ev) => {
+                ev.preventDefault();
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+                if (!moved) return;
+                panel.style.left = `${startLeft + dx}px`;
+                panel.style.top = `${startTop + dy}px`;
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                window.setTimeout(() => button.classList.remove('pressing'), moved ? 0 : 140);
+                suppressNextLayoutClick = moved;
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                if (moved) console.info('[guac-client]', 'floating panel moved by traffic handle', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (suppressNextLayoutClick) {
+                suppressNextLayoutClick = false;
+                return;
+            }
+            bringPanelToFront(panel);
+            if (panelLayoutMenu) closePanelLayoutMenu();
+            else openPanelLayoutMenu(button, panel);
+        });
+    });
+    document.addEventListener('pointerdown', (event) => {
+        if (panelLayoutMenu && !event.target.closest('.panel-layout-menu') && !event.target.closest('[data-layout-panel]')) closePanelLayoutMenu();
+    });
+    window.addEventListener('resize', closePanelLayoutMenu);
+}
+
+function setupPanelDrag() {
+    const handles = [
+        ...document.querySelectorAll('[data-drag-panel]'),
+        ...document.querySelectorAll('.guac-floating-panel .panel-titlebar'),
+    ];
+    handles.forEach((handle) => {
+        const panel = handle.dataset.dragPanel
+            ? document.getElementById(handle.dataset.dragPanel)
+            : handle.closest('.guac-floating-panel');
+        if (!panel) return;
+        handle.addEventListener('pointerdown', (event) => {
+            if (event.target.closest('button,input,select,textarea,label')) return;
+            event.preventDefault();
+            bringPanelToFront(panel);
+            panel.classList.add('dragging');
+            handle.setPointerCapture?.(event.pointerId);
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+
+            const onMove = (ev) => {
+                ev.preventDefault();
+                panel.style.left = `${startLeft + ev.clientX - startX}px`;
+                panel.style.top = `${startTop + ev.clientY - startY}px`;
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                console.info('[guac-client]', 'floating panel dragged', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
+    });
+}
+
+function setupPanelResize() {
+    document.querySelectorAll('[data-resize-panel]').forEach((handle) => {
+        const panel = document.getElementById(handle.dataset.resizePanel);
+        if (!panel) return;
+        handle.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            bringPanelToFront(panel);
+            panel.classList.add('resizing');
+            handle.setPointerCapture?.(event.pointerId);
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startWidth = panel.offsetWidth;
+            const startHeight = panel.offsetHeight;
+            const startLeft = panel.offsetLeft;
+            const edge = handle.dataset.resizeEdge || 'right';
+            const parentRect = panel.parentElement.getBoundingClientRect();
+            const compact = isCompactScreen();
+            const minWidth = compact ? 260 : 320;
+            const minHeight = compact ? 220 : 260;
+
+            const onMove = (ev) => {
+                ev.preventDefault();
+                let nextLeft = startLeft;
+                let nextWidth = startWidth + ev.clientX - startX;
+                if (edge === 'left') {
+                    nextWidth = startWidth - (ev.clientX - startX);
+                    nextLeft = startLeft + (ev.clientX - startX);
+                    if (nextWidth < minWidth) {
+                        nextLeft -= minWidth - nextWidth;
+                        nextWidth = minWidth;
+                    }
+                    if (nextLeft < 8) {
+                        nextWidth += nextLeft - 8;
+                        nextLeft = 8;
+                    }
+                    panel.style.left = `${nextLeft}px`;
+                }
+                const maxWidth = edge === 'left' ? startLeft + startWidth - 8 : parentRect.width - panel.offsetLeft - 12;
+                const maxHeight = parentRect.height - panel.offsetTop - 12;
+                const width = Math.min(Math.max(minWidth, nextWidth), maxWidth);
+                const height = Math.min(Math.max(minHeight, startHeight + ev.clientY - startY), maxHeight);
+                panel.style.width = `${width}px`;
+                panel.style.height = `${height}px`;
+            };
+            const onUp = () => {
+                panel.classList.remove('resizing');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                console.info('[guac-client]', 'floating panel resized', { id: panel.id, width: panel.offsetWidth, height: panel.offsetHeight });
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+        });
+    });
+}
+
+function setupFloatingPanels() {
+    floatingPanels().forEach((panel) => {
+        ensureFloatingPanel(panel, getDefaultPanelOptions(panel));
+        panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+    });
+    setupPanelLayoutMenu();
+    setupPanelDrag();
+    setupPanelResize();
+}
+
 function togglePanel(panel, force) {
     if (!panel) return;
+    ensureFloatingPanel(panel, getDefaultPanelOptions(panel));
     const shouldShow = force ?? panel.hidden;
     panel.hidden = !shouldShow;
-    if (shouldShow) panel.classList.add('open');
-    else panel.classList.remove('open');
+    panel.classList.toggle('open', shouldShow);
+    if (shouldShow) bringPanelToFront(panel);
+    else closePanelLayoutMenu();
+    console.info('[guac-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
 }
 
 function setClipboardHint(message, level = 'info') {
@@ -808,6 +1252,7 @@ shortcutGrid?.addEventListener('click', (event) => {
 }, { capture: true });
 
 stage?.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'touch' || event.pointerType === 'pen') return;
     if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
     stage.focus({ preventScroll: true });
     notifyParentActivity();
@@ -826,6 +1271,8 @@ window.addEventListener('message', (event) => {
     }
 });
 
+setupFloatingPanels();
+setupMobilePointerMouse();
 fitBtn.classList.add('active');
 setStatus('connecting');
 connect();

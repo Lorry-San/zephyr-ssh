@@ -3500,27 +3500,88 @@ html.keyboard-open .terminal-page {
 
 .guac-floating-panel {
     position: absolute;
-    right: 12px;
-    top: 12px;
-    z-index: 20;
-    width: min(420px, calc(100% - 24px));
-    max-height: calc(100% - 24px);
+    z-index: 30;
+    min-width: 300px;
+    min-height: 240px;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    border: 1px solid rgba(139,148,158,.34);
+    border-radius: 22px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, rgba(255,255,255,.12)), color-mix(in srgb, var(--surface) 82%, transparent)),
+        color-mix(in srgb, var(--surface) 88%, transparent);
+    box-shadow: 0 28px 90px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.11);
+    backdrop-filter: blur(28px) saturate(1.62);
+    -webkit-backdrop-filter: blur(28px) saturate(1.62);
+    overflow: hidden;
+    visibility: hidden;
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(.985);
+    transition:
+        opacity .24s ease,
+        visibility .24s ease,
+        transform .34s cubic-bezier(.16,1,.3,1),
+        box-shadow .24s ease,
+        left .34s cubic-bezier(.16,1,.3,1),
+        top .34s cubic-bezier(.16,1,.3,1),
+        width .34s cubic-bezier(.16,1,.3,1),
+        height .34s cubic-bezier(.16,1,.3,1);
+}
+
+.guac-floating-panel[hidden] {
+    display: flex !important;
+    pointer-events: none;
+}
+
+.guac-floating-panel.open {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate3d(0, 0, 0) scale(1);
+}
+
+.guac-floating-panel.front {
+    z-index: 42;
+    box-shadow: 0 34px 110px rgba(0,0,0,.54), inset 0 1px 0 rgba(255,255,255,.13);
+}
+
+.guac-floating-panel.front-switching {
+    animation: panelFrontSwitch .28s cubic-bezier(.2,.8,.2,1);
+}
+
+.guac-floating-panel.dragging,
+.guac-floating-panel.resizing {
+    transition: none;
+    user-select: none;
+    touch-action: none;
+}
+
+.guac-floating-panel.layout-animating {
+    transition:
+        left .44s cubic-bezier(.16,1,.3,1),
+        top .44s cubic-bezier(.16,1,.3,1),
+        width .44s cubic-bezier(.16,1,.3,1),
+        height .44s cubic-bezier(.16,1,.3,1),
+        transform .44s cubic-bezier(.16,1,.3,1),
+        opacity .2s ease;
+}
+
+.guac-floating-panel .panel-drag-handle {
+    height: 30px;
+    background: color-mix(in srgb, var(--border) 30%, rgba(255,255,255,.08));
+}
+
+.guac-panel-content {
+    min-height: 0;
+    flex: 1;
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding: 12px;
-    border: 1px solid rgba(139,148,158,.34);
-    border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
-    box-shadow: 0 22px 70px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.08);
-    backdrop-filter: blur(24px) saturate(1.45);
-    -webkit-backdrop-filter: blur(24px) saturate(1.45);
     overflow: auto;
-    animation: panelMenuIn .28s cubic-bezier(.16,1,.3,1);
-}
-
-.guac-floating-panel[hidden] {
-    display: none !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 }
 
 .guac-panel-head,
@@ -3618,14 +3679,13 @@ html.keyboard-open .terminal-page {
     }
 
     .guac-floating-panel {
-        left: 6px;
-        right: 6px;
-        top: auto;
-        bottom: 8px;
-        width: auto;
-        max-height: min(62vh, 430px);
+        min-width: 260px;
+        min-height: 220px;
+        border-radius: 18px;
+    }
+
+    .guac-panel-content {
         padding: 10px;
-        border-radius: 16px;
     }
 
     .guac-panel-actions {
