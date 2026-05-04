@@ -454,6 +454,72 @@ function setClipboardHint(message, level = 'info') {
     clipboardHint.dataset.level = level;
 }
 
+function setTransientStatus(message, timeout = 1800) {
+    const old = statusText?.textContent || '';
+    if (statusText) statusText.textContent = message;
+    window.setTimeout(() => {
+        if (connected && statusText && statusText.textContent === message) {
+            statusText.textContent = `${protocolLabel()} 已连接`;
+        } else if (!connected && statusText && statusText.textContent === message) {
+            statusText.textContent = old;
+        }
+    }, timeout);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function ensureRemoteReady(action = '操作') {
+    if (!client || !connected) {
+        const msg = `${protocolLabel()} 尚未连接，无法${action}`;
+        console.warn('[guac-client]', msg, { hasClient: !!client, connected });
+        setTransientStatus(msg);
+        return false;
+    }
+    return true;
+}
+
+async function writeHostClipboard(text) {
+    if (!text) return false;
+
+    try {
+        const permission = await navigator.permissions?.query?.({ name: 'clipboard-write' });
+        console.debug('[guac-client]', 'clipboard-write permission', { state: permission?.state || 'unknown' });
+    } catch (err) {
+        console.debug('[guac-client]', 'clipboard-write permission query unavailable', { error: err.message });
+    }
+
+    try {
+        await navigator.clipboard.writeText(text);
+        console.info('[guac-client]', 'host clipboard written via Clipboard API', { length: text.length });
+        return true;
+    } catch (err) {
+        console.warn('[guac-client]', 'Clipboard API write failed, trying execCommand fallback', { error: err.message });
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+        console.info('[guac-client]', 'host clipboard fallback result', { ok, length: text.length });
+    } catch (err) {
+        console.warn('[guac-client]', 'host clipboard fallback failed', { error: err.message });
+    } finally {
+        textarea.remove();
+        stage?.focus?.({ preventScroll: true });
+    }
+    return ok;
+}
+
 function sendRemoteClipboardText(text) {
     const label = protocolLabel();
     if (!client || !connected) {
@@ -489,15 +555,15 @@ async function copyRemoteClipboardToLocal() {
         setClipboardHint('还没有收到远程剪贴板', 'warning');
         return;
     }
-    try {
-        await navigator.clipboard.writeText(lastRemoteClipboard);
-        clipboardAutoWriteOk = true;
+
+    const ok = await writeHostClipboard(lastRemoteClipboard);
+    clipboardAutoWriteOk = ok;
+    clipboardAutoWriteFailed = !ok;
+    if (ok) {
         setClipboardHint('远程剪贴板已复制到本机', 'success');
-        console.info('[guac-client]', 'remote clipboard copied to local clipboard', { length: lastRemoteClipboard.length });
-    } catch (err) {
-        clipboardAutoWriteFailed = true;
-        setClipboardHint('自动复制被浏览器拦截，请长按/全选手动复制', 'warning');
-        console.warn('[guac-client]', 'remote clipboard copy to local failed', { error: err.message });
+        setTransientStatus('远程剪贴板已同步到本机');
+    } else {
+        setClipboardHint('浏览器阻止写入系统剪贴板，请在文本框中手动全选复制', 'warning');
         remoteClipboardText?.focus?.();
         remoteClipboardText?.select?.();
     }
@@ -520,37 +586,63 @@ function receiveRemoteClipboard(stream, mimetype) {
     reader.onend = async () => {
         lastRemoteClipboard = chunks.join('');
         if (remoteClipboardText) remoteClipboardText.value = lastRemoteClipboard;
-        setClipboardHint(`收到远程剪贴板 ${lastRemoteClipboard.length} 字符`, 'success');
+        togglePanel(clipboardPanel, true);
+        setClipboardHint(`收到远程剪贴板 ${lastRemoteClipboard.length} 字符，正在同步到本机...`, 'info');
         console.info('[guac-client]', 'remote clipboard received', { length: lastRemoteClipboard.length, mimetype });
 
-        try {
-            await navigator.clipboard.writeText(lastRemoteClipboard);
-            clipboardAutoWriteOk = true;
-            clipboardAutoWriteFailed = false;
+        const ok = await writeHostClipboard(lastRemoteClipboard);
+        clipboardAutoWriteOk = ok;
+        clipboardAutoWriteFailed = !ok;
+        if (ok) {
             setClipboardHint('远程剪贴板已自动同步到本机', 'success');
-            console.info('[guac-client]', 'remote clipboard auto-written to local', { length: lastRemoteClipboard.length });
-        } catch (err) {
-            clipboardAutoWriteFailed = true;
-            setClipboardHint('已收到远程剪贴板；点“复制到本机”完成同步', 'warning');
-            console.warn('[guac-client]', 'remote clipboard auto-write blocked', { error: err.message });
+            setTransientStatus('远程剪贴板已自动同步到本机');
+        } else {
+            setClipboardHint('已收到远程剪贴板；浏览器阻止自动写入，请点“复制到本机”或手动复制文本框内容', 'warning');
+            console.warn('[guac-client]', 'remote clipboard auto-write blocked by browser policy');
+            remoteClipboardText?.focus?.();
+            remoteClipboardText?.select?.();
         }
     };
 }
 
-function sendKeyDownUp(keysym) {
-    if (!client || !connected) return;
-    console.debug('[guac-client]', 'shortcut key', { keysym });
-    client.sendKeyEvent(1, keysym);
-    client.sendKeyEvent(0, keysym);
-    notifyParentActivity();
+async function sendKeyDownUp(keysym, label = '快捷键') {
+    if (!ensureRemoteReady(`发送${label}`)) return false;
+    try {
+        console.info('[guac-client]', 'shortcut key send', { label, keysym });
+        client.sendKeyEvent(1, keysym);
+        await sleep(35);
+        client.sendKeyEvent(0, keysym);
+        notifyParentActivity();
+        setTransientStatus(`已发送 ${label}`);
+        return true;
+    } catch (err) {
+        console.error('[guac-client]', 'shortcut key send failed', { label, keysym, error: err.message });
+        setTransientStatus(`${label} 发送失败`);
+        return false;
+    }
 }
 
-function sendKeyCombo(...keysyms) {
-    if (!client || !connected) return;
-    console.info('[guac-client]', 'shortcut combo', { keysyms });
-    keysyms.forEach((keysym) => client.sendKeyEvent(1, keysym));
-    [...keysyms].reverse().forEach((keysym) => client.sendKeyEvent(0, keysym));
-    notifyParentActivity();
+async function sendKeyCombo(keysyms, label = '组合键') {
+    if (!ensureRemoteReady(`发送${label}`)) return false;
+    try {
+        console.info('[guac-client]', 'shortcut combo send', { label, keysyms });
+        for (const keysym of keysyms) {
+            client.sendKeyEvent(1, keysym);
+            await sleep(25);
+        }
+        await sleep(60);
+        for (const keysym of [...keysyms].reverse()) {
+            client.sendKeyEvent(0, keysym);
+            await sleep(25);
+        }
+        notifyParentActivity();
+        setTransientStatus(`已发送 ${label}`);
+        return true;
+    } catch (err) {
+        console.error('[guac-client]', 'shortcut combo send failed', { label, keysyms, error: err.message });
+        setTransientStatus(`${label} 发送失败`);
+        return false;
+    }
 }
 
 function asciiKeysym(char) {
@@ -595,30 +687,39 @@ function handleMobileKeyboardInput() {
     }
 }
 
-function runShortcut(name) {
+async function runShortcut(name) {
     const lower = String(name || '').toLowerCase();
     const ctrlChar = (char) => char.toLowerCase().codePointAt(0);
+    console.info('[guac-client]', 'shortcut button activated', { name: lower, connected, hasClient: !!client });
+
     const actions = {
-        esc: () => sendKeyDownUp(KEY.ESC),
-        tab: () => sendKeyDownUp(KEY.TAB),
-        enter: () => sendKeyDownUp(KEY.ENTER),
-        backspace: () => sendKeyDownUp(KEY.BACKSPACE),
-        win: () => sendKeyDownUp(KEY.SUPER),
-        'alt-tab': () => sendKeyCombo(KEY.ALT, KEY.TAB),
-        'ctrl-c': () => sendKeyCombo(KEY.CTRL, ctrlChar('c')),
-        'ctrl-v': () => sendKeyCombo(KEY.CTRL, ctrlChar('v')),
-        'ctrl-a': () => sendKeyCombo(KEY.CTRL, ctrlChar('a')),
-        'ctrl-z': () => sendKeyCombo(KEY.CTRL, ctrlChar('z')),
-        up: () => sendKeyDownUp(KEY.UP),
-        down: () => sendKeyDownUp(KEY.DOWN),
-        left: () => sendKeyDownUp(KEY.LEFT),
-        right: () => sendKeyDownUp(KEY.RIGHT),
-        home: () => sendKeyDownUp(KEY.HOME),
-        end: () => sendKeyDownUp(KEY.END),
-        pageup: () => sendKeyDownUp(KEY.PAGE_UP),
-        pagedown: () => sendKeyDownUp(KEY.PAGE_DOWN),
+        esc: () => sendKeyDownUp(KEY.ESC, 'Esc'),
+        tab: () => sendKeyDownUp(KEY.TAB, 'Tab'),
+        enter: () => sendKeyDownUp(KEY.ENTER, 'Enter'),
+        backspace: () => sendKeyDownUp(KEY.BACKSPACE, 'Backspace'),
+        win: () => sendKeyDownUp(KEY.SUPER, 'Win'),
+        'alt-tab': () => sendKeyCombo([KEY.ALT, KEY.TAB], 'Alt+Tab'),
+        'ctrl-c': () => sendKeyCombo([KEY.CTRL, ctrlChar('c')], 'Ctrl+C'),
+        'ctrl-v': () => sendKeyCombo([KEY.CTRL, ctrlChar('v')], 'Ctrl+V'),
+        'ctrl-a': () => sendKeyCombo([KEY.CTRL, ctrlChar('a')], 'Ctrl+A'),
+        'ctrl-z': () => sendKeyCombo([KEY.CTRL, ctrlChar('z')], 'Ctrl+Z'),
+        up: () => sendKeyDownUp(KEY.UP, '↑'),
+        down: () => sendKeyDownUp(KEY.DOWN, '↓'),
+        left: () => sendKeyDownUp(KEY.LEFT, '←'),
+        right: () => sendKeyDownUp(KEY.RIGHT, '→'),
+        home: () => sendKeyDownUp(KEY.HOME, 'Home'),
+        end: () => sendKeyDownUp(KEY.END, 'End'),
+        pageup: () => sendKeyDownUp(KEY.PAGE_UP, 'PageUp'),
+        pagedown: () => sendKeyDownUp(KEY.PAGE_DOWN, 'PageDown'),
     };
-    actions[lower]?.();
+
+    const action = actions[lower];
+    if (!action) {
+        console.warn('[guac-client]', 'unknown shortcut', { name: lower });
+        setTransientStatus(`未知快捷键：${lower}`);
+        return false;
+    }
+    return action();
 }
 
 async function sendClipboard() {
@@ -687,13 +788,27 @@ shortcutsBtn?.addEventListener('click', () => {
     togglePanel(clipboardPanel, false);
 });
 shortcutsCloseBtn?.addEventListener('click', () => togglePanel(shortcutsPanel, false));
+shortcutGrid?.addEventListener('pointerdown', (event) => {
+    const btn = event.target.closest('[data-keyseq]');
+    if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    btn.classList.add('active');
+    window.setTimeout(() => btn.classList.remove('active'), 140);
+    runShortcut(btn.dataset.keyseq).catch((err) => {
+        console.error('[guac-client]', 'shortcut action failed', { keyseq: btn.dataset.keyseq, error: err.message });
+    });
+}, { capture: true });
+
 shortcutGrid?.addEventListener('click', (event) => {
     const btn = event.target.closest('[data-keyseq]');
     if (!btn) return;
-    runShortcut(btn.dataset.keyseq);
-});
+    event.preventDefault();
+    event.stopPropagation();
+}, { capture: true });
 
-stage?.addEventListener('pointerdown', () => {
+stage?.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
     stage.focus({ preventScroll: true });
     notifyParentActivity();
 });

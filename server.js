@@ -692,6 +692,18 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96 } = 
         base['disable-auth'] = 'false';
         base['enable-font-smoothing'] = 'true';
         base['enable-desktop-composition'] = 'false';
+
+        // 明确启用 RDP 剪贴板双向重定向。guacd/RDP 默认通常启用，
+        // 但显式传参可以避免连接配置或旧 guacd 默认值导致复制/粘贴被禁用。
+        base['disable-copy'] = 'false';
+        base['disable-paste'] = 'false';
+        base['clipboard-encoding'] = 'UTF-8';
+        console.info('[guacamole]', 'RDP clipboard redirection enabled', {
+            connectionId: conn.id || '',
+            disableCopy: base['disable-copy'],
+            disablePaste: base['disable-paste'],
+            clipboardEncoding: base['clipboard-encoding'],
+        });
     }
 
     if (protocol === 'vnc') {
