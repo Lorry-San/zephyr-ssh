@@ -1305,19 +1305,94 @@ body.terminal-custom-fullscreen-open .terminal-smartbar {
 .result-card pre { background: var(--bg); border-radius: var(--radius); padding: 10px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; line-height: 1.55; }
 .result-card .stderr, .error-text { color: var(--danger); }
 .settings-form .btn { margin-top: 0; }
-.modal-backdrop {
+body.disable-interaction {
+    pointer-events: none;
+    user-select: none;
+}
+body.connection-home-blur .app-shell {
+    filter: blur(10px) saturate(.88) brightness(.78);
+    transform: scale(.992);
+}
+body.connection-transition-opening .app-shell,
+body.connection-transition-closing .app-shell {
+    transition:
+        filter .42s cubic-bezier(.16,1,.3,1),
+        transform .50s cubic-bezier(.22,1,.36,1);
+}
+.connection-transition-layer {
     position: fixed;
     inset: 0;
     z-index: 100;
     display: none;
+    pointer-events: none;
+    transform-origin: top left;
+    background:
+        radial-gradient(circle at 22% 0%, rgba(88,166,255,.18), transparent 34%),
+        radial-gradient(circle at 78% 10%, rgba(63,185,80,.12), transparent 30%),
+        color-mix(in srgb, var(--surface) 96%, var(--bg));
+    border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    border-radius: 18px;
+    clip-path: inset(0 round 18px);
+    will-change: transform, opacity, clip-path, border-radius, box-shadow;
+    contain: paint;
+}
+.connection-transition-layer::before {
+    content: '＋';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 78px;
+    height: 78px;
+    display: grid;
+    place-items: center;
+    border-radius: 22px;
+    transform: translate(-50%, -50%);
+    color: var(--accent-hover);
+    font-size: 40px;
+    font-weight: 500;
+    background:
+        radial-gradient(circle at 30% 18%, rgba(255,255,255,.22), transparent 36%),
+        linear-gradient(145deg, color-mix(in srgb, var(--surface) 88%, transparent), color-mix(in srgb, var(--bg) 86%, transparent));
+    box-shadow: 0 18px 48px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.10);
+    opacity: .92;
+    transition: opacity .18s ease;
+}
+.connection-transition-layer[style*="scale(1)"]::before {
+    opacity: 0;
+}
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 101;
+    display: none;
     place-items: center;
     padding: 18px;
     background: rgba(0,0,0,.48);
+    opacity: 0;
+    pointer-events: none;
+    backdrop-filter: blur(0);
+    -webkit-backdrop-filter: blur(0);
+    transition:
+        opacity .22s ease,
+        backdrop-filter .32s ease,
+        -webkit-backdrop-filter .32s ease;
+}
+.modal-backdrop.show {
+    display: grid;
+}
+.modal-backdrop.show.app-visible {
+    opacity: 1;
+    pointer-events: auto;
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
 }
-.modal-backdrop.show { display: grid; animation: modalBackdropIn .22s ease-out both; }
-.modal-backdrop.closing { display: grid; animation: modalBackdropOut .24s ease-in both; pointer-events: none; }
+.modal-backdrop.closing {
+    display: grid;
+    opacity: 0;
+    pointer-events: none;
+    backdrop-filter: blur(0);
+    -webkit-backdrop-filter: blur(0);
+}
 .connection-modal {
     width: min(620px, 100%);
     max-height: min(88vh, 760px);
@@ -1327,15 +1402,18 @@ body.terminal-custom-fullscreen-open .terminal-smartbar {
     border-radius: var(--radius-xl);
     padding: 18px;
     box-shadow: 0 28px 90px rgba(0,0,0,.42);
-    transform-origin: center;
-    animation: modalIn .30s cubic-bezier(.16,1,.3,1) both;
-    will-change: transform, opacity, filter;
+    opacity: 0;
+    transform: none;
+    filter: none;
+    transition: opacity .26s ease;
+    will-change: opacity;
 }
-.modal-backdrop.closing .connection-modal { animation: modalOut .24s cubic-bezier(.2,.8,.2,1) both; }
-@keyframes modalBackdropIn { from { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); } to { opacity: 1; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); } }
-@keyframes modalBackdropOut { from { opacity: 1; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); } to { opacity: 0; backdrop-filter: blur(0); -webkit-backdrop-filter: blur(0); } }
-@keyframes modalIn { from { opacity: 0; transform: translateY(18px) scale(.96); filter: blur(8px); } to { opacity: 1; transform: none; filter: blur(0); } }
-@keyframes modalOut { from { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); } to { opacity: 0; transform: translateY(14px) scale(.965); filter: blur(8px); } }
+.modal-backdrop.show.app-visible .connection-modal {
+    opacity: 1;
+}
+.modal-backdrop.closing .connection-modal {
+    opacity: 0;
+}
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .icon-btn { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
 .password-field { position: relative; }

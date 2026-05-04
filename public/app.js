@@ -4,6 +4,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [], settings = {};
 let editingId = null;
 let editingSecretLoaded = false;
+let connectionModalTrigger = null;
 let terminalTabs = [], activeTerminalTab = null;
 let openOrderStack = [], visualLayout = [], recentUseStack = [];
 let terminalSmartbarOpen = false;
@@ -274,25 +275,139 @@ function setConnectionTestLatency(text = '', state = '') {
     el.textContent = text;
     el.dataset.state = state;
 }
-function openModal(conn = null) {
+function viewportMetrics() {
+    const vv = window.visualViewport;
+    return {
+        width: Math.round(vv?.width || window.innerWidth || document.documentElement.clientWidth || 1),
+        height: Math.round(vv?.height || window.innerHeight || document.documentElement.clientHeight || 1),
+        left: Math.round(vv?.offsetLeft || 0),
+        top: Math.round(vv?.offsetTop || 0)
+    };
+}
+function connectionTransitionTargetRect(trigger = connectionModalTrigger) {
+    const source = trigger?.isConnected ? trigger : $('#addConnectionBtn');
+    const rect = source?.getBoundingClientRect?.();
+    if (rect?.width && rect?.height) return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, source };
+    const viewport = viewportMetrics();
+    return { left: viewport.width - 86, top: 82, width: 62, height: 62, source: null };
+}
+function connectionTransitionTransform(rect, viewport = viewportMetrics()) {
+    const scale = Math.max(0.025, Math.min(1, rect.width / viewport.width));
+    return {
+        scale,
+        value: `translate(${Math.round(rect.left - viewport.left)}px, ${Math.round(rect.top - viewport.top)}px) scale(${scale})`
+    };
+}
+function resetConnectionTransitionLayer(layer) {
+    if (!layer) return;
+    layer.style.display = 'none';
+    layer.style.transition = 'none';
+    layer.style.transform = '';
+    layer.style.opacity = '';
+    layer.style.clipPath = '';
+    layer.style.borderRadius = '';
+    layer.style.boxShadow = '';
+}
+function prepareConnectionModalForm(conn = null) {
     editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
     setConnectionTestLatency();
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || ($('#connProtocol').value === 'RDP' ? 3389 : $('#connProtocol').value === 'VNC' ? 5900 : 22); $('#connUsername').value = conn?.username || '';
     renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
-    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn }); const modal = $('#connectionModal'); modal.classList.remove('closing'); modal.classList.add('show'); console.debug('[connection-modal]', 'open', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '' });
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn });
+}
+function openModal(conn = null, trigger = null) {
+    const modal = $('#connectionModal');
+    const layer = $('#connectionTransitionLayer');
+    if (!modal || !layer || modal.classList.contains('show')) return;
+    prepareConnectionModalForm(conn);
+    connectionModalTrigger = trigger || connectionTransitionTargetRect().source;
+    const viewport = viewportMetrics();
+    const rect = connectionTransitionTargetRect(connectionModalTrigger);
+    const start = connectionTransitionTransform(rect, viewport);
+    window.clearTimeout(openModal._homeBlurTimer);
+    window.clearTimeout(openModal._appTimer);
+    window.clearTimeout(openModal._finishTimer);
+    window.clearTimeout(closeModal._timer);
+    resetConnectionTransitionLayer(layer);
+    modal.classList.remove('closing', 'app-visible');
+    modal.classList.add('show');
+    document.body.classList.add('disable-interaction', 'connection-transition-opening');
+    connectionModalTrigger?.style?.setProperty('opacity', '0');
+    layer.style.display = 'block';
+    layer.style.transition = 'none';
+    layer.style.transformOrigin = 'top left';
+    layer.style.transform = start.value;
+    layer.style.opacity = '1';
+    layer.style.borderRadius = '18px';
+    layer.style.clipPath = 'inset(0 round 18px)';
+    layer.style.boxShadow = '0 8px 24px rgba(0,0,0,.24)';
+    layer.offsetHeight;
+    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', rect, viewport, scale: start.scale });
+    layer.style.transition = 'transform 0.5s cubic-bezier(0.22,1,0.36,1), clip-path 0.4s ease 0.16s, border-radius 0.4s ease 0.16s, box-shadow 0.5s cubic-bezier(0.22,1,0.36,1), opacity 0.22s ease 0.30s';
+    layer.style.transform = 'translate(0,0) scale(1)';
+    layer.style.borderRadius = '0px';
+    layer.style.clipPath = 'inset(0 round 0px)';
+    layer.style.boxShadow = '0 34px 96px rgba(0,0,0,.44)';
+    layer.style.opacity = '0';
+    openModal._homeBlurTimer = window.setTimeout(() => {
+        document.body.classList.add('connection-home-blur');
+        console.debug('[connection-transition]', 'open:home-blur', { delayMs: 80 });
+    }, 80);
+    openModal._appTimer = window.setTimeout(() => {
+        modal.classList.add('app-visible');
+        console.debug('[connection-transition]', 'open:app-fade-in', { delayMs: 120 });
+    }, 120);
+    openModal._finishTimer = window.setTimeout(() => {
+        resetConnectionTransitionLayer(layer);
+        document.body.classList.remove('disable-interaction', 'connection-transition-opening', 'connection-home-blur');
+        modal.classList.add('app-visible');
+        console.debug('[connection-transition]', 'open:complete', { durationMs: 520 });
+    }, 520);
 }
 function closeModal() {
     const modal = $('#connectionModal');
+    const layer = $('#connectionTransitionLayer');
     if (!modal?.classList.contains('show') || modal.classList.contains('closing')) return;
-    modal.classList.add('closing');
-    setConnectionTestLatency();
-    console.debug('[connection-modal]', 'closing animation start', { connectionId: editingId || '' });
+    const viewport = viewportMetrics();
+    const rect = connectionTransitionTargetRect(connectionModalTrigger);
+    const end = connectionTransitionTransform(rect, viewport);
+    window.clearTimeout(openModal._homeBlurTimer);
+    window.clearTimeout(openModal._appTimer);
+    window.clearTimeout(openModal._finishTimer);
+    window.clearTimeout(closeModal._restoreIconTimer);
     window.clearTimeout(closeModal._timer);
+    modal.classList.add('closing');
+    modal.classList.remove('app-visible');
+    setConnectionTestLatency();
+    document.body.classList.add('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
+    layer.style.display = 'block';
+    layer.style.transition = 'none';
+    layer.style.transformOrigin = 'top left';
+    layer.style.transform = 'translate(0,0) scale(1)';
+    layer.style.opacity = '1';
+    layer.style.borderRadius = '0px';
+    layer.style.clipPath = 'inset(0 round 0px)';
+    layer.style.boxShadow = '0 34px 96px rgba(0,0,0,.44)';
+    layer.offsetHeight;
+    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', rect, viewport, scale: end.scale });
+    layer.style.transition = 'transform 0.46s cubic-bezier(0.2,0.8,0.2,1), clip-path 0.34s ease 0.12s, border-radius 0.34s ease 0.12s, box-shadow 0.46s cubic-bezier(0.2,0.8,0.2,1), opacity 0.18s ease 0.32s';
+    layer.style.transform = end.value;
+    layer.style.borderRadius = '18px';
+    layer.style.clipPath = 'inset(0 round 18px)';
+    layer.style.boxShadow = '0 8px 24px rgba(0,0,0,.24)';
+    layer.style.opacity = '0';
+    closeModal._restoreIconTimer = window.setTimeout(() => {
+        connectionModalTrigger?.style?.removeProperty('opacity');
+        console.debug('[connection-transition]', 'close:icon-restored', { delayMs: 250 });
+    }, 250);
     closeModal._timer = window.setTimeout(() => {
-        modal.classList.remove('show', 'closing');
-        console.debug('[connection-modal]', 'closed after animation');
-    }, 260);
+        modal.classList.remove('show', 'closing', 'app-visible');
+        resetConnectionTransitionLayer(layer);
+        document.body.classList.remove('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
+        connectionModalTrigger?.style?.removeProperty('opacity');
+        console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
+    }, 500);
 }
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
@@ -1139,12 +1254,12 @@ function bindEvents() {
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     $$('.settings-tab').forEach((btn) => btn.addEventListener('click', () => { $$('.settings-tab').forEach((b) => b.classList.remove('active')); btn.classList.add('active'); $$('.settings-panel').forEach((p) => p.classList.remove('active')); $(`#settings-${btn.dataset.settings}`).classList.add('active'); }));
     $('#appThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#settingsThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
-    $('#addConnectionBtn').addEventListener('click', () => openModal()); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $$('.route-type-tab').forEach((btn) => btn.addEventListener('click', () => setRouteMode($('#connMode').value === btn.dataset.routeMode ? 'direct' : btn.dataset.routeMode))); $('#addJumpRouteBtn').addEventListener('click', addJumpRouteRow); $('#jumpRouteList').addEventListener('click', (e) => { if (!e.target.closest('[data-remove-jump-route]')) return; const ids = $$('#jumpRouteList [data-jump-route-select]').filter((el) => !el.closest('[data-jump-route-row]').contains(e.target)).map((el) => el.value).filter(Boolean); renderJumpRouteRows(ids); }); $('#testConnectionBtn').addEventListener('click', testConnection);
+    $('#addConnectionBtn').addEventListener('click', (e) => openModal(null, e.currentTarget)); $('#closeModalBtn').addEventListener('click', closeModal); $('#cancelModalBtn').addEventListener('click', closeModal); $('#toggleConnPassword').addEventListener('click', () => { const el = $('#connPassword'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleConnPassword').textContent = el.type === 'password' ? '👁️' : '🙈'; }); $('#revealConnSecrets').addEventListener('click', () => revealConnectionSecrets().catch((err) => toast(err.message))); $$('.route-type-tab').forEach((btn) => btn.addEventListener('click', () => setRouteMode($('#connMode').value === btn.dataset.routeMode ? 'direct' : btn.dataset.routeMode))); $('#addJumpRouteBtn').addEventListener('click', addJumpRouteRow); $('#jumpRouteList').addEventListener('click', (e) => { if (!e.target.closest('[data-remove-jump-route]')) return; const ids = $$('#jumpRouteList [data-jump-route-select]').filter((el) => !el.closest('[data-jump-route-row]').contains(e.target)).map((el) => el.value).filter(Boolean); renderJumpRouteRows(ids); }); $('#testConnectionBtn').addEventListener('click', testConnection);
     $('#connProtocol').addEventListener('change', () => updateProtocolFields({ preservePort: false }));
     $('#connectionForm').addEventListener('submit', saveConnection); ['searchInput', 'protocolFilter', 'tagFilter', 'sortSelect'].forEach((id) => $(`#${id}`).addEventListener('input', renderConnections));
     $('#connectionGrid').addEventListener('click', async (e) => {
         const edit = e.target.closest('[data-edit]')?.dataset.edit, del = e.target.closest('[data-delete]')?.dataset.delete, connect = e.target.closest('[data-connect]')?.dataset.connect;
-        if (edit) openModal(connections.find((c) => c.id === edit));
+        if (edit) openModal(connections.find((c) => c.id === edit), e.target.closest('[data-edit]'));
         if (del && confirm('确定删除该连接？')) {
             const card = e.target.closest('.connection-card');
             try {
