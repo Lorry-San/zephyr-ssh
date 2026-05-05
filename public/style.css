@@ -29,7 +29,7 @@
     --app-keyboard-inset: 0px;
     --app-visual-vh: 100vh;
     --app-visual-offset-top: 0px;
-    --connection-ios-spring: cubic-bezier(0.28, 1, 0.3, 1);
+    --connection-ios-spring: cubic-bezier(0.32, 0.72, 0, 1);
     --connection-app-duration: 0.5s;
     --connection-shadow-idle: 0 4px 12px rgba(0,0,0,0.2);
     --connection-shadow-active: 0 40px 100px rgba(0,0,0,0.5);
@@ -186,6 +186,35 @@ body.app-body::before {
 
 body.app-body.theme-ripple-active::before {
     animation: appThemeRipple .54s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#addConnectionBtn,
+.connection-list [data-edit] {
+    transform: translateZ(0) scale(var(--connection-press-scale, 1));
+    transform-origin: center;
+    will-change: transform;
+    transition:
+        transform 0.18s cubic-bezier(0.32, 0.72, 0, 1),
+        background-color 260ms ease,
+        background 260ms ease,
+        color 260ms ease,
+        border-color 260ms ease,
+        box-shadow 260ms ease,
+        opacity 260ms ease,
+        filter 260ms ease;
+}
+#addConnectionBtn.connection-pressing,
+.connection-list [data-edit].connection-pressing {
+    --connection-press-scale: 0.965;
+    transition:
+        transform 0.10s cubic-bezier(0.32, 0.72, 0, 1),
+        background-color 180ms ease,
+        background 180ms ease,
+        color 180ms ease,
+        border-color 180ms ease,
+        box-shadow 180ms ease,
+        opacity 180ms ease,
+        filter 180ms ease;
 }
 
 @keyframes appThemeRipple {
