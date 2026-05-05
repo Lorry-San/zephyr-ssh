@@ -791,43 +791,96 @@ function getRangeIntersectionText(range, node) {
     return text;
 }
 
+function bridgeCellToChar(cell) {
+    const cp = Number(cell?.char || 0);
+    return cp >= 32 ? String.fromCodePoint(cp) : ' ';
+}
+
+function readMainBufferRowText(rowIndex, cols) {
+    const bridge = term?.bridge;
+    if (!bridge || rowIndex < 0) return '';
+    let text = '';
+    for (let col = 0; col < cols; col++) text += bridgeCellToChar(bridge.getCell(rowIndex, col));
+    return cleanTerminalRowText(text);
+}
+
+function readScrollbackBufferRowText(rowEl, cols) {
+    const bridge = term?.bridge;
+    const renderer = term?.renderer;
+    if (!bridge || !renderer?._scrollbackRowEls) return '';
+    const index = renderer._scrollbackRowEls.indexOf(rowEl);
+    const count = bridge.getScrollbackCount?.() || 0;
+    if (index < 0 || count <= 0) return '';
+
+    // renderer.syncScrollback() 以 offset 从大到小插入 DOM，因此 DOM 中第 0 个 scrollback row
+    // 对应最老的 scrollback offset = count - 1。
+    const offset = count - 1 - index;
+    if (offset < 0) return '';
+
+    const lineLen = Math.max(0, Math.min(cols, bridge.getScrollbackLineLen(offset) || 0));
+    let text = '';
+    for (let col = 0; col < lineLen; col++) text += bridgeCellToChar(bridge.getScrollbackCell(offset, col));
+    const fromBridge = cleanTerminalRowText(text);
+    const fromDom = cleanTerminalRowText(rowEl.textContent || '');
+
+    // 如果 offset 映射因 wterm 内部滚动更新而不一致，回退 DOM 行文本，避免复制错行或空白。
+    if (fromBridge && (!fromDom || fromBridge === fromDom || fromDom.includes(fromBridge) || fromBridge.includes(fromDom))) return fromBridge;
+    return fromDom;
+}
+
+function readWTermBufferRowText(rowEl, cols) {
+    const renderer = term?.renderer;
+    if (!rowEl || !renderer) return cleanTerminalRowText(rowEl?.textContent || '');
+    if (rowEl.classList.contains('term-scrollback-row')) return readScrollbackBufferRowText(rowEl, cols);
+
+    const rowIndex = renderer.rowEls?.indexOf(rowEl) ?? -1;
+    const fromBridge = readMainBufferRowText(rowIndex, cols);
+    const fromDom = cleanTerminalRowText(rowEl.textContent || '');
+
+    // 主屏行没有 lineLen API，bridge 读取后需要 trim；若异常则回退 DOM。
+    return fromBridge || fromDom;
+}
+
 function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
     if (!selection || selection.rangeCount === 0 || !selectionTouchesTerminal(selection)) return '';
-    const rows = Array.from(wtermWrapper.querySelectorAll('.term-row'));
-    if (!rows.length) return '';
+    const fallbackText = getSelectionTextFromRanges(selection) || selection.toString?.() || '';
+    if (!fallbackText || !fallbackText.trim()) return '';
 
-    const cols = getTerminalColsForCopy();
+    const rows = Array.from(wtermWrapper.querySelectorAll('.term-row'));
+    if (!rows.length || !term?.bridge) return normalizeCopiedTerminalText(fallbackText);
+
+    const cols = Math.max(2, Number(term.bridge.getCols?.() || getTerminalColsForCopy()));
     const selectedRows = [];
     for (const row of rows) {
-        const rowParts = [];
         let intersects = false;
         for (let i = 0; i < selection.rangeCount; i++) {
-            const range = selection.getRangeAt(i);
             try {
-                if (!range.intersectsNode(row)) continue;
-                intersects = true;
-                rowParts.push(getRangeIntersectionText(range, row));
+                if (selection.getRangeAt(i).intersectsNode(row)) {
+                    intersects = true;
+                    break;
+                }
             } catch (_) {}
         }
         if (!intersects) continue;
-        const selectedText = cleanTerminalRowText(rowParts.join(''));
-        const fullRowText = cleanTerminalRowText(row.textContent || '');
+
+        const text = readWTermBufferRowText(row, cols);
+        if (!text) continue;
         selectedRows.push({
-            text: selectedText,
-            fullColumns: terminalDisplayColumns(fullRowText),
-            selectedColumns: terminalDisplayColumns(selectedText),
-            selectedToRowEnd: selectedText.length > 0 && fullRowText.endsWith(selectedText),
+            text,
+            fullColumns: terminalDisplayColumns(text),
+            source: row.classList.contains('term-scrollback-row') ? 'scrollback' : 'screen',
         });
     }
 
-    if (!selectedRows.length) return '';
+    if (!selectedRows.length) return normalizeCopiedTerminalText(fallbackText);
+
     let result = '';
     let softWrapJoins = 0;
     let hardLineBreaks = 0;
     selectedRows.forEach((row, index) => {
         result += row.text;
         if (index >= selectedRows.length - 1) return;
-        const isSoftWrapped = row.fullColumns >= cols && row.selectedToRowEnd;
+        const isSoftWrapped = row.fullColumns >= cols;
         if (isSoftWrapped) softWrapJoins += 1;
         else {
             hardLineBreaks += 1;
@@ -836,15 +889,18 @@ function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
     });
 
     const normalized = normalizeCopiedTerminalText(result);
-    console.debug('[TerminalCopy]', 'selection reconstructed', {
+    if (!normalized.trim()) return normalizeCopiedTerminalText(fallbackText);
+    console.debug('[TerminalCopy]', 'selection reconstructed from wterm bridge', {
         rows: selectedRows.length,
         cols,
         softWrapJoins,
         hardLineBreaks,
+        fallbackLength: fallbackText.length,
         rawLength: result.length,
         normalizedLength: normalized.length,
         rawNewlines: (result.match(/\n/g) || []).length,
         normalizedNewlines: (normalized.match(/\n/g) || []).length,
+        sources: [...new Set(selectedRows.map((row) => row.source))],
     });
     return normalized;
 }
