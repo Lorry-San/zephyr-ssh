@@ -308,20 +308,42 @@ function syncConnectionLayerVisual(layer, source) {
         return;
     }
     const style = getComputedStyle(source);
+    const shellBackground = `
+        radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%),
+        radial-gradient(circle at 82% 8%, color-mix(in srgb, var(--success) 6%, transparent), transparent 28%),
+        var(--surface)
+    `;
     layer.innerHTML = `<span class="connection-transition-source-visual">${source.innerHTML}</span>`;
     layer.dataset.hasSourceVisual = 'true';
-    layer.style.background = style.background;
-    layer.style.border = style.border;
+    layer.style.background = shellBackground;
+    layer.style.border = '1px solid color-mix(in srgb, var(--border) 50%, transparent)';
     layer.style.color = style.color;
     layer.style.font = style.font;
     layer.style.letterSpacing = style.letterSpacing;
     layer.style.textAlign = style.textAlign;
-    layer.style.padding = style.padding;
+    layer.style.padding = '0';
     layer.style.display = 'inline-flex';
-    layer.style.alignItems = style.alignItems || 'center';
-    layer.style.justifyContent = style.justifyContent || 'center';
+    layer.style.alignItems = 'center';
+    layer.style.justifyContent = 'center';
     layer.style.gap = style.gap;
     layer.style.whiteSpace = 'nowrap';
+
+    const visual = layer.querySelector('.connection-transition-source-visual');
+    if (visual) {
+        visual.style.background = style.background;
+        visual.style.border = style.border;
+        visual.style.borderRadius = style.borderRadius;
+        visual.style.color = style.color;
+        visual.style.font = style.font;
+        visual.style.letterSpacing = style.letterSpacing;
+        visual.style.padding = style.padding;
+        visual.style.gap = style.gap;
+    }
+    console.debug('[connection-transition]', 'source visual synced', {
+        sourceRole: source.id === 'addConnectionBtn' ? 'add' : source.matches('[data-edit]') ? 'edit' : 'other',
+        sourceBackground: style.background,
+        shellBackground: 'neutral-surface'
+    });
 }
 function resetConnectionTransitionLayer(layer) {
     if (!layer) return;

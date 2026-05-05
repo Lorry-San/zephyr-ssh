@@ -1356,8 +1356,11 @@ body.connection-transition-closing .app-shell {
     align-items: center;
     justify-content: center;
     gap: inherit;
+    width: 100%;
+    height: 100%;
     max-width: 100%;
     min-width: 0;
+    box-sizing: border-box;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
