@@ -43,7 +43,48 @@ function getPreferredTheme() {
     const saved = localStorage.getItem('zephyr-theme');
     return saved === 'light' || saved === 'dark' ? saved : getSystemTheme();
 }
-function broadcastThemeToTerminals(theme) { $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme }, '*')); }
+function postTerminalLayoutStabilize(reason = 'layout-stabilize', { focus = false, tabId = activeTerminalTab } = {}) {
+    const workspace = $('#terminalWorkspace');
+    const frames = tabId
+        ? $$(`#terminalWorkspace iframe.terminal-frame[data-frame="${CSS.escape(tabId)}"]`)
+        : $$('#terminalWorkspace iframe.terminal-frame');
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    const workspaceRect = workspace?.getBoundingClientRect?.();
+    console.info('[TerminalLayoutDiagnostics]', {
+        event: 'parent:layout-stabilize',
+        reason,
+        focus,
+        tabId,
+        frames: frames.length,
+        workspace: workspaceRect ? {
+            width: Math.round(workspaceRect.width),
+            height: Math.round(workspaceRect.height),
+            top: Math.round(workspaceRect.top),
+            left: Math.round(workspaceRect.left),
+        } : null,
+        fullscreen: !!fullscreenElement,
+        customFullscreen: !!workspace?.classList.contains('custom-fullscreen'),
+        keyboardOpen: !!workspace?.classList.contains('keyboard-open'),
+        appKeyboardOpen,
+        appKeyboardBaseline,
+        visualViewport: window.visualViewport ? {
+            width: Math.round(window.visualViewport.width || 0),
+            height: Math.round(window.visualViewport.height || 0),
+            offsetTop: Math.round(window.visualViewport.offsetTop || 0),
+            offsetLeft: Math.round(window.visualViewport.offsetLeft || 0),
+        } : null,
+    });
+    frames.forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'layout-stabilize', reason, focus }, '*'));
+}
+function scheduleTerminalLayoutStabilize(reason = 'layout-stabilize', options = {}) {
+    window.clearTimeout(scheduleTerminalLayoutStabilize._timer);
+    scheduleTerminalLayoutStabilize._timer = window.setTimeout(() => {
+        [0, 80, 220, 520].forEach((delay, index) => {
+            window.setTimeout(() => postTerminalLayoutStabilize(`${reason}:phase-${index}`, options), delay);
+        });
+    }, 24);
+}
+function broadcastThemeToTerminals(theme) { $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme }, '*')); scheduleTerminalLayoutStabilize('theme-change', { focus: false, tabId: null }); }
 function applyTheme(theme, { persist = false } = {}) {
     const root = document.documentElement;
     const previousTheme = root.getAttribute('data-theme') || getSystemTheme();
@@ -151,6 +192,7 @@ function switchView(name) {
     $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
     document.body.classList.toggle('terminal-mode', name === 'terminal');
+    if (name === 'terminal') scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
 }
 function parseTags(v) { return String(v || '').split(',').map((x) => x.trim()).filter(Boolean); }
 function base64urlToBuffer(value) { const s = String(value).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)); }
@@ -990,6 +1032,7 @@ function renderTerminalWorkspace() {
         splitterY.dataset.splitter = 'y';
         workspace.appendChild(splitterY);
     }
+    scheduleTerminalLayoutStabilize('render-terminal-workspace', { focus: true });
 }
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     syncVisualLayout({ preserve: true });
@@ -1109,6 +1152,8 @@ function resetTerminalWorkspaceKeyboard() {
         frame.style.height = '';
         frame.style.maxHeight = '';
     });
+    console.info('[TerminalLayoutDiagnostics]', { event: 'parent:keyboard-reset' });
+    scheduleTerminalLayoutStabilize('parent-keyboard-reset', { focus: true });
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
@@ -1139,6 +1184,15 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
         frame.style.height = '100%';
         frame.style.maxHeight = '100%';
     }
+    console.info('[TerminalLayoutDiagnostics]', {
+        event: 'parent:keyboard-apply',
+        inset,
+        viewportHeight,
+        offsetTop,
+        activeTerminalTab,
+        isFullscreenTerminalSurface,
+    });
+    scheduleTerminalLayoutStabilize('parent-keyboard-apply', { focus: true });
 }
 
 function updateFullscreenKeyboardFromViewport() {

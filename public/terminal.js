@@ -282,6 +282,63 @@ const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 const TERMINAL_BOTTOM_THRESHOLD = 48;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
+const TERMINAL_LAYOUT_DIAGNOSTICS = true;
+const TERMINAL_MIN_RESIZE_WIDTH = 120;
+const TERMINAL_MIN_RESIZE_HEIGHT = 80;
+const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
+
+function logTerminalLayoutDiagnostics(event, details = {}) {
+    if (!TERMINAL_LAYOUT_DIAGNOSTICS) return;
+    try {
+        const viewport = window.visualViewport;
+        const wrapperRect = wtermWrapper?.getBoundingClientRect?.();
+        const containerRect = terminalContainer?.getBoundingClientRect?.();
+        const gridRect = wtermWrapper?.querySelector?.('.term-grid')?.getBoundingClientRect?.();
+        console.info('[TerminalLayoutDiagnostics]', {
+            event,
+            embeddedMode,
+            visibility: document.visibilityState,
+            mobileKeyboardOpen,
+            keyboardFocusLikely,
+            wrapper: wrapperRect ? {
+                width: Math.round(wrapperRect.width),
+                height: Math.round(wrapperRect.height),
+                top: Math.round(wrapperRect.top),
+                left: Math.round(wrapperRect.left),
+                scrollTop: Math.round(wtermWrapper?.scrollTop || 0),
+                scrollHeight: Math.round(wtermWrapper?.scrollHeight || 0),
+                clientHeight: Math.round(wtermWrapper?.clientHeight || 0),
+            } : null,
+            container: containerRect ? {
+                width: Math.round(containerRect.width),
+                height: Math.round(containerRect.height),
+                top: Math.round(containerRect.top),
+                left: Math.round(containerRect.left),
+            } : null,
+            grid: gridRect ? {
+                width: Math.round(gridRect.width),
+                height: Math.round(gridRect.height),
+            } : null,
+            viewport: viewport ? {
+                width: Math.round(viewport.width || 0),
+                height: Math.round(viewport.height || 0),
+                offsetTop: Math.round(viewport.offsetTop || 0),
+                offsetLeft: Math.round(viewport.offsetLeft || 0),
+            } : null,
+            inner: {
+                width: Math.round(window.innerWidth || 0),
+                height: Math.round(window.innerHeight || 0),
+            },
+            term: term ? {
+                cols: Number(term.cols ?? term._cols ?? term.options?.cols ?? 0),
+                rows: Number(term.rows ?? term._rows ?? term.options?.rows ?? 0),
+            } : null,
+            ...details,
+        });
+    } catch (err) {
+        console.info('[TerminalLayoutDiagnostics]', event, details, err);
+    }
+}
 
 function getCssPxVar(name) {
     return Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0);
@@ -402,7 +459,7 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
         document.documentElement.classList.remove('viewport-updating');
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
-        scheduleTerminalResize();
+        requestStableTerminalLayout('viewport-css-animation-settled', { includeResize: true });
     }, immediate ? 40 : 600);  // 增加延迟到 600ms 以匹配更长的 transition
 }
 
@@ -569,10 +626,14 @@ window.addEventListener('message', (e) => {
     if (e.data?.source !== 'zephyr-app') return;
     if (e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
         if (!hasTerminalThemeOverride()) applyTheme(e.data.theme);
+        requestStableTerminalLayout('parent-theme-change', { includeResize: false });
     }
     if (e.data.type === 'focus-terminal') {
-        try { term?.focus?.(); } catch (_) {}
-        wtermWrapper?.focus?.({ preventScroll: true });
+        requestStableTerminalLayout('parent-focus-terminal', { includeResize: true, focus: true });
+    }
+    if (e.data.type === 'layout-stabilize') {
+        logTerminalLayoutDiagnostics('parent-layout-stabilize-message', { payload: e.data });
+        requestStableTerminalLayout(e.data.reason || 'parent-layout-stabilize', { includeResize: true, focus: !!e.data.focus });
     }
 });
 
@@ -602,33 +663,108 @@ function getTerminalCharMetrics() {
     };
 }
 
-function sendTerminalResize(cols, rows) {
+function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
+    if (!term || !wtermWrapper) return;
+    const rect = wtermWrapper.getBoundingClientRect();
+    if (rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT) {
+        logTerminalLayoutDiagnostics('wterm-layout:skipped-unstable-rect', {
+            reason,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+        });
+        return;
+    }
+
+    try { term.resize?.(); } catch (_) {}
+    try { term.fit?.(); } catch (_) {}
+    try { term.refresh?.(); } catch (_) {}
+    try { term.render?.(); } catch (_) {}
+    try { term.renderer?.refresh?.(); } catch (_) {}
+    try { term.renderer?.render?.(); } catch (_) {}
+    try { term.renderer?.syncRows?.(); } catch (_) {}
+    try { term.renderer?.syncScrollback?.(); } catch (_) {}
+    try { term._refresh?.(); } catch (_) {}
+    try { term._render?.(); } catch (_) {}
+
+    logTerminalLayoutDiagnostics('wterm-layout:refreshed', { reason });
+}
+
+function requestStableTerminalLayout(reason = 'stable-layout', { includeResize = true, focus = false } = {}) {
+    window.clearTimeout(requestStableTerminalLayout._coalesceTimer);
+    requestStableTerminalLayout._pendingReason = reason;
+    requestStableTerminalLayout._includeResize = requestStableTerminalLayout._includeResize || includeResize;
+    requestStableTerminalLayout._focus = requestStableTerminalLayout._focus || focus;
+    requestStableTerminalLayout._coalesceTimer = window.setTimeout(() => {
+        const runReason = requestStableTerminalLayout._pendingReason || reason;
+        const shouldResize = requestStableTerminalLayout._includeResize !== false;
+        const shouldFocus = !!requestStableTerminalLayout._focus;
+        requestStableTerminalLayout._pendingReason = '';
+        requestStableTerminalLayout._includeResize = false;
+        requestStableTerminalLayout._focus = false;
+
+        logTerminalLayoutDiagnostics('stable-layout:scheduled', { reason: runReason, includeResize: shouldResize, focus: shouldFocus });
+        TERMINAL_STABLE_LAYOUT_DELAYS.forEach((delay, index) => {
+            window.setTimeout(() => {
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        invokeWTermLayoutRefresh(`${runReason}:phase-${index}`);
+                        if (shouldResize) sendTerminalResize(undefined, undefined, { reason: `${runReason}:phase-${index}`, force: index === TERMINAL_STABLE_LAYOUT_DELAYS.length - 1 });
+                        shouldFollowTerminalOutput = true;
+                        scheduleTerminalScrollToBottom();
+                        scheduleTerminalScrollbarUpdate();
+                        if (shouldFocus) {
+                            try { term?.focus?.(); } catch (_) {}
+                            try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
+                        }
+                    });
+                });
+            }, delay);
+        });
+    }, 24);
+}
+
+function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {}) {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
     if (Number.isFinite(cols) && Number.isFinite(rows)) {
-        wsConnection.send(JSON.stringify({
-            type: 'resize',
-            rows: Math.max(2, Math.floor(rows)),
-            cols: Math.max(2, Math.floor(cols)),
-        }));
+        const nextCols = Math.max(2, Math.floor(cols));
+        const nextRows = Math.max(2, Math.floor(rows));
+        wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
+        logTerminalLayoutDiagnostics('resize:explicit-sent', { reason, cols: nextCols, rows: nextRows });
         return;
     }
     const rect = wtermWrapper.getBoundingClientRect();
+    if (!force && (rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
+        logTerminalLayoutDiagnostics('resize:skipped-unstable-rect', {
+            reason,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+        });
+        requestStableTerminalLayout(`${reason}:unstable-rect`, { includeResize: true });
+        return;
+    }
     const { lineHeight, charWidth } = getTerminalCharMetrics();
     let effectiveHeight = rect.height;
     if (mobileKeyboardOpen && window.visualViewport) {
         const viewportBottom = window.visualViewport.offsetTop + window.visualViewport.height;
         effectiveHeight = Math.max(lineHeight * 2, Math.min(rect.height, viewportBottom - rect.top));
     }
-    wsConnection.send(JSON.stringify({
-        type: 'resize',
-        rows: Math.max(2, Math.floor(effectiveHeight / lineHeight)),
-        cols: Math.max(2, Math.floor(rect.width / charWidth)),
-    }));
+    const nextRows = Math.max(2, Math.floor(effectiveHeight / lineHeight));
+    const nextCols = Math.max(2, Math.floor(rect.width / charWidth));
+    wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
+    logTerminalLayoutDiagnostics('resize:measured-sent', {
+        reason,
+        force,
+        cols: nextCols,
+        rows: nextRows,
+        lineHeight: Number(lineHeight.toFixed(2)),
+        charWidth: Number(charWidth.toFixed(2)),
+        effectiveHeight: Math.round(effectiveHeight),
+    });
 }
 
-function scheduleTerminalResize() {
+function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
     window.clearTimeout(scheduleTerminalResize._timer);
-    scheduleTerminalResize._timer = window.setTimeout(sendTerminalResize, 120);
+    scheduleTerminalResize._timer = window.setTimeout(() => sendTerminalResize(undefined, undefined, { reason }), delay);
 }
 
 function applyTerminalFontSize(size, { persist = true } = {}) {
@@ -2854,7 +2990,7 @@ function applyKeyboardFallbackAvoidance() {
     animateViewportCssMetrics(metrics.viewportHeight, metrics.offsetTop);
     shouldFollowTerminalOutput = true;
     scheduleTerminalScrollToBottom();
-    scheduleTerminalResize();
+    requestStableTerminalLayout('keyboard-fallback-applied', { includeResize: true });
     return true;
 }
 
@@ -3595,6 +3731,26 @@ window.addEventListener('resize', () => {
     setStableViewportHeight();
     [fileManager, infoModal, dockerPanel].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
+    logTerminalLayoutDiagnostics('window-resize');
+    requestStableTerminalLayout('window-resize', { includeResize: true });
+});
+window.visualViewport?.addEventListener('resize', () => {
+    logTerminalLayoutDiagnostics('visual-viewport-resize');
+    requestStableTerminalLayout('visual-viewport-resize', { includeResize: true });
+}, { passive: true });
+window.visualViewport?.addEventListener('scroll', () => {
+    logTerminalLayoutDiagnostics('visual-viewport-scroll');
+    requestStableTerminalLayout('visual-viewport-scroll', { includeResize: true });
+}, { passive: true });
+window.addEventListener('pageshow', (e) => {
+    logTerminalLayoutDiagnostics('pageshow', { persisted: !!e.persisted });
+    requestStableTerminalLayout('pageshow', { includeResize: true, focus: true });
+});
+document.addEventListener('visibilitychange', () => {
+    logTerminalLayoutDiagnostics('visibilitychange');
+    if (document.visibilityState === 'visible') {
+        requestStableTerminalLayout('visibility-visible', { includeResize: true, focus: true });
+    }
 });
 
 // ---------- 辅助键 / 终端输入 ----------
@@ -3958,7 +4114,7 @@ async function initWTerm(connectionToken = activeConnectionToken) {
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
             onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }),
-            onResize: (cols, rows) => sendTerminalResize(cols, rows),
+            onResize: (cols, rows) => sendTerminalResize(cols, rows, { reason: 'wterm-onResize' }),
         });
     } catch {
         term = new WTermClass(wtermWrapper);
@@ -3971,7 +4127,7 @@ async function initWTerm(connectionToken = activeConnectionToken) {
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
 
-    const observeResize = () => sendTerminalResize();
+    const observeResize = () => requestStableTerminalLayout('wterm-wrapper-resize-observer', { includeResize: true });
     let ro = null;
     if (window.ResizeObserver) {
         ro = new ResizeObserver(() => { clearTimeout(ro._timer); ro._timer = setTimeout(observeResize, 150); });
