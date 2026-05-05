@@ -295,6 +295,36 @@ function connectionTransitionTargetRect(trigger = connectionModalTrigger) {
 function nextAnimationFrame(fn) {
     requestAnimationFrame(() => requestAnimationFrame(fn));
 }
+function getConnectionTransitionShadowLayer() {
+    let shadow = $('#connectionTransitionShadow');
+    if (!shadow) {
+        shadow = document.createElement('div');
+        shadow.id = 'connectionTransitionShadow';
+        shadow.className = 'connection-transition-shadow';
+        shadow.style.position = 'fixed';
+        shadow.style.inset = 'auto';
+        shadow.style.background = 'transparent';
+        shadow.style.border = '0';
+        shadow.style.boxSizing = 'border-box';
+        shadow.style.pointerEvents = 'none';
+        shadow.style.contain = 'layout paint style';
+        shadow.style.willChange = 'left, top, width, height, border-radius, box-shadow, opacity';
+        document.body.appendChild(shadow);
+    }
+    return shadow;
+}
+function resetConnectionTransitionShadow(shadow = $('#connectionTransitionShadow')) {
+    if (!shadow) return;
+    shadow.style.visibility = 'hidden';
+    shadow.style.transition = 'none';
+    shadow.style.opacity = '0';
+    shadow.style.left = '';
+    shadow.style.top = '';
+    shadow.style.width = '';
+    shadow.style.height = '';
+    shadow.style.borderRadius = '';
+    shadow.style.transform = '';
+}
 function setConnectionLayerRect(layer, rect) {
     layer.style.left = `${rect.left}px`;
     layer.style.top = `${rect.top}px`;
@@ -441,6 +471,8 @@ function openModal(conn = null, trigger = null) {
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._timer);
     window.clearTimeout(closeModal._restoreIconTimer);
+    window.clearTimeout(closeModal._shadowTimer);
+    resetConnectionTransitionShadow();
     resetConnectionTransitionLayer(layer);
     modal.classList.remove('closing', 'app-visible');
     modal.classList.add('show');
@@ -453,7 +485,7 @@ function openModal(conn = null, trigger = null) {
     setConnectionLayerRect(layer, connectionModalOriginRect);
     layer.style.transition = 'none';
     layer.style.borderRadius = getComputedStyle(sourceRect.source || connectionModalTrigger || layer).borderRadius || '18px';
-    layer.style.boxShadow = 'var(--connection-shadow-idle)';
+    layer.style.boxShadow = 'none';
     layer.style.visibility = 'visible';
     layer.style.pointerEvents = 'auto';
     connectionModalTrigger?.style?.setProperty('opacity', '0');
@@ -471,15 +503,14 @@ function openModal(conn = null, trigger = null) {
             left var(--connection-app-duration) var(--connection-ios-spring),
             width var(--connection-app-duration) var(--connection-ios-spring),
             height var(--connection-app-duration) var(--connection-ios-spring),
-            border-radius var(--connection-app-duration) var(--connection-ios-spring),
-            box-shadow 0.3s ease-out
+            border-radius var(--connection-app-duration) var(--connection-ios-spring)
         `;
         layer.style.left = `${viewport.left}px`;
         layer.style.top = `${viewport.top}px`;
         layer.style.width = `${viewport.width}px`;
         layer.style.height = `${viewport.height}px`;
         layer.style.borderRadius = '0px';
-        layer.style.boxShadow = 'var(--connection-shadow-active)';
+        layer.style.boxShadow = 'none';
         console.debug('[connection-transition]', 'open:morph-start', { durationMs: 500 });
     });
 
@@ -506,6 +537,7 @@ function closeModal() {
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._restoreIconTimer);
     window.clearTimeout(closeModal._timer);
+    window.clearTimeout(closeModal._shadowTimer);
 
     modal.classList.add('closing');
     modal.classList.remove('app-visible');
@@ -518,7 +550,7 @@ function closeModal() {
     const sourceEl = currentRect.source || connectionModalTrigger;
     const sourceStyle = sourceEl?.isConnected ? getComputedStyle(sourceEl) : null;
     const sourceBorderRadius = sourceStyle?.borderRadius || getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
-    const sourceBoxShadow = 'var(--connection-shadow-idle)';
+    const shadowLayer = getConnectionTransitionShadowLayer();
 
     applyConnectionLayerSourceChrome(layer, sourceEl, { revealVisual: true });
 
@@ -530,10 +562,23 @@ function closeModal() {
     layer.style.width = `${viewport.width}px`;
     layer.style.height = `${viewport.height}px`;
     layer.style.borderRadius = '0px';
-    layer.style.boxShadow = 'var(--connection-shadow-active)';
+    layer.style.boxShadow = 'none';
     layer.classList.remove('source-visual-hidden');
 
+    shadowLayer.style.visibility = 'visible';
+    shadowLayer.style.pointerEvents = 'none';
+    shadowLayer.style.transition = 'none';
+    shadowLayer.style.left = `${viewport.left}px`;
+    shadowLayer.style.top = `${viewport.top}px`;
+    shadowLayer.style.width = `${viewport.width}px`;
+    shadowLayer.style.height = `${viewport.height}px`;
+    shadowLayer.style.borderRadius = '0px';
+    shadowLayer.style.boxShadow = 'var(--connection-shadow-active)';
+    shadowLayer.style.opacity = '1';
+    shadowLayer.style.zIndex = '99';
+
     void layer.offsetHeight;
+    void shadowLayer.offsetHeight;
 
     console.debug('[connection-transition]', 'close:init', {
         connectionId: editingId || '',
@@ -548,13 +593,25 @@ function closeModal() {
             left var(--connection-app-duration) var(--connection-ios-spring),
             width var(--connection-app-duration) var(--connection-ios-spring),
             height var(--connection-app-duration) var(--connection-ios-spring),
-            border-radius var(--connection-app-duration) var(--connection-ios-spring),
-            box-shadow 0.3s ease-out
+            border-radius var(--connection-app-duration) var(--connection-ios-spring)
         `;
 
         setConnectionLayerRect(layer, sourceRect);
         layer.style.borderRadius = sourceBorderRadius;
-        layer.style.boxShadow = sourceBoxShadow;
+
+        shadowLayer.style.transition = `
+            left var(--connection-app-duration) var(--connection-ios-spring),
+            top var(--connection-app-duration) var(--connection-ios-spring),
+            width var(--connection-app-duration) var(--connection-ios-spring),
+            height var(--connection-app-duration) var(--connection-ios-spring),
+            border-radius var(--connection-app-duration) var(--connection-ios-spring),
+            opacity 0.72s cubic-bezier(.16, 1, .3, 1),
+            box-shadow 0.72s cubic-bezier(.16, 1, .3, 1)
+        `;
+        setConnectionLayerRect(shadowLayer, sourceRect);
+        shadowLayer.style.borderRadius = sourceBorderRadius;
+        shadowLayer.style.boxShadow = '0 6px 18px rgba(0,0,0,0.10)';
+        shadowLayer.style.opacity = '0';
 
         console.debug('[connection-transition]', 'close:morph-start', { durationMs: 500 });
     });
@@ -589,6 +646,7 @@ function closeModal() {
         resetConnectionTransitionLayer(layer);
 
         restoreTriggerWithoutTransition();
+        closeModal._shadowTimer = window.setTimeout(() => resetConnectionTransitionShadow(shadowLayer), 180);
 
         window.setTimeout(() => {
             document.body.classList.remove(
