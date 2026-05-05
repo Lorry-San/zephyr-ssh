@@ -5,6 +5,7 @@ let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [
 let editingId = null;
 let editingSecretLoaded = false;
 let connectionModalTrigger = null;
+let connectionModalOriginRect = null;
 let terminalTabs = [], activeTerminalTab = null;
 let openOrderStack = [], visualLayout = [], recentUseStack = [];
 let terminalSmartbarOpen = false;
@@ -338,7 +339,8 @@ function openModal(conn = null, trigger = null) {
 
     const viewport = viewportMetrics();
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
-    setConnectionLayerRect(layer, sourceRect);
+    connectionModalOriginRect = { left: sourceRect.left, top: sourceRect.top, width: sourceRect.width, height: sourceRect.height };
+    setConnectionLayerRect(layer, connectionModalOriginRect);
     layer.style.transition = 'none';
     layer.style.borderRadius = '18px';
     layer.style.boxShadow = 'var(--connection-shadow-idle)';
@@ -348,7 +350,7 @@ function openModal(conn = null, trigger = null) {
 
     void layer.offsetHeight;
 
-    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', sourceRect, viewport });
+    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', sourceRect, originRect: connectionModalOriginRect, viewport });
 
     requestAnimationFrame(() => {
         document.body.classList.add('connection-home-blur');
@@ -381,7 +383,8 @@ function closeModal() {
     const layer = $('#connectionTransitionLayer');
     if (!modal?.classList.contains('show') || modal.classList.contains('closing')) return;
     const viewport = viewportMetrics();
-    const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
+    const currentRect = connectionTransitionTargetRect(connectionModalTrigger);
+    const sourceRect = connectionModalOriginRect || { left: currentRect.left, top: currentRect.top, width: currentRect.width, height: currentRect.height };
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._restoreIconTimer);
     window.clearTimeout(closeModal._timer);
@@ -403,7 +406,7 @@ function closeModal() {
 
     void layer.offsetHeight;
 
-    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect });
+    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect, currentRect });
 
     requestAnimationFrame(() => {
         layer.style.transition = `
@@ -429,6 +432,7 @@ function closeModal() {
         resetConnectionTransitionLayer(layer);
         document.body.classList.remove('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
         connectionModalTrigger?.style?.removeProperty('opacity');
+        connectionModalOriginRect = null;
         console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
     };
     const onEnd = (ev) => {
