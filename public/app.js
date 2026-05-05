@@ -443,15 +443,25 @@ function closeModal() {
     const modal = $('#connectionModal');
     const layer = $('#connectionTransitionLayer');
     if (!modal?.classList.contains('show') || modal.classList.contains('closing')) return;
+
     const viewport = viewportMetrics();
     const currentRect = connectionTransitionTargetRect(connectionModalTrigger);
-    const sourceRect = connectionModalOriginRect || { left: currentRect.left, top: currentRect.top, width: currentRect.width, height: currentRect.height };
+    const sourceRect = connectionModalOriginRect || {
+        left: currentRect.left,
+        top: currentRect.top,
+        width: currentRect.width,
+        height: currentRect.height
+    };
+
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._restoreIconTimer);
     window.clearTimeout(closeModal._timer);
+
     modal.classList.add('closing');
     modal.classList.remove('app-visible');
+
     setConnectionTestLatency();
+
     document.body.classList.add('disable-interaction', 'connection-transition-closing');
     document.body.classList.remove('connection-transition-opening', 'connection-home-blur');
 
@@ -467,9 +477,23 @@ function closeModal() {
 
     void layer.offsetHeight;
 
-    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect, currentRect });
+    console.debug('[connection-transition]', 'close:init', {
+        connectionId: editingId || '',
+        viewport,
+        sourceRect,
+        currentRect
+    });
 
+    /*
+     * 关闭时始终隐藏克隆出来的按钮/图标视觉。
+     *
+     * 不要在动画中途恢复 .connection-transition-source-visual，
+     * 否则会在收缩尾段出现：
+     * layer 外壳 -> 克隆按钮 -> 真实按钮
+     * 的二次视觉切换，导致图标跳一下或颜色闪一下。
+     */
     layer.classList.add('source-visual-hidden');
+
     requestAnimationFrame(() => {
         layer.style.transition = `
             top var(--connection-app-duration) var(--connection-ios-spring),
@@ -479,32 +503,79 @@ function closeModal() {
             border-radius var(--connection-app-duration) var(--connection-ios-spring),
             box-shadow 0.2s ease-in
         `;
+
         setConnectionLayerRect(layer, sourceRect);
         layer.style.borderRadius = getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
         layer.style.boxShadow = 'var(--connection-shadow-idle)';
+
         console.debug('[connection-transition]', 'close:morph-start', { durationMs: 500 });
     });
 
     let done = false;
+
+    const restoreTriggerWithoutTransition = () => {
+        const trigger = connectionModalTrigger;
+        if (!trigger?.style) return;
+
+        /*
+         * 原按钮本身可能有 transition: opacity / background / color。
+         * 这里临时禁用 transition，避免真实按钮恢复 opacity 时又补一段动画，
+         * 从而造成尾帧跳动或颜色变化。
+         */
+        const oldTransition = trigger.style.transition;
+        trigger.style.transition = 'none';
+        trigger.style.removeProperty('opacity');
+
+        void trigger.offsetHeight;
+
+        requestAnimationFrame(() => {
+            if (oldTransition) {
+                trigger.style.transition = oldTransition;
+            } else {
+                trigger.style.removeProperty('transition');
+            }
+        });
+    };
+
     const finish = () => {
         if (done) return;
         done = true;
+
         layer.removeEventListener('transitionend', onEnd);
+
         modal.classList.remove('show', 'closing', 'app-visible');
+
+        /*
+         * 先隐藏并重置过渡层，再恢复真实按钮。
+         * 这样视觉上就是：
+         * 全屏 layer 收缩完成 -> layer 消失 -> 真实按钮出现
+         * 不会在尾段提前出现克隆图标。
+         */
         resetConnectionTransitionLayer(layer);
-        document.body.classList.remove('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
-        connectionModalTrigger?.style?.removeProperty('opacity');
+
+        document.body.classList.remove(
+            'disable-interaction',
+            'connection-transition-closing',
+            'connection-home-blur'
+        );
+
+        restoreTriggerWithoutTransition();
+
         connectionModalOriginRect = null;
+
         console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
     };
+
     const onEnd = (ev) => {
         if (ev.propertyName === 'top') finish();
     };
+
     layer.addEventListener('transitionend', onEnd);
-    closeModal._restoreIconTimer = window.setTimeout(() => {
-        layer.classList.remove('source-visual-hidden');
-        console.debug('[connection-transition]', 'close:source-visual-restored', { delayMs: 340 });
-    }, 340);
+
+    /*
+     * 兜底：如果某些浏览器没有触发 transitionend，
+     * 仍然保证动画结束后清理状态。
+     */
     closeModal._timer = window.setTimeout(finish, 560);
 }
 function connectionPayload({ forTest = false } = {}) {
