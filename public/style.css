@@ -3478,7 +3478,7 @@ html.keyboard-open .terminal-page {
     .result-card pre { max-height: 260px; font-size: 11px; padding: 9px; }
 }
 
-@media (pointer: coarse), (max-width: 700px) {
+@media (max-width: 700px), (hover: none) and (pointer: coarse) {
     body:has(.terminal-page),
     body:has(.guac-page) {
         height: 100dvh;

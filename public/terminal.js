@@ -290,9 +290,41 @@ const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 const TERMINAL_BOTTOM_THRESHOLD = 48;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 const TERMINAL_LAYOUT_DIAGNOSTICS = false;
+const TERMINAL_SCROLL_DIAGNOSTICS = false;
 const TERMINAL_MIN_RESIZE_WIDTH = 120;
 const TERMINAL_MIN_RESIZE_HEIGHT = 80;
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
+
+function logTerminalScrollDiagnostics(event, details = {}) {
+    if (!TERMINAL_SCROLL_DIAGNOSTICS) return;
+    try {
+        const el = getTerminalScrollElement?.();
+        const viewport = window.visualViewport;
+        console.info('[TerminalScrollDiagnostics]', {
+            event,
+            shouldFollowTerminalOutput,
+            isProgrammaticTerminalScroll,
+            mobileKeyboardOpen,
+            keyboardFocusLikely,
+            keyboardFallbackActive,
+            activeElement: document.activeElement?.id || document.activeElement?.className || document.activeElement?.tagName,
+            scroll: el ? {
+                top: Math.round(el.scrollTop || 0),
+                height: Math.round(el.scrollHeight || 0),
+                clientHeight: Math.round(el.clientHeight || 0),
+                bottomDistance: Math.round(getTerminalBottomDistance?.(el) || 0),
+                atBottom: Boolean(isTerminalAtBottom?.(el)),
+            } : null,
+            viewport: viewport ? {
+                height: Math.round(viewport.height || 0),
+                offsetTop: Math.round(viewport.offsetTop || 0),
+            } : null,
+            ...details,
+        });
+    } catch (err) {
+        console.info('[TerminalScrollDiagnostics]', event, details, err);
+    }
+}
 
 function logTerminalLayoutDiagnostics(event, details = {}) {
     if (!TERMINAL_LAYOUT_DIAGNOSTICS) return;
@@ -1277,7 +1309,7 @@ document.addEventListener('keydown', (e) => {
         const text = selection.toString();
         if (text) return;
         e.preventDefault();
-        sendData('\x03');
+        sendData('\x03', { source: 'keyboard-shortcut', forceFollow: false });
     }
 });
 
@@ -2918,22 +2950,40 @@ function scheduleTerminalScrollbarUpdate() {
     });
 }
 
-function scrollTerminalToBottom() {
+function scrollTerminalToBottom(reason = 'scroll-to-bottom') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    logTerminalScrollDiagnostics('scroll-to-bottom:before', {
+        reason,
+        maxScroll: Math.round(getTerminalMaxScroll(el)),
+    });
     isProgrammaticTerminalScroll = true;
     el.scrollTop = getTerminalMaxScroll(el);
     shouldFollowTerminalOutput = true;
     scheduleTerminalScrollbarUpdate();
-    requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+    requestAnimationFrame(() => {
+        logTerminalScrollDiagnostics('scroll-to-bottom:after', { reason });
+        isProgrammaticTerminalScroll = false;
+    });
 }
 
-function markTerminalUserInput(data = '') {
+function markTerminalUserInput(data = '', { source = 'unknown', forceFollow = false } = {}) {
     if (!data) return;
-    shouldFollowTerminalOutput = true;
+    const wasAtBottom = isTerminalAtBottom();
+    const shouldFollowAfterInput = forceFollow || shouldFollowTerminalOutput || wasAtBottom;
+    logTerminalScrollDiagnostics('user-input:mark-before', {
+        source,
+        forceFollow,
+        wasAtBottom,
+        shouldFollowAfterInput,
+        length: data.length,
+        preview: String(data).slice(0, 20).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
+    });
+    shouldFollowTerminalOutput = shouldFollowAfterInput;
     terminalInputEchoSuppressUntil = performance.now() + 350;
     terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
-    scheduleTerminalScrollToBottom();
+    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom(`user-input:${source}`);
+    else scheduleTerminalScrollbarUpdate();
 }
 
 function isLikelyTerminalInputEcho(data = '') {
@@ -2945,12 +2995,17 @@ function isLikelyTerminalInputEcho(data = '') {
     return data.length <= terminalInputEchoMaxLength + 8;
 }
 
-function scheduleTerminalScrollToBottom() {
-    if (terminalScrollRaf) return;
+function scheduleTerminalScrollToBottom(reason = 'scheduled') {
+    if (terminalScrollRaf) {
+        logTerminalScrollDiagnostics('scroll-schedule:coalesced', { reason });
+        return;
+    }
+    logTerminalScrollDiagnostics('scroll-schedule:queued', { reason });
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         requestAnimationFrame(() => {
-            if (shouldFollowTerminalOutput) scrollTerminalToBottom();
+            logTerminalScrollDiagnostics('scroll-schedule:run', { reason });
+            if (shouldFollowTerminalOutput) scrollTerminalToBottom(reason);
             else scheduleTerminalScrollbarUpdate();
         });
     });
@@ -3037,8 +3092,15 @@ function setupTerminalInputActivityHooks() {
         if (isModifierOnlyKeyEvent(e)) return;
         if (document.activeElement === cmdInput) return;
         if (!terminalContainer?.contains(document.activeElement) && document.activeElement !== document.body) return;
-        shouldFollowTerminalOutput = true;
-        scheduleTerminalScrollToBottom();
+        const wasAtBottom = isTerminalAtBottom();
+        shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
+        logTerminalScrollDiagnostics('keydown-input-activity', {
+            key: e.key,
+            wasAtBottom,
+            nextFollow: shouldFollowTerminalOutput,
+        });
+        if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom('keydown-input-activity');
+        else scheduleTerminalScrollbarUpdate();
     }, true);
 }
 
@@ -3441,10 +3503,16 @@ function patchWTermScrollBehavior() {
 function writeTerminalData(data = '') {
     if (!term?.write) return;
     const wasAtBottom = isTerminalAtBottom();
-    if (isLikelyTerminalInputEcho(data)) shouldFollowTerminalOutput = true;
-    else shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
+    const likelyInputEcho = isLikelyTerminalInputEcho(data);
+    shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
+    logTerminalScrollDiagnostics('terminal-data:before-write', {
+        length: String(data).length,
+        likelyInputEcho,
+        wasAtBottom,
+        nextFollow: shouldFollowTerminalOutput,
+    });
     term.write(data);
-    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom();
+    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom(likelyInputEcho ? 'terminal-input-echo' : 'terminal-data');
     else scheduleTerminalScrollbarUpdate();
 }
 
@@ -3913,11 +3981,15 @@ function rememberTerminalPaste(text = '', source = 'wterm-paste') {
     terminalRecentPaste = { text: String(text), at: performance.now(), source };
 }
 
-function sendData(data, { normalizeNewlines = false, source = 'unknown' } = {}) {
+function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFollow = false } = {}) {
     if (shouldSuppressDuplicatePaste(data, source)) return;
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         const payload = normalizeNewlines ? normalizeTerminalInputNewlines(data) : data;
-        markTerminalUserInput(payload);
+        const shouldForceFollow = forceFollow
+            || source === 'command-box-send'
+            || source === 'keypad'
+            || source === 'wterm-paste';
+        markTerminalUserInput(payload, { source, forceFollow: shouldForceFollow });
         wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(payload) }));
     }
 }
@@ -3931,7 +4003,7 @@ function sendCommand() {
     const text = cmdInput.value;
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         logTerminalPasteDiagnostics('command-box-send', text);
-        sendData(text + '\r', { normalizeNewlines: true });
+        sendData(text + '\r', { normalizeNewlines: true, source: 'command-box-send' });
     }
     cmdInput.value = '';
     resizeCommandInput();
@@ -3979,8 +4051,8 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     btn.addEventListener('click', () => {
         const key = btn.dataset.key;
         if (btn.classList.contains('modifier')) { modifierState[key] = !modifierState[key]; updateModifierUI(); return; }
-        if (keySequences[key]) sendData(keySequences[key]);
-        if (comboSequences[key]) sendData(comboSequences[key]);
+        if (keySequences[key]) sendData(keySequences[key], { source: 'keypad' });
+        if (comboSequences[key]) sendData(comboSequences[key], { source: 'keypad' });
     });
 });
 
