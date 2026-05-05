@@ -19,6 +19,17 @@ function notifyParentStatus(status) {
         window.parent.postMessage({ source: 'zephyr-terminal', tabId: params?.tabId, status }, '*');
     }
 }
+function notifyParentCloseRequest(reason = 'terminal-closed') {
+    if (embeddedMode && window.parent && window.parent !== window) {
+        console.info('[TerminalClose]', 'request parent to close tab', {
+            tabId: params?.tabId,
+            reason,
+            connected: isConnected,
+            readyState: wsConnection?.readyState,
+        });
+        window.parent.postMessage({ source: 'zephyr-terminal', type: 'close-request', tabId: params?.tabId, reason }, '*');
+    }
+}
 function notifyParentActivity() {
     if (embeddedMode && window.parent && window.parent !== window) {
         window.parent.postMessage({ source: 'zephyr-terminal', type: 'activity', tabId: params?.tabId }, '*');
@@ -3612,7 +3623,6 @@ function normalizeTerminalInputNewlines(data = '') {
 }
 function logTerminalPasteDiagnostics(source, text = '') {
     const raw = String(text);
-    if (!raw.includes('\n') && !raw.includes('\r')) return;
     console.info('[TerminalPaste]', {
         source,
         length: raw.length,
@@ -3621,7 +3631,32 @@ function logTerminalPasteDiagnostics(source, text = '') {
         preview: raw.slice(0, 120).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
     });
 }
-function sendData(data, { normalizeNewlines = false } = {}) {
+
+let terminalRecentPaste = { text: '', at: 0, source: '' };
+
+function shouldSuppressDuplicatePaste(data = '', source = '') {
+    const raw = String(data);
+    if (!raw || source === 'wterm-paste' || source === 'command-box-send' || source === 'keypad') return false;
+    const now = performance.now();
+    const duplicated = terminalRecentPaste.text === raw && now - terminalRecentPaste.at < 700;
+    if (duplicated) {
+        console.info('[TerminalPaste]', {
+            source,
+            suppressed: true,
+            duplicatedFrom: terminalRecentPaste.source,
+            ageMs: Math.round(now - terminalRecentPaste.at),
+            length: raw.length,
+        });
+    }
+    return duplicated;
+}
+
+function rememberTerminalPaste(text = '', source = 'wterm-paste') {
+    terminalRecentPaste = { text: String(text), at: performance.now(), source };
+}
+
+function sendData(data, { normalizeNewlines = false, source = 'unknown' } = {}) {
+    if (shouldSuppressDuplicatePaste(data, source)) return;
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         const payload = normalizeNewlines ? normalizeTerminalInputNewlines(data) : data;
         markTerminalUserInput(payload);
@@ -3648,8 +3683,11 @@ function handleTerminalPaste(e) {
     const text = e.clipboardData?.getData('text/plain') || '';
     if (!text) return;
     e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    rememberTerminalPaste(text, 'wterm-paste');
     logTerminalPasteDiagnostics('wterm-paste', text);
-    sendData(text, { normalizeNewlines: true });
+    sendData(text, { normalizeNewlines: true, source: 'wterm-paste' });
     try { term?.focus?.(); } catch (_) {}
 }
 cmdInput.addEventListener('input', resizeCommandInput);
@@ -3700,7 +3738,7 @@ wtermWrapper.addEventListener('mouseup', () => {
     if (mobileTerminalSelectionMode || selection?.toString?.().length > 0) return;
     term?.focus?.();
 });
-wtermWrapper.addEventListener('paste', handleTerminalPaste);
+wtermWrapper.addEventListener('paste', handleTerminalPaste, { capture: true });
 ['pointerdown', 'touchstart'].forEach((eventName) => {
     wtermWrapper.addEventListener(eventName, (e) => {
         terminalTouchMoved = false;
@@ -3919,13 +3957,13 @@ async function initWTerm(connectionToken = activeConnectionToken) {
             cols: 80, rows: 24, autoResize: true, cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
-            onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }),
+            onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }),
             onResize: (cols, rows) => sendTerminalResize(cols, rows),
         });
     } catch {
         term = new WTermClass(wtermWrapper);
-        if (typeof term.onData === 'function') term.onData(data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }));
-        else if (typeof term.on === 'function') term.on('data', data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data) }));
+        if (typeof term.onData === 'function') term.onData(data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }));
+        else if (typeof term.on === 'function') term.on('data', data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }));
     }
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
@@ -4012,7 +4050,9 @@ function connectWebSocket(connectionToken = activeConnectionToken) {
                         break;
                     case 'close':
                         setStatus('disconnected', msg.message || '会话已关闭');
-                        if (!userClosedConnection) {
+                        if (embeddedMode) {
+                            notifyParentCloseRequest('ssh-session-close');
+                        } else if (!userClosedConnection) {
                             try { ws.close(4000, 'SSH 会话关闭'); } catch (_) {}
                             startAutoReconnect(msg.message || 'SSH 会话已关闭');
                         }
@@ -4034,7 +4074,11 @@ function connectWebSocket(connectionToken = activeConnectionToken) {
                 return;
             }
             if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
-            if (!userClosedConnection) startAutoReconnect(`连接已断开 (${e.code || 'N/A'})`);
+            if (embeddedMode) {
+                notifyParentCloseRequest(`websocket-close-${e.code || 'N/A'}`);
+            } else if (!userClosedConnection) {
+                startAutoReconnect(`连接已断开 (${e.code || 'N/A'})`);
+            }
         });
 
         if (connectionToken === activeConnectionToken) wsConnection = ws;
@@ -4095,7 +4139,8 @@ disconnectBtn.addEventListener('click', () => {
     sessionStorage.removeItem(params?.tabId ? `zephyr_ssh_params_${params.tabId}` : 'zephyr_ssh_params');
     if (embeddedMode) {
         notifyParentStatus('closed');
-        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">会话已断开，可关闭此标签。</div>';
+        notifyParentCloseRequest('user-disconnect-button');
+        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">会话已断开，正在关闭此终端窗口...</div>';
     } else {
         window.location.href = '/';
     }

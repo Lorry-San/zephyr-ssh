@@ -1023,9 +1023,17 @@ function exitTerminalFullscreen() {
     }
 }
 
-function closeTerminalTab(tabId) {
+function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
     if (!terminalTabs.some((t) => t.id === tabId) || closingTerminalTabs.has(tabId)) return;
-    if (activeTerminalTab === tabId) exitTerminalFullscreen();
+    const willBeLastTab = terminalTabs.length <= 1;
+    console.info('[terminal-layout]', 'close terminal tab requested', {
+        tabId,
+        reason,
+        willBeLastTab,
+        activeTerminalTab,
+        customFullscreen: $('#terminalWorkspace')?.classList.contains('custom-fullscreen'),
+    });
+    if (activeTerminalTab === tabId || willBeLastTab) exitTerminalFullscreen();
     closingTerminalTabs.add(tabId);
     renderTerminalTabs({ rebuildWorkspace: false });
     window.setTimeout(() => {
@@ -1037,6 +1045,16 @@ function closeTerminalTab(tabId) {
         sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
         sessionStorage.removeItem(`zephyr_guac_params_${tabId}`);
         if (activeTerminalTab === tabId) activeTerminalTab = visualLayout[0] || terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || null;
+        if (!terminalTabs.length) {
+            activeTerminalTab = null;
+            visualLayout = [];
+            openOrderStack = [];
+            recentUseStack = [];
+            setTerminalSmartbarOpen(false);
+            exitTerminalFullscreen();
+            resetTerminalWorkspaceKeyboard();
+            switchView('dashboard');
+        }
         renderTerminalTabs();
     }, 260);
 }
@@ -1648,7 +1666,32 @@ function bindEvents() {
             applyTheme(theme);
         }
     });
-    window.addEventListener('message', (e) => { if (e.data?.source !== 'zephyr-terminal') return; if (e.data.type === 'keyboard-metrics') { applyTerminalWorkspaceKeyboard(e.data); return; } if (e.data.type === 'activity') { noteTerminalWorkspaceActivity(); return; } const t = terminalTabs.find((x) => x.id === e.data.tabId); if (t) { t.status = e.data.status || t.status; renderTerminalTabs({ rebuildWorkspace: false }); } });
+    window.addEventListener('message', (e) => {
+        if (e.data?.source !== 'zephyr-terminal') return;
+        if (e.data.type === 'keyboard-metrics') {
+            applyTerminalWorkspaceKeyboard(e.data);
+            return;
+        }
+        if (e.data.type === 'activity') {
+            noteTerminalWorkspaceActivity();
+            return;
+        }
+        if (e.data.type === 'close-request') {
+            console.info('[terminal-layout]', 'close request from terminal iframe', {
+                tabId: e.data.tabId,
+                reason: e.data.reason,
+                tabCount: terminalTabs.length,
+                compact: isCompactTerminalWorkspace(),
+            });
+            closeTerminalTab(e.data.tabId, { reason: e.data.reason || 'iframe-close-request' });
+            return;
+        }
+        const t = terminalTabs.find((x) => x.id === e.data.tabId);
+        if (t) {
+            t.status = e.data.status || t.status;
+            renderTerminalTabs({ rebuildWorkspace: false });
+        }
+    });
     window.visualViewport?.addEventListener('resize', updateFullscreenKeyboardFromViewport, { passive: true });
     window.addEventListener('resize', () => {
         document.querySelectorAll('.terminal-window-titlebar.menu-open').forEach(positionTerminalWindowMenu);
