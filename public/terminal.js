@@ -2932,13 +2932,31 @@ function isLikelyTerminalInputEcho(data = '') {
     return data.length <= terminalInputEchoMaxLength + 8;
 }
 
-function scheduleTerminalScrollToBottom() {
+function scheduleTerminalScrollToBottom({ force = false, reason = 'scheduled-scroll' } = {}) {
     if (terminalScrollRaf) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         requestAnimationFrame(() => {
-            if (shouldFollowTerminalOutput) scrollTerminalToBottom();
-            else scheduleTerminalScrollbarUpdate();
+            const el = getTerminalScrollElement();
+            const nearBottom = canFollowTerminalInput(el);
+            const shouldScroll = force || (shouldFollowTerminalOutput && nearBottom);
+
+            console.info('[TerminalLayoutDiagnostics]', {
+                event: 'scroll-follow-guard',
+                reason,
+                force,
+                nearBottom,
+                shouldFollowTerminalOutput,
+                shouldScroll,
+                bottomDistance: Math.round(getTerminalBottomDistance(el) || 0),
+                followThreshold: Math.round(getInputFollowThreshold(el) || 0),
+            });
+
+            if (shouldScroll) scrollTerminalToBottom();
+            else {
+                shouldFollowTerminalOutput = false;
+                scheduleTerminalScrollbarUpdate();
+            }
         });
     });
 }
