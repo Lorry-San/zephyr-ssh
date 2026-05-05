@@ -903,11 +903,7 @@ function renderTerminalSmartbar() {
         </div>` : '';
     const smartbarRoot = $('#sessionTabs');
     const navRectNow = $('.main-nav')?.getBoundingClientRect();
-    const customFullscreenOpen = document.body.classList.contains('terminal-custom-fullscreen-open');
-    if (customFullscreenOpen) {
-        smartbarRoot.style.setProperty('--smartbar-top', 'env(safe-area-inset-top, 0px)');
-        document.documentElement.style.setProperty('--smartbar-top', 'env(safe-area-inset-top, 0px)');
-    } else if (navRectNow) {
+    if (navRectNow) {
         const smartbarTop = `${Math.round(navRectNow.bottom)}px`;
         smartbarRoot.style.setProperty('--smartbar-top', smartbarTop);
         document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
@@ -929,16 +925,11 @@ function renderTerminalSmartbar() {
         const nav = $('.main-nav');
         const smartbar = $('#sessionTabs');
         const panel = smartbar?.querySelector('.smartbar-panel');
-        if (!smartbar || !panel) return;
-        if (document.body.classList.contains('terminal-custom-fullscreen-open')) {
-            smartbar.style.setProperty('--smartbar-top', 'env(safe-area-inset-top, 0px)');
-            document.documentElement.style.setProperty('--smartbar-top', 'env(safe-area-inset-top, 0px)');
-        } else if (nav) {
-            const navRect = nav.getBoundingClientRect();
-            const smartbarTop = `${Math.round(navRect.bottom)}px`;
-            smartbar.style.setProperty('--smartbar-top', smartbarTop);
-            document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
-        }
+        if (!nav || !smartbar || !panel) return;
+        const navRect = nav.getBoundingClientRect();
+        const smartbarTop = `${Math.round(navRect.bottom)}px`;
+        smartbar.style.setProperty('--smartbar-top', smartbarTop);
+        document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
         positionSmartbarPicker();
     });
 }

@@ -452,17 +452,15 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
     viewportAnimationState.currentOffsetTop = targetY;
     viewportAnimationState.targetHeight = targetH;
     viewportAnimationState.targetOffsetTop = targetY;
-
-    // 移动端 SSH 需要“稳定跟随”而不是“页面动画”：
-    // 软键盘本身已经有系统动画，页面再做 height/transform transition 会造成双重动画和跳屏。
-    document.documentElement.classList.remove('viewport-updating');
+    document.documentElement.classList.toggle('viewport-updating', !immediate);
     setViewportCssMetrics(targetH, targetY);
     window.clearTimeout(viewportAnimationResizeTimer);
     viewportAnimationResizeTimer = window.setTimeout(() => {
+        document.documentElement.classList.remove('viewport-updating');
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
-        requestStableTerminalLayout('viewport-css-settled', { includeResize: true });
-    }, immediate ? 32 : 96);
+        requestStableTerminalLayout('viewport-css-animation-settled', { includeResize: true });
+    }, immediate ? 40 : 600);  // 增加延迟到 600ms 以匹配更长的 transition
 }
 
 function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate = false } = {}) {
@@ -2879,48 +2877,18 @@ function scrollTerminalToBottom() {
     const el = getTerminalScrollElement();
     if (!el) return;
     isProgrammaticTerminalScroll = true;
-    if (isTouchKeyboardDevice()) el.scrollLeft = 0;
     el.scrollTop = getTerminalMaxScroll(el);
     shouldFollowTerminalOutput = true;
     scheduleTerminalScrollbarUpdate();
     requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
 }
 
-function getInputFollowThreshold(el = getTerminalScrollElement()) {
-    return el
-        ? Math.max(TERMINAL_BOTTOM_THRESHOLD * 2, Math.min(180, el.clientHeight * 0.20))
-        : TERMINAL_BOTTOM_THRESHOLD * 2;
-}
-
-function canFollowTerminalInput(el = getTerminalScrollElement()) {
-    return getTerminalBottomDistance(el) <= getInputFollowThreshold(el);
-}
-
 function markTerminalUserInput(data = '') {
     if (!data) return;
-    const el = getTerminalScrollElement();
-    const bottomDistance = getTerminalBottomDistance(el);
-    const followThreshold = getInputFollowThreshold(el);
-    const canSafelyFollow = canFollowTerminalInput(el);
-
-    // 输入/回显不能无条件 scrollToBottom：无论手机还是电脑，只要用户已经滚到上面，
-    // 键入字符、命令框发送、输入回显都不应该把视图强行拉回底部。
-    shouldFollowTerminalOutput = canSafelyFollow;
+    shouldFollowTerminalOutput = true;
     terminalInputEchoSuppressUntil = performance.now() + 350;
     terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
-
-    console.info('[TerminalLayoutDiagnostics]', {
-        event: 'input-follow-guard',
-        touchDevice: isTouchKeyboardDevice(),
-        bottomDistance: Math.round(bottomDistance || 0),
-        followThreshold: Math.round(followThreshold || 0),
-        canSafelyFollow,
-        shouldFollowTerminalOutput,
-        inputLength: String(data).length,
-    });
-
-    if (canSafelyFollow) scheduleTerminalScrollToBottom();
-    else scheduleTerminalScrollbarUpdate();
+    scheduleTerminalScrollToBottom();
 }
 
 function isLikelyTerminalInputEcho(data = '') {
@@ -2932,31 +2900,13 @@ function isLikelyTerminalInputEcho(data = '') {
     return data.length <= terminalInputEchoMaxLength + 8;
 }
 
-function scheduleTerminalScrollToBottom({ force = false, reason = 'scheduled-scroll' } = {}) {
+function scheduleTerminalScrollToBottom() {
     if (terminalScrollRaf) return;
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         requestAnimationFrame(() => {
-            const el = getTerminalScrollElement();
-            const nearBottom = canFollowTerminalInput(el);
-            const shouldScroll = force || (shouldFollowTerminalOutput && nearBottom);
-
-            console.info('[TerminalLayoutDiagnostics]', {
-                event: 'scroll-follow-guard',
-                reason,
-                force,
-                nearBottom,
-                shouldFollowTerminalOutput,
-                shouldScroll,
-                bottomDistance: Math.round(getTerminalBottomDistance(el) || 0),
-                followThreshold: Math.round(getInputFollowThreshold(el) || 0),
-            });
-
-            if (shouldScroll) scrollTerminalToBottom();
-            else {
-                shouldFollowTerminalOutput = false;
-                scheduleTerminalScrollbarUpdate();
-            }
+            if (shouldFollowTerminalOutput) scrollTerminalToBottom();
+            else scheduleTerminalScrollbarUpdate();
         });
     });
 }
@@ -3468,24 +3418,10 @@ function patchWTermScrollBehavior() {
 
 function writeTerminalData(data = '') {
     if (!term?.write) return;
-    const el = getTerminalScrollElement();
-    const wasNearBottom = canFollowTerminalInput(el);
-    const likelyEcho = isLikelyTerminalInputEcho(data);
-
-    // 服务端输入回显同样不能强制贴底；用户在 scrollback 里看内容时，
-    // 输入字符/回显不应该把屏幕往下拉。
-    if (likelyEcho) shouldFollowTerminalOutput = wasNearBottom;
-    else shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasNearBottom;
-
+    const wasAtBottom = isTerminalAtBottom();
+    if (isLikelyTerminalInputEcho(data)) shouldFollowTerminalOutput = true;
+    else shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
     term.write(data);
-    console.info('[TerminalLayoutDiagnostics]', {
-        event: 'write-follow-guard',
-        likelyEcho,
-        wasNearBottom,
-        shouldFollowTerminalOutput,
-        bottomDistance: Math.round(getTerminalBottomDistance(el) || 0),
-        dataLength: String(data).length,
-    });
     if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom();
     else scheduleTerminalScrollbarUpdate();
 }
