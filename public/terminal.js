@@ -452,15 +452,17 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
     viewportAnimationState.currentOffsetTop = targetY;
     viewportAnimationState.targetHeight = targetH;
     viewportAnimationState.targetOffsetTop = targetY;
-    document.documentElement.classList.toggle('viewport-updating', !immediate);
+
+    // 移动端 SSH 需要“稳定跟随”而不是“页面动画”：
+    // 软键盘本身已经有系统动画，页面再做 height/transform transition 会造成双重动画和跳屏。
+    document.documentElement.classList.remove('viewport-updating');
     setViewportCssMetrics(targetH, targetY);
     window.clearTimeout(viewportAnimationResizeTimer);
     viewportAnimationResizeTimer = window.setTimeout(() => {
-        document.documentElement.classList.remove('viewport-updating');
         shouldFollowTerminalOutput = true;
         scheduleTerminalScrollToBottom();
-        requestStableTerminalLayout('viewport-css-animation-settled', { includeResize: true });
-    }, immediate ? 40 : 600);  // 增加延迟到 600ms 以匹配更长的 transition
+        requestStableTerminalLayout('viewport-css-settled', { includeResize: true });
+    }, immediate ? 32 : 96);
 }
 
 function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate = false } = {}) {
@@ -2877,6 +2879,7 @@ function scrollTerminalToBottom() {
     const el = getTerminalScrollElement();
     if (!el) return;
     isProgrammaticTerminalScroll = true;
+    if (isTouchKeyboardDevice()) el.scrollLeft = 0;
     el.scrollTop = getTerminalMaxScroll(el);
     shouldFollowTerminalOutput = true;
     scheduleTerminalScrollbarUpdate();

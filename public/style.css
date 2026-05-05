@@ -1202,9 +1202,21 @@ body.terminal-custom-fullscreen-open {
     height: 100dvh;
     overflow: hidden;
 }
-body.terminal-custom-fullscreen-open .main-nav,
-body.terminal-custom-fullscreen-open .terminal-smartbar {
+body.terminal-custom-fullscreen-open .main-nav {
     display: none !important;
+}
+
+body.terminal-custom-fullscreen-open .terminal-smartbar {
+    --smartbar-top: env(safe-area-inset-top, 0px);
+    display: flex !important;
+    top: var(--smartbar-top);
+    z-index: 1100;
+}
+
+body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-handle {
+    top: 0;
+    opacity: 1;
+    pointer-events: auto;
 }
 .terminal-workspace-grid.compact .workspace-splitter { display: none; }
 .terminal-workspace.fullscreen-transitioning { transform: scale(.992); box-shadow: 0 28px 88px rgba(0,0,0,.36); }
@@ -1845,15 +1857,12 @@ body.app-body > .toast.show { opacity: 1; transform: translate3d(0,0,0) scale(1)
 
 html.viewport-updating .terminal-page {
     transition:
-        height 0.40s cubic-bezier(0.16, 1, 0.3, 1),
-        max-height 0.40s cubic-bezier(0.16, 1, 0.3, 1),
-        transform 0.40s cubic-bezier(0.16, 1, 0.3, 1),
         background-color 0.24s ease,
         border-color 0.24s ease;
 }
 
 html.keyboard-open .terminal-page {
-    transform: translate3d(0, var(--visual-offset-top, 0px), 0);
+    transform: translate3d(0, 0, 0);
 }
 
 /* 顶栏 */
@@ -2188,6 +2197,36 @@ html.keyboard-open .terminal-page {
 .terminal-container .wterm-wrapper .term-row,
 .terminal-container .wterm-wrapper .term-scrollback-row {
     min-width: 100%;
+}
+
+@media (pointer: coarse), (max-width: 700px) {
+    .terminal-container {
+        margin: 4px;
+        --terminal-scrollbar-size: 8px;
+    }
+
+    .terminal-container .wterm-wrapper,
+    .terminal-container .wterm-wrapper.wterm {
+        overflow-x: hidden;
+        overscroll-behavior-x: none;
+        touch-action: pan-y;
+        padding: 8px calc(8px + var(--terminal-scrollbar-size)) 8px 8px;
+        scroll-padding-bottom: 8px;
+    }
+
+    .terminal-container .wterm-wrapper .term-grid {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: clip;
+    }
+
+    .terminal-container .wterm-wrapper .term-row,
+    .terminal-container .wterm-wrapper .term-scrollback-row {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
 }
 .terminal-scrollbar {
     position: absolute;
