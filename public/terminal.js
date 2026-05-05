@@ -693,15 +693,30 @@ copyBtn.addEventListener('click', async () => {
 copyBtn.addEventListener('pointerdown', (e) => e.preventDefault(), { passive: false });
 copyBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
 
+document.addEventListener('copy', (e) => {
+    const selection = window.getSelection?.();
+    const text = getTerminalSelectionTextFromDom(selection);
+    if (!text) return;
+    e.preventDefault();
+    e.clipboardData?.setData('text/plain', text);
+    cachedSelectionText = text;
+    console.debug('[TerminalCopy]', 'native copy overridden', {
+        length: text.length,
+        newlines: (text.match(/\n/g) || []).length,
+    });
+});
+
 function normalizeCopiedTerminalText(text = '') {
     let value = String(text)
         .replace(/\u00a0/g, ' ')
         .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
         .replace(/\r\n?/g, '\n');
-    // 终端中的长链接常被视觉换行拆开；复制时把 URL 内部换行/空白拼回去，避免链接缺段。
-    value = value.replace(/https?:\/\/[^\s<>'"]+(?:\s+[^\s<>'"]+)*/g, (match) => {
-        const compact = match.replace(/\s+/g, '');
-        return /^https?:\/\//.test(compact) ? compact : match;
+    // 仅作为兜底：如果浏览器默认 selection 已经把 URI 内部软换行变成空白，
+    // 这里会把常见 URI 片段拼回去。真正的根治在 getTerminalSelectionTextFromDom：
+    // 按终端屏幕行宽区分软换行/真实换行。
+    value = value.replace(/\b([a-z][a-z0-9+.-]{1,31}:\/\/[^\s<>'"]+(?:[ \t\n]+[^\s<>'"]+)*)/gi, (match) => {
+        const compact = match.replace(/[ \t\n]+/g, '');
+        return /^[a-z][a-z0-9+.-]{1,31}:\/\//i.test(compact) ? compact : match;
     });
     return value;
 }
@@ -716,9 +731,128 @@ function getSelectionTextFromRanges(selection) {
     return parts.join('');
 }
 
+function getTerminalColsForCopy() {
+    const optionCols = Number(term?.cols ?? term?._cols ?? term?.options?.cols);
+    if (Number.isFinite(optionCols) && optionCols > 0) return Math.floor(optionCols);
+    const rect = wtermWrapper?.getBoundingClientRect?.();
+    if (!rect?.width) return 80;
+    const { charWidth } = getTerminalCharMetrics();
+    return Math.max(2, Math.floor(rect.width / Math.max(1, charWidth)));
+}
+
+function terminalDisplayColumns(text = '') {
+    let columns = 0;
+    for (const ch of String(text)) {
+        if (ch === '\t') columns += 8 - (columns % 8 || 0);
+        else if (/[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(ch)) columns += 2;
+        else columns += 1;
+    }
+    return columns;
+}
+
+function cleanTerminalRowText(text = '') {
+    return String(text)
+        .replace(/\u00a0/g, ' ')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/[ \t]+$/g, '');
+}
+
+function selectionTouchesTerminal(selection) {
+    if (!selection || selection.rangeCount === 0 || !wtermWrapper) return false;
+    for (let i = 0; i < selection.rangeCount; i++) {
+        const range = selection.getRangeAt(i);
+        if (wtermWrapper.contains(range.commonAncestorContainer)) return true;
+        const rows = wtermWrapper.querySelectorAll?.('.term-row') || [];
+        for (const row of rows) {
+            try {
+                if (range.intersectsNode(row)) return true;
+            } catch (_) {}
+        }
+    }
+    return false;
+}
+
+function getRangeIntersectionText(range, node) {
+    const nodeRange = document.createRange();
+    nodeRange.selectNodeContents(node);
+    if (range.compareBoundaryPoints(Range.END_TO_START, nodeRange) <= 0 || range.compareBoundaryPoints(Range.START_TO_END, nodeRange) >= 0) {
+        return '';
+    }
+    const intersection = range.cloneRange();
+    if (intersection.compareBoundaryPoints(Range.START_TO_START, nodeRange) < 0) {
+        intersection.setStart(nodeRange.startContainer, nodeRange.startOffset);
+    }
+    if (intersection.compareBoundaryPoints(Range.END_TO_END, nodeRange) > 0) {
+        intersection.setEnd(nodeRange.endContainer, nodeRange.endOffset);
+    }
+    const text = intersection.cloneContents().textContent || intersection.toString() || '';
+    nodeRange.detach?.();
+    intersection.detach?.();
+    return text;
+}
+
+function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
+    if (!selection || selection.rangeCount === 0 || !selectionTouchesTerminal(selection)) return '';
+    const rows = Array.from(wtermWrapper.querySelectorAll('.term-row'));
+    if (!rows.length) return '';
+
+    const cols = getTerminalColsForCopy();
+    const selectedRows = [];
+    for (const row of rows) {
+        const rowParts = [];
+        let intersects = false;
+        for (let i = 0; i < selection.rangeCount; i++) {
+            const range = selection.getRangeAt(i);
+            try {
+                if (!range.intersectsNode(row)) continue;
+                intersects = true;
+                rowParts.push(getRangeIntersectionText(range, row));
+            } catch (_) {}
+        }
+        if (!intersects) continue;
+        const selectedText = cleanTerminalRowText(rowParts.join(''));
+        const fullRowText = cleanTerminalRowText(row.textContent || '');
+        selectedRows.push({
+            text: selectedText,
+            fullColumns: terminalDisplayColumns(fullRowText),
+            selectedColumns: terminalDisplayColumns(selectedText),
+            selectedToRowEnd: selectedText.length > 0 && fullRowText.endsWith(selectedText),
+        });
+    }
+
+    if (!selectedRows.length) return '';
+    let result = '';
+    let softWrapJoins = 0;
+    let hardLineBreaks = 0;
+    selectedRows.forEach((row, index) => {
+        result += row.text;
+        if (index >= selectedRows.length - 1) return;
+        const isSoftWrapped = row.fullColumns >= cols && row.selectedToRowEnd;
+        if (isSoftWrapped) softWrapJoins += 1;
+        else {
+            hardLineBreaks += 1;
+            result += '\n';
+        }
+    });
+
+    const normalized = normalizeCopiedTerminalText(result);
+    console.debug('[TerminalCopy]', 'selection reconstructed', {
+        rows: selectedRows.length,
+        cols,
+        softWrapJoins,
+        hardLineBreaks,
+        rawLength: result.length,
+        normalizedLength: normalized.length,
+        rawNewlines: (result.match(/\n/g) || []).length,
+        normalizedNewlines: (normalized.match(/\n/g) || []).length,
+    });
+    return normalized;
+}
+
 function getCopyableSelectionText() {
     const selection = window.getSelection();
-    const liveText = normalizeCopiedTerminalText(getSelectionTextFromRanges(selection) || selection?.toString?.() || '');
+    const terminalText = getTerminalSelectionTextFromDom(selection);
+    const liveText = terminalText || normalizeCopiedTerminalText(getSelectionTextFromRanges(selection) || selection?.toString?.() || '');
     if (liveText) {
         cachedSelectionText = liveText;
         return liveText;
