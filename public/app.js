@@ -296,10 +296,10 @@ function nextAnimationFrame(fn) {
     requestAnimationFrame(() => requestAnimationFrame(fn));
 }
 function setConnectionLayerRect(layer, rect) {
-    layer.style.left = `${Math.round(rect.left)}px`;
-    layer.style.top = `${Math.round(rect.top)}px`;
-    layer.style.width = `${Math.round(rect.width)}px`;
-    layer.style.height = `${Math.round(rect.height)}px`;
+    layer.style.left = `${rect.left}px`;
+    layer.style.top = `${rect.top}px`;
+    layer.style.width = `${rect.width}px`;
+    layer.style.height = `${rect.height}px`;
 }
 function syncConnectionLayerVisual(layer, source) {
     if (!layer || !source?.isConnected) {
@@ -345,7 +345,7 @@ function syncConnectionLayerVisual(layer, source) {
         shellBackground: 'neutral-surface'
     });
 }
-function applyConnectionLayerSourceChrome(layer, source) {
+function applyConnectionLayerSourceChrome(layer, source, { revealVisual = false } = {}) {
     if (!layer || !source?.isConnected) return;
 
     const style = getComputedStyle(source);
@@ -359,6 +359,7 @@ function applyConnectionLayerSourceChrome(layer, source) {
     layer.style.font = style.font;
     layer.style.letterSpacing = style.letterSpacing;
     layer.style.textAlign = style.textAlign;
+    layer.style.padding = '0';
     layer.style.display = 'inline-flex';
     layer.style.alignItems = 'center';
     layer.style.justifyContent = 'center';
@@ -375,11 +376,23 @@ function applyConnectionLayerSourceChrome(layer, source) {
         visual.style.letterSpacing = style.letterSpacing;
         visual.style.padding = style.padding;
         visual.style.gap = style.gap;
+        visual.style.width = '100%';
+        visual.style.height = '100%';
+        visual.style.maxWidth = '100%';
+        visual.style.boxSizing = 'border-box';
+        visual.style.display = style.display === 'inline-flex' || style.display === 'flex' ? 'inline-flex' : 'flex';
+        visual.style.alignItems = style.alignItems || 'center';
+        visual.style.justifyContent = style.justifyContent || 'center';
+        visual.style.whiteSpace = 'nowrap';
+        visual.style.opacity = revealVisual ? '1' : '';
+        visual.style.transform = revealVisual ? 'scale(1)' : '';
+        visual.style.transition = revealVisual ? 'opacity 0.12s ease 0.06s, transform 0.18s cubic-bezier(.16,1,.3,1) 0.04s' : '';
     }
 
     console.debug('[connection-transition]', 'source chrome applied', {
         sourceRole: source.id === 'addConnectionBtn' ? 'add' : source.matches('[data-edit]') ? 'edit' : 'other',
-        background
+        background,
+        revealVisual
     });
 }
 function resetConnectionTransitionLayer(layer) {
@@ -502,7 +515,7 @@ function closeModal() {
     document.body.classList.add('disable-interaction', 'connection-transition-closing');
     document.body.classList.remove('connection-transition-opening', 'connection-home-blur');
 
-    applyConnectionLayerSourceChrome(layer, currentRect.source || connectionModalTrigger);
+    applyConnectionLayerSourceChrome(layer, currentRect.source || connectionModalTrigger, { revealVisual: true });
 
     layer.style.visibility = 'visible';
     layer.style.pointerEvents = 'auto';
@@ -513,7 +526,7 @@ function closeModal() {
     layer.style.height = `${viewport.height}px`;
     layer.style.borderRadius = '0px';
     layer.style.boxShadow = 'var(--connection-shadow-active)';
-    layer.classList.add('source-visual-hidden');
+    layer.classList.remove('source-visual-hidden');
 
     void layer.offsetHeight;
 
