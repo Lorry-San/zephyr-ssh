@@ -762,7 +762,14 @@ async function openConnection(id) {
         terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
         console.debug('[guac-client]', 'open guacamole tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {
-        sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: true, timestamp: Date.now() }));
+        const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now() };
+        sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
+        // 移动端直接进入独立终端页，不走 iframe 工作区。
+        // 这样键盘只影响 terminal.html 自己，避免父页面 + iframe 双重 visualViewport 抖动。
+        if (isCompactTerminalWorkspace()) {
+            window.location.href = `/terminal.html?tabId=${encodeURIComponent(tabId)}`;
+            return;
+        }
         terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
     }
     openOrderStack.push(tabId);

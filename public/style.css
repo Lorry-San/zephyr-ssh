@@ -1973,6 +1973,17 @@ html.keyboard-open .terminal-page {
     100% { opacity: 0; transform: translate(-50%, -50%) scale(12); }
 }
 
+.terminal-input-panel {
+    order: 1;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 20;
+    background: var(--surface);
+    padding-bottom: 0;
+    transform: none;
+    transition: none;
+}
+
 /* ===== 辅助工具栏 ===== */
 .toolbar {
     background: var(--surface);
@@ -2082,7 +2093,8 @@ html.keyboard-open .terminal-page {
 
 /* ===== 终端容器 ===== */
 .terminal-container {
-    flex: 1;
+    order: 2;
+    flex: 1 1 auto;
     overflow: hidden;
     position: relative;
     background: var(--wterm-bg);
@@ -2138,6 +2150,7 @@ html.keyboard-open .terminal-page {
     color: var(--wterm-fg);
     transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+
 :root[data-wterm-theme] .terminal-container .wterm-wrapper,
 :root[data-wterm-theme] .terminal-container .wterm-wrapper.wterm {
     background: var(--wterm-bg) !important;
@@ -3466,6 +3479,55 @@ html.keyboard-open .terminal-page {
 }
 
 @media (pointer: coarse), (max-width: 700px) {
+    body:has(.terminal-page),
+    body:has(.guac-page) {
+        height: 100dvh;
+        min-height: 100dvh;
+    }
+
+    .terminal-page {
+        inset: 0;
+        height: 100dvh;
+        max-height: 100dvh;
+        padding-bottom: 0;
+        box-shadow: none;
+        will-change: auto;
+    }
+
+    html.viewport-updating .terminal-page {
+        transition: background-color 0.24s ease, border-color 0.24s ease;
+    }
+
+    html.keyboard-open .terminal-page {
+        transform: translate3d(0, 0, 0);
+    }
+
+    .terminal-container {
+        order: 1;
+        flex: 1 1 auto;
+    }
+
+    .terminal-input-panel {
+        order: 2;
+        padding-bottom: max(4px, env(safe-area-inset-bottom));
+        transform: translate3d(0, calc(-1 * var(--keyboard-inset, 0px)), 0);
+        transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        will-change: transform;
+        box-shadow: 0 -1px 0 var(--border);
+    }
+
+    html.keyboard-open .terminal-input-panel {
+        transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    html.keyboard-open .terminal-container .wterm-wrapper {
+        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
+    }
+
+    html.keyboard-open .terminal-container .wterm-wrapper.wterm {
+        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
+    }
+
     .file-manager,
     .info-modal,
     .docker-panel {

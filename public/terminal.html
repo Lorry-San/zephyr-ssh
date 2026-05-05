@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content">
     <title>Zephyr - 终端</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
@@ -208,37 +208,6 @@
             <div class="panel-resize-handle right" data-resize-panel="infoModal" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
-        <!-- 辅助工具栏 -->
-        <div class="toolbar" id="toolbar">
-            <div class="toolbar-row">
-                <button class="tool-btn modifier" data-key="ctrl">Ctrl</button>
-                <button class="tool-btn modifier" data-key="alt">Alt</button>
-                <button class="tool-btn modifier" data-key="shift">Shift</button>
-                <span class="tool-sep"></span>
-                <button class="tool-btn func" data-key="esc">Esc</button>
-                <button class="tool-btn func" data-key="tab">Tab</button>
-                <button class="tool-btn func" data-key="home">Home</button>
-                <button class="tool-btn func" data-key="end">End</button>
-                <span class="tool-sep"></span>
-                <button class="tool-btn arrow" data-key="up">↑</button>
-                <button class="tool-btn arrow" data-key="down">↓</button>
-                <button class="tool-btn arrow" data-key="left">←</button>
-                <button class="tool-btn arrow" data-key="right">→</button>
-                <span class="tool-sep"></span>
-                <button class="tool-btn combo" data-key="ctrl-c">Ctrl+C</button>
-                <button class="tool-btn combo" data-key="ctrl-d">Ctrl+D</button>
-                <button class="tool-btn combo" data-key="ctrl-l">Ctrl+L</button>
-                <button class="tool-btn combo" data-key="ctrl-u">Ctrl+U</button>
-                <span class="tool-sep"></span>
-                <button class="tool-btn font-size-btn" id="fontDecreaseBtn" title="缩小终端字体">A−</button>
-                <button class="tool-btn font-size-btn" id="fontIncreaseBtn" title="放大终端字体">A+</button>
-            </div>
-            <div class="cmd-input-row">
-                <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
-                <button class="cmd-send-btn" id="cmdSendBtn">发送</button>
-            </div>
-        </div>
-
         <!-- 终端容器 -->
         <div class="terminal-container" id="terminalContainer">
             <div class="terminal-overlay" id="terminalOverlay">
@@ -249,6 +218,39 @@
             <div class="terminal-scrollbar" id="terminalScrollbar" aria-hidden="true">
                 <div class="terminal-scrollbar-track">
                     <div class="terminal-scrollbar-thumb" id="terminalScrollbarThumb"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部输入面板 -->
+        <div class="terminal-input-panel" id="terminalInputPanel">
+            <div class="toolbar" id="toolbar">
+                <div class="toolbar-row">
+                    <button class="tool-btn modifier" data-key="ctrl">Ctrl</button>
+                    <button class="tool-btn modifier" data-key="alt">Alt</button>
+                    <button class="tool-btn modifier" data-key="shift">Shift</button>
+                    <span class="tool-sep"></span>
+                    <button class="tool-btn func" data-key="esc">Esc</button>
+                    <button class="tool-btn func" data-key="tab">Tab</button>
+                    <button class="tool-btn func" data-key="home">Home</button>
+                    <button class="tool-btn func" data-key="end">End</button>
+                    <span class="tool-sep"></span>
+                    <button class="tool-btn arrow" data-key="up">↑</button>
+                    <button class="tool-btn arrow" data-key="down">↓</button>
+                    <button class="tool-btn arrow" data-key="left">←</button>
+                    <button class="tool-btn arrow" data-key="right">→</button>
+                    <span class="tool-sep"></span>
+                    <button class="tool-btn combo" data-key="ctrl-c">Ctrl+C</button>
+                    <button class="tool-btn combo" data-key="ctrl-d">Ctrl+D</button>
+                    <button class="tool-btn combo" data-key="ctrl-l">Ctrl+L</button>
+                    <button class="tool-btn combo" data-key="ctrl-u">Ctrl+U</button>
+                    <span class="tool-sep"></span>
+                    <button class="tool-btn font-size-btn" id="fontDecreaseBtn" title="缩小终端字体">A−</button>
+                    <button class="tool-btn font-size-btn" id="fontIncreaseBtn" title="放大终端字体">A+</button>
+                </div>
+                <div class="cmd-input-row">
+                    <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+                    <button class="cmd-send-btn" id="cmdSendBtn">发送</button>
                 </div>
             </div>
         </div>
