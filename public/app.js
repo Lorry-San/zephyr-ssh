@@ -1508,7 +1508,26 @@ async function openSshKeySecret(id) {
     toast('已载入 SSH 密钥内容');
 }
 
+function bindConnectionPressFeedback(root = document) {
+    const pressableSelector = '#addConnectionBtn, [data-edit]';
+    const clearPress = (el) => el?.classList?.remove('connection-pressing');
+    root.addEventListener('pointerdown', (e) => {
+        const target = e.target.closest(pressableSelector);
+        if (!target || target.disabled) return;
+        target.classList.add('connection-pressing');
+    }, { passive: true });
+    root.addEventListener('pointerup', (e) => clearPress(e.target.closest(pressableSelector)), { passive: true });
+    root.addEventListener('pointercancel', (e) => clearPress(e.target.closest(pressableSelector)), { passive: true });
+    root.addEventListener('pointerleave', (e) => clearPress(e.target.closest(pressableSelector)), { passive: true });
+    root.addEventListener('click', (e) => {
+        const target = e.target.closest(pressableSelector);
+        if (!target) return;
+        window.setTimeout(() => clearPress(target), 120);
+    }, true);
+}
+
 function bindEvents() {
+    bindConnectionPressFeedback();
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
     $$('.settings-tab').forEach((btn) => btn.addEventListener('click', () => { $$('.settings-tab').forEach((b) => b.classList.remove('active')); btn.classList.add('active'); $$('.settings-panel').forEach((p) => p.classList.remove('active')); $(`#settings-${btn.dataset.settings}`).classList.add('active'); }));
     $('#appThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#settingsThemeToggle').addEventListener('click', () => toggleTheme().catch((err) => toast(err.message))); $('#logoutBtn').addEventListener('click', async () => { await api('/api/auth/logout', { method: 'POST' }); location.href = '/'; });
