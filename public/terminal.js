@@ -841,6 +841,72 @@ function readWTermBufferRowText(rowEl, cols) {
     return fromBridge || fromDom;
 }
 
+function getTerminalRowSelectionText(row, selection) {
+    let text = '';
+    if (!row || !selection) return text;
+    for (let i = 0; i < selection.rangeCount; i++) {
+        try {
+            text += getRangeIntersectionText(selection.getRangeAt(i), row);
+        } catch (_) {}
+    }
+    return cleanTerminalRowText(text);
+}
+
+function getSelectedTerminalRowSlice(row, bufferText, selectedDomText) {
+    const selectedText = cleanTerminalRowText(selectedDomText);
+    const fullBufferText = cleanTerminalRowText(bufferText);
+    const fullDomText = cleanTerminalRowText(row?.textContent || '');
+    if (!selectedText) {
+        return {
+            text: '',
+            startOffset: 0,
+            endOffset: 0,
+            startsAtRowStart: true,
+            endsAtRowEnd: true,
+            partial: false,
+        };
+    }
+
+    const referenceText = fullDomText || fullBufferText;
+    const startOffset = referenceText ? referenceText.indexOf(selectedText) : -1;
+    const isFullDomRow = referenceText && selectedText === referenceText;
+    const isFullBufferRow = fullBufferText && selectedText === fullBufferText;
+
+    if (startOffset >= 0 && !isFullDomRow && fullBufferText) {
+        const sliced = fullBufferText.slice(startOffset, startOffset + selectedText.length);
+        return {
+            text: sliced || selectedText,
+            startOffset,
+            endOffset: startOffset + selectedText.length,
+            startsAtRowStart: startOffset <= 0,
+            endsAtRowEnd: startOffset + selectedText.length >= referenceText.length,
+            partial: true,
+        };
+    }
+
+    if (isFullDomRow || isFullBufferRow) {
+        return {
+            text: fullBufferText || selectedText,
+            startOffset: 0,
+            endOffset: referenceText.length,
+            startsAtRowStart: true,
+            endsAtRowEnd: true,
+            partial: false,
+        };
+    }
+
+    // DOM 选区文本和 buffer 文本无法可靠对齐时，优先返回浏览器真实选中的片段，
+    // 避免再次退化成“复制整行”。
+    return {
+        text: selectedText,
+        startOffset: 0,
+        endOffset: selectedText.length,
+        startsAtRowStart: false,
+        endsAtRowEnd: false,
+        partial: true,
+    };
+}
+
 function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
     if (!selection || selection.rangeCount === 0 || !selectionTouchesTerminal(selection)) return '';
     const fallbackText = getSelectionTextFromRanges(selection) || selection.toString?.() || '';
@@ -852,22 +918,20 @@ function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
     const cols = Math.max(2, Number(term.bridge.getCols?.() || getTerminalColsForCopy()));
     const selectedRows = [];
     for (const row of rows) {
-        let intersects = false;
-        for (let i = 0; i < selection.rangeCount; i++) {
-            try {
-                if (selection.getRangeAt(i).intersectsNode(row)) {
-                    intersects = true;
-                    break;
-                }
-            } catch (_) {}
-        }
-        if (!intersects) continue;
+        const selectedDomText = getTerminalRowSelectionText(row, selection);
+        if (!selectedDomText) continue;
 
-        const text = readWTermBufferRowText(row, cols);
-        if (!text) continue;
+        const bufferText = readWTermBufferRowText(row, cols);
+        const slice = getSelectedTerminalRowSlice(row, bufferText, selectedDomText);
+        if (!slice.text) continue;
+
         selectedRows.push({
-            text,
-            fullColumns: terminalDisplayColumns(text),
+            text: slice.text,
+            fullColumns: terminalDisplayColumns(bufferText || row.textContent || ''),
+            selectedColumns: terminalDisplayColumns(slice.text),
+            startsAtRowStart: slice.startsAtRowStart,
+            endsAtRowEnd: slice.endsAtRowEnd,
+            partial: slice.partial,
             source: row.classList.contains('term-scrollback-row') ? 'scrollback' : 'screen',
         });
     }
@@ -880,7 +944,8 @@ function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
     selectedRows.forEach((row, index) => {
         result += row.text;
         if (index >= selectedRows.length - 1) return;
-        const isSoftWrapped = row.fullColumns >= cols;
+        const nextRow = selectedRows[index + 1];
+        const isSoftWrapped = row.fullColumns >= cols && row.endsAtRowEnd && nextRow.startsAtRowStart;
         if (isSoftWrapped) softWrapJoins += 1;
         else {
             hardLineBreaks += 1;
@@ -890,11 +955,12 @@ function getTerminalSelectionTextFromDom(selection = window.getSelection?.()) {
 
     const normalized = normalizeCopiedTerminalText(result);
     if (!normalized.trim()) return normalizeCopiedTerminalText(fallbackText);
-    console.debug('[TerminalCopy]', 'selection reconstructed from wterm bridge', {
+    console.debug('[TerminalCopy]', 'selection reconstructed from wterm bridge with row slicing', {
         rows: selectedRows.length,
         cols,
         softWrapJoins,
         hardLineBreaks,
+        partialRows: selectedRows.filter((row) => row.partial).length,
         fallbackLength: fallbackText.length,
         rawLength: result.length,
         normalizedLength: normalized.length,
