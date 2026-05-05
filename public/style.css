@@ -2174,7 +2174,7 @@ html.keyboard-open .terminal-page {
     overflow-y: auto;
 }
 .terminal-container .wterm-wrapper .term-grid {
-    width: max-content;
+    width: 100%;
     min-width: 100%;
     height: auto;
     min-height: 100%;
@@ -2183,6 +2183,11 @@ html.keyboard-open .terminal-page {
     overflow-anchor: none;
     user-select: text;
     -webkit-user-select: text;
+}
+
+.terminal-container .wterm-wrapper .term-row,
+.terminal-container .wterm-wrapper .term-scrollback-row {
+    min-width: 100%;
 }
 .terminal-scrollbar {
     position: absolute;

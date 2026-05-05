@@ -663,6 +663,73 @@ function getTerminalCharMetrics() {
     };
 }
 
+function getMeasuredTerminalSize() {
+    const rect = wtermWrapper.getBoundingClientRect();
+    const style = getComputedStyle(wtermWrapper);
+    const paddingX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    const { lineHeight, charWidth } = getTerminalCharMetrics();
+    let effectiveHeight = Math.max(0, rect.height - paddingY);
+    if (mobileKeyboardOpen && window.visualViewport) {
+        const viewportBottom = window.visualViewport.offsetTop + window.visualViewport.height;
+        effectiveHeight = Math.max(lineHeight * 2, Math.min(effectiveHeight, viewportBottom - rect.top - paddingY));
+    }
+    const effectiveWidth = Math.max(0, rect.width - paddingX);
+    return {
+        cols: Math.max(20, Math.floor(effectiveWidth / Math.max(1, charWidth))),
+        rows: Math.max(2, Math.floor(effectiveHeight / Math.max(1, lineHeight))),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        effectiveWidth: Math.round(effectiveWidth),
+        effectiveHeight: Math.round(effectiveHeight),
+        lineHeight,
+        charWidth,
+    };
+}
+
+function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
+    if (!term || !wtermWrapper) return false;
+    const nextCols = Math.floor(Number(cols));
+    const nextRows = Math.floor(Number(rows));
+    if (!Number.isFinite(nextCols) || !Number.isFinite(nextRows) || nextCols < 20 || nextRows < 2) {
+        logTerminalLayoutDiagnostics('wterm-layout:ignored-tiny-safe-resize', {
+            reason,
+            cols: nextCols,
+            rows: nextRows,
+        });
+        return false;
+    }
+
+    const currentCols = Number(term.cols ?? term._cols ?? term.options?.cols ?? 0);
+    const currentRows = Number(term.rows ?? term._rows ?? term.options?.rows ?? 0);
+    try {
+        if ((currentCols !== nextCols || currentRows !== nextRows) && typeof term.resize === 'function') {
+            term.resize(nextCols, nextRows);
+        } else if (term.options) {
+            term.options.cols = nextCols;
+            term.options.rows = nextRows;
+        }
+        try { term.refresh?.(); } catch (_) {}
+        logTerminalLayoutDiagnostics('wterm-layout:safe-resized', {
+            reason,
+            cols: nextCols,
+            rows: nextRows,
+            previousCols: currentCols,
+            previousRows: currentRows,
+        });
+        return true;
+    } catch (err) {
+        logTerminalLayoutDiagnostics('wterm-layout:safe-resize-failed', {
+            reason,
+            cols: nextCols,
+            rows: nextRows,
+            error: err?.message || String(err),
+        });
+        try { term.refresh?.(); } catch (_) {}
+        return false;
+    }
+}
+
 function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
     if (!term || !wtermWrapper) return;
     const rect = wtermWrapper.getBoundingClientRect();
@@ -675,14 +742,16 @@ function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
         return;
     }
 
-    // 只调用公开/半公开的整体尺寸刷新入口。不要触碰 renderer.syncRows/syncScrollback
-    // 这类私有 DOM 同步方法，否则移动端键盘动画期间会把屏幕行和 DOM 行状态打散，
-    // 表现为“每一行都错位”。
-    try { term.resize?.(); } catch (_) {}
-    try { term.fit?.(); } catch (_) {}
-    try { term.refresh?.(); } catch (_) {}
+    const measured = getMeasuredTerminalSize();
+    resizeWTermSafely(measured.cols, measured.rows, reason);
 
-    logTerminalLayoutDiagnostics('wterm-layout:refreshed-safe', { reason });
+    logTerminalLayoutDiagnostics('wterm-layout:refreshed-safe', {
+        reason,
+        measuredCols: measured.cols,
+        measuredRows: measured.rows,
+        measuredWidth: measured.width,
+        measuredHeight: measured.height,
+    });
 }
 
 function requestStableTerminalLayout(reason = 'stable-layout', { includeResize = true, focus = false } = {}) {
@@ -724,40 +793,50 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
 
 function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {}) {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
-    if (Number.isFinite(cols) && Number.isFinite(rows)) {
-        const nextCols = Math.max(2, Math.floor(cols));
-        const nextRows = Math.max(2, Math.floor(rows));
-        wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
-        logTerminalLayoutDiagnostics('resize:explicit-sent', { reason, cols: nextCols, rows: nextRows });
-        return;
-    }
-    const rect = wtermWrapper.getBoundingClientRect();
-    if (!force && (rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
+    const measured = getMeasuredTerminalSize();
+    if (!force && (measured.width < TERMINAL_MIN_RESIZE_WIDTH || measured.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
         logTerminalLayoutDiagnostics('resize:skipped-unstable-rect', {
             reason,
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
+            width: measured.width,
+            height: measured.height,
         });
         requestStableTerminalLayout(`${reason}:unstable-rect`, { includeResize: true });
         return;
     }
-    const { lineHeight, charWidth } = getTerminalCharMetrics();
-    let effectiveHeight = rect.height;
-    if (mobileKeyboardOpen && window.visualViewport) {
-        const viewportBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-        effectiveHeight = Math.max(lineHeight * 2, Math.min(rect.height, viewportBottom - rect.top));
+
+    let nextCols = measured.cols;
+    let nextRows = measured.rows;
+    const explicitCols = Math.floor(Number(cols));
+    const explicitRows = Math.floor(Number(rows));
+    if (Number.isFinite(explicitCols) && Number.isFinite(explicitRows)) {
+        // WTerm autoResize/onResize 在移动端键盘动画中可能回调 cols=1/2，
+        // 绝不能把这个值发给后端 PTY，否则服务端会按极窄宽度把提示符竖排。
+        if (explicitCols >= 20 && explicitRows >= 2) {
+            nextCols = explicitCols;
+            nextRows = explicitRows;
+        } else {
+            logTerminalLayoutDiagnostics('resize:ignored-tiny-explicit-size', {
+                reason,
+                explicitCols,
+                explicitRows,
+                measuredCols: measured.cols,
+                measuredRows: measured.rows,
+            });
+        }
     }
-    const nextRows = Math.max(2, Math.floor(effectiveHeight / lineHeight));
-    const nextCols = Math.max(2, Math.floor(rect.width / charWidth));
+
     wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
-    logTerminalLayoutDiagnostics('resize:measured-sent', {
+    logTerminalLayoutDiagnostics('resize:sent', {
         reason,
         force,
         cols: nextCols,
         rows: nextRows,
-        lineHeight: Number(lineHeight.toFixed(2)),
-        charWidth: Number(charWidth.toFixed(2)),
-        effectiveHeight: Math.round(effectiveHeight),
+        measuredWidth: measured.width,
+        measuredHeight: measured.height,
+        effectiveWidth: measured.effectiveWidth,
+        effectiveHeight: measured.effectiveHeight,
+        lineHeight: Number(measured.lineHeight.toFixed(2)),
+        charWidth: Number(measured.charWidth.toFixed(2)),
     });
 }
 
@@ -4109,7 +4188,12 @@ async function initWTerm(connectionToken = activeConnectionToken) {
     wtermWrapper.innerHTML = '';
     try {
         term = new WTermClass(wtermWrapper, {
-            cols: 80, rows: 24, autoResize: true, cursorBlink: true,
+            cols: 80,
+            rows: 24,
+            // 禁用 WTerm 内置 autoResize：移动端/iframe/软键盘动画中它会短暂测成 1~2 列，
+            // 导致前端 DOM 或后端 PTY 出现“每个字符一行”的竖排。统一走安全测量逻辑。
+            autoResize: false,
+            cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
             onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }),
