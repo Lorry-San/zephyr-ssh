@@ -515,7 +515,14 @@ function closeModal() {
     document.body.classList.add('disable-interaction', 'connection-transition-closing');
     document.body.classList.remove('connection-transition-opening', 'connection-home-blur');
 
-    applyConnectionLayerSourceChrome(layer, currentRect.source || connectionModalTrigger, { revealVisual: true });
+    const sourceEl = currentRect.source || connectionModalTrigger;
+    const sourceStyle = sourceEl?.isConnected ? getComputedStyle(sourceEl) : null;
+    const sourceBorderRadius = sourceStyle?.borderRadius || getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
+    const sourceBoxShadow = sourceStyle?.boxShadow && sourceStyle.boxShadow !== 'none'
+        ? sourceStyle.boxShadow
+        : 'var(--connection-shadow-idle)';
+
+    applyConnectionLayerSourceChrome(layer, sourceEl, { revealVisual: true });
 
     layer.style.visibility = 'visible';
     layer.style.pointerEvents = 'auto';
@@ -548,8 +555,8 @@ function closeModal() {
         `;
 
         setConnectionLayerRect(layer, sourceRect);
-        layer.style.borderRadius = getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
-        layer.style.boxShadow = 'var(--connection-shadow-idle)';
+        layer.style.borderRadius = sourceBorderRadius;
+        layer.style.boxShadow = sourceBoxShadow;
 
         console.debug('[connection-transition]', 'close:morph-start', { durationMs: 500 });
     });
@@ -583,13 +590,13 @@ function closeModal() {
         modal.classList.remove('show', 'closing', 'app-visible');
         resetConnectionTransitionLayer(layer);
 
+        restoreTriggerWithoutTransition();
+
         document.body.classList.remove(
             'disable-interaction',
             'connection-transition-closing',
             'connection-home-blur'
         );
-
-        restoreTriggerWithoutTransition();
         connectionModalOriginRect = null;
 
         console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
