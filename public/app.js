@@ -345,6 +345,43 @@ function syncConnectionLayerVisual(layer, source) {
         shellBackground: 'neutral-surface'
     });
 }
+function applyConnectionLayerSourceChrome(layer, source) {
+    if (!layer || !source?.isConnected) return;
+
+    const style = getComputedStyle(source);
+    const background = style.background && style.background !== 'none'
+        ? style.background
+        : style.backgroundColor;
+
+    layer.style.background = background || style.backgroundColor || 'var(--surface)';
+    layer.style.border = style.border || '1px solid color-mix(in srgb, var(--border) 50%, transparent)';
+    layer.style.color = style.color;
+    layer.style.font = style.font;
+    layer.style.letterSpacing = style.letterSpacing;
+    layer.style.textAlign = style.textAlign;
+    layer.style.display = 'inline-flex';
+    layer.style.alignItems = 'center';
+    layer.style.justifyContent = 'center';
+    layer.style.gap = style.gap;
+    layer.style.whiteSpace = 'nowrap';
+
+    const visual = layer.querySelector('.connection-transition-source-visual');
+    if (visual) {
+        visual.style.background = style.background;
+        visual.style.border = style.border;
+        visual.style.borderRadius = style.borderRadius;
+        visual.style.color = style.color;
+        visual.style.font = style.font;
+        visual.style.letterSpacing = style.letterSpacing;
+        visual.style.padding = style.padding;
+        visual.style.gap = style.gap;
+    }
+
+    console.debug('[connection-transition]', 'source chrome applied', {
+        sourceRole: source.id === 'addConnectionBtn' ? 'add' : source.matches('[data-edit]') ? 'edit' : 'other',
+        background
+    });
+}
 function resetConnectionTransitionLayer(layer) {
     if (!layer) return;
     layer.style.visibility = 'hidden';
@@ -465,6 +502,8 @@ function closeModal() {
     document.body.classList.add('disable-interaction', 'connection-transition-closing');
     document.body.classList.remove('connection-transition-opening', 'connection-home-blur');
 
+    applyConnectionLayerSourceChrome(layer, currentRect.source || connectionModalTrigger);
+
     layer.style.visibility = 'visible';
     layer.style.pointerEvents = 'auto';
     layer.style.transition = 'none';
@@ -474,6 +513,7 @@ function closeModal() {
     layer.style.height = `${viewport.height}px`;
     layer.style.borderRadius = '0px';
     layer.style.boxShadow = 'var(--connection-shadow-active)';
+    layer.classList.add('source-visual-hidden');
 
     void layer.offsetHeight;
 
@@ -483,16 +523,6 @@ function closeModal() {
         sourceRect,
         currentRect
     });
-
-    /*
-     * 关闭时始终隐藏克隆出来的按钮/图标视觉。
-     *
-     * 不要在动画中途恢复 .connection-transition-source-visual，
-     * 否则会在收缩尾段出现：
-     * layer 外壳 -> 克隆按钮 -> 真实按钮
-     * 的二次视觉切换，导致图标跳一下或颜色闪一下。
-     */
-    layer.classList.add('source-visual-hidden');
 
     requestAnimationFrame(() => {
         layer.style.transition = `
@@ -517,11 +547,6 @@ function closeModal() {
         const trigger = connectionModalTrigger;
         if (!trigger?.style) return;
 
-        /*
-         * 原按钮本身可能有 transition: opacity / background / color。
-         * 这里临时禁用 transition，避免真实按钮恢复 opacity 时又补一段动画，
-         * 从而造成尾帧跳动或颜色变化。
-         */
         const oldTransition = trigger.style.transition;
         trigger.style.transition = 'none';
         trigger.style.removeProperty('opacity');
@@ -542,15 +567,7 @@ function closeModal() {
         done = true;
 
         layer.removeEventListener('transitionend', onEnd);
-
         modal.classList.remove('show', 'closing', 'app-visible');
-
-        /*
-         * 先隐藏并重置过渡层，再恢复真实按钮。
-         * 这样视觉上就是：
-         * 全屏 layer 收缩完成 -> layer 消失 -> 真实按钮出现
-         * 不会在尾段提前出现克隆图标。
-         */
         resetConnectionTransitionLayer(layer);
 
         document.body.classList.remove(
@@ -560,7 +577,6 @@ function closeModal() {
         );
 
         restoreTriggerWithoutTransition();
-
         connectionModalOriginRect = null;
 
         console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
@@ -571,11 +587,6 @@ function closeModal() {
     };
 
     layer.addEventListener('transitionend', onEnd);
-
-    /*
-     * 兜底：如果某些浏览器没有触发 transitionend，
-     * 仍然保证动画结束后清理状态。
-     */
     closeModal._timer = window.setTimeout(finish, 560);
 }
 function connectionPayload({ forTest = false } = {}) {
