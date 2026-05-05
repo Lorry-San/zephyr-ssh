@@ -675,18 +675,14 @@ function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
         return;
     }
 
+    // 只调用公开/半公开的整体尺寸刷新入口。不要触碰 renderer.syncRows/syncScrollback
+    // 这类私有 DOM 同步方法，否则移动端键盘动画期间会把屏幕行和 DOM 行状态打散，
+    // 表现为“每一行都错位”。
     try { term.resize?.(); } catch (_) {}
     try { term.fit?.(); } catch (_) {}
     try { term.refresh?.(); } catch (_) {}
-    try { term.render?.(); } catch (_) {}
-    try { term.renderer?.refresh?.(); } catch (_) {}
-    try { term.renderer?.render?.(); } catch (_) {}
-    try { term.renderer?.syncRows?.(); } catch (_) {}
-    try { term.renderer?.syncScrollback?.(); } catch (_) {}
-    try { term._refresh?.(); } catch (_) {}
-    try { term._render?.(); } catch (_) {}
 
-    logTerminalLayoutDiagnostics('wterm-layout:refreshed', { reason });
+    logTerminalLayoutDiagnostics('wterm-layout:refreshed-safe', { reason });
 }
 
 function requestStableTerminalLayout(reason = 'stable-layout', { includeResize = true, focus = false } = {}) {
@@ -707,12 +703,15 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
             window.setTimeout(() => {
                 requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
-                        invokeWTermLayoutRefresh(`${runReason}:phase-${index}`);
-                        if (shouldResize) sendTerminalResize(undefined, undefined, { reason: `${runReason}:phase-${index}`, force: index === TERMINAL_STABLE_LAYOUT_DELAYS.length - 1 });
+                        const finalPhase = index === TERMINAL_STABLE_LAYOUT_DELAYS.length - 1;
+                        // 键盘动画/页面恢复的中间阶段只同步滚动；最后一帧再安全刷新和 resize，
+                        // 避免连续 DOM 行刷新导致移动端每行错位。
+                        if (finalPhase) invokeWTermLayoutRefresh(`${runReason}:phase-${index}`);
+                        if (shouldResize && finalPhase) sendTerminalResize(undefined, undefined, { reason: `${runReason}:phase-${index}`, force: true });
                         shouldFollowTerminalOutput = true;
                         scheduleTerminalScrollToBottom();
                         scheduleTerminalScrollbarUpdate();
-                        if (shouldFocus) {
+                        if (shouldFocus && finalPhase) {
                             try { term?.focus?.(); } catch (_) {}
                             try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
                         }

@@ -1096,7 +1096,8 @@ function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
             setTerminalSmartbarOpen(false);
             exitTerminalFullscreen();
             resetTerminalWorkspaceKeyboard();
-            switchView('dashboard');
+            // 最后一个终端关闭后保留在终端页，显示空会话占位，不再自动回到首页。
+            switchView('terminal');
         }
         renderTerminalTabs();
     }, 260);
