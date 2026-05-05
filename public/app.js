@@ -301,6 +301,28 @@ function setConnectionLayerRect(layer, rect) {
     layer.style.width = `${Math.round(rect.width)}px`;
     layer.style.height = `${Math.round(rect.height)}px`;
 }
+function syncConnectionLayerVisual(layer, source) {
+    if (!layer || !source?.isConnected) {
+        layer.innerHTML = '';
+        layer.removeAttribute('data-has-source-visual');
+        return;
+    }
+    const style = getComputedStyle(source);
+    layer.innerHTML = `<span class="connection-transition-source-visual">${source.innerHTML}</span>`;
+    layer.dataset.hasSourceVisual = 'true';
+    layer.style.background = style.background;
+    layer.style.border = style.border;
+    layer.style.color = style.color;
+    layer.style.font = style.font;
+    layer.style.letterSpacing = style.letterSpacing;
+    layer.style.textAlign = style.textAlign;
+    layer.style.padding = style.padding;
+    layer.style.display = 'inline-flex';
+    layer.style.alignItems = style.alignItems || 'center';
+    layer.style.justifyContent = style.justifyContent || 'center';
+    layer.style.gap = style.gap;
+    layer.style.whiteSpace = 'nowrap';
+}
 function resetConnectionTransitionLayer(layer) {
     if (!layer) return;
     layer.style.visibility = 'hidden';
@@ -314,6 +336,21 @@ function resetConnectionTransitionLayer(layer) {
     layer.style.height = '';
     layer.style.left = '';
     layer.style.top = '';
+    layer.style.background = '';
+    layer.style.border = '';
+    layer.style.color = '';
+    layer.style.font = '';
+    layer.style.letterSpacing = '';
+    layer.style.textAlign = '';
+    layer.style.padding = '';
+    layer.style.display = '';
+    layer.style.alignItems = '';
+    layer.style.justifyContent = '';
+    layer.style.gap = '';
+    layer.style.whiteSpace = '';
+    layer.innerHTML = '';
+    layer.removeAttribute('data-has-source-visual');
+    layer.classList.remove('source-visual-hidden');
 }
 function prepareConnectionModalForm(conn = null) {
     editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
@@ -340,9 +377,10 @@ function openModal(conn = null, trigger = null) {
     const viewport = viewportMetrics();
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
     connectionModalOriginRect = { left: sourceRect.left, top: sourceRect.top, width: sourceRect.width, height: sourceRect.height };
+    syncConnectionLayerVisual(layer, sourceRect.source);
     setConnectionLayerRect(layer, connectionModalOriginRect);
     layer.style.transition = 'none';
-    layer.style.borderRadius = '18px';
+    layer.style.borderRadius = getComputedStyle(sourceRect.source || connectionModalTrigger || layer).borderRadius || '18px';
     layer.style.boxShadow = 'var(--connection-shadow-idle)';
     layer.style.visibility = 'visible';
     layer.style.pointerEvents = 'auto';
@@ -355,6 +393,7 @@ function openModal(conn = null, trigger = null) {
     requestAnimationFrame(() => {
         document.body.classList.add('connection-home-blur');
         modal.classList.add('app-visible');
+        layer.classList.add('source-visual-hidden');
         layer.style.transition = `
             top var(--connection-app-duration) var(--connection-ios-spring),
             left var(--connection-app-duration) var(--connection-ios-spring),
@@ -408,6 +447,7 @@ function closeModal() {
 
     console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect, currentRect });
 
+    layer.classList.add('source-visual-hidden');
     requestAnimationFrame(() => {
         layer.style.transition = `
             top var(--connection-app-duration) var(--connection-ios-spring),
@@ -418,7 +458,7 @@ function closeModal() {
             box-shadow 0.2s ease-in
         `;
         setConnectionLayerRect(layer, sourceRect);
-        layer.style.borderRadius = '18px';
+        layer.style.borderRadius = getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
         layer.style.boxShadow = 'var(--connection-shadow-idle)';
         console.debug('[connection-transition]', 'close:morph-start', { durationMs: 500 });
     });
@@ -440,9 +480,9 @@ function closeModal() {
     };
     layer.addEventListener('transitionend', onEnd);
     closeModal._restoreIconTimer = window.setTimeout(() => {
-        connectionModalTrigger?.style?.removeProperty('opacity');
-        console.debug('[connection-transition]', 'close:icon-restored', { delayMs: 260 });
-    }, 260);
+        layer.classList.remove('source-visual-hidden');
+        console.debug('[connection-transition]', 'close:source-visual-restored', { delayMs: 340 });
+    }, 340);
     closeModal._timer = window.setTimeout(finish, 560);
 }
 function connectionPayload({ forTest = false } = {}) {

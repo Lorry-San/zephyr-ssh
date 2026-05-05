@@ -1351,6 +1351,26 @@ body.connection-transition-closing .app-shell {
     content: none;
     display: none;
 }
+.connection-transition-source-visual {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: inherit;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 1;
+    transform: scale(1);
+    transition: opacity .15s ease, transform .18s ease;
+    pointer-events: none;
+}
+.connection-transition-layer.source-visual-hidden .connection-transition-source-visual {
+    opacity: 0;
+    transform: scale(.94);
+    transition: opacity .15s ease, transform .18s ease;
+}
 .modal-backdrop {
     position: fixed;
     inset: 0;
