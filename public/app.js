@@ -289,23 +289,21 @@ function connectionTransitionTargetRect(trigger = connectionModalTrigger) {
     const rect = source?.getBoundingClientRect?.();
     if (rect?.width && rect?.height) return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, source };
     const viewport = viewportMetrics();
-    return { left: viewport.width - 86, top: 82, width: 62, height: 62, source: null };
-}
-function connectionSurfaceTransform(rect, viewport = viewportMetrics()) {
-    const scale = Math.max(0.035, Math.min(1, rect.width / viewport.width));
-    const x = rect.left - viewport.left + rect.width / 2 - viewport.width * scale / 2;
-    const y = rect.top - viewport.top + rect.height / 2 - viewport.height * scale / 2;
-    return {
-        scale,
-        value: `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) scale(${scale})`
-    };
+    return { left: viewport.width - 86, top: 82, width: 74, height: 74, source: null };
 }
 function nextAnimationFrame(fn) {
     requestAnimationFrame(() => requestAnimationFrame(fn));
 }
+function setConnectionLayerRect(layer, rect) {
+    layer.style.left = `${Math.round(rect.left)}px`;
+    layer.style.top = `${Math.round(rect.top)}px`;
+    layer.style.width = `${Math.round(rect.width)}px`;
+    layer.style.height = `${Math.round(rect.height)}px`;
+}
 function resetConnectionTransitionLayer(layer) {
     if (!layer) return;
-    layer.style.display = 'none';
+    layer.style.visibility = 'hidden';
+    layer.style.pointerEvents = 'none';
     layer.style.transition = 'none';
     layer.style.transform = '';
     layer.style.opacity = '';
@@ -330,50 +328,53 @@ function openModal(conn = null, trigger = null) {
     if (!modal || !layer || modal.classList.contains('show')) return;
     prepareConnectionModalForm(conn);
     connectionModalTrigger = trigger || connectionTransitionTargetRect().source;
-    window.clearTimeout(openModal._homeBlurTimer);
-    window.clearTimeout(openModal._appTimer);
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._timer);
+    window.clearTimeout(closeModal._restoreIconTimer);
     resetConnectionTransitionLayer(layer);
     modal.classList.remove('closing', 'app-visible');
     modal.classList.add('show');
     document.body.classList.add('disable-interaction', 'connection-transition-opening');
-    connectionModalTrigger?.style?.setProperty('opacity', '0');
+
     const viewport = viewportMetrics();
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
-    const start = connectionSurfaceTransform(sourceRect, viewport);
-    layer.style.display = 'block';
+    setConnectionLayerRect(layer, sourceRect);
     layer.style.transition = 'none';
-    layer.style.left = '0px';
-    layer.style.top = '0px';
-    layer.style.width = `${viewport.width}px`;
-    layer.style.height = `${viewport.height}px`;
-    layer.style.transformOrigin = 'top left';
-    layer.style.transform = start.value;
-    layer.style.opacity = '1';
     layer.style.borderRadius = '18px';
-    layer.offsetHeight;
-    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', sourceRect, viewport, scale: start.scale });
-    nextAnimationFrame(() => {
-        layer.style.transition = 'transform 0.48s cubic-bezier(0.22,1,0.36,1), border-radius 0.42s ease 0.10s, opacity 0.20s ease 0.34s';
-        layer.style.transform = 'translate3d(0,0,0) scale(1)';
-        layer.style.borderRadius = '0px';
-        layer.style.opacity = '0.22';
-    });
-    openModal._homeBlurTimer = window.setTimeout(() => {
+    layer.style.boxShadow = 'var(--connection-shadow-idle)';
+    layer.style.visibility = 'visible';
+    layer.style.pointerEvents = 'auto';
+    connectionModalTrigger?.style?.setProperty('opacity', '0');
+
+    void layer.offsetHeight;
+
+    console.debug('[connection-transition]', 'open:init', { mode: editingId ? 'edit' : 'create', connectionId: editingId || '', sourceRect, viewport });
+
+    requestAnimationFrame(() => {
         document.body.classList.add('connection-home-blur');
-        console.debug('[connection-transition]', 'open:home-blur', { delayMs: 100 });
-    }, 100);
-    openModal._appTimer = window.setTimeout(() => {
         modal.classList.add('app-visible');
-        console.debug('[connection-transition]', 'open:app-fade-in', { delayMs: 180 });
-    }, 180);
+        layer.style.transition = `
+            top var(--connection-app-duration) var(--connection-ios-spring),
+            left var(--connection-app-duration) var(--connection-ios-spring),
+            width var(--connection-app-duration) var(--connection-ios-spring),
+            height var(--connection-app-duration) var(--connection-ios-spring),
+            border-radius var(--connection-app-duration) var(--connection-ios-spring),
+            box-shadow 0.3s ease-out
+        `;
+        layer.style.left = `${viewport.left}px`;
+        layer.style.top = `${viewport.top}px`;
+        layer.style.width = `${viewport.width}px`;
+        layer.style.height = `${viewport.height}px`;
+        layer.style.borderRadius = '0px';
+        layer.style.boxShadow = 'var(--connection-shadow-active)';
+        console.debug('[connection-transition]', 'open:morph-start', { durationMs: 500 });
+    });
+
     openModal._finishTimer = window.setTimeout(() => {
-        resetConnectionTransitionLayer(layer);
-        document.body.classList.remove('disable-interaction', 'connection-transition-opening', 'connection-home-blur');
+        document.body.classList.remove('disable-interaction', 'connection-transition-opening');
         modal.classList.add('app-visible');
-        console.debug('[connection-transition]', 'open:complete', { durationMs: 580 });
-    }, 580);
+        console.debug('[connection-transition]', 'open:complete', { durationMs: 500 });
+    }, 520);
 }
 function closeModal() {
     const modal = $('#connectionModal');
@@ -381,45 +382,64 @@ function closeModal() {
     if (!modal?.classList.contains('show') || modal.classList.contains('closing')) return;
     const viewport = viewportMetrics();
     const sourceRect = connectionTransitionTargetRect(connectionModalTrigger);
-    const end = connectionSurfaceTransform(sourceRect, viewport);
-    window.clearTimeout(openModal._homeBlurTimer);
-    window.clearTimeout(openModal._appTimer);
     window.clearTimeout(openModal._finishTimer);
     window.clearTimeout(closeModal._restoreIconTimer);
     window.clearTimeout(closeModal._timer);
     modal.classList.add('closing');
     modal.classList.remove('app-visible');
     setConnectionTestLatency();
-    document.body.classList.add('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
-    layer.style.display = 'block';
+    document.body.classList.add('disable-interaction', 'connection-transition-closing');
+    document.body.classList.remove('connection-transition-opening', 'connection-home-blur');
+
+    layer.style.visibility = 'visible';
+    layer.style.pointerEvents = 'auto';
     layer.style.transition = 'none';
-    layer.style.left = '0px';
-    layer.style.top = '0px';
+    layer.style.left = `${viewport.left}px`;
+    layer.style.top = `${viewport.top}px`;
     layer.style.width = `${viewport.width}px`;
     layer.style.height = `${viewport.height}px`;
-    layer.style.transformOrigin = 'top left';
-    layer.style.transform = 'translate3d(0,0,0) scale(1)';
-    layer.style.opacity = '0.22';
     layer.style.borderRadius = '0px';
-    layer.offsetHeight;
-    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect, scale: end.scale });
-    nextAnimationFrame(() => {
-        layer.style.transition = 'transform 0.44s cubic-bezier(0.22,1,0.36,1), border-radius 0.34s ease 0.08s, opacity 0.18s ease';
-        layer.style.transform = end.value;
+    layer.style.boxShadow = 'var(--connection-shadow-active)';
+
+    void layer.offsetHeight;
+
+    console.debug('[connection-transition]', 'close:init', { connectionId: editingId || '', viewport, sourceRect });
+
+    requestAnimationFrame(() => {
+        layer.style.transition = `
+            top var(--connection-app-duration) var(--connection-ios-spring),
+            left var(--connection-app-duration) var(--connection-ios-spring),
+            width var(--connection-app-duration) var(--connection-ios-spring),
+            height var(--connection-app-duration) var(--connection-ios-spring),
+            border-radius var(--connection-app-duration) var(--connection-ios-spring),
+            box-shadow 0.2s ease-in
+        `;
+        setConnectionLayerRect(layer, sourceRect);
         layer.style.borderRadius = '18px';
-        layer.style.opacity = '1';
+        layer.style.boxShadow = 'var(--connection-shadow-idle)';
+        console.debug('[connection-transition]', 'close:morph-start', { durationMs: 500 });
     });
-    closeModal._restoreIconTimer = window.setTimeout(() => {
-        connectionModalTrigger?.style?.removeProperty('opacity');
-        console.debug('[connection-transition]', 'close:icon-restored', { delayMs: 260 });
-    }, 260);
-    closeModal._timer = window.setTimeout(() => {
+
+    let done = false;
+    const finish = () => {
+        if (done) return;
+        done = true;
+        layer.removeEventListener('transitionend', onEnd);
         modal.classList.remove('show', 'closing', 'app-visible');
         resetConnectionTransitionLayer(layer);
         document.body.classList.remove('disable-interaction', 'connection-transition-closing', 'connection-home-blur');
         connectionModalTrigger?.style?.removeProperty('opacity');
-        console.debug('[connection-transition]', 'close:complete', { durationMs: 520 });
-    }, 520);
+        console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
+    };
+    const onEnd = (ev) => {
+        if (ev.propertyName === 'top') finish();
+    };
+    layer.addEventListener('transitionend', onEnd);
+    closeModal._restoreIconTimer = window.setTimeout(() => {
+        connectionModalTrigger?.style?.removeProperty('opacity');
+        console.debug('[connection-transition]', 'close:icon-restored', { delayMs: 260 });
+    }, 260);
+    closeModal._timer = window.setTimeout(finish, 560);
 }
 function connectionPayload({ forTest = false } = {}) {
     const mode = $('#connMode').value;
