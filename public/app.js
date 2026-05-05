@@ -518,9 +518,7 @@ function closeModal() {
     const sourceEl = currentRect.source || connectionModalTrigger;
     const sourceStyle = sourceEl?.isConnected ? getComputedStyle(sourceEl) : null;
     const sourceBorderRadius = sourceStyle?.borderRadius || getComputedStyle(connectionModalTrigger || layer).borderRadius || '18px';
-    const sourceBoxShadow = sourceStyle?.boxShadow && sourceStyle.boxShadow !== 'none'
-        ? sourceStyle.boxShadow
-        : 'var(--connection-shadow-idle)';
+    const sourceBoxShadow = 'var(--connection-shadow-idle)';
 
     applyConnectionLayerSourceChrome(layer, sourceEl, { revealVisual: true });
 
@@ -551,7 +549,7 @@ function closeModal() {
             width var(--connection-app-duration) var(--connection-ios-spring),
             height var(--connection-app-duration) var(--connection-ios-spring),
             border-radius var(--connection-app-duration) var(--connection-ios-spring),
-            box-shadow 0.2s ease-in
+            box-shadow 0.3s ease-out
         `;
 
         setConnectionLayerRect(layer, sourceRect);
@@ -592,11 +590,13 @@ function closeModal() {
 
         restoreTriggerWithoutTransition();
 
-        document.body.classList.remove(
-            'disable-interaction',
-            'connection-transition-closing',
-            'connection-home-blur'
-        );
+        window.setTimeout(() => {
+            document.body.classList.remove(
+                'disable-interaction',
+                'connection-transition-closing',
+                'connection-home-blur'
+            );
+        }, 80);
         connectionModalOriginRect = null;
 
         console.debug('[connection-transition]', 'close:complete', { durationMs: 500 });
