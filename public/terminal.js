@@ -2970,11 +2970,15 @@ function scrollTerminalToBottom(reason = 'scroll-to-bottom') {
 function markTerminalUserInput(data = '', { source = 'unknown', forceFollow = false } = {}) {
     if (!data) return;
     const wasAtBottom = isTerminalAtBottom();
-    const shouldFollowAfterInput = forceFollow || shouldFollowTerminalOutput || wasAtBottom;
+    // 普通输入不应继承首次连接/输出阶段遗留的 shouldFollowTerminalOutput=true。
+    // 否则用户在历史输出中输入第一个字符时，会被强制拉到终端底部。
+    // 只有当前已经在底部，或发送命令/辅助键/粘贴等显式 forceFollow 的输入，才继续贴底。
+    const shouldFollowAfterInput = forceFollow || wasAtBottom;
     logTerminalScrollDiagnostics('user-input:mark-before', {
         source,
         forceFollow,
         wasAtBottom,
+        previousFollow: shouldFollowTerminalOutput,
         shouldFollowAfterInput,
         length: data.length,
         preview: String(data).slice(0, 20).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
@@ -3093,7 +3097,9 @@ function setupTerminalInputActivityHooks() {
         if (document.activeElement === cmdInput) return;
         if (!terminalContainer?.contains(document.activeElement) && document.activeElement !== document.body) return;
         const wasAtBottom = isTerminalAtBottom();
-        shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
+        // 与 markTerminalUserInput 保持一致：普通键盘输入只在当前已处于底部时跟随，
+        // 不继承首次连接输出阶段遗留的 shouldFollowTerminalOutput=true。
+        shouldFollowTerminalOutput = wasAtBottom;
         logTerminalScrollDiagnostics('keydown-input-activity', {
             key: e.key,
             wasAtBottom,
