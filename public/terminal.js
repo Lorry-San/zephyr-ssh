@@ -163,6 +163,7 @@ let dockerLogBuffer = '';
 let chartInstances = {};
 let latestStatsData = null;
 let shouldFollowTerminalOutput = true;
+let terminalAutoScrollLockedByUser = false;
 let terminalScrollRaf = 0;
 let terminalScrollbarRaf = 0;
 let isProgrammaticTerminalScroll = false;
@@ -496,8 +497,7 @@ function animateViewportCssMetrics(targetHeight, targetOffsetTop, { immediate = 
     window.clearTimeout(viewportAnimationResizeTimer);
     viewportAnimationResizeTimer = window.setTimeout(() => {
         document.documentElement.classList.remove('viewport-updating');
-        shouldFollowTerminalOutput = true;
-        scheduleTerminalScrollToBottom();
+        requestTerminalAutoFollow('viewport-css-animation-settled');
         requestStableTerminalLayout('viewport-css-animation-settled', { includeResize: true });
     }, immediate ? 40 : 600);  // 增加延迟到 600ms 以匹配更长的 transition
 }
@@ -540,8 +540,7 @@ function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate
         if (state.currentHeight !== state.targetHeight || state.currentOffsetTop !== state.targetOffsetTop) {
             viewportAnimationRaf = requestAnimationFrame(step);
         } else {
-            shouldFollowTerminalOutput = true;
-            scheduleTerminalScrollToBottom();
+            requestTerminalAutoFollow('viewport-css-animation-old-step-settled');
             scheduleTerminalResize();
         }
     };
@@ -549,8 +548,7 @@ function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate
     viewportAnimationRaf = requestAnimationFrame(step);
     window.clearTimeout(viewportAnimationResizeTimer);
     viewportAnimationResizeTimer = window.setTimeout(() => {
-        shouldFollowTerminalOutput = true;
-        scheduleTerminalScrollToBottom();
+        requestTerminalAutoFollow('viewport-css-animation-old-timer-settled');
         scheduleTerminalResize();
     }, mobileKeyboardOpen ? 360 : 420);
 }
@@ -839,8 +837,7 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
                                 );
                             }
                         }
-                        shouldFollowTerminalOutput = true;
-                        scheduleTerminalScrollToBottom();
+                        requestTerminalAutoFollow(`${runReason}:phase-${index}`);
                         scheduleTerminalScrollbarUpdate();
                         if (shouldFocus && finalPhase) {
                             try { term?.focus?.(); } catch (_) {}
@@ -2954,30 +2951,28 @@ function scrollTerminalToBottom(reason = 'scroll-to-bottom') {
     const el = getTerminalScrollElement();
     if (!el) return;
     const forced = isForcedTerminalScrollReason(reason);
-    if (!forced && !shouldFollowTerminalOutput && !isTerminalAtBottom(el)) {
-        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-follow-disabled', {
-            reason,
-            bottomDistance: Math.round(getTerminalBottomDistance(el)),
-        });
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
-    if (isCommandInputEditingTerminalHistory() && !forced) {
+
+    if (!forced && (terminalAutoScrollLockedByUser || !shouldFollowTerminalOutput) && !isTerminalAtBottom(el)) {
         shouldFollowTerminalOutput = false;
-        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-command-edit', {
+        terminalAutoScrollLockedByUser = true;
+        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-user-lock', {
             reason,
+            locked: terminalAutoScrollLockedByUser,
             bottomDistance: Math.round(getTerminalBottomDistance(el)),
         });
         scheduleTerminalScrollbarUpdate();
         return;
     }
+
     logTerminalScrollDiagnostics('scroll-to-bottom:before', {
         reason,
+        forced,
         maxScroll: Math.round(getTerminalMaxScroll(el)),
     });
     isProgrammaticTerminalScroll = true;
     el.scrollTop = getTerminalMaxScroll(el);
     shouldFollowTerminalOutput = true;
+    terminalAutoScrollLockedByUser = false;
     scheduleTerminalScrollbarUpdate();
     requestAnimationFrame(() => {
         logTerminalScrollDiagnostics('scroll-to-bottom:after', { reason });
@@ -3002,6 +2997,7 @@ function markTerminalUserInput(data = '', { source = 'unknown', forceFollow = fa
         preview: String(data).slice(0, 20).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
     });
     shouldFollowTerminalOutput = shouldFollowAfterInput;
+    terminalAutoScrollLockedByUser = forceFollow ? false : !wasAtBottom;
     terminalInputEchoSuppressUntil = performance.now() + 350;
     terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
     if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom(`user-input:${source}`);
@@ -3023,13 +3019,15 @@ function isCommandInputEditingTerminalHistory() {
 }
 
 function isForcedTerminalScrollReason(reason = '') {
-    return /^user-input:(command-box-send|keypad|wterm-paste)/.test(String(reason));
+    const value = String(reason);
+    return value === 'connect-ready' || /^user-input:(command-box-send|keypad|wterm-paste)/.test(value);
 }
 
 function scheduleTerminalScrollToBottom(reason = 'scheduled') {
-    if (isCommandInputEditingTerminalHistory() && !isForcedTerminalScrollReason(reason)) {
+    const forced = isForcedTerminalScrollReason(reason);
+    if (!forced && terminalAutoScrollLockedByUser) {
         shouldFollowTerminalOutput = false;
-        logTerminalScrollDiagnostics('scroll-schedule:suppressed-command-edit', { reason });
+        logTerminalScrollDiagnostics('scroll-schedule:suppressed-user-lock', { reason });
         scheduleTerminalScrollbarUpdate();
         return;
     }
@@ -3037,21 +3035,33 @@ function scheduleTerminalScrollToBottom(reason = 'scheduled') {
         logTerminalScrollDiagnostics('scroll-schedule:coalesced', { reason });
         return;
     }
-    logTerminalScrollDiagnostics('scroll-schedule:queued', { reason });
+    logTerminalScrollDiagnostics('scroll-schedule:queued', { reason, forced });
     terminalScrollRaf = requestAnimationFrame(() => {
         terminalScrollRaf = 0;
         requestAnimationFrame(() => {
-            logTerminalScrollDiagnostics('scroll-schedule:run', { reason });
-            if (isCommandInputEditingTerminalHistory() && !isForcedTerminalScrollReason(reason)) {
+            const runForced = isForcedTerminalScrollReason(reason);
+            logTerminalScrollDiagnostics('scroll-schedule:run', { reason, forced: runForced });
+            if (!runForced && terminalAutoScrollLockedByUser) {
                 shouldFollowTerminalOutput = false;
-                logTerminalScrollDiagnostics('scroll-run:suppressed-command-edit', { reason });
+                logTerminalScrollDiagnostics('scroll-run:suppressed-user-lock', { reason });
                 scheduleTerminalScrollbarUpdate();
                 return;
             }
-            if (shouldFollowTerminalOutput) scrollTerminalToBottom(reason);
+            if (shouldFollowTerminalOutput || runForced) scrollTerminalToBottom(reason);
             else scheduleTerminalScrollbarUpdate();
         });
     });
+}
+
+function requestTerminalAutoFollow(reason = 'auto-follow') {
+    if (terminalAutoScrollLockedByUser) {
+        shouldFollowTerminalOutput = false;
+        logTerminalScrollDiagnostics('auto-follow:suppressed-user-lock', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
+    shouldFollowTerminalOutput = true;
+    scheduleTerminalScrollToBottom(reason);
 }
 
 function stopTerminalAutoScrollObserver() {
@@ -3071,17 +3081,22 @@ function stopTerminalAutoScrollObserver() {
 function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     stopTerminalAutoScrollObserver();
     shouldFollowTerminalOutput = !!followOnConnect;
+    if (followOnConnect) terminalAutoScrollLockedByUser = false;
 
     const onScroll = () => {
         if (!isProgrammaticTerminalScroll) {
-            shouldFollowTerminalOutput = isTerminalAtBottom();
+            const atBottom = isTerminalAtBottom();
+            shouldFollowTerminalOutput = atBottom;
+            terminalAutoScrollLockedByUser = !atBottom;
         }
         scheduleTerminalScrollbarUpdate();
     };
 
     const onWheel = (e) => {
         if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
-            shouldFollowTerminalOutput = e.deltaY >= 0 ? isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2) : false;
+            const atBottom = isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2);
+            shouldFollowTerminalOutput = e.deltaY >= 0 ? atBottom : false;
+            terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
         }
     };
 
@@ -3093,7 +3108,9 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
         if (e.touches.length !== 1) return;
         const dy = e.touches[0].clientY - touchStartY;
         if (Math.abs(dy) > 4) {
-            shouldFollowTerminalOutput = dy < 0 ? isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2) : false;
+            const atBottom = isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2);
+            shouldFollowTerminalOutput = dy < 0 ? atBottom : false;
+            terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
         }
     };
 
@@ -3139,10 +3156,12 @@ function setupTerminalInputActivityHooks() {
         // 与 markTerminalUserInput 保持一致：普通键盘输入只在当前已处于底部时跟随，
         // 不继承首次连接输出阶段遗留的 shouldFollowTerminalOutput=true。
         shouldFollowTerminalOutput = wasAtBottom;
+        terminalAutoScrollLockedByUser = !wasAtBottom;
         logTerminalScrollDiagnostics('keydown-input-activity', {
             key: e.key,
             wasAtBottom,
             nextFollow: shouldFollowTerminalOutput,
+            locked: terminalAutoScrollLockedByUser,
         });
         if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom('keydown-input-activity');
         else scheduleTerminalScrollbarUpdate();
@@ -3163,6 +3182,7 @@ function setupTerminalCustomScrollbar() {
         isProgrammaticTerminalScroll = true;
         el.scrollTop = ratio * maxScroll;
         shouldFollowTerminalOutput = isTerminalAtBottom(el);
+        terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
         scheduleTerminalScrollbarUpdate();
         requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
     };
@@ -3217,8 +3237,7 @@ function applyKeyboardFallbackAvoidance() {
     notifyParentKeyboardMetrics(metrics);
     document.documentElement.style.setProperty('--keyboard-inset', `${metrics.keyboardInset}px`);
     document.documentElement.classList.add('keyboard-open');
-    shouldFollowTerminalOutput = true;
-    scheduleTerminalScrollToBottom();
+    requestTerminalAutoFollow('keyboard-fallback-applied');
     scheduleTerminalScrollbarUpdate();
     scheduleTerminalResize('keyboard-fallback-applied', 650);
     return true;
@@ -3276,16 +3295,14 @@ function updateViewportInsets() {
             layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
             offsetTop: Math.round(viewport?.offsetTop || 0)
         });
-        shouldFollowTerminalOutput = true;
-        scheduleTerminalScrollToBottom();
+        requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
         scheduleTerminalScrollbarUpdate();
         // 键盘稳定后再 resize 一次，不在动画每帧 resize。
         scheduleTerminalResize(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 650);
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
-        shouldFollowTerminalOutput = true;
-        scheduleTerminalScrollToBottom();
+        requestTerminalAutoFollow('keyboard-final-settled');
         scheduleTerminalScrollbarUpdate();
         scheduleTerminalResize('keyboard-final-settled', 120);
     }, keyboardOpen ? 720 : 360);
@@ -4044,6 +4061,7 @@ function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-
     const previousTop = shouldPreserve ? el.scrollTop : 0;
     if (shouldPreserve) {
         shouldFollowTerminalOutput = false;
+        terminalAutoScrollLockedByUser = true;
         if (terminalScrollRaf) {
             cancelAnimationFrame(terminalScrollRaf);
             terminalScrollRaf = 0;
@@ -4060,6 +4078,7 @@ function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-
         if (shouldPreserve) {
             const restore = () => {
                 shouldFollowTerminalOutput = false;
+                terminalAutoScrollLockedByUser = true;
                 el.scrollTop = previousTop;
                 scheduleTerminalScrollbarUpdate();
                 logTerminalScrollDiagnostics('command-input:preserve-after', {
