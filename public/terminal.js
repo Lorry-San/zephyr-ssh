@@ -2953,6 +2953,24 @@ function scheduleTerminalScrollbarUpdate() {
 function scrollTerminalToBottom(reason = 'scroll-to-bottom') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    const forced = isForcedTerminalScrollReason(reason);
+    if (!forced && !shouldFollowTerminalOutput && !isTerminalAtBottom(el)) {
+        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-follow-disabled', {
+            reason,
+            bottomDistance: Math.round(getTerminalBottomDistance(el)),
+        });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
+    if (isCommandInputEditingTerminalHistory() && !forced) {
+        shouldFollowTerminalOutput = false;
+        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-command-edit', {
+            reason,
+            bottomDistance: Math.round(getTerminalBottomDistance(el)),
+        });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     logTerminalScrollDiagnostics('scroll-to-bottom:before', {
         reason,
         maxScroll: Math.round(getTerminalMaxScroll(el)),
@@ -3050,9 +3068,9 @@ function stopTerminalAutoScrollObserver() {
     isProgrammaticTerminalScroll = false;
 }
 
-function setupTerminalScrollHooks() {
+function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     stopTerminalAutoScrollObserver();
-    shouldFollowTerminalOutput = true;
+    shouldFollowTerminalOutput = !!followOnConnect;
 
     const onScroll = () => {
         if (!isProgrammaticTerminalScroll) {
@@ -4290,7 +4308,7 @@ function sleep(ms) {
     return new Promise((resolve) => { reconnectTimer = window.setTimeout(resolve, ms); });
 }
 
-async function startFreshConnection({ message = '正在建立 SSH 连接...', resetAttempts = false } = {}) {
+async function startFreshConnection({ message = '正在建立 SSH 连接...', resetAttempts = false, followOnConnect = true } = {}) {
     clearReconnectTimer();
     userClosedConnection = false;
     activeConnectionToken += 1;
@@ -4299,8 +4317,8 @@ async function startFreshConnection({ message = '正在建立 SSH 连接...', re
     destroyTerminalInstance();
     setStatus('connecting', message);
     if (resetAttempts) reconnectAttempts = 0;
-    await initWTerm(token);
-    await connectWebSocket(token);
+    await initWTerm(token, { followOnConnect });
+    await connectWebSocket(token, { followOnConnect });
     if (token !== activeConnectionToken) throw new Error('连接已被新的会话替换');
     syncFeaturePanelsAfterConnection();
     scheduleTerminalResize();
@@ -4318,7 +4336,7 @@ async function startAutoReconnect(reason = '连接已断开') {
             await sleep(2000);
             reconnectTimer = 0;
             if (userClosedConnection || isConnected) break;
-            await startFreshConnection({ message: label, resetAttempts: false });
+            await startFreshConnection({ message: label, resetAttempts: false, followOnConnect: false });
             reconnectAttempts = 0;
             reconnectInProgress = false;
             showToast('自动重连成功', 'success');
@@ -4337,7 +4355,7 @@ async function startAutoReconnect(reason = '连接已断开') {
 }
 
 // ---------- WTerm 初始化 ----------
-async function initWTerm(connectionToken = activeConnectionToken) {
+async function initWTerm(connectionToken = activeConnectionToken, { followOnConnect = true } = {}) {
     let WTermClass;
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
@@ -4383,11 +4401,11 @@ async function initWTerm(connectionToken = activeConnectionToken) {
         ro?.disconnect();
         window.removeEventListener('resize', observeResize);
     };
-    setupTerminalScrollHooks();
+    setupTerminalScrollHooks({ followOnConnect });
 }
 
 // ---------- WebSocket 连接 ----------
-function connectWebSocket(connectionToken = activeConnectionToken) {
+function connectWebSocket(connectionToken = activeConnectionToken, { followOnConnect = true } = {}) {
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/ssh`);
@@ -4438,8 +4456,9 @@ function connectWebSocket(connectionToken = activeConnectionToken) {
                         setStatus('connected', '已连接');
                         if (term?.focus) term.focus();
                         reconnectAttempts = 0;
-                        shouldFollowTerminalOutput = true;
-                        scheduleTerminalScrollToBottom();
+                        shouldFollowTerminalOutput = !!followOnConnect;
+                        if (followOnConnect) scheduleTerminalScrollToBottom('connect-ready');
+                        else scheduleTerminalScrollbarUpdate();
                         resolve(ws);
                         break;
                     case 'data':
