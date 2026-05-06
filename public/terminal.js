@@ -2999,7 +2999,22 @@ function isLikelyTerminalInputEcho(data = '') {
     return data.length <= terminalInputEchoMaxLength + 8;
 }
 
+function isCommandInputEditingTerminalHistory() {
+    const el = getTerminalScrollElement();
+    return Boolean(document.activeElement === cmdInput && el && !isTerminalAtBottom(el));
+}
+
+function isForcedTerminalScrollReason(reason = '') {
+    return /^user-input:(command-box-send|keypad|wterm-paste)/.test(String(reason));
+}
+
 function scheduleTerminalScrollToBottom(reason = 'scheduled') {
+    if (isCommandInputEditingTerminalHistory() && !isForcedTerminalScrollReason(reason)) {
+        shouldFollowTerminalOutput = false;
+        logTerminalScrollDiagnostics('scroll-schedule:suppressed-command-edit', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (terminalScrollRaf) {
         logTerminalScrollDiagnostics('scroll-schedule:coalesced', { reason });
         return;
@@ -3009,6 +3024,12 @@ function scheduleTerminalScrollToBottom(reason = 'scheduled') {
         terminalScrollRaf = 0;
         requestAnimationFrame(() => {
             logTerminalScrollDiagnostics('scroll-schedule:run', { reason });
+            if (isCommandInputEditingTerminalHistory() && !isForcedTerminalScrollReason(reason)) {
+                shouldFollowTerminalOutput = false;
+                logTerminalScrollDiagnostics('scroll-run:suppressed-command-edit', { reason });
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
             if (shouldFollowTerminalOutput) scrollTerminalToBottom(reason);
             else scheduleTerminalScrollbarUpdate();
         });
