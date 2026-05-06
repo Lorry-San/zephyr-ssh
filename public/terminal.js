@@ -3999,6 +3999,43 @@ function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFo
         wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(payload) }));
     }
 }
+function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {
+    const el = getTerminalScrollElement();
+    const shouldPreserve = Boolean(el && !isTerminalAtBottom(el));
+    const previousTop = shouldPreserve ? el.scrollTop : 0;
+    if (shouldPreserve) {
+        shouldFollowTerminalOutput = false;
+        if (terminalScrollRaf) {
+            cancelAnimationFrame(terminalScrollRaf);
+            terminalScrollRaf = 0;
+        }
+        logTerminalScrollDiagnostics('command-input:preserve-before', {
+            reason,
+            scrollTop: Math.round(previousTop),
+            bottomDistance: Math.round(getTerminalBottomDistance(el)),
+        });
+    }
+    try {
+        callback();
+    } finally {
+        if (shouldPreserve) {
+            const restore = () => {
+                shouldFollowTerminalOutput = false;
+                el.scrollTop = previousTop;
+                scheduleTerminalScrollbarUpdate();
+                logTerminalScrollDiagnostics('command-input:preserve-after', {
+                    reason,
+                    scrollTop: Math.round(el.scrollTop),
+                    bottomDistance: Math.round(getTerminalBottomDistance(el)),
+                });
+            };
+            restore();
+            requestAnimationFrame(restore);
+            window.setTimeout(restore, 80);
+        }
+    }
+}
+
 function resizeCommandInput() {
     if (!cmdInput) return;
     cmdInput.style.height = 'auto';
@@ -4026,7 +4063,9 @@ function handleTerminalPaste(e) {
     sendData(text, { normalizeNewlines: true, source: 'wterm-paste' });
     try { term?.focus?.(); } catch (_) {}
 }
-cmdInput.addEventListener('input', resizeCommandInput);
+cmdInput.addEventListener('input', () => {
+    preserveTerminalScrollWhileEditingCommandInput('cmdInput-input', resizeCommandInput);
+});
 cmdInput.addEventListener('paste', (e) => {
     const text = e.clipboardData?.getData('text/plain') || '';
     if (!text.includes('\n') && !text.includes('\r')) {
