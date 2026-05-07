@@ -3020,7 +3020,7 @@ function isCommandInputEditingTerminalHistory() {
 
 function isForcedTerminalScrollReason(reason = '') {
     const value = String(reason);
-    return value === 'connect-ready' || /^user-input:(command-box-send|keypad|wterm-paste)/.test(value);
+    return value === 'connect-ready' || /^user-input:(command-box-send|keypad)/.test(value);
 }
 
 function scheduleTerminalScrollToBottom(reason = 'scheduled') {
@@ -3551,14 +3551,9 @@ function showInfoModal() {
 
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
-    // wterm 0.1.x 的私有 _scrollToBottom 会按行高向下取整，某些尺寸下会离底部差半行，
-    // 下一次 write 前 _isScrolledToBottom() 判断失败，自动滚动就会断掉。这里改成精确贴底。
-    if (typeof term._scrollToBottom === 'function') {
-        term._scrollToBottom = () => scrollTerminalToBottom();
-    }
-    if (typeof term._isScrolledToBottom === 'function') {
-        term._isScrolledToBottom = () => isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD);
-    }
+    // 以官方 @wterm/dom 行为为准：不要覆盖私有 _scrollToBottom/_isScrolledToBottom。
+    // WTerm 内部已经在 write() 前记录是否位于底部，并在渲染后只对“原本在底部”的输出自动跟随；
+    // 输入/粘贴也由 InputHandler 在 onData 前统一处理滚动。
     term._zephyrScrollPatched = true;
 }
 
@@ -3566,16 +3561,15 @@ function writeTerminalData(data = '') {
     if (!term?.write) return;
     const wasAtBottom = isTerminalAtBottom();
     const likelyInputEcho = isLikelyTerminalInputEcho(data);
-    shouldFollowTerminalOutput = shouldFollowTerminalOutput || wasAtBottom;
-    logTerminalScrollDiagnostics('terminal-data:before-write', {
+    logTerminalScrollDiagnostics('terminal-data:before-write-official', {
         length: String(data).length,
         likelyInputEcho,
         wasAtBottom,
-        nextFollow: shouldFollowTerminalOutput,
     });
+    // 以官方 @wterm/dom SSH 示例为准：服务端输出只调用 write(data)。
+    // WTerm.write() 内部会在写入前判断是否位于底部，并在渲染后自动决定是否跟随。
     term.write(data);
-    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom(likelyInputEcho ? 'terminal-input-echo' : 'terminal-data');
-    else scheduleTerminalScrollbarUpdate();
+    requestAnimationFrame(scheduleTerminalScrollbarUpdate);
 }
 
 function hideInfoModal() {
@@ -4020,39 +4014,19 @@ function logTerminalPasteDiagnostics(source, text = '') {
     });
 }
 
-let terminalRecentPaste = { text: '', at: 0, source: '' };
-
-function shouldSuppressDuplicatePaste(data = '', source = '') {
-    const raw = String(data);
-    if (!raw || source === 'wterm-paste' || source === 'command-box-send' || source === 'keypad') return false;
-    const now = performance.now();
-    const duplicated = terminalRecentPaste.text === raw && now - terminalRecentPaste.at < 700;
-    if (duplicated) {
-        console.info('[TerminalPaste]', {
-            source,
-            suppressed: true,
-            duplicatedFrom: terminalRecentPaste.source,
-            ageMs: Math.round(now - terminalRecentPaste.at),
-            length: raw.length,
-        });
-    }
-    return duplicated;
-}
-
-function rememberTerminalPaste(text = '', source = 'wterm-paste') {
-    terminalRecentPaste = { text: String(text), at: performance.now(), source };
-}
-
 function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFollow = false } = {}) {
-    if (shouldSuppressDuplicatePaste(data, source)) return;
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
-        const payload = normalizeNewlines ? normalizeTerminalInputNewlines(data) : data;
-        const shouldForceFollow = forceFollow
-            || source === 'command-box-send'
-            || source === 'keypad'
-            || source === 'wterm-paste';
-        markTerminalUserInput(payload, { source, forceFollow: shouldForceFollow });
-        wsConnection.send(JSON.stringify({ type: 'input', data: processModifiers(payload) }));
+        const fromWTerm = source === 'wterm-onData';
+        // 官方 SSH 示例中 WTerm onData 只负责把数据发给后端，不参与外层滚动状态机。
+        // 本项目仍需 JSON 包装以匹配现有 /ssh 协议，但 payload 保持 WTerm 产生的原始字节序列。
+        const payload = fromWTerm ? data : (normalizeNewlines ? normalizeTerminalInputNewlines(data) : data);
+        if (!fromWTerm) {
+            const shouldForceFollow = forceFollow
+                || source === 'command-box-send'
+                || source === 'keypad';
+            markTerminalUserInput(payload, { source, forceFollow: shouldForceFollow });
+        }
+        wsConnection.send(JSON.stringify({ type: 'input', data: fromWTerm ? payload : processModifiers(payload) }));
     }
 }
 function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {
@@ -4109,18 +4083,6 @@ function sendCommand() {
     cmdInput.value = '';
     resizeCommandInput();
 }
-function handleTerminalPaste(e) {
-    if (document.activeElement === cmdInput) return;
-    const text = e.clipboardData?.getData('text/plain') || '';
-    if (!text) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation?.();
-    rememberTerminalPaste(text, 'wterm-paste');
-    logTerminalPasteDiagnostics('wterm-paste', text);
-    sendData(text, { normalizeNewlines: true, source: 'wterm-paste' });
-    try { term?.focus?.(); } catch (_) {}
-}
 cmdInput.addEventListener('input', () => {
     preserveTerminalScrollWhileEditingCommandInput('cmdInput-input', resizeCommandInput);
 });
@@ -4171,7 +4133,10 @@ wtermWrapper.addEventListener('mouseup', () => {
     if (mobileTerminalSelectionMode || selection?.toString?.().length > 0) return;
     term?.focus?.();
 });
-wtermWrapper.addEventListener('paste', handleTerminalPaste, { capture: true });
+ // 粘贴交给 @wterm/dom 官方 InputHandler 处理：
+ // - 支持 bracketed paste；
+ // - 在 onData 前执行 WTerm 内置输入滚动；
+ // - 避免外层捕获 paste 后强制滚到底。
 ['pointerdown', 'touchstart'].forEach((eventName) => {
     wtermWrapper.addEventListener(eventName, (e) => {
         terminalTouchMoved = false;
@@ -4395,13 +4360,13 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
             cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
-            onData: (data) => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }),
+            onData: (data) => sendData(data, { source: 'wterm-onData' }),
             onResize: (cols, rows) => sendTerminalResize(cols, rows, { reason: 'wterm-onResize' }),
         });
     } catch {
         term = new WTermClass(wtermWrapper);
-        if (typeof term.onData === 'function') term.onData(data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }));
-        else if (typeof term.on === 'function') term.on('data', data => sendData(data, { normalizeNewlines: /[\r\n]/.test(data), source: 'wterm-onData' }));
+        if (typeof term.onData === 'function') term.onData(data => sendData(data, { source: 'wterm-onData' }));
+        else if (typeof term.on === 'function') term.on('data', data => sendData(data, { source: 'wterm-onData' }));
     }
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
