@@ -3504,9 +3504,25 @@ function showInfoModal() {
 
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
-    // 以官方 @wterm/dom 行为为准：不要覆盖私有 _scrollToBottom/_isScrolledToBottom。
-    // WTerm 内部已经在 write() 前记录是否位于底部，并在渲染后只对“原本在底部”的输出自动跟随；
-    // 输入/粘贴也由 InputHandler 在 onData 前统一处理滚动。
+    // 保持官方语义：WTerm.write() 仍然只在“写入前位于底部”时自动跟随。
+    // 但 @wterm/dom 0.1.x 的默认 _scrollToBottom() 会按行高向下取整，
+    // 在本页面 padding/滚动条布局下可能离真实底部差半行以上，随后官方 5px
+    // _isScrolledToBottom() 判定失败，自动滚动链路就断掉。
+    // 这里仅修正“贴底精度”和“底部判定容差”，不引入外层强制滚动。
+    if (typeof term._scrollToBottom === 'function') {
+        term._scrollToBottom = () => {
+            const el = term.element || wtermWrapper;
+            if (!el) return;
+            el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        };
+    }
+    if (typeof term._isScrolledToBottom === 'function') {
+        term._isScrolledToBottom = () => {
+            const el = term.element || wtermWrapper;
+            if (!el) return true;
+            return el.scrollHeight - el.scrollTop - el.clientHeight <= TERMINAL_BOTTOM_THRESHOLD;
+        };
+    }
     term._zephyrScrollPatched = true;
 }
 
