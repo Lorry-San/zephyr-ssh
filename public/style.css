@@ -2131,17 +2131,18 @@ html.keyboard-open .terminal-page {
 :root[data-theme="light"]:not([data-wterm-theme="default"]) .terminal-container { background: var(--wterm-bg); }
 .terminal-container .wterm-wrapper {
     width: 100%;
-    flex: 0 0 auto;
+    height: 100%;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
     overscroll-behavior: none;
     touch-action: pan-x pan-y;
     font-family: var(--font-mono);
     font-size: var(--terminal-font-size);
-    padding: 12px calc(12px + var(--terminal-scrollbar-size)) 12px 12px;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    scrollbar-gutter: auto;
+    padding: 12px;
+    scrollbar-width: auto;
+    -ms-overflow-style: auto;
+    scrollbar-gutter: stable;
     background: var(--wterm-bg);
     color: var(--wterm-fg);
     transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -2168,14 +2169,13 @@ html.keyboard-open .terminal-page {
     background: var(--wterm-selection);
 }
 .terminal-container .wterm-wrapper::-webkit-scrollbar {
-    width: 0;
-    height: 0;
-    display: none;
+    width: auto;
+    height: auto;
 }
 .terminal-container .wterm-wrapper.wterm {
     border-radius: 0;
     box-shadow: none;
-    padding: 12px calc(12px + var(--terminal-scrollbar-size)) 12px 12px;
+    padding: 12px;
     outline: none;
     overflow: hidden;
 }
@@ -2197,15 +2197,7 @@ html.keyboard-open .terminal-page {
     min-width: 100%;
 }
 .terminal-scrollbar {
-    position: absolute;
-    top: 8px;
-    right: 4px;
-    bottom: 8px;
-    width: var(--terminal-scrollbar-size);
-    z-index: 6;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.16s ease;
+    display: none;
 }
 .terminal-container.scrollable .terminal-scrollbar,
 .terminal-container:hover .terminal-scrollbar,
