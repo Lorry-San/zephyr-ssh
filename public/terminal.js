@@ -800,58 +800,52 @@ function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
 function requestStableTerminalLayout(reason = 'stable-layout', { includeResize = true, focus = false } = {}) {
     window.clearTimeout(requestStableTerminalLayout._coalesceTimer);
     requestStableTerminalLayout._pendingReason = reason;
-    requestStableTerminalLayout._includeResize = requestStableTerminalLayout._includeResize || includeResize;
     requestStableTerminalLayout._focus = requestStableTerminalLayout._focus || focus;
     requestStableTerminalLayout._coalesceTimer = window.setTimeout(() => {
         const runReason = requestStableTerminalLayout._pendingReason || reason;
-        const shouldResize = requestStableTerminalLayout._includeResize !== false;
         const shouldFocus = !!requestStableTerminalLayout._focus;
         requestStableTerminalLayout._pendingReason = '';
-        requestStableTerminalLayout._includeResize = false;
         requestStableTerminalLayout._focus = false;
 
-        logTerminalLayoutDiagnostics('stable-layout:scheduled', { reason: runReason, includeResize: shouldResize, focus: shouldFocus });
-        TERMINAL_STABLE_LAYOUT_DELAYS.forEach((delay, index) => {
-            window.setTimeout(() => {
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        const finalPhase = index === TERMINAL_STABLE_LAYOUT_DELAYS.length - 1;
-                        // 键盘动画/页面恢复的中间阶段只同步滚动；最后一帧再安全刷新和 resize，
-                        // 避免连续 DOM 行刷新导致移动端每行错位。
-                        const keyboardRelated = isTouchKeyboardDevice() && (
-                            mobileKeyboardOpen
-                            || keyboardFocusLikely
-                            || getViewportKeyboardMetrics().keyboardInset > 8
-                            || String(runReason).includes('keyboard')
-                            || String(runReason).includes('viewport')
-                            || String(runReason).includes('visual')
-                        );
-                        if (finalPhase) {
-                            if (!keyboardRelated) {
-                                invokeWTermLayoutRefresh(`${runReason}:phase-${index}`);
-                            }
-                            if (shouldResize) {
-                                scheduleTerminalResize(
-                                    `${runReason}:phase-${index}`,
-                                    keyboardRelated ? 650 : 120
-                                );
-                            }
-                        }
-                        requestTerminalAutoFollow(`${runReason}:phase-${index}`);
-                        scheduleTerminalScrollbarUpdate();
-                        if (shouldFocus && finalPhase) {
-                            try { term?.focus?.(); } catch (_) {}
-                            try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
-                        }
-                    });
-                });
-            }, delay);
+        logTerminalLayoutDiagnostics('stable-layout:official-noop', { reason: runReason, includeResize, focus: shouldFocus });
+        // 官方 @wterm/dom 使用内置 ResizeObserver/autoResize 处理尺寸变化。
+        // 外层布局事件只同步自定义滚动条和可选 focus，避免输入/渲染时重复 resize 导致跳动。
+        requestAnimationFrame(() => {
+            scheduleTerminalScrollbarUpdate();
+            if (shouldFocus) {
+                try { term?.focus?.(); } catch (_) {}
+                try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
+            }
         });
     }, 24);
 }
 
 function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {}) {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+    const explicitCols = Math.floor(Number(cols));
+    const explicitRows = Math.floor(Number(rows));
+
+    if (reason === 'wterm-onResize') {
+        // 官方路径：WTerm 内置 autoResize 测量出 cols/rows 后，通过 onResize 通知外层。
+        // 这里不要再次测量 DOM 或覆盖尺寸，否则会和官方 autoResize 竞争导致输入/渲染跳动。
+        if (!Number.isFinite(explicitCols) || !Number.isFinite(explicitRows) || explicitCols < 20 || explicitRows < 2) {
+            logTerminalLayoutDiagnostics('resize:ignored-invalid-wterm-size', {
+                reason,
+                explicitCols,
+                explicitRows,
+            });
+            return;
+        }
+        wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
+        logTerminalLayoutDiagnostics('resize:sent', {
+            reason,
+            force,
+            cols: explicitCols,
+            rows: explicitRows,
+        });
+        return;
+    }
+
     const measured = getMeasuredTerminalSize();
     if (!force && (measured.width < TERMINAL_MIN_RESIZE_WIDTH || measured.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
         logTerminalLayoutDiagnostics('resize:skipped-unstable-rect', {
@@ -859,30 +853,11 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
             width: measured.width,
             height: measured.height,
         });
-        requestStableTerminalLayout(`${reason}:unstable-rect`, { includeResize: true });
         return;
     }
 
-    let nextCols = measured.cols;
-    let nextRows = measured.rows;
-    const explicitCols = Math.floor(Number(cols));
-    const explicitRows = Math.floor(Number(rows));
-    if (Number.isFinite(explicitCols) && Number.isFinite(explicitRows)) {
-        // WTerm autoResize/onResize 在移动端键盘动画中可能回调 cols=1/2，
-        // 绝不能把这个值发给后端 PTY，否则服务端会按极窄宽度把提示符竖排。
-        if (explicitCols >= 20 && explicitRows >= 2) {
-            nextCols = explicitCols;
-            nextRows = explicitRows;
-        } else {
-            logTerminalLayoutDiagnostics('resize:ignored-tiny-explicit-size', {
-                reason,
-                explicitCols,
-                explicitRows,
-                measuredCols: measured.cols,
-                measuredRows: measured.rows,
-            });
-        }
-    }
+    const nextCols = measured.cols;
+    const nextRows = measured.rows;
 
     wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
     logTerminalLayoutDiagnostics('resize:sent', {
@@ -912,11 +887,10 @@ function isMobileKeyboardActiveOrSettling() {
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
     window.clearTimeout(scheduleTerminalResize._timer);
-    const keyboardRelated = isMobileKeyboardActiveOrSettling();
-    const finalDelay = keyboardRelated ? 650 : delay;
-    scheduleTerminalResize._timer = window.setTimeout(() => {
-        sendTerminalResize(undefined, undefined, { reason: keyboardRelated ? `${reason}:keyboard-settled` : reason });
-    }, finalDelay);
+    // 以官方 @wterm/dom 行为为准：尺寸变化由 WTerm 内置 autoResize 处理，
+    // 后端 PTY resize 只应来自 WTerm onResize(cols, rows)，不要由外层布局/键盘事件测量后主动发送。
+    logTerminalLayoutDiagnostics('resize:schedule-official-noop', { reason, delay });
+    scheduleTerminalScrollbarUpdate();
 }
 
 function applyTerminalFontSize(size, { persist = true } = {}) {
@@ -4333,9 +4307,8 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
         term = new WTermClass(wtermWrapper, {
             cols: 80,
             rows: 24,
-            // 禁用 WTerm 内置 autoResize：移动端/iframe/软键盘动画中它会短暂测成 1~2 列，
-            // 导致前端 DOM 或后端 PTY 出现“每个字符一行”的竖排。统一走安全测量逻辑。
-            autoResize: false,
+            // 以官方 @wterm/dom 行为为准：使用 WTerm 内置 autoResize。
+            autoResize: true,
             cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
@@ -4353,17 +4326,9 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
 
-    const observeResize = () => requestStableTerminalLayout('wterm-wrapper-resize-observer', { includeResize: true });
-    let ro = null;
-    if (window.ResizeObserver) {
-        ro = new ResizeObserver(() => { clearTimeout(ro._timer); ro._timer = setTimeout(observeResize, 150); });
-        ro.observe(wtermWrapper);
-    }
-    window.addEventListener('resize', observeResize);
-    terminalResizeCleanup = () => {
-        ro?.disconnect();
-        window.removeEventListener('resize', observeResize);
-    };
+    // 官方 @wterm/dom 已在内部使用 ResizeObserver 处理 autoResize；
+    // 外层不再观察 wrapper 或手动触发布局/resize，避免与官方测量竞争。
+    terminalResizeCleanup = () => {};
     setupTerminalScrollHooks({ followOnConnect });
 }
 

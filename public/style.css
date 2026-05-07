@@ -2131,14 +2131,10 @@ html.keyboard-open .terminal-page {
 :root[data-theme="light"]:not([data-wterm-theme="default"]) .terminal-container { background: var(--wterm-bg); }
 .terminal-container .wterm-wrapper {
     width: 100%;
-    height: 100%;
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
-    max-height: 100%;
-    overflow-x: auto;
-    overflow-y: auto;
+    overflow: hidden;
     overscroll-behavior: none;
-    -webkit-overflow-scrolling: touch;
     touch-action: pan-x pan-y;
     font-family: var(--font-mono);
     font-size: var(--terminal-font-size);
@@ -2148,7 +2144,7 @@ html.keyboard-open .terminal-page {
     scrollbar-gutter: auto;
     background: var(--wterm-bg);
     color: var(--wterm-fg);
-    transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root[data-wterm-theme] .terminal-container .wterm-wrapper,
@@ -2181,18 +2177,16 @@ html.keyboard-open .terminal-page {
     box-shadow: none;
     padding: 12px calc(12px + var(--terminal-scrollbar-size)) 12px 12px;
     outline: none;
+    overflow: hidden;
 }
-.terminal-container .wterm-wrapper.wterm.has-scrollback,
-.terminal-container .wterm-wrapper.wterm.terminal-scrollable {
+.terminal-container .wterm-wrapper.wterm.has-scrollback {
     overflow-y: auto;
 }
 .terminal-container .wterm-wrapper .term-grid {
-    width: 100%;
-    min-width: 100%;
-    height: auto;
-    min-height: 100%;
-    overflow: visible;
-    overscroll-behavior: none;
+    display: block;
+    white-space: pre;
+    contain: layout paint style;
+    will-change: contents;
     overflow-anchor: none;
     user-select: text;
     -webkit-user-select: text;
@@ -3518,14 +3512,6 @@ html.keyboard-open .terminal-page {
 
     html.keyboard-open .terminal-input-panel {
         transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-
-    html.keyboard-open .terminal-container .wterm-wrapper {
-        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
-    }
-
-    html.keyboard-open .terminal-container .wterm-wrapper.wterm {
-        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
     }
 
     .file-manager,
