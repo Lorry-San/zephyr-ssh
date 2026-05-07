@@ -928,7 +928,7 @@ function applyTerminalFontSize(size, { persist = true } = {}) {
     if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
     updateFontSizeButtons();
     scheduleTerminalResize();
-    scheduleTerminalScrollToBottom();
+    scheduleTerminalScrollbarUpdate();
 }
 
 function getTouchDistance(touches) {
@@ -3000,8 +3000,9 @@ function markTerminalUserInput(data = '', { source = 'unknown', forceFollow = fa
     terminalAutoScrollLockedByUser = forceFollow ? false : !wasAtBottom;
     terminalInputEchoSuppressUntil = performance.now() + 350;
     terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
-    if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom(`user-input:${source}`);
-    else scheduleTerminalScrollbarUpdate();
+    // 非 WTerm 的辅助输入/命令框发送也不在外层强制滚动；
+    // 后续远端回显/输出由 WTerm.write() 按官方规则决定是否跟随。
+    scheduleTerminalScrollbarUpdate();
 }
 
 function isLikelyTerminalInputEcho(data = '') {
@@ -3054,14 +3055,10 @@ function scheduleTerminalScrollToBottom(reason = 'scheduled') {
 }
 
 function requestTerminalAutoFollow(reason = 'auto-follow') {
-    if (terminalAutoScrollLockedByUser) {
-        shouldFollowTerminalOutput = false;
-        logTerminalScrollDiagnostics('auto-follow:suppressed-user-lock', { reason });
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
-    shouldFollowTerminalOutput = true;
-    scheduleTerminalScrollToBottom(reason);
+    // 官方 @wterm/dom 不会在外层因 layout/viewport/keyboard 事件主动滚底。
+    // 这些事件只同步自定义滚动条；真正的输出跟随由 WTerm.write() 内部决定。
+    logTerminalScrollDiagnostics('auto-follow:official-noop', { reason });
+    scheduleTerminalScrollbarUpdate();
 }
 
 function stopTerminalAutoScrollObserver() {
@@ -3122,8 +3119,9 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     let resizeObserver = null;
     if (window.ResizeObserver) {
         resizeObserver = new ResizeObserver(() => {
-            if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom();
-            else scheduleTerminalScrollbarUpdate();
+            // DOM 尺寸/内容变化后的自动跟随由 WTerm 内部 write/render 决定；
+            // 外层只同步自定义滚动条，避免输入时和官方滚动逻辑抢控制权造成上下跳。
+            scheduleTerminalScrollbarUpdate();
         });
         resizeObserver.observe(wtermWrapper);
         const grid = wtermWrapper.querySelector('.term-grid');
@@ -3139,7 +3137,6 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
         resizeObserver?.disconnect();
     };
 
-    scheduleTerminalScrollToBottom();
     scheduleTerminalScrollbarUpdate();
 }
 
@@ -3148,24 +3145,8 @@ function isModifierOnlyKeyEvent(e) {
 }
 
 function setupTerminalInputActivityHooks() {
-    document.addEventListener('keydown', (e) => {
-        if (isModifierOnlyKeyEvent(e)) return;
-        if (document.activeElement === cmdInput) return;
-        if (!terminalContainer?.contains(document.activeElement) && document.activeElement !== document.body) return;
-        const wasAtBottom = isTerminalAtBottom();
-        // 与 markTerminalUserInput 保持一致：普通键盘输入只在当前已处于底部时跟随，
-        // 不继承首次连接输出阶段遗留的 shouldFollowTerminalOutput=true。
-        shouldFollowTerminalOutput = wasAtBottom;
-        terminalAutoScrollLockedByUser = !wasAtBottom;
-        logTerminalScrollDiagnostics('keydown-input-activity', {
-            key: e.key,
-            wasAtBottom,
-            nextFollow: shouldFollowTerminalOutput,
-            locked: terminalAutoScrollLockedByUser,
-        });
-        if (shouldFollowTerminalOutput) scheduleTerminalScrollToBottom('keydown-input-activity');
-        else scheduleTerminalScrollbarUpdate();
-    }, true);
+    // 以官方 @wterm/dom 行为为准：不要在外层监听 keydown 并滚动。
+    // WTerm 的 InputHandler 会在输入 onData 前执行内部滚动；外层再次滚动会造成输入上下跳动。
 }
 
 function setupTerminalCustomScrollbar() {
@@ -3359,8 +3340,6 @@ function finalizeKeyboardClose({ force = false } = {}) {
         layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
         offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
     });
-    shouldFollowTerminalOutput = true;
-    scheduleTerminalScrollToBottom();
     scheduleTerminalScrollbarUpdate();
     scheduleTerminalResize('keyboard-close-final', 500);
 }
