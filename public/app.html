@@ -118,6 +118,9 @@
                                     <option value="2">双窗</option>
                                     <option value="3">三窗</option>
                                 </select>
+                                <label>最小化窗口保持连接数</label>
+                                <input id="terminalMinimizedKeepAlive" type="number" min="-1" step="1" value="0" placeholder="0">
+                                <p class="field-hint">默认 0：最小化后不保留 SSH 连接；-1：不限制；正数：保留最近使用的 N 个最小化窗口连接。</p>
                                 <label>顶部终端栏排序</label>
                                 <select id="terminalSmartbarOrder">
                                     <option value="old-left">左侧从最早到最新，右侧相反</option>

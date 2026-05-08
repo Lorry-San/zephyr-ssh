@@ -954,6 +954,29 @@ body.terminal-mode .app-shell {
 .terminal-window.background:hover { opacity: 1; filter: none; }
 .terminal-window.closing { opacity: 0; transform: scale(.82) translateY(-12px); filter: blur(12px); pointer-events: none; }
 .terminal-window.minimizing { opacity: 0; transform: scale(.72) translateY(-34px); filter: blur(14px) saturate(.72); pointer-events: none; }
+.terminal-window.minimized-keepalive {
+    position: absolute !important;
+    left: -10000px !important;
+    top: -10000px !important;
+    width: 1px !important;
+    height: 1px !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    overflow: hidden !important;
+    grid-column: auto !important;
+    grid-row: auto !important;
+}
+.terminal-window.minimized-keepalive .terminal-window-titlebar {
+    display: none !important;
+}
+.terminal-window.minimized-keepalive .terminal-window-body,
+.terminal-window.minimized-keepalive .terminal-frame {
+    width: 1px !important;
+    height: 1px !important;
+    min-height: 0 !important;
+}
 .terminal-window.dragging {
     z-index: 8;
     transform: translate3d(var(--drag-x, 0), var(--drag-y, 0), 0) scale(.985);

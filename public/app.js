@@ -796,6 +796,13 @@ function getConfiguredTerminalMaxWindows() {
     const value = Number(settings?.terminal?.maxWindows || localStorage.getItem('zephyr-terminal-max-windows') || 3);
     return Math.min(3, Math.max(1, Number.isFinite(value) ? value : 3));
 }
+function getConfiguredMinimizedKeepAlive() {
+    const raw = settings?.terminal?.minimizedKeepAlive ?? localStorage.getItem('zephyr-terminal-minimized-keepalive') ?? 0;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return 0;
+    if (value === -1) return -1;
+    return Math.max(0, Math.floor(value));
+}
 function getTerminalSmartbarOrder() {
     const value = settings?.terminal?.smartbarOrder || localStorage.getItem('zephyr-terminal-smartbar-order') || 'old-left';
     return value === 'new-left' ? 'new-left' : 'old-left';
@@ -974,6 +981,15 @@ function positionTerminalWindowMenu(titlebar) {
     const clampedLeft = Math.min(Math.max(left, 8), titleRect.width - menuRect.width - 8);
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
 }
+function getMinimizedKeepAliveSessions() {
+    const limit = getConfiguredMinimizedKeepAlive();
+    const minimized = terminalTabs
+        .filter((t) => t.minimized && !closingTerminalTabs.has(t.id) && t.iframe)
+        .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0));
+    if (limit === -1) return minimized;
+    if (limit <= 0) return [];
+    return minimized.slice(0, limit);
+}
 function createTerminalWindowElement(t) {
     const article = document.createElement('article');
     article.className = 'terminal-window';
@@ -1005,18 +1021,46 @@ function createTerminalWindowElement(t) {
 }
 function renderTerminalWorkspace() {
     const visible = visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
+    const keepAliveMinimized = getMinimizedKeepAliveSessions();
     const count = visible.length;
     const workspace = $('#terminalWorkspace');
     const preservedWorkspaceClasses = ['custom-fullscreen', 'keyboard-open', 'fullscreen-transitioning', 'fullscreen-loading']
         .filter((className) => workspace.classList.contains(className));
     workspace.className = `terminal-workspace terminal-workspace-grid layout-${Math.min(count, 3)} ${isCompactTerminalWorkspace() ? 'compact' : ''} ${preservedWorkspaceClasses.join(' ')}`;
+    const visibleIds = new Set(visible.map((t) => t.id));
+    const keepAliveIds = new Set([...visible.map((t) => t.id), ...keepAliveMinimized.map((t) => t.id)]);
+    console.info('[terminal-keepalive]', 'workspace render decision', {
+        visibleIds: [...visibleIds],
+        minimizedKeepAliveLimit: getConfiguredMinimizedKeepAlive(),
+        keptMinimizedIds: keepAliveMinimized.map((t) => t.id),
+        existingWindowIds: Array.from(workspace.querySelectorAll(':scope > .terminal-window')).map((el) => el.dataset.window),
+    });
     if (!count) {
-        workspace.innerHTML = '<div class="terminal-placeholder">暂无会话。点击仪表盘中的“连接”打开 SSH 会话。</div>';
+        workspace.querySelectorAll(':scope > .workspace-splitter').forEach((el) => el.remove());
+        workspace.querySelectorAll(':scope > .terminal-window').forEach((el) => {
+            if (!keepAliveIds.has(el.dataset.window)) {
+                console.info('[terminal-keepalive]', 'unload terminal iframe', { tabId: el.dataset.window, reason: 'no-visible-and-not-kept' });
+                el.remove();
+            }
+        });
+        if (!workspace.querySelector(':scope > .terminal-placeholder')) {
+            workspace.insertAdjacentHTML('afterbegin', '<div class="terminal-placeholder active">暂无可见会话。最小化会话可从终端栏恢复。</div>');
+        }
+        keepAliveMinimized.forEach((t) => {
+            let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
+            if (!win) win = createTerminalWindowElement(t);
+            win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
+            workspace.appendChild(win);
+        });
         return;
     }
     workspace.querySelectorAll(':scope > .terminal-placeholder, :scope > .workspace-splitter').forEach((el) => el.remove());
-    const visibleIds = new Set(visible.map((t) => t.id));
-    workspace.querySelectorAll(':scope > .terminal-window').forEach((el) => { if (!visibleIds.has(el.dataset.window)) el.remove(); });
+    workspace.querySelectorAll(':scope > .terminal-window').forEach((el) => {
+        if (!keepAliveIds.has(el.dataset.window)) {
+            console.info('[terminal-keepalive]', 'unload terminal iframe', { tabId: el.dataset.window, reason: 'outside-visible-and-minimized-keepalive' });
+            el.remove();
+        }
+    });
     visible.forEach((t, index) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
         if (!win) win = createTerminalWindowElement(t);
@@ -1025,6 +1069,12 @@ function renderTerminalWorkspace() {
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
         win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''}`;
+        workspace.appendChild(win);
+    });
+    keepAliveMinimized.forEach((t) => {
+        let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
+        if (!win) win = createTerminalWindowElement(t);
+        win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
         workspace.appendChild(win);
     });
     if (count === 2 || count === 3) {
@@ -1443,6 +1493,7 @@ async function loadSettings() {
     $('#captchaEnabled').checked = !!cap.enabled; $('#captchaProvider').value = cap.provider || 'turnstile'; $('#captchaSiteKey').value = cap.siteKey || cap.tencentCaptchaAppId || cap.aliyunCaptchaId || cap.aliyunSceneId || ''; $('#captchaSecretKey').value = cap.secretKey || cap.tencentAppSecretKey || cap.aliyunAccessKeySecret || '';
     $('#mailEnabled').checked = !!mail.enabled; $('#mailHost').value = mail.host || ''; $('#mailPort').value = mail.port || 465; $('#mailSecure').checked = mail.secure !== false; $('#mailUser').value = mail.user || ''; $('#mailPass').value = mail.pass || ''; $('#mailFrom').value = mail.from || ''; $('#mailAdminEmail').value = mail.adminEmail || ''; $('#notifyLoginSuccess').checked = mail.notifyLoginSuccess !== false; $('#notifyLoginFailure').checked = mail.notifyLoginFailure !== false; $('#geoLookupEnabled').checked = mail.geoLookupEnabled !== false;
     $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
+    $('#terminalMinimizedKeepAlive').value = String(getConfiguredMinimizedKeepAlive());
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
     settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(settings.appearance || {}) };
     applyAppearance(settings.appearance);
@@ -1523,13 +1574,17 @@ async function testMail() {
 async function saveTerminalLayout(e) {
     e.preventDefault();
     const maxWindows = Math.min(3, Math.max(1, Number($('#terminalMaxWindows').value) || 3));
+    const rawKeepAlive = Number($('#terminalMinimizedKeepAlive').value);
+    const minimizedKeepAlive = rawKeepAlive === -1 ? -1 : Math.max(0, Math.floor(Number.isFinite(rawKeepAlive) ? rawKeepAlive : 0));
     const smartbarOrder = $('#terminalSmartbarOrder').value === 'new-left' ? 'new-left' : 'old-left';
     localStorage.setItem('zephyr-terminal-max-windows', String(maxWindows));
+    localStorage.setItem('zephyr-terminal-minimized-keepalive', String(minimizedKeepAlive));
     localStorage.setItem('zephyr-terminal-smartbar-order', smartbarOrder);
-    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows, smartbarOrder } }) });
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows, minimizedKeepAlive, smartbarOrder } }) });
     enforceTerminalWorkspaceLimit(activeTerminalTab);
     renderTerminalTabs();
-    toast(`终端布局已保存：最多 ${maxWindows} 窗`);
+    const keepAliveText = minimizedKeepAlive === -1 ? '最小化无限保活' : `最小化保活 ${minimizedKeepAlive} 个`;
+    toast(`终端布局已保存：最多 ${maxWindows} 窗，${keepAliveText}`);
 }
 async function setupTotp() { const r = await api('/api/security/totp/setup', { method: 'POST', body: '{}' }); $('#totpEnableForm').classList.remove('force-hidden'); $('#totpQrBox').innerHTML = `<img class="qr-img" src="${r.qr}"><p class="muted">密钥：${escapeHtml(r.secret)}</p>`; }
 async function registerPasskey() { try { if (!window.PublicKeyCredential) return toast('当前浏览器不支持 Passkey'); const options = await api('/api/passkeys/register/options', { method: 'POST', body: '{}' }); options.challenge = base64urlToBuffer(options.challenge); options.user.id = base64urlToBuffer(options.user.id); (options.excludeCredentials || []).forEach((c) => { c.id = base64urlToBuffer(c.id); }); const cred = await navigator.credentials.create({ publicKey: options }); if (!cred) return toast('Passkey 创建被取消'); const payload = { id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type, response: { clientDataJSON: bufferToBase64url(cred.response.clientDataJSON), attestationObject: bufferToBase64url(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } }; await api('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify(payload) }); toast('Passkey 已绑定'); await loadSecurityStatus(); } catch (err) { toast('Passkey 注册失败：' + err.message); } }
