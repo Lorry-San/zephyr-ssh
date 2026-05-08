@@ -1048,9 +1048,12 @@ function renderTerminalWorkspace() {
         }
         keepAliveMinimized.forEach((t) => {
             let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
-            if (!win) win = createTerminalWindowElement(t);
+            if (!win) {
+                win = createTerminalWindowElement(t);
+                workspace.appendChild(win);
+                console.info('[terminal-keepalive]', 'create minimized keepalive iframe', { tabId: t.id, reason: 'no-visible' });
+            }
             win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
-            workspace.appendChild(win);
         });
         return;
     }
@@ -1063,19 +1066,25 @@ function renderTerminalWorkspace() {
     });
     visible.forEach((t, index) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
-        if (!win) win = createTerminalWindowElement(t);
+        if (!win) {
+            win = createTerminalWindowElement(t);
+            workspace.appendChild(win);
+            console.info('[terminal-keepalive]', 'create visible iframe', { tabId: t.id, slot: index + 1 });
+        }
         const titlebar = win.querySelector('.terminal-window-titlebar');
         if (titlebar) {
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
         win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''}`;
-        workspace.appendChild(win);
     });
     keepAliveMinimized.forEach((t) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
-        if (!win) win = createTerminalWindowElement(t);
+        if (!win) {
+            win = createTerminalWindowElement(t);
+            workspace.appendChild(win);
+            console.info('[terminal-keepalive]', 'create minimized keepalive iframe', { tabId: t.id, reason: 'hidden-minimized' });
+        }
         win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
-        workspace.appendChild(win);
     });
     if (count === 2 || count === 3) {
         const splitterX = document.createElement('div');
