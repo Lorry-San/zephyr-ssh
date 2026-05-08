@@ -1020,7 +1020,11 @@ function createTerminalWindowElement(t) {
     return article;
 }
 function renderTerminalWorkspace() {
-    const visible = visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
+    const visibleSessions = terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
+    const visible = [
+        ...visualLayout.map(getTerminalSession).filter(Boolean).filter((t) => visibleSessions.some((item) => item.id === t.id)),
+        ...visibleSessions.filter((t) => !visualLayout.includes(t.id)),
+    ];
     const keepAliveMinimized = getMinimizedKeepAliveSessions();
     const count = visible.length;
     const workspace = $('#terminalWorkspace');
