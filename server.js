@@ -38,10 +38,59 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const sessions = new Map();
+const sshTerminalSessions = new Map();
 const tempTotpTokens = new Map();
 const webauthnChallenges = new Map();
 const resetRequestHits = new Map();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+function wsSendJSON(targetWs, obj) {
+    if (targetWs?.readyState === targetWs?.OPEN) {
+        targetWs.send(JSON.stringify(obj));
+    }
+}
+
+function appendSshSessionBuffer(session, data) {
+    if (!session || !data) return;
+    session.outputBuffer.push(String(data));
+    let total = session.outputBuffer.reduce((sum, item) => sum + item.length, 0);
+    while (total > 512 * 1024 && session.outputBuffer.length > 1) {
+        total -= session.outputBuffer.shift().length;
+    }
+}
+
+function broadcastSshSession(session, obj) {
+    if (!session?.attachedWs) return;
+    for (const targetWs of [...session.attachedWs]) {
+        wsSendJSON(targetWs, obj);
+    }
+}
+
+function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
+    const session = typeof sessionOrId === 'string' ? sshTerminalSessions.get(sessionOrId) : sessionOrId;
+    if (!session || session.closed) return;
+    session.closed = true;
+    sshTerminalSessions.delete(session.id);
+    console.info('[SSH-SESSION]', 'destroy', {
+        sessionId: session.id,
+        reason,
+        attached: session.attachedWs?.size || 0,
+        connectionId: session.connectionId || '',
+    });
+    broadcastSshSession(session, { type: 'close', message: reason === 'client-disconnect' ? '会话已断开' : 'SSH 会话已关闭' });
+    for (const targetWs of [...(session.attachedWs || [])]) {
+        try { targetWs._sshTerminalSession = null; } catch {}
+    }
+    session.attachedWs?.clear?.();
+    try { session.sshStream?.end?.(); } catch {}
+    try { session.sshStream?.destroy?.(); } catch {}
+    [...(session.sshClients || [])].reverse().forEach((client) => {
+        try { client.end?.(); } catch {}
+    });
+    if (session.sshClient && !(session.sshClients || []).includes(session.sshClient)) {
+        try { session.sshClient.end?.(); } catch {}
+    }
+}
 
 function loadDataEnv() {
     const envFile = path.join(DATA_DIR, '.env');
@@ -1888,6 +1937,7 @@ wss.on('connection', (ws, req) => {
     let sshClient = null;
     let sshClients = [];
     let sshStream = null;
+    let attachedSshSession = null;
     let sftpStream = null;
     let guacdSocket = null;
     let guacdParser = null;
@@ -1970,7 +2020,26 @@ wss.on('connection', (ws, req) => {
         dockerLogStreams.clear();
     }
 
-    const cleanup = () => {
+    const detachSshSession = (reason = 'ws-detach') => {
+        stopStatsPush();
+        stopDockerLogStreams();
+        if (attachedSshSession) {
+            attachedSshSession.attachedWs?.delete(ws);
+            attachedSshSession.lastDetachedAt = Date.now();
+            console.info('[SSH-SESSION]', 'detach websocket', {
+                sessionId: attachedSshSession.id,
+                reason,
+                remaining: attachedSshSession.attachedWs?.size || 0,
+            });
+            attachedSshSession = null;
+            sshClient = null;
+            sshClients = [];
+            sshStream = null;
+        }
+        ws._sshTerminalSession = null;
+    };
+
+    const cleanup = ({ destroySsh = true, reason = 'cleanup' } = {}) => {
         stopStatsPush();
         stopDockerLogStreams();
         if (guacdSocket) {
@@ -1986,19 +2055,52 @@ wss.on('connection', (ws, req) => {
             try { sftpStream.end(); } catch {}
             sftpStream = null;
         }
-        if (sshStream) {
-            try { sshStream.end(); } catch {}
-            sshStream = null;
-        }
-        if (sshClient) {
-            sshClients.reverse().forEach((client) => { try { client.end(); } catch {} });
-            if (!sshClients.includes(sshClient)) {
-                try { sshClient.end(); } catch {}
+        if (destroySsh) {
+            if (attachedSshSession) {
+                destroySshTerminalSession(attachedSshSession, reason);
+                attachedSshSession = null;
+            } else {
+                if (sshStream) {
+                    try { sshStream.end(); } catch {}
+                    sshStream = null;
+                }
+                if (sshClient) {
+                    sshClients.reverse().forEach((client) => { try { client.end(); } catch {} });
+                    if (!sshClients.includes(sshClient)) {
+                        try { sshClient.end(); } catch {}
+                    }
+                    sshClient = null;
+                    sshClients = [];
+                }
             }
-            sshClient = null;
-            sshClients = [];
+        } else {
+            detachSshSession(reason);
         }
     };
+
+    function attachSshSession(session, { replay = true } = {}) {
+        if (!session || session.closed) return false;
+        cleanup({ destroySsh: false, reason: 'attach-existing-session' });
+        attachedSshSession = session;
+        sshClient = session.sshClient;
+        sshClients = session.sshClients || [session.sshClient].filter(Boolean);
+        sshStream = session.sshStream;
+        session.attachedWs.add(ws);
+        session.lastActive = Date.now();
+        ws._sshTerminalSession = session;
+        console.info('[SSH-SESSION]', 'attach websocket', {
+            sessionId: session.id,
+            connectionId: session.connectionId || '',
+            attached: session.attachedWs.size,
+            replay,
+        });
+        sendJSON({ type: 'ready', sessionId: session.id, attached: true });
+        if (replay && session.outputBuffer.length) {
+            sendJSON({ type: 'data', data: session.outputBuffer.join('') });
+        }
+        startStatsPush();
+        return true;
+    }
 
     function execDockerStream(command, onMessage, onComplete) {
         if (!sshClient) {
@@ -2220,7 +2322,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         // ------------------------- SSH 连接 -------------------------
         if (msg.type === 'connect') {
             const { host, port, username, password, privateKey, init, connectionId } = msg;
-            cleanup();
+            const requestedSessionId = String(msg.sessionId || msg.terminalSessionId || msg.tabId || connectionId || crypto.randomUUID());
+            const existingSession = sshTerminalSessions.get(requestedSessionId);
+            if (existingSession && !existingSession.closed) {
+                attachSshSession(existingSession, { replay: true });
+                return;
+            }
+            cleanup({ destroySsh: false, reason: 'connect-new-session' });
             let conn;
             try {
                 console.info('[SSH-DIAG] connect request received', {
@@ -2288,14 +2396,24 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
             sshClient.on('error', (err) => {
                 console.error(`[SSH] 错误: ${err.message}`);
-                sendJSON({ type: 'error', message: `SSH 连接失败: ${err.message}` });
-                cleanup();
+                if (attachedSshSession) {
+                    broadcastSshSession(attachedSshSession, { type: 'error', message: `SSH 连接失败: ${err.message}` });
+                    destroySshTerminalSession(attachedSshSession, 'ssh-error');
+                } else {
+                    sendJSON({ type: 'error', message: `SSH 连接失败: ${err.message}` });
+                    cleanup();
+                }
             });
 
             sshClient.on('close', () => {
                 console.log('[SSH] 连接关闭');
-                sendJSON({ type: 'close', message: 'SSH 连接已关闭' });
-                cleanup();
+                if (attachedSshSession) {
+                    broadcastSshSession(attachedSshSession, { type: 'close', message: 'SSH 连接已关闭' });
+                    destroySshTerminalSession(attachedSshSession, 'ssh-close');
+                } else {
+                    sendJSON({ type: 'close', message: 'SSH 连接已关闭' });
+                    cleanup();
+                }
             });
 
             // 打开 shell
@@ -2318,21 +2436,41 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     username: conn.username || '',
                 });
                 sshStream = stream;
-                sendJSON({ type: 'ready' });
+                const session = {
+                    id: requestedSessionId,
+                    connectionId: conn.id || connectionId || '',
+                    sshClient,
+                    sshClients,
+                    sshStream,
+                    attachedWs: new Set([ws]),
+                    outputBuffer: [],
+                    createdAt: Date.now(),
+                    lastActive: Date.now(),
+                    lastDetachedAt: 0,
+                    closed: false,
+                };
+                attachedSshSession = session;
+                ws._sshTerminalSession = session;
+                sshTerminalSessions.set(session.id, session);
+                sendJSON({ type: 'ready', sessionId: session.id });
 
                 // SSH 连接就绪后，启动实时监控推送
                 startStatsPush();
 
                 stream.on('data', (data) => {
-                    sendJSON({ type: 'data', data: data.toString('utf-8') });
+                    const text = data.toString('utf-8');
+                    appendSshSessionBuffer(session, text);
+                    broadcastSshSession(session, { type: 'data', data: text });
                 });
                 stream.on('close', (code, signal) => {
                     console.log(`[SSH] Shell 关闭 code=${code} signal=${signal}`);
-                    sendJSON({ type: 'close', message: `Shell 已关闭 (code=${code})` });
-                    cleanup();
+                    broadcastSshSession(session, { type: 'close', message: `Shell 已关闭 (code=${code})` });
+                    destroySshTerminalSession(session, `shell-close-${code ?? 'N/A'}`);
                 });
                 stream.stderr.on('data', (data) => {
-                    sendJSON({ type: 'data', data: data.toString('utf-8') });
+                    const text = data.toString('utf-8');
+                    appendSshSessionBuffer(session, text);
+                    broadcastSshSession(session, { type: 'data', data: text });
                 });
 
                 if (init && typeof init === 'string' && init.trim().length > 0) {
@@ -2373,7 +2511,8 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         // 断开
         if (msg.type === 'disconnect') {
-            cleanup();
+            if (attachedSshSession) destroySshTerminalSession(attachedSshSession, 'client-disconnect');
+            else cleanup({ destroySsh: true, reason: 'client-disconnect' });
             ws.close();
             return;
         }
@@ -2561,12 +2700,12 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
     ws.on('close', () => {
         console.log('[WS] 客户端断开');
-        cleanup();
+        cleanup({ destroySsh: false, reason: 'ws-close' });
     });
 
     ws.on('error', (err) => {
         console.error('[WS] 错误:', err.message);
-        cleanup();
+        cleanup({ destroySsh: false, reason: 'ws-error' });
     });
 });
 

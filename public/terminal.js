@@ -4206,12 +4206,12 @@ function destroyTerminalInstance({ clear = true } = {}) {
     if (clear) wtermWrapper.innerHTML = '';
 }
 
-function closeWebSocketOnly(reason = '重建连接') {
+function closeWebSocketOnly(reason = '重建连接', { sendDisconnect = false } = {}) {
     const ws = wsConnection;
     wsConnection = null;
     if (!ws) return;
     try {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'disconnect' }));
+        if (sendDisconnect && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'disconnect' }));
     } catch (_) {}
     try {
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close(1000, reason);
@@ -4223,7 +4223,7 @@ function disconnect({ userInitiated = true, updateStatus = true, destroyTerminal
     reconnectInProgress = false;
     clearReconnectTimer();
     activeConnectionToken += 1;
-    closeWebSocketOnly(userInitiated ? '用户主动断开' : '重建连接');
+    closeWebSocketOnly(userInitiated ? '用户主动断开' : '重建连接', { sendDisconnect: userInitiated });
     if (destroyTerminal) destroyTerminalInstance();
     isConnected = false;
     sftpReady = false;
@@ -4370,6 +4370,7 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
             clearTimeout(timeout);
             ws.send(JSON.stringify({
                 type: 'connect',
+                sessionId: params.tabId || params.sessionId || params.connectionId || '',
                 connectionId: params.connectionId || '',
                 host: params.host,
                 port: params.port,
@@ -4509,6 +4510,10 @@ disconnectBtn.addEventListener('click', () => {
         window.location.href = '/';
     }
 });
-window.addEventListener('beforeunload', () => disconnect({ userInitiated: true, updateStatus: false }));
+window.addEventListener('beforeunload', () => {
+    userClosedConnection = true;
+    clearReconnectTimer();
+    closeWebSocketOnly('页面卸载', { sendDisconnect: false });
+});
 
 main();
