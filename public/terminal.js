@@ -4415,11 +4415,11 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                         break;
                     case 'close':
                         setStatus('disconnected', msg.message || '会话已关闭');
-                        if (embeddedMode) {
-                            notifyParentCloseRequest('ssh-session-close');
-                        } else if (!userClosedConnection) {
+                        if (!userClosedConnection) {
                             try { ws.close(4000, 'SSH 会话关闭'); } catch (_) {}
                             startAutoReconnect(msg.message || 'SSH 会话已关闭');
+                        } else if (embeddedMode) {
+                            notifyParentCloseRequest('ssh-session-close');
                         }
                         break;
                     case 'banner':
@@ -4439,10 +4439,10 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                 return;
             }
             if (isConnected) setStatus('disconnected', `断开 (${e.code})`);
-            if (embeddedMode) {
-                notifyParentCloseRequest(`websocket-close-${e.code || 'N/A'}`);
-            } else if (!userClosedConnection) {
+            if (!userClosedConnection) {
                 startAutoReconnect(`连接已断开 (${e.code || 'N/A'})`);
+            } else if (embeddedMode) {
+                notifyParentCloseRequest(`websocket-close-${e.code || 'N/A'}`);
             }
         });
 
