@@ -1194,25 +1194,21 @@ body.terminal-mode .app-shell {
 .terminal-grip:hover span::before { transform: translateX(1.5px); }
 .terminal-grip:hover span::after { transform: translateX(-1.5px); }
 .terminal-window-titlebar.menu-open .terminal-grip {
-    --island-w: 214px;
-    --island-h: 34px;
-    --island-fluid-scale-x: 1;
-    --island-fluid-scale-y: 1;
+    --island-w: 42px;
+    --island-h: 22px;
+    --island-fluid-scale-x: .72;
+    --island-fluid-scale-y: .66;
     --island-dot-spread: 0px;
-    --island-dot-scale: .18;
+    --island-dot-scale: .16;
     --island-dot-opacity: .02;
-    --island-fluid-blur: 3px;
-    border-color: rgba(88,166,255,.38);
-    background:
-        radial-gradient(circle at 50% 12%, rgba(255,255,255,.20), transparent 42%),
-        linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.02)),
-        rgba(28,28,30,.82);
+    --island-fluid-blur: 5px;
+    border-color: transparent;
+    background: rgba(28,28,30,.28);
     color: var(--text);
-    box-shadow:
-        0 8px 22px rgba(0,0,0,.28),
-        0 0 0 3px rgba(88,166,255,.08),
-        inset 0 1px 0 rgba(255,255,255,.12);
-    animation: terminalIslandDynamicMorph .66s cubic-bezier(.22,1,.36,1) both;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: none;
+    animation: terminalIslandSourceMelt .42s cubic-bezier(.2,.8,.2,1) both;
 }
 .terminal-window-titlebar.menu-open .terminal-grip span {
     animation: terminalIslandDotMelt .66s cubic-bezier(.2,.8,.2,1) both;
@@ -1253,9 +1249,9 @@ body.terminal-mode .app-shell {
     border: .5px solid rgba(255,255,255,.14);
     border-radius: 20px;
     background:
-        radial-gradient(ellipse at var(--island-origin-x, 50%) var(--island-origin-y, 0px), rgba(255,255,255,.18), transparent 34%),
-        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.025)),
-        rgba(18,18,20,.84);
+        radial-gradient(ellipse at var(--island-origin-x, 50%) var(--island-origin-y, 0px), rgba(255,255,255,.18), transparent 30%),
+        linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.03)),
+        rgba(18,18,20,.90);
     box-shadow:
         0 12px 34px rgba(0,0,0,.28),
         0 0 0 1px rgba(255,255,255,.045),
@@ -1379,6 +1375,35 @@ body.terminal-mode .app-shell {
 @keyframes terminalIslandDotBreath {
     0%, 100% { transform: scale(var(--island-dot-scale)); filter: blur(0); }
     50% { transform: scale(calc(var(--island-dot-scale) * 1.08)); filter: blur(.15px); }
+}
+@keyframes terminalIslandSourceMelt {
+    0% {
+        opacity: 1;
+        --island-dot-spread: 10px;
+        --island-dot-scale: 1;
+        --island-dot-opacity: 1;
+        --island-fluid-scale-x: 1;
+        --island-fluid-scale-y: 1;
+        --island-fluid-blur: 0px;
+    }
+    45% {
+        opacity: .78;
+        --island-dot-spread: 2px;
+        --island-dot-scale: .62;
+        --island-dot-opacity: .74;
+        --island-fluid-scale-x: .74;
+        --island-fluid-scale-y: .68;
+        --island-fluid-blur: 2px;
+    }
+    100% {
+        opacity: 0;
+        --island-dot-spread: 0px;
+        --island-dot-scale: .16;
+        --island-dot-opacity: .02;
+        --island-fluid-scale-x: .58;
+        --island-fluid-scale-y: .54;
+        --island-fluid-blur: 6px;
+    }
 }
 @keyframes terminalIslandDynamicMorph {
     0% {
