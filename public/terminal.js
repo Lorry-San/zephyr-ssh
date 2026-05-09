@@ -3793,11 +3793,10 @@ function setupPanelLayoutMenu() {
         button.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            closePanelLayoutMenu();
             bringPanelToFront(panel);
             button.classList.add('pressing');
-            panel.classList.add('dragging');
             button.setPointerCapture?.(e.pointerId);
+
             const startX = e.clientX;
             const startY = e.clientY;
             const startLeft = panel.offsetLeft;
@@ -3808,7 +3807,11 @@ function setupPanelLayoutMenu() {
                 ev.preventDefault();
                 const dx = ev.clientX - startX;
                 const dy = ev.clientY - startY;
-                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+                if (!moved && Math.hypot(dx, dy) > 7) {
+                    moved = true;
+                    closePanelLayoutMenu();
+                    panel.classList.add('dragging');
+                }
                 if (!moved) return;
                 panel.style.left = `${startLeft + dx}px`;
                 panel.style.top = `${startTop + dy}px`;
@@ -3816,14 +3819,16 @@ function setupPanelLayoutMenu() {
                 panel.style.bottom = 'auto';
                 clampPanel(panel);
             };
+
             const onUp = () => {
                 panel.classList.remove('dragging');
-                window.setTimeout(() => button.classList.remove('pressing'), moved ? 0 : 140);
+                button.classList.remove('pressing');
                 suppressNextLayoutClick = moved;
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
                 window.removeEventListener('pointercancel', onUp);
             };
+
             window.addEventListener('pointermove', onMove, { passive: false });
             window.addEventListener('pointerup', onUp, { once: true });
             window.addEventListener('pointercancel', onUp, { once: true });
@@ -3844,7 +3849,7 @@ function setupPanelLayoutMenu() {
                 suppressNextLayoutClick: false,
             });
             if (navigator.vibrate) navigator.vibrate(8);
-            if (panelLayoutMenu) closePanelLayoutMenu();
+            if (panelLayoutMenu && panelLayoutButton === button) closePanelLayoutMenu();
             else openPanelLayoutMenu(button, panel);
         });
     });
