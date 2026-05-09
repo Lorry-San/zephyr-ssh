@@ -68,6 +68,18 @@
     initial-value: 0px;
 }
 
+@property --island-w {
+    syntax: '<length>';
+    inherits: true;
+    initial-value: 58px;
+}
+
+@property --island-h {
+    syntax: '<length>';
+    inherits: true;
+    initial-value: 22px;
+}
+
 @property --island-dot-spread {
     syntax: '<length>';
     inherits: true;
@@ -1050,7 +1062,7 @@ body.terminal-mode .app-shell {
 .terminal-grip {
     --island-x: -50%;
     --island-y: -50%;
-    --island-w: 58px;
+    --island-w: 42px;
     --island-h: 22px;
     --island-radius: 999px;
     --island-fluid-scale-x: 1;
@@ -1096,32 +1108,33 @@ body.terminal-mode .app-shell {
         box-shadow .36s ease,
         backdrop-filter .24s ease,
         -webkit-backdrop-filter .24s ease;
-    will-change: transform, clip-path, border-radius, box-shadow, background, filter;
+    will-change: width, height, transform, clip-path, border-radius, box-shadow, background, filter;
     contain: paint;
 }
 .terminal-grip::before {
     content: '';
     position: absolute;
-    inset: -12px;
+    inset: -14px;
     z-index: -1;
     border-radius: inherit;
     background:
-        radial-gradient(circle at 50% 50%, rgba(255,255,255,.18), transparent 34%),
-        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,0));
-    opacity: .76;
+        radial-gradient(circle at 50% 50%, rgba(255,255,255,.22), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,0));
+    opacity: .68;
     filter: blur(8px);
-    transform: scale3d(.78, .72, 1);
+    transform: scale3d(.72, .68, 1);
     pointer-events: none;
 }
 .terminal-grip::after {
     content: '';
     position: absolute;
-    inset: -1px;
+    inset: -2px;
     z-index: -2;
     border-radius: inherit;
     background: inherit;
-    opacity: .88;
+    opacity: .84;
     filter: blur(var(--island-fluid-blur));
+    transform: scale3d(1.02, .92, 1);
     pointer-events: none;
 }
 .terminal-grip span,
@@ -1143,12 +1156,17 @@ body.terminal-mode .app-shell {
 }
 .terminal-grip span {
     position: relative;
-    transform-origin: center;
+    transform-origin: center center;
     transform: scale(var(--island-dot-scale));
     opacity: var(--island-dot-opacity);
+    animation: terminalIslandDotBreath 2.2s cubic-bezier(.22,1,.36,1) infinite;
 }
 .terminal-grip span::before,
-.terminal-grip span::after { position: absolute; top: 0; }
+.terminal-grip span::after {
+    position: absolute;
+    top: 0;
+    transform-origin: center center;
+}
 .terminal-grip span::before { left: calc(-1 * var(--island-dot-spread)); }
 .terminal-grip span::after { left: var(--island-dot-spread); }
 .terminal-grip:hover {
@@ -1176,11 +1194,13 @@ body.terminal-mode .app-shell {
 .terminal-grip:hover span::before { transform: translateX(1.5px); }
 .terminal-grip:hover span::after { transform: translateX(-1.5px); }
 .terminal-window-titlebar.menu-open .terminal-grip {
-    --island-fluid-scale-x: 1.08;
-    --island-fluid-scale-y: .92;
+    --island-w: 214px;
+    --island-h: 34px;
+    --island-fluid-scale-x: 1;
+    --island-fluid-scale-y: 1;
     --island-dot-spread: 0px;
-    --island-dot-scale: .22;
-    --island-dot-opacity: 0;
+    --island-dot-scale: .18;
+    --island-dot-opacity: .02;
     --island-fluid-blur: 3px;
     border-color: rgba(88,166,255,.38);
     background:
@@ -1189,15 +1209,16 @@ body.terminal-mode .app-shell {
         rgba(28,28,30,.82);
     color: var(--text);
     box-shadow:
-        0 6px 18px rgba(0,0,0,.26),
+        0 8px 22px rgba(0,0,0,.28),
         0 0 0 3px rgba(88,166,255,.08),
         inset 0 1px 0 rgba(255,255,255,.12);
-    animation: terminalIslandDotFusion .34s cubic-bezier(.34,1.56,.64,1) both;
+    animation: terminalIslandDynamicMorph .66s cubic-bezier(.22,1,.36,1) both;
 }
-.terminal-window-titlebar.menu-open .terminal-grip span,
+.terminal-window-titlebar.menu-open .terminal-grip span {
+    animation: terminalIslandDotMelt .66s cubic-bezier(.2,.8,.2,1) both;
+}
 .terminal-window-titlebar.menu-open .terminal-grip span::before,
 .terminal-window-titlebar.menu-open .terminal-grip span::after {
-    opacity: 0;
     filter: blur(6px);
 }
 .terminal-window.dragging .terminal-grip { cursor: grabbing; }
@@ -1219,7 +1240,7 @@ body.terminal-mode .app-shell {
 .terminal-window-more:hover { color: var(--text); background: rgba(88,166,255,.14); transform: scale(1.08); }
 .terminal-window-menu {
     position: absolute;
-    top: calc(50% + 16px);
+    top: calc(50% + 23px);
     left: var(--terminal-window-menu-left, calc(50% - 107px));
     right: auto;
     z-index: 16;
@@ -1273,10 +1294,10 @@ body.terminal-mode .app-shell {
     pointer-events: auto;
     border-radius: 18px;
     clip-path: inset(0 round 18px);
-    animation: terminalIslandFluidOpen .62s cubic-bezier(.16,1,.3,1) both;
+    animation: terminalIslandFluidOpen .68s cubic-bezier(.22,1,.36,1) both;
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu::before {
-    animation: terminalIslandLiquidGlow .62s cubic-bezier(.16,1,.3,1) both;
+    animation: terminalIslandLiquidGlow .68s cubic-bezier(.22,1,.36,1) both;
 }
 .terminal-window-menu button {
     position: relative;
@@ -1292,14 +1313,14 @@ body.terminal-mode .app-shell {
     opacity: 0;
     transform: translate3d(0, 4px, 0) scale(.98);
     transition:
-        opacity .18s ease,
-        transform .26s cubic-bezier(.22,1,.36,1),
+        opacity .20s ease,
+        transform .30s cubic-bezier(.22,1,.36,1),
         background .14s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    transition-delay: calc(.24s + (var(--item-index, 0) * 28ms));
+    transition-delay: calc(.12s + (var(--item-index, 0) * 28ms));
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(1) { --item-index: 0; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(2) { --item-index: 1; }
@@ -1315,76 +1336,121 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-placeholder {
     pointer-events: none;
 }
-@keyframes terminalIslandDotFusion {
+@keyframes terminalIslandDotBreath {
+    0%, 100% { transform: scale(var(--island-dot-scale)); filter: blur(0); }
+    50% { transform: scale(calc(var(--island-dot-scale) * 1.08)); filter: blur(.15px); }
+}
+@keyframes terminalIslandDynamicMorph {
     0% {
+        --island-w: 42px;
+        --island-h: 22px;
         --island-dot-spread: 10px;
         --island-dot-scale: 1;
         --island-dot-opacity: 1;
-        --island-fluid-scale-x: .92;
-        --island-fluid-scale-y: .84;
+        --island-fluid-scale-x: 1;
+        --island-fluid-scale-y: 1;
         --island-fluid-blur: 0px;
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
     }
-    42% {
+    28% {
+        --island-w: 40px;
+        --island-h: 21px;
         --island-dot-spread: 2px;
-        --island-dot-scale: .76;
-        --island-dot-opacity: .82;
-        --island-fluid-scale-x: .74;
-        --island-fluid-scale-y: .70;
-        --island-fluid-blur: 2px;
+        --island-dot-scale: .62;
+        --island-dot-opacity: .76;
+        --island-fluid-scale-x: .88;
+        --island-fluid-scale-y: .86;
+        --island-fluid-blur: 1.6px;
+        border-radius: 999px;
+        clip-path: inset(0 2px round 999px);
     }
-    68% {
+    48% {
+        --island-w: 74px;
+        --island-h: 25px;
         --island-dot-spread: 0px;
-        --island-dot-scale: .36;
-        --island-dot-opacity: .28;
-        --island-fluid-scale-x: 1.15;
-        --island-fluid-scale-y: .88;
+        --island-dot-scale: .34;
+        --island-dot-opacity: .34;
+        --island-fluid-scale-x: 1.05;
+        --island-fluid-scale-y: .82;
         --island-fluid-blur: 4px;
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
     }
-    100% {
+    72% {
+        --island-w: 222px;
+        --island-h: 35px;
         --island-dot-spread: 0px;
         --island-dot-scale: .22;
-        --island-dot-opacity: 0;
-        --island-fluid-scale-x: 1.08;
-        --island-fluid-scale-y: .92;
-        --island-fluid-blur: 3px;
+        --island-dot-opacity: .08;
+        --island-fluid-scale-x: 1.035;
+        --island-fluid-scale-y: 1.06;
+        --island-fluid-blur: 2px;
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
     }
+    86% {
+        --island-w: 206px;
+        --island-h: 33px;
+        --island-fluid-scale-x: .985;
+        --island-fluid-scale-y: .97;
+        --island-fluid-blur: .8px;
+    }
+    100% {
+        --island-w: 214px;
+        --island-h: 34px;
+        --island-dot-spread: 0px;
+        --island-dot-scale: .18;
+        --island-dot-opacity: .02;
+        --island-fluid-scale-x: 1;
+        --island-fluid-scale-y: 1;
+        --island-fluid-blur: 0px;
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
+    }
+}
+@keyframes terminalIslandDotMelt {
+    0% { opacity: 1; transform: scale(1); filter: blur(0); }
+    28% { opacity: .76; transform: scale(.62); filter: blur(.6px); }
+    48% { opacity: .34; transform: scale(.34); filter: blur(3px); }
+    100% { opacity: .02; transform: scale(.18); filter: blur(7px); }
 }
 @keyframes terminalIslandFluidOpen {
     0% {
         opacity: .62;
         border-radius: 999px;
-        clip-path: inset(43% 49% 43% 49% round 999px);
+        clip-path: inset(46% 48% 46% 48% round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
             scaleX(max(var(--island-start-scale-x, .18), .18))
             scaleY(max(var(--island-start-scale-y, .24), .24));
         filter: blur(10px) saturate(.84);
     }
-    18% {
-        opacity: .86;
+    26% {
+        opacity: .88;
         border-radius: 999px;
-        clip-path: inset(38% 47% 38% 47% round 999px);
+        clip-path: inset(42% 39% 42% 39% round 999px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .78), calc(var(--island-start-dy, 0px) * .84), 0)
-            scaleX(.30)
-            scaleY(.34);
+            translate3d(calc(var(--island-start-dx, 0px) * .72), calc(var(--island-start-dy, 0px) * .78), 0)
+            scaleX(.82)
+            scaleY(.32);
         filter: blur(12px) saturate(.94);
     }
-    42% {
+    46% {
         opacity: 1;
         border-radius: 999px;
-        clip-path: inset(23% 12% 23% 12% round 999px);
+        clip-path: inset(34% 2% 34% 2% round 999px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .36), calc(var(--island-start-dy, 0px) * .42), 0)
-            scaleX(1.045)
-            scaleY(.54);
+            translate3d(calc(var(--island-start-dx, 0px) * .30), calc(var(--island-start-dy, 0px) * .36), 0)
+            scaleX(1.035)
+            scaleY(.48);
         filter: blur(4px) saturate(1.08);
     }
     68% {
         opacity: 1;
         border-radius: 22px;
         clip-path: inset(0 round 22px);
-        transform: translate3d(0, 1px, 0) scaleX(1.035) scaleY(1.06);
+        transform: translate3d(0, 1px, 0) scaleX(1.025) scaleY(1.06);
         filter: blur(0) saturate(1.06);
     }
     84% {
