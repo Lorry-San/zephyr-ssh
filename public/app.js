@@ -1848,7 +1848,7 @@ function bindEvents() {
                 control.closest('.terminal-window-titlebar')?.classList.remove('menu-open');
                 releaseIslandPress();
                 startTerminalWindowDrag(e, tabId);
-            }, 280);
+            }, 360);
             const cleanup = () => {
                 window.clearTimeout(timer);
                 releaseIslandPress();

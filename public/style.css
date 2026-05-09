@@ -1181,12 +1181,15 @@ body.terminal-mode .app-shell {
         0 0 0 3px rgba(88,166,255,.07);
 }
 .terminal-grip.island-pressing {
-    --island-fluid-scale-x: .92;
-    --island-fluid-scale-y: .84;
-    --island-dot-spread: 5px;
-    --island-dot-scale: .78;
-    --island-fluid-blur: 1px;
-    transition: background .16s ease, box-shadow .16s ease;
+    --island-fluid-scale-x: .965;
+    --island-fluid-scale-y: .92;
+    --island-dot-spread: 8px;
+    --island-dot-scale: .92;
+    --island-fluid-blur: .4px;
+    transition:
+        transform .10s cubic-bezier(0.32, 0.72, 0, 1),
+        background .14s ease,
+        box-shadow .14s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-grip.island-pressing {
     --island-fluid-scale-x: .98;
@@ -1504,24 +1507,24 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandFluidOpen {
     0% {
-        opacity: .88;
+        opacity: .96;
         border-radius: 999px;
-        clip-path: inset(0 44% 86% 44% round 999px);
+        clip-path: inset(0 43% 84% 43% round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), 0, 0)
-            scaleX(max(var(--island-start-scale-x, .24), .18))
-            scaleY(max(var(--island-start-scale-y, .14), .08));
-        filter: blur(6px) saturate(.92);
+            scaleX(max(var(--island-start-scale-x, .34), .28))
+            scaleY(max(var(--island-start-scale-y, .18), .14));
+        filter: blur(4px) saturate(1);
     }
-    20% {
-        opacity: .90;
+    18% {
+        opacity: .96;
         border-radius: 999px;
-        clip-path: inset(0 32% 72% 32% round 999px);
+        clip-path: inset(0 29% 68% 29% round 999px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .72), 0, 0)
-            scaleX(.54)
-            scaleY(.30);
-        filter: blur(9px) saturate(.98);
+            translate3d(calc(var(--island-start-dx, 0px) * .68), 0, 0)
+            scaleX(.66)
+            scaleY(.38);
+        filter: blur(6px) saturate(1.02);
     }
     44% {
         opacity: 1;
@@ -1566,32 +1569,32 @@ body.terminal-mode .app-shell {
     100% {
         opacity: 0;
         border-radius: 999px;
-        clip-path: inset(0 44% 86% 44% round 999px);
+        clip-path: inset(0 43% 84% 43% round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), 0, 0)
-            scaleX(max(var(--island-start-scale-x, .24), .18))
-            scaleY(max(var(--island-start-scale-y, .14), .08));
-        filter: blur(8px) saturate(.86);
+            scaleX(max(var(--island-start-scale-x, .34), .28))
+            scaleY(max(var(--island-start-scale-y, .18), .14));
+        filter: blur(5px) saturate(.9);
     }
 }
 @keyframes terminalIslandDotsReturn {
     0% {
-        --island-dot-spread: 0px;
-        --island-dot-scale: .16;
-        --island-dot-opacity: .02;
-        --island-fluid-scale-x: .58;
-        --island-fluid-scale-y: .54;
-        --island-fluid-blur: 6px;
+        --island-dot-spread: 2px;
+        --island-dot-scale: .58;
+        --island-dot-opacity: .08;
+        --island-fluid-scale-x: .72;
+        --island-fluid-scale-y: .66;
+        --island-fluid-blur: 4px;
         opacity: 0;
     }
-    62% {
-        --island-dot-spread: 4px;
-        --island-dot-scale: .72;
+    52% {
+        --island-dot-spread: 7px;
+        --island-dot-scale: .88;
         --island-dot-opacity: .72;
-        --island-fluid-scale-x: .88;
-        --island-fluid-scale-y: .82;
-        --island-fluid-blur: 1px;
-        opacity: .86;
+        --island-fluid-scale-x: .96;
+        --island-fluid-scale-y: .90;
+        --island-fluid-blur: .8px;
+        opacity: .88;
     }
     100% {
         --island-dot-spread: 10px;
