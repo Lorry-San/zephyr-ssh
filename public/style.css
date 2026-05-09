@@ -2934,8 +2934,9 @@ html.keyboard-open .terminal-page {
     min-height: 380px;
     display: none;
 }
-.file-manager.front { z-index: 45; }
-.docker-panel.front { z-index: 47; }
+.file-manager.front,
+.docker-panel.front,
+.info-modal.front { z-index: 47; }
 .file-manager.front-switching,
 .info-modal.front-switching,
 .docker-panel.front-switching {
@@ -4083,7 +4084,6 @@ html.keyboard-open .terminal-page {
         filter 0.32s ease;
     will-change: transform, opacity, filter;
 }
-.info-modal.front { z-index: 46; }
 .info-modal.open {
     opacity: 1;
     transform: scale(1) translateY(0);

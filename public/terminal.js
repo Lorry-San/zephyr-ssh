@@ -1317,6 +1317,7 @@ function showFileManager() {
     ensureFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
     fileManager.classList.add('open');
     fileBtn.classList.add('active');
+    bringPanelToFront(fileManager);
     if (!sftpReady) {
         initSFTP();
     } else {
