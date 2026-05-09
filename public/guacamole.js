@@ -655,15 +655,52 @@ function applyPanelLayout(panel, layout) {
 }
 
 let panelLayoutButton = null;
-function closePanelLayoutMenu() {
-    panelLayoutButton?.classList.remove('active-layout');
-    panelLayoutMenu?.remove();
-    panelLayoutMenu = null;
-    panelLayoutButton = null;
+function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
+    if (!menu || !button) return;
+    const rect = button.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const vvLeft = viewport?.offsetLeft || 0;
+    const vvTop = viewport?.offsetTop || 0;
+    const vvWidth = viewport?.width || window.innerWidth;
+    const vvHeight = viewport?.height || window.innerHeight;
+    const anchorX = rect.left + rect.width / 2;
+    const finalWidth = Math.min(284, Math.max(160, vvWidth - 16));
+    const finalHeight = 50;
+    const finalLeft = Math.min(vvLeft + vvWidth - finalWidth - 8, Math.max(vvLeft + 8, anchorX - finalWidth / 2));
+    const belowTop = rect.bottom + 8;
+    const aboveTop = rect.top - finalHeight - 8;
+    const canPlaceBelow = belowTop + finalHeight <= vvTop + vvHeight - 8;
+    const finalTop = canPlaceBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
+    menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
+    menu.style.top = `${collapsed ? rect.top : finalTop}px`;
+    menu.style.width = `${collapsed ? rect.width : finalWidth}px`;
+    menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : finalHeight}px`);
+    menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
+    menu.dataset.placement = canPlaceBelow ? 'below' : 'above';
+}
+function closePanelLayoutMenu({ instant = false } = {}) {
+    const menu = panelLayoutMenu;
+    const button = panelLayoutButton;
+    if (!menu) { button?.classList.remove('active-layout'); panelLayoutButton = null; return; }
+    window.clearTimeout(menu._closeTimer);
+    if (instant || !button?.isConnected) {
+        button?.classList.remove('active-layout'); button?.style.removeProperty('opacity'); menu.remove(); panelLayoutMenu = null; panelLayoutButton = null; return;
+    }
+    positionPanelLayoutMenu(menu, button, { collapsed: false });
+    menu.classList.remove('island-open');
+    menu.classList.add('island-closing', 'island-animating');
+    button.classList.add('active-layout');
+    button.style.opacity = '0';
+    requestAnimationFrame(() => positionPanelLayoutMenu(menu, button, { collapsed: true }));
+    menu._closeTimer = window.setTimeout(() => {
+        button.classList.remove('active-layout'); button.style.removeProperty('opacity'); menu.remove();
+        if (panelLayoutMenu === menu) panelLayoutMenu = null;
+        if (panelLayoutButton === button) panelLayoutButton = null;
+    }, 460);
 }
 
 function openPanelLayoutMenu(button, panel) {
-    closePanelLayoutMenu();
+    closePanelLayoutMenu({ instant: true });
     panelLayoutButton = button;
     button?.classList.add('active-layout');
     const menu = document.createElement('div');
@@ -678,92 +715,22 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
     `;
     document.body.appendChild(menu);
-    const placeMenu = () => {
-        const rect = button.getBoundingClientRect();
-        const viewport = window.visualViewport;
-        const vvLeft = viewport?.offsetLeft || 0;
-        const vvTop = viewport?.offsetTop || 0;
-        const vvWidth = viewport?.width || window.innerWidth;
-        const vvHeight = viewport?.height || window.innerHeight;
-        const anchorX = rect.left + rect.width / 2;
-        const anchorY = rect.top + rect.height / 2;
-        const targetCenterX = anchorX;
-        menu.style.width = `${Math.min(284, Math.max(160, vvWidth - 16))}px`;
-        const menuRect = menu.getBoundingClientRect();
-        const idealLeft = targetCenterX - menuRect.width / 2;
-        const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, idealLeft));
-        const belowTop = rect.bottom + 8;
-        const aboveTop = rect.top - menuRect.height - 8;
-        const canPlaceBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
-        const top = canPlaceBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
-        const placement = canPlaceBelow ? 'below' : 'above';
-        menu.style.left = `${left}px`;
-        menu.style.top = `${top}px`;
-        const actualMenuRect = menu.getBoundingClientRect();
-        const originX = Math.min(actualMenuRect.width - 18, Math.max(18, anchorX - actualMenuRect.left));
-        const originY = Math.min(actualMenuRect.height - 18, Math.max(18, anchorY - actualMenuRect.top));
-        const menuCenterX = actualMenuRect.left + actualMenuRect.width / 2;
-        const menuCenterY = actualMenuRect.top + actualMenuRect.height / 2;
-        const centerDelta = menuCenterX - targetCenterX;
-        const startScaleX = Math.max(0.12, Math.min(1, rect.width / Math.max(actualMenuRect.width, 1)));
-        const startScaleY = Math.max(0.12, Math.min(1, rect.height / Math.max(actualMenuRect.height, 1)));
-        const startDx = anchorX - menuCenterX;
-        const startDy = anchorY - menuCenterY;
-        menu.style.setProperty('--menu-origin-x', `${originX}px`);
-        menu.style.setProperty('--menu-origin-y', `${originY}px`);
-        menu.style.setProperty('--island-start-dx', `${startDx}px`);
-        menu.style.setProperty('--island-start-dy', `${startDy}px`);
-        menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
-        menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
-        menu.dataset.placement = placement;
-        console.info('[DynamicIslandDiagnostics]', {
-            event: 'guac-layout-menu-align',
-            panelId: panel?.id || '',
-            buttonId: button?.id || '',
-            viewport: {
-                left: Number(vvLeft.toFixed(2)),
-                top: Number(vvTop.toFixed(2)),
-                width: Number(vvWidth.toFixed(2)),
-                height: Number(vvHeight.toFixed(2)),
-            },
-            buttonRect: {
-                left: Number(rect.left.toFixed(2)),
-                top: Number(rect.top.toFixed(2)),
-                width: Number(rect.width.toFixed(2)),
-                height: Number(rect.height.toFixed(2)),
-                centerX: Number(anchorX.toFixed(2)),
-                centerY: Number(anchorY.toFixed(2)),
-            },
-            menuRect: {
-                left: Number(left.toFixed(2)),
-                top: Number(top.toFixed(2)),
-                width: Number(actualMenuRect.width.toFixed(2)),
-                height: Number(actualMenuRect.height.toFixed(2)),
-                centerX: Number(menuCenterX.toFixed(2)),
-                centerY: Number(menuCenterY.toFixed(2)),
-            },
-            targetCenterX: Number(targetCenterX.toFixed(2)),
-            centerDelta: Number(centerDelta.toFixed(2)),
-            originX: Number(originX.toFixed(2)),
-            originY: Number(originY.toFixed(2)),
-            startTransform: {
-                dx: Number(startDx.toFixed(2)),
-                dy: Number(startDy.toFixed(2)),
-                scaleX: Number(startScaleX.toFixed(3)),
-                scaleY: Number(startScaleY.toFixed(3)),
-            },
-            clamped: Math.abs(centerDelta) > 0.5,
-            menuAnimation: getComputedStyle(menu).animationName,
-            buttonActiveLayout: button?.classList.contains('active-layout') || false,
-        });
-    };
-    placeMenu();
-    requestAnimationFrame(placeMenu);
+    positionPanelLayoutMenu(menu, button, { collapsed: true });
+    button.style.opacity = '0';
+    menu.classList.add('island-animating');
+    requestAnimationFrame(() => {
+        menu.classList.add('island-open');
+        positionPanelLayoutMenu(menu, button, { collapsed: false });
+        window.setTimeout(() => menu.classList.remove('island-animating'), 540);
+    });
     menu.addEventListener('click', (event) => {
         const item = event.target.closest('[data-layout]');
         if (!item) return;
-        if (item.dataset.layout === 'close') togglePanel(panel, false);
-        else applyPanelLayout(panel, item.dataset.layout);
+        if (item.dataset.layout === 'close') {
+            togglePanel(panel, false);
+            return;
+        }
+        applyPanelLayout(panel, item.dataset.layout);
         closePanelLayoutMenu();
     });
     panelLayoutMenu = menu;
@@ -792,7 +759,7 @@ function setupPanelLayoutMenu() {
                 const dy = ev.clientY - startY;
                 if (!moved && Math.hypot(dx, dy) > 7) {
                     moved = true;
-                    closePanelLayoutMenu();
+                    closePanelLayoutMenu({ instant: true });
                     panel.classList.add('dragging');
                 }
                 if (!moved) return;
@@ -961,7 +928,7 @@ function togglePanel(panel, force) {
     if (panel === clipboardPanel) clipboardBtn?.classList.toggle('active', shouldShow);
     if (panel === shortcutsPanel) shortcutsBtn?.classList.toggle('active', shouldShow);
     if (shouldShow) bringPanelToFront(panel);
-    else closePanelLayoutMenu();
+    else closePanelLayoutMenu({ instant: true });
     console.info('[guac-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
 }
 
