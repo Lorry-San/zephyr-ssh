@@ -971,7 +971,7 @@ function terminalWindowTitlebarHtml(t) {
 }
 function positionTerminalWindowMenu(titlebar) {
     if (!titlebar?.classList.contains('menu-open')) return;
-    const button = titlebar.querySelector('.terminal-window-more');
+    const button = titlebar.querySelector('[data-window-control]');
     const menu = titlebar.querySelector('.terminal-window-menu');
     if (!button || !menu) return;
     const titleRect = titlebar.getBoundingClientRect();
@@ -1774,6 +1774,10 @@ function bindEvents() {
             window.addEventListener('pointercancel', cleanup, { once: true });
         }
     });
+    document.addEventListener('pointerdown', (e) => {
+        if (e.target.closest?.('.terminal-window-titlebar.menu-open')) return;
+        $$('.terminal-window-titlebar.menu-open').forEach((el) => el.classList.remove('menu-open'));
+    }, true);
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
         const workspace = $('#terminalWorkspace');
