@@ -3728,11 +3728,10 @@ function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
     const vvWidth = viewport?.width || window.innerWidth;
     const vvHeight = viewport?.height || window.innerHeight;
     const anchorX = rect.left + rect.width / 2;
-    const anchorY = rect.top + rect.height / 2;
     const finalWidth = Math.min(284, Math.max(160, vvWidth - 16));
     const finalHeight = 50;
-    const finalLeft = Math.min(vvLeft + vvWidth - finalWidth - 8, Math.max(vvLeft + 8, anchorX - finalWidth / 2));
-    const finalTop = Math.min(vvTop + vvHeight - finalHeight - 8, Math.max(vvTop + 8, anchorY - finalHeight / 2));
+    const finalLeft = anchorX - finalWidth / 2;
+    const finalTop = rect.top;
     menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
     menu.style.top = `${collapsed ? rect.top : finalTop}px`;
     menu.style.width = `${collapsed ? rect.width : finalWidth}px`;
