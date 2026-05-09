@@ -1162,7 +1162,7 @@ body.terminal-mode .app-shell {
 .terminal-window-more:hover { color: var(--text); background: rgba(88,166,255,.14); transform: scale(1.08); }
 .terminal-window-menu {
     position: absolute;
-    top: 50%;
+    top: calc(50% + 18px);
     left: var(--terminal-window-menu-left, calc(50% - 102px));
     right: auto;
     z-index: 16;
@@ -1185,8 +1185,8 @@ body.terminal-mode .app-shell {
     opacity: 0;
     pointer-events: none;
     overflow: hidden;
-    transform: translate3d(0, -50%, 0) scaleX(.18) scaleY(.62);
-    transform-origin: 50% 50%;
+    transform: translate3d(0, -8px, 0) scaleX(.18) scaleY(.62);
+    transform-origin: 50% 0;
     filter: blur(8px) saturate(.86);
     clip-path: inset(0 round 46% 54% 48% 52% / 58% 52% 48% 42%);
     transition:
@@ -1200,7 +1200,7 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open .terminal-window-menu {
     opacity: 1;
     pointer-events: auto;
-    transform: translate3d(0, -50%, 0) scaleX(1) scaleY(1);
+    transform: translate3d(0, 0, 0) scaleX(1) scaleY(1);
     filter: blur(0) saturate(1);
     clip-path: inset(0 round 19px);
 }
@@ -2721,7 +2721,7 @@ html.keyboard-open .terminal-page {
     box-shadow: 0 22px 70px rgba(0,0,0,0.38), 0 0 0 1px rgba(255,255,255,0.08) inset;
     backdrop-filter: blur(28px) saturate(1.65);
     -webkit-backdrop-filter: blur(28px) saturate(1.65);
-    transform-origin: var(--menu-origin-x, 50%) var(--menu-origin-y, 0px);
+    transform-origin: var(--menu-origin-x, 50%) 0;
     animation: panelMenuIn 0.42s cubic-bezier(0.16, 1, 0.3, 1);
     display: grid;
     grid-template-columns: repeat(5, 1fr);
@@ -2751,9 +2751,9 @@ html.keyboard-open .terminal-page {
     transform: translateX(-50%) rotate(225deg);
 }
 @keyframes panelMenuIn {
-    0% { opacity: 0; transform: translateY(var(--menu-enter-y, -12px)) scale(0.72); filter: blur(10px); }
-    54% { opacity: 1; transform: translateY(var(--menu-overshoot-y, 1px)) scale(1.045); filter: blur(0); }
-    78% { transform: translateY(var(--menu-settle-y, -0.5px)) scale(0.992); }
+    0% { opacity: 0; transform: translateY(0) scaleX(0.18) scaleY(0.42); filter: blur(10px); }
+    54% { opacity: 1; transform: translateY(0) scaleX(1.02) scaleY(1.045); filter: blur(0); }
+    78% { transform: translateY(0) scaleX(0.998) scaleY(0.992); }
     100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
 .panel-layout-menu button {

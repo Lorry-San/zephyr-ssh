@@ -3695,13 +3695,9 @@ function openPanelLayoutMenu(button, panel) {
         const maxMenuWidth = Math.max(160, vvWidth - 16);
         menu.style.width = `${Math.min(284, maxMenuWidth)}px`;
         const menuRect = menu.getBoundingClientRect();
-        const buttonSlotOffset = menuRect.width / 5;
-        const idealLeft = anchorX - menuRect.width / 2 - buttonSlotOffset;
+        const idealLeft = anchorX - menuRect.width / 2;
         const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, idealLeft));
-        const belowTop = rect.bottom + 8;
-        const aboveTop = rect.top - menuRect.height - 8;
-        const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
-        const top = opensBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
+        const top = Math.max(vvTop + 8, rect.bottom);
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
@@ -3709,15 +3705,14 @@ function openPanelLayoutMenu(button, panel) {
             anchorX: Number(anchorX.toFixed(2)),
             left: Number(left.toFixed(2)),
             menuWidth: Number(menuRect.width.toFixed(2)),
-            buttonSlotOffset: Number(buttonSlotOffset.toFixed(2)),
             originX: Number(originX.toFixed(2)),
         });
         menu.style.setProperty('--menu-origin-x', `${originX}px`);
-        menu.style.setProperty('--menu-origin-y', opensBelow ? '0px' : `${menuRect.height}px`);
-        menu.style.setProperty('--menu-enter-y', opensBelow ? '-12px' : '12px');
-        menu.style.setProperty('--menu-overshoot-y', opensBelow ? '1px' : '-1px');
-        menu.style.setProperty('--menu-settle-y', opensBelow ? '-0.5px' : '0.5px');
-        menu.dataset.placement = opensBelow ? 'below' : 'above';
+        menu.style.setProperty('--menu-origin-y', '0px');
+        menu.style.setProperty('--menu-enter-y', '0px');
+        menu.style.setProperty('--menu-overshoot-y', '0px');
+        menu.style.setProperty('--menu-settle-y', '0px');
+        menu.dataset.placement = 'below';
     };
     placeMenu();
     requestAnimationFrame(placeMenu);
