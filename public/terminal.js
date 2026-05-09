@@ -3692,26 +3692,80 @@ function openPanelLayoutMenu(button, panel) {
         const vvWidth = viewport?.width || window.innerWidth;
         const vvHeight = viewport?.height || window.innerHeight;
         const anchorX = rect.left + rect.width / 2;
+        const panelRect = panel?.getBoundingClientRect?.();
+        const targetCenterX = panelRect
+            ? panelRect.left + panelRect.width / 2
+            : anchorX;
         const maxMenuWidth = Math.max(160, vvWidth - 16);
         menu.style.width = `${Math.min(284, maxMenuWidth)}px`;
         const menuRect = menu.getBoundingClientRect();
-        const idealLeft = anchorX - menuRect.width / 2;
+        const idealLeft = targetCenterX - menuRect.width / 2;
         const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, idealLeft));
         const top = Math.max(vvTop + 8, rect.bottom);
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
         const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
-        console.debug('[PanelLayoutMenuAlign]', {
-            anchorX: Number(anchorX.toFixed(2)),
-            left: Number(left.toFixed(2)),
-            menuWidth: Number(menuRect.width.toFixed(2)),
+        const originY = Math.min(menuRect.height - 18, Math.max(18, rect.top + rect.height / 2 - top));
+        const menuCenterX = left + menuRect.width / 2;
+        const menuCenterY = top + menuRect.height / 2;
+        const centerDelta = menuCenterX - targetCenterX;
+        const startScaleX = Math.max(0.12, Math.min(1, rect.width / Math.max(menuRect.width, 1)));
+        const startScaleY = Math.max(0.12, Math.min(1, rect.height / Math.max(menuRect.height, 1)));
+        const startDx = anchorX - menuCenterX;
+        const startDy = (rect.top + rect.height / 2) - menuCenterY;
+        const buttonCenterInPanel = panelRect
+            ? anchorX - panelRect.left
+            : 0;
+        const expectedPanelCenter = panelRect
+            ? panelRect.width / 2
+            : 0;
+        console.info('[DynamicIslandDiagnostics]', {
+            event: 'layout-menu-align',
+            panelId: panel?.id || '',
+            buttonId: button?.id || '',
+            viewport: {
+                left: Number(vvLeft.toFixed(2)),
+                top: Number(vvTop.toFixed(2)),
+                width: Number(vvWidth.toFixed(2)),
+                height: Number(vvHeight.toFixed(2)),
+            },
+            buttonRect: {
+                left: Number(rect.left.toFixed(2)),
+                top: Number(rect.top.toFixed(2)),
+                width: Number(rect.width.toFixed(2)),
+                height: Number(rect.height.toFixed(2)),
+                centerX: Number(anchorX.toFixed(2)),
+            },
+            menuRect: {
+                left: Number(left.toFixed(2)),
+                top: Number(top.toFixed(2)),
+                width: Number(menuRect.width.toFixed(2)),
+                height: Number(menuRect.height.toFixed(2)),
+                centerX: Number(menuCenterX.toFixed(2)),
+            },
+            targetCenterX: Number(targetCenterX.toFixed(2)),
+            centerDelta: Number(centerDelta.toFixed(2)),
             originX: Number(originX.toFixed(2)),
+            originY: Number(originY.toFixed(2)),
+            startTransform: {
+                dx: Number(startDx.toFixed(2)),
+                dy: Number(startDy.toFixed(2)),
+                scaleX: Number(startScaleX.toFixed(3)),
+                scaleY: Number(startScaleY.toFixed(3)),
+            },
+            buttonCenterInPanel: Number(buttonCenterInPanel.toFixed(2)),
+            expectedPanelCenter: Number(expectedPanelCenter.toFixed(2)),
+            panelCenterDelta: Number((buttonCenterInPanel - expectedPanelCenter).toFixed(2)),
+            clamped: Math.abs(centerDelta) > 0.5,
+            menuAnimation: getComputedStyle(menu).animationName,
+            buttonActiveLayout: button?.classList.contains('active-layout') || false,
         });
         menu.style.setProperty('--menu-origin-x', `${originX}px`);
-        menu.style.setProperty('--menu-origin-y', '0px');
-        menu.style.setProperty('--menu-enter-y', '0px');
-        menu.style.setProperty('--menu-overshoot-y', '0px');
-        menu.style.setProperty('--menu-settle-y', '0px');
+        menu.style.setProperty('--menu-origin-y', `${originY}px`);
+        menu.style.setProperty('--island-start-dx', `${startDx}px`);
+        menu.style.setProperty('--island-start-dy', `${startDy}px`);
+        menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
+        menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
         menu.dataset.placement = 'below';
     };
     placeMenu();
@@ -3768,9 +3822,11 @@ function setupPanelLayoutMenu() {
                 suppressNextLayoutClick = moved;
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
+                window.removeEventListener('pointercancel', onUp);
             };
             window.addEventListener('pointermove', onMove, { passive: false });
             window.addEventListener('pointerup', onUp, { once: true });
+            window.addEventListener('pointercancel', onUp, { once: true });
         });
         button.addEventListener('click', (e) => {
             e.preventDefault();
@@ -3780,6 +3836,14 @@ function setupPanelLayoutMenu() {
                 return;
             }
             bringPanelToFront(panel);
+            console.info('[DynamicIslandDiagnostics]', {
+                event: 'layout-menu-toggle',
+                panelId: panel?.id || '',
+                buttonId: button?.id || '',
+                open: !panelLayoutMenu,
+                suppressNextLayoutClick: false,
+            });
+            if (navigator.vibrate) navigator.vibrate(8);
             if (panelLayoutMenu) closePanelLayoutMenu();
             else openPanelLayoutMenu(button, panel);
         });

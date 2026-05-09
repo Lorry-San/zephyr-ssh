@@ -979,7 +979,47 @@ function positionTerminalWindowMenu(titlebar) {
     const menuRect = menu.getBoundingClientRect();
     const left = (buttonRect.left + buttonRect.width / 2) - titleRect.left - (menuRect.width / 2);
     const clampedLeft = Math.min(Math.max(left, 8), titleRect.width - menuRect.width - 8);
+    const anchorX = buttonRect.left + buttonRect.width / 2;
+    const anchorY = buttonRect.top + buttonRect.height / 2;
+    const menuCenterX = titleRect.left + clampedLeft + menuRect.width / 2;
+    const menuCenterY = titleRect.top + menu.offsetTop + menuRect.height / 2;
+    const startDx = anchorX - menuCenterX;
+    const startDy = anchorY - menuCenterY;
+    const startScaleX = Math.max(0.12, Math.min(1, buttonRect.width / Math.max(menuRect.width, 1)));
+    const startScaleY = Math.max(0.12, Math.min(1, buttonRect.height / Math.max(menuRect.height, 1)));
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
+    menu.style.setProperty('--island-start-dx', `${startDx}px`);
+    menu.style.setProperty('--island-start-dy', `${startDy}px`);
+    menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
+    menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
+    console.info('[DynamicIslandDiagnostics]', {
+        event: 'terminal-window-menu-align',
+        tabId: button?.dataset.windowControl || '',
+        titlebarOpen: titlebar.classList.contains('menu-open'),
+        buttonRect: {
+            left: Number(buttonRect.left.toFixed(2)),
+            top: Number(buttonRect.top.toFixed(2)),
+            width: Number(buttonRect.width.toFixed(2)),
+            height: Number(buttonRect.height.toFixed(2)),
+            centerX: Number(anchorX.toFixed(2)),
+            centerY: Number(anchorY.toFixed(2)),
+        },
+        menuRect: {
+            left: Number((titleRect.left + clampedLeft).toFixed(2)),
+            top: Number(menuRect.top.toFixed(2)),
+            width: Number(menuRect.width.toFixed(2)),
+            height: Number(menuRect.height.toFixed(2)),
+            centerX: Number(menuCenterX.toFixed(2)),
+            centerY: Number(menuCenterY.toFixed(2)),
+        },
+        startTransform: {
+            dx: Number(startDx.toFixed(2)),
+            dy: Number(startDy.toFixed(2)),
+            scaleX: Number(startScaleX.toFixed(3)),
+            scaleY: Number(startScaleY.toFixed(3)),
+        },
+        menuAnimation: getComputedStyle(menu).animationName,
+    });
 }
 function getMinimizedKeepAliveSessions() {
     const limit = getConfiguredMinimizedKeepAlive();
@@ -1740,6 +1780,12 @@ function bindEvents() {
             }
             const titlebar = menuBtn.closest('.terminal-window-titlebar');
             titlebar?.classList.toggle('menu-open');
+            console.info('[DynamicIslandDiagnostics]', {
+                event: 'terminal-window-menu-toggle',
+                tabId: menuBtn.dataset.windowControl || '',
+                open: titlebar?.classList.contains('menu-open') || false,
+                longPressSuppressed: false,
+            });
             requestAnimationFrame(() => positionTerminalWindowMenu(titlebar));
             return;
         }
@@ -1760,13 +1806,17 @@ function bindEvents() {
         if (control) {
             const tabId = control.dataset.windowControl;
             terminalControlLongPress = false;
+            control.classList.add('island-pressing');
+            const releaseIslandPress = () => control.classList.remove('island-pressing');
             const timer = window.setTimeout(() => {
                 terminalControlLongPress = true;
                 control.closest('.terminal-window-titlebar')?.classList.remove('menu-open');
+                releaseIslandPress();
                 startTerminalWindowDrag(e, tabId);
             }, 280);
             const cleanup = () => {
                 window.clearTimeout(timer);
+                releaseIslandPress();
                 window.removeEventListener('pointerup', cleanup);
                 window.removeEventListener('pointercancel', cleanup);
             };
