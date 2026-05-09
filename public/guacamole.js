@@ -664,19 +664,17 @@ function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
     const vvWidth = viewport?.width || window.innerWidth;
     const vvHeight = viewport?.height || window.innerHeight;
     const anchorX = rect.left + rect.width / 2;
+    const anchorY = rect.top + rect.height / 2;
     const finalWidth = Math.min(284, Math.max(160, vvWidth - 16));
     const finalHeight = 50;
     const finalLeft = Math.min(vvLeft + vvWidth - finalWidth - 8, Math.max(vvLeft + 8, anchorX - finalWidth / 2));
-    const belowTop = rect.bottom + 8;
-    const aboveTop = rect.top - finalHeight - 8;
-    const canPlaceBelow = belowTop + finalHeight <= vvTop + vvHeight - 8;
-    const finalTop = canPlaceBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
+    const finalTop = Math.min(vvTop + vvHeight - finalHeight - 8, Math.max(vvTop + 8, anchorY - finalHeight / 2));
     menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
     menu.style.top = `${collapsed ? rect.top : finalTop}px`;
     menu.style.width = `${collapsed ? rect.width : finalWidth}px`;
     menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : finalHeight}px`);
     menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
-    menu.dataset.placement = canPlaceBelow ? 'below' : 'above';
+    menu.dataset.placement = 'inline';
 }
 function closePanelLayoutMenu({ instant = false } = {}) {
     const menu = panelLayoutMenu;
