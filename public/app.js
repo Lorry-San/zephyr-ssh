@@ -981,17 +981,20 @@ function positionTerminalWindowMenu(titlebar) {
     const islandCenterX = buttonRect.left + buttonRect.width / 2;
     const islandCenterY = buttonRect.top + buttonRect.height / 2;
     const itemCount = Number.parseInt(menu.style.getPropertyValue('--island-action-count'), 10) || menu.children.length || 3;
-    const menuWidth = Math.min(220, Math.max(172, titleRect.width - 16));
-    const targetHeight = Math.min(360, 16 + itemCount * 38);
+    const windowRect = titlebar.closest('.terminal-window')?.getBoundingClientRect() || titleRect;
+    const menuWidth = Math.min(260, Math.max(220, titleRect.width - 16));
+    const naturalHeight = 16 + itemCount * 42;
+    const availableBelow = Math.max(96, windowRect.bottom - islandCenterY - 12);
+    const availableAbove = Math.max(0, islandCenterY - windowRect.top - 12);
+    const openDown = availableBelow >= Math.min(naturalHeight, 220) || availableBelow >= availableAbove;
+    const targetHeight = Math.min(naturalHeight, openDown ? availableBelow : Math.max(160, availableAbove));
     const minLeft = 8;
     const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
     const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
     const clampedLeft = Math.min(Math.max(idealLeft, minLeft), maxLeft);
-    const availableBelow = Math.max(0, titleRect.bottom - islandCenterY - 8);
-    const openDown = availableBelow >= Math.min(targetHeight, 132);
     const top = openDown
-        ? Math.round(islandCenterY - titleRect.top + buttonRect.height / 2 + 6)
-        : Math.round(Math.max(6, islandCenterY - titleRect.top - targetHeight - buttonRect.height / 2 - 6));
+        ? Math.round(islandCenterY - titleRect.top + buttonRect.height / 2 + 8)
+        : Math.round(islandCenterY - titleRect.top - targetHeight - buttonRect.height / 2 - 8);
     menu.style.top = `${top}px`;
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
     menu.style.setProperty('--terminal-island-menu-width', `${menuWidth}px`);
