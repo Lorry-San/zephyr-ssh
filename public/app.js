@@ -1057,8 +1057,6 @@ function openTerminalWindowMenu(titlebar) {
     const menu = titlebar.querySelector('.terminal-window-menu');
     menu?.style.setProperty('opacity', '1');
     titlebar.classList.add('menu-open', 'menu-animating');
-    const button = titlebar.querySelector('[data-window-control]');
-    if (button) button.style.opacity = '0';
     requestAnimationFrame(() => {
         positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
         window.setTimeout(() => {
@@ -1079,8 +1077,6 @@ function closeTerminalWindowMenu(titlebar) {
     titlebar._terminalMenuCloseTimer = window.setTimeout(() => {
         titlebar.classList.remove('menu-closing', 'menu-animating');
         menu?.style.removeProperty('opacity');
-        const button = titlebar.querySelector('[data-window-control]');
-        button?.style.removeProperty('opacity');
     }, 460);
 }
 function closeOtherTerminalWindowMenus(currentButton = null) {

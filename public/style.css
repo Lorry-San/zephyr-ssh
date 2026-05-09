@@ -1273,30 +1273,11 @@ body.terminal-mode .app-shell {
     content: none;
 }
 .terminal-window-menu::after {
-    content: '';
-    position: absolute;
-    left: calc(var(--island-dots-x, var(--island-origin-x, 50%)) - 2.5px);
-    top: calc(var(--island-dots-y, var(--island-origin-y, 50%)) - 2.5px);
-    z-index: 2;
-    width: 5px;
-    height: 5px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text-secondary) 72%, transparent);
-    box-shadow:
-        -10px 0 0 color-mix(in srgb, var(--text-secondary) 72%, transparent),
-        10px 0 0 color-mix(in srgb, var(--text-secondary) 72%, transparent),
-        0 0 9px rgba(255,255,255,.08);
-    opacity: 1;
-    transform: scale(1);
-    transform-origin: center center;
-    filter: blur(0);
-    pointer-events: none;
+    content: none;
 }
-.terminal-window-titlebar.menu-open .terminal-window-menu::after {
-    animation: terminalIslandSourceDotsToPanel .18s cubic-bezier(0.32, 0.72, 0, 1) both;
-}
+.terminal-window-titlebar.menu-open .terminal-window-menu::after,
 .terminal-window-titlebar.menu-closing .terminal-window-menu::after {
-    animation: terminalIslandSourceDotsReturn .42s cubic-bezier(0.4, 0, 0.6, 1) both;
+    animation: none;
 }
 :root[data-theme="light"] .terminal-window-menu {
     border-color: transparent;
