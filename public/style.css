@@ -1247,7 +1247,7 @@ body.terminal-mode .app-shell {
     display: grid;
     grid-auto-rows: minmax(38px, auto);
     gap: 7px;
-    padding: 10px;
+    padding: 12px 10px 14px;
     border: 1px solid rgba(255,255,255,.16);
     border-radius: 22px;
     background:
@@ -1263,7 +1263,7 @@ body.terminal-mode .app-shell {
     -webkit-backdrop-filter: blur(28px) saturate(1.8);
     opacity: 0;
     pointer-events: none;
-    overflow: visible;
+    overflow: hidden;
     transform:
         translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
         scaleX(max(var(--island-start-scale-x, .24), .18))
@@ -1327,7 +1327,7 @@ body.terminal-mode .app-shell {
     padding: 0 14px;
     border: 0;
     border-radius: 14px;
-    background: rgba(255,255,255,.055);
+    background: rgba(255,255,255,.07);
     color: rgba(255,255,255,.88);
     text-align: left;
     cursor: pointer;

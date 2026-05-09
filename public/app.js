@@ -983,7 +983,7 @@ function positionTerminalWindowMenu(titlebar) {
     const itemCount = Number.parseInt(menu.style.getPropertyValue('--island-action-count'), 10) || menu.children.length || 3;
     const windowRect = titlebar.closest('.terminal-window')?.getBoundingClientRect() || titleRect;
     const menuWidth = Math.min(260, Math.max(220, titleRect.width - 16));
-    const naturalHeight = 16 + itemCount * 42;
+    const naturalHeight = 26 + itemCount * 45;
     const targetHeight = naturalHeight;
     const openDown = true;
     const minLeft = 8;
