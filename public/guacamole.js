@@ -689,14 +689,14 @@ function closePanelLayoutMenu({ instant = false } = {}) {
     void menu.offsetWidth;
     menu.classList.remove('island-open');
     menu.classList.add('island-closing', 'island-animating');
-    button.classList.add('active-layout');
+    button.classList.remove('active-layout');
     button.style.opacity = '0';
     requestAnimationFrame(() => {
         menu.style.removeProperty('transition');
         positionPanelLayoutMenu(menu, button, { collapsed: true });
     });
     menu._closeTimer = window.setTimeout(() => {
-        button.classList.remove('active-layout'); button.style.removeProperty('opacity'); menu.remove();
+        button.classList.remove('active-layout'); button.style.opacity = '1'; requestAnimationFrame(() => button.style.removeProperty('opacity')); menu.remove();
         if (panelLayoutMenu === menu) panelLayoutMenu = null;
         if (panelLayoutButton === button) panelLayoutButton = null;
     }, 460);
