@@ -1001,8 +1001,8 @@ body.terminal-mode .app-shell {
     display: flex;
     align-items: center;
     gap: 7px;
-    min-height: 24px;
-    padding: 3px 8px;
+    min-height: 30px;
+    padding: 4px 10px;
     border-bottom: 1px solid rgba(139,148,158,.18);
     background: color-mix(in srgb, var(--surface) 80%, transparent);
     backdrop-filter: blur(14px) saturate(1.25);
@@ -1014,18 +1014,20 @@ body.terminal-mode .app-shell {
 .terminal-grip {
     --island-x: -50%;
     --island-y: -50%;
-    --island-w: 126px;
-    --island-h: 37px;
-    --island-radius: 24px;
+    --island-w: 54px;
+    --island-h: 22px;
+    --island-radius: 999px;
     position: absolute;
     left: 50%;
     top: 50%;
     width: var(--island-w);
     height: var(--island-h);
     transform: translate3d(var(--island-x), var(--island-y), 0);
-    border: 0;
+    border: 1px solid rgba(139,148,158,.20);
     border-radius: var(--island-radius);
-    background: transparent;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.015)),
+        color-mix(in srgb, var(--surface) 72%, rgba(0,0,0,.34));
     color: var(--text-secondary);
     cursor: pointer;
     display: inline-flex;
@@ -1035,24 +1037,23 @@ body.terminal-mode .app-shell {
     touch-action: none;
     overflow: hidden;
     isolation: isolate;
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+    backdrop-filter: blur(18px) saturate(1.2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
     box-shadow:
-        0 10px 35px rgba(0,0,0,.22),
+        0 3px 10px rgba(0,0,0,.18),
         inset 0 1px 0 rgba(255,255,255,.08);
     clip-path: inset(0 round var(--island-radius));
     transition:
-        width .62s var(--ios-open),
-        height .62s var(--ios-open),
-        border-radius .42s ease,
-        clip-path .62s var(--ios-open),
-        background .35s ease,
-        color .22s ease,
-        box-shadow .62s var(--ios-open),
-        transform .72s var(--ios-bounce),
-        backdrop-filter .42s ease,
-        -webkit-backdrop-filter .42s ease;
-    will-change: width, height, border-radius, clip-path, transform, box-shadow, backdrop-filter;
+        width .36s cubic-bezier(.16,1,.3,1),
+        height .36s cubic-bezier(.16,1,.3,1),
+        border-color .22s ease,
+        background .22s ease,
+        color .18s ease,
+        box-shadow .28s ease,
+        transform .32s cubic-bezier(.18,1.18,.2,1),
+        backdrop-filter .22s ease,
+        -webkit-backdrop-filter .22s ease;
+    will-change: transform, box-shadow, background;
 }
 .terminal-grip::before {
     content: '';
@@ -1076,17 +1077,17 @@ body.terminal-mode .app-shell {
 .terminal-grip span::before,
 .terminal-grip span::after {
     content: '';
-    width: 10px;
-    height: 10px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
-    background: rgba(255,255,255,.22);
+    background: color-mix(in srgb, var(--text-secondary) 72%, transparent);
     display: block;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    box-shadow: none;
     transition:
-        transform .46s cubic-bezier(.22,1,.36,1),
+        transform .24s cubic-bezier(.22,1,.36,1),
         opacity .18s ease,
-        filter .26s ease,
-        background-color .22s ease;
+        filter .20s ease,
+        background-color .18s ease;
 }
 .terminal-grip span {
     position: relative;
@@ -1094,53 +1095,46 @@ body.terminal-mode .app-shell {
 }
 .terminal-grip span::before,
 .terminal-grip span::after { position: absolute; top: 0; }
-.terminal-grip span::before { left: -18px; }
-.terminal-grip span::after { left: 18px; }
+.terminal-grip span::before { left: -10px; }
+.terminal-grip span::after { left: 10px; }
 .terminal-grip:hover {
     color: var(--text);
+    border-color: rgba(88,166,255,.36);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
+        color-mix(in srgb, var(--surface) 78%, rgba(88,166,255,.10));
+    box-shadow:
+        0 6px 16px rgba(0,0,0,.20),
+        0 0 0 3px rgba(88,166,255,.07);
 }
 .terminal-grip.island-pressing {
-    transition: transform .11s cubic-bezier(.3,0,.2,1), background .18s ease, box-shadow .18s ease;
-    transform: translate3d(var(--island-x), var(--island-y), 0) scale(.945);
+    transition: transform .11s cubic-bezier(.3,0,.2,1), background .16s ease, box-shadow .16s ease;
+    transform: translate3d(var(--island-x), var(--island-y), 0) scale(.92);
 }
 .terminal-window-titlebar.menu-open .terminal-grip.island-pressing {
-    transform: translate3d(var(--island-x), calc(var(--island-y) + 2px), 0) scale(.972);
+    transform: translate3d(var(--island-x), var(--island-y), 0) scale(.96);
 }
-.terminal-grip:hover span::before { transform: translateX(1.5px) scale(1.08); }
-.terminal-grip:hover span::after { transform: translateX(-1.5px) scale(1.08); }
+.terminal-grip:hover span::before { transform: translateX(1px); }
+.terminal-grip:hover span::after { transform: translateX(-1px); }
 .terminal-window-titlebar.menu-open .terminal-grip {
-    --island-w: min(356px, calc(100% - 16px));
-    --island-h: 170px;
-    --island-radius: 36px;
-    background: rgba(28,28,30,.78);
+    width: 46px;
+    height: 20px;
+    border-color: rgba(88,166,255,.38);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
+        rgba(28,28,30,.78);
     color: var(--text);
     box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.16),
-        inset 0 -10px 24px rgba(0,0,0,.10),
-        0 18px 50px rgba(0,0,0,.34),
-        0 0 0 1px rgba(255,255,255,.04);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
-    clip-path: inset(0 round 36px);
+        0 4px 14px rgba(0,0,0,.24),
+        0 0 0 3px rgba(88,166,255,.08),
+        inset 0 1px 0 rgba(255,255,255,.10);
 }
-.terminal-window-titlebar.menu-open .terminal-grip::before {
-    opacity: 1;
-    transform: scaleX(1) scaleY(1);
-    filter: blur(0) saturate(1);
-}
-.terminal-window-titlebar.menu-open .terminal-grip::after {
-    opacity: .72;
-}
-.terminal-window-titlebar.menu-open .terminal-grip span {
-    opacity: 0;
-    transform: scale(.2);
-    filter: blur(7px);
-}
-.terminal-window-titlebar.menu-open .terminal-grip span::before {
-    transform: translateX(8px) scale(.4);
-}
+.terminal-window-titlebar.menu-open .terminal-grip span,
+.terminal-window-titlebar.menu-open .terminal-grip span::before,
 .terminal-window-titlebar.menu-open .terminal-grip span::after {
-    transform: translateX(-8px) scale(.4);
+    opacity: 0;
+    transform: scale(.35);
+    filter: blur(5px);
 }
 .terminal-window.dragging .terminal-grip { cursor: grabbing; }
 .terminal-window-titlebar strong { font-size: 11px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1161,67 +1155,81 @@ body.terminal-mode .app-shell {
 .terminal-window-more:hover { color: var(--text); background: rgba(88,166,255,.14); transform: scale(1.08); }
 .terminal-window-menu {
     position: absolute;
-    top: calc(50% + 18px);
+    top: calc(100% + 8px);
     left: var(--terminal-window-menu-left, calc(50% - 102px));
     right: auto;
     z-index: 16;
-    width: min(204px, calc(100% - 16px));
+    width: min(214px, calc(100% - 16px));
     min-height: 36px;
     display: grid;
-    grid-auto-rows: minmax(28px, auto);
+    grid-auto-rows: minmax(30px, auto);
     gap: 4px;
-    padding: 5px;
+    padding: 7px;
     border: 1px solid rgba(139,148,158,.26);
-    border-radius: 19px;
+    border-radius: 18px;
     background:
-        radial-gradient(circle at 28% 0%, rgba(255,255,255,.17), transparent 36%),
-        color-mix(in srgb, var(--surface) 72%, transparent);
+        radial-gradient(circle at var(--island-origin-x, 50%) -10%, rgba(88,166,255,.14), transparent 34%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, rgba(255,255,255,.08)), color-mix(in srgb, var(--surface) 82%, rgba(0,0,0,.24)));
     box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.13),
-        0 18px 48px rgba(0,0,0,.34);
-    backdrop-filter: blur(34px) saturate(1.78);
-    -webkit-backdrop-filter: blur(34px) saturate(1.78);
+        0 18px 48px rgba(0,0,0,.34),
+        inset 0 1px 0 rgba(255,255,255,.10);
+    backdrop-filter: blur(24px) saturate(1.35);
+    -webkit-backdrop-filter: blur(24px) saturate(1.35);
     opacity: 0;
     pointer-events: none;
     overflow: hidden;
     transform:
-        translate3d(var(--island-start-dx, 0px), var(--island-start-dy, -8px), 0)
-        scaleX(var(--island-start-scale-x, .18))
-        scaleY(var(--island-start-scale-y, .42));
-    transform-origin: 50% 0;
-    filter: blur(8px) saturate(.86);
-    clip-path: inset(0 round 46% 54% 48% 52% / 58% 52% 48% 42%);
+        translate3d(var(--island-start-dx, 0px), calc(var(--island-start-dy, 0px) - 8px), 0)
+        scaleX(max(var(--island-start-scale-x, .22), .22))
+        scaleY(max(var(--island-start-scale-y, .30), .30));
+    transform-origin: var(--island-origin-x, 50%) 0;
+    filter: blur(4px) saturate(.92);
+    clip-path: inset(0 round 999px);
     transition:
-        opacity .16s ease .04s,
-        transform .62s var(--ios-open),
-        filter .42s ease,
-        border-radius .42s ease,
-        clip-path .62s var(--ios-open);
-    will-change: opacity, transform, filter, clip-path;
+        opacity .14s ease,
+        transform .34s cubic-bezier(.16,1,.3,1),
+        filter .24s ease,
+        border-radius .34s cubic-bezier(.16,1,.3,1),
+        clip-path .34s cubic-bezier(.16,1,.3,1);
+    will-change: opacity, transform, filter, clip-path, border-radius;
+}
+.terminal-window-menu::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: var(--island-origin-x, 50%);
+    width: 10px;
+    height: 10px;
+    border-left: 1px solid rgba(139,148,158,.26);
+    border-top: 1px solid rgba(139,148,158,.26);
+    background: inherit;
+    transform: translateX(-50%) rotate(45deg);
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu {
     opacity: 1;
     pointer-events: auto;
     transform: translate3d(0, 0, 0) scaleX(1) scaleY(1);
     filter: blur(0) saturate(1);
-    clip-path: inset(0 round 19px);
+    border-radius: 18px;
+    clip-path: inset(0 round 18px);
 }
 .terminal-window-menu button {
+    position: relative;
     width: 100%;
     padding: 8px 10px;
     border: 0;
-    border-radius: 14px;
+    border-radius: 11px;
     background: transparent;
     color: var(--text);
     text-align: left;
     cursor: pointer;
     font-size: 12px;
     opacity: 0;
-    transform: translate3d(0, 6px, 0) scale(.96);
+    transform: translate3d(0, 4px, 0) scale(.98);
     transition:
-        opacity .22s ease,
-        transform .42s cubic-bezier(.22,1,.36,1),
-        background .16s ease;
+        opacity .18s ease,
+        transform .26s cubic-bezier(.22,1,.36,1),
+        background .14s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button {
     opacity: 1;
@@ -1237,7 +1245,7 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(7) { --item-index: 6; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(8) { --item-index: 7; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(9) { --item-index: 8; }
-.terminal-window-menu button:hover { background: rgba(88,166,255,.16); }
+.terminal-window-menu button:hover { background: rgba(255,255,255,.10); }
 .terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-frame,
 .terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-placeholder {
     pointer-events: none;
@@ -2555,13 +2563,15 @@ html.keyboard-open .terminal-page {
     pointer-events: auto;
 }
 .panel-traffic-btn {
-    --panel-island-w: 126px;
-    --panel-island-h: 37px;
+    --panel-island-w: 58px;
+    --panel-island-h: 20px;
     width: var(--panel-island-w);
     height: var(--panel-island-h);
-    border: 0;
+    border: 1px solid rgba(139,148,158,.22);
     border-radius: 999px;
-    background: rgba(28,28,30,.78);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.02)),
+        color-mix(in srgb, var(--surface) 76%, rgba(0,0,0,.26));
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2569,24 +2579,22 @@ html.keyboard-open .terminal-page {
     touch-action: none;
     transform: translateZ(0);
     transition:
-        width .62s var(--ios-open),
-        height .62s var(--ios-open),
-        border-radius .42s ease,
-        background .35s ease,
-        box-shadow .62s var(--ios-open),
-        transform .72s var(--ios-bounce),
-        backdrop-filter .42s ease,
-        -webkit-backdrop-filter .42s ease;
+        border-color .18s ease,
+        background .18s ease,
+        box-shadow .22s ease,
+        transform .18s cubic-bezier(.2,.9,.2,1),
+        backdrop-filter .22s ease,
+        -webkit-backdrop-filter .22s ease;
     pointer-events: auto;
     position: relative;
     overflow: hidden;
     isolation: isolate;
     box-shadow:
-        0 10px 35px rgba(0,0,0,.22),
+        0 3px 10px rgba(0,0,0,.16),
         inset 0 1px 0 rgba(255,255,255,.08);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
-    will-change: width, height, border-radius, transform, box-shadow, backdrop-filter;
+    backdrop-filter: blur(18px) saturate(1.16);
+    -webkit-backdrop-filter: blur(18px) saturate(1.16);
+    will-change: transform, box-shadow, background;
 }
 .panel-traffic-btn::before {
     content: '';
@@ -2606,29 +2614,31 @@ html.keyboard-open .terminal-page {
     background: inherit;
     pointer-events: none;
 }
-.panel-traffic-btn:hover { background: rgba(28,28,30,.78); }
+.panel-traffic-btn:hover {
+    border-color: rgba(88,166,255,.38);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
+        color-mix(in srgb, var(--surface) 80%, rgba(88,166,255,.12));
+    box-shadow: 0 6px 16px rgba(0,0,0,.18), 0 0 0 3px rgba(88,166,255,.07);
+}
 .panel-traffic-btn:active,
 .panel-traffic-btn.pressing {
-    background: rgba(28,28,30,.78);
-    transform: scale(.945);
-    transition: transform .11s cubic-bezier(.3,0,.2,1), background .18s ease;
+    transform: scale(.92);
+    transition: transform .10s cubic-bezier(.3,0,.2,1), background .14s ease;
 }
 .panel-traffic-btn.active-layout.pressing {
-    transform: translateY(2px) scale(.972);
+    transform: scale(.96);
 }
 .panel-traffic-btn.active-layout {
-    --panel-island-w: min(356px, calc(100% - 16px));
-    --panel-island-h: 170px;
-    border-radius: 36px;
-    background: rgba(28,28,30,.78);
+    border-color: rgba(88,166,255,.42);
+    background:
+        linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.02)),
+        color-mix(in srgb, var(--surface) 70%, rgba(88,166,255,.18));
     color: var(--text);
     box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.16),
-        inset 0 -10px 24px rgba(0,0,0,.10),
-        0 18px 50px rgba(0,0,0,.34),
-        0 0 0 1px rgba(255,255,255,.04);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+        0 5px 15px rgba(0,0,0,.22),
+        0 0 0 3px rgba(88,166,255,.08),
+        inset 0 1px 0 rgba(255,255,255,.10);
 }
 .panel-traffic-btn.active-layout::before {
     opacity: 1;
@@ -2638,22 +2648,21 @@ html.keyboard-open .terminal-page {
 .panel-traffic-btn span::before,
 .panel-traffic-btn span::after {
     display: block;
-    width: 10px;
-    height: 10px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
-    background: rgba(255,255,255,.22);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    background: color-mix(in srgb, var(--text-secondary) 74%, transparent);
+    box-shadow: none;
     transition:
-        transform 0.42s cubic-bezier(0.18, 1.2, 0.2, 1),
-        opacity 0.24s ease,
-        background-color 0.24s ease,
-        box-shadow 0.42s ease;
+        transform 0.22s cubic-bezier(0.18, 1.2, 0.2, 1),
+        opacity 0.18s ease,
+        background-color 0.18s ease;
 }
 .panel-traffic-btn span { position: relative; }
 .panel-traffic-btn span::before,
 .panel-traffic-btn span::after { content: ''; position: absolute; top: 0; }
-.panel-traffic-btn span::before { left: -18px; }
-.panel-traffic-btn span::after { left: 18px; }
+.panel-traffic-btn span::before { left: -10px; }
+.panel-traffic-btn span::after { left: 10px; }
 .panel-traffic-btn:hover span,
 .panel-traffic-btn:hover span::before,
 .panel-traffic-btn:hover span::after {
@@ -2661,27 +2670,23 @@ html.keyboard-open .terminal-page {
 }
 .panel-traffic-btn:active span,
 .panel-traffic-btn.pressing span {
-    transform: scale(0.74);
-    background: rgba(255,255,255,.22);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+    transform: scale(0.82);
 }
 .panel-traffic-btn:active span::before,
 .panel-traffic-btn.pressing span::before {
-    transform: translateX(4px) scale(1.18);
-    background: rgba(255,255,255,.22);
+    transform: translateX(2px);
 }
 .panel-traffic-btn:active span::after,
 .panel-traffic-btn.pressing span::after {
-    transform: translateX(-4px) scale(1.18);
-    background: rgba(255,255,255,.22);
+    transform: translateX(-2px);
 }
-.panel-traffic-btn.active-layout span {
+.panel-traffic-btn.active-layout span,
+.panel-traffic-btn.active-layout span::before,
+.panel-traffic-btn.active-layout span::after {
     opacity: 0;
-    transform: scale(.2);
-    filter: blur(7px);
+    transform: scale(.35);
+    filter: blur(5px);
 }
-.panel-traffic-btn.active-layout span::before { transform: translateX(8px) scale(.4); }
-.panel-traffic-btn.active-layout span::after { transform: translateX(-8px) scale(.4); }
 @keyframes panelTrafficIslandBreath {
     0%, 100% {
         transform: translateZ(0) translateY(-.2px);
@@ -2706,30 +2711,28 @@ html.keyboard-open .terminal-page {
 .panel-layout-menu {
     position: fixed;
     z-index: 100;
-    width: min(284px, calc(100vw - 16px));
-    min-height: 118px;
-    padding: 22px;
-    border: 1px solid rgba(139,148,158,.34);
-    border-radius: 36px;
+    width: min(236px, calc(100vw - 16px));
+    min-height: 50px;
+    padding: 6px;
+    border: 1px solid rgba(139,148,158,.28);
+    border-radius: 18px;
     background:
-        radial-gradient(circle at var(--menu-origin-x, 50%) 0%, rgba(255,255,255,.24), transparent 34%),
-        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, rgba(255,255,255,.12)), color-mix(in srgb, var(--surface) 70%, transparent));
+        radial-gradient(circle at var(--menu-origin-x, 50%) -10%, rgba(88,166,255,.14), transparent 34%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, rgba(255,255,255,.08)), color-mix(in srgb, var(--surface) 84%, rgba(0,0,0,.20)));
     box-shadow:
-        0 26px 80px rgba(0,0,0,0.42),
-        0 0 0 1px rgba(255,255,255,0.08) inset,
-        inset 0 1px 0 rgba(255,255,255,.18),
-        inset 0 -18px 34px rgba(0,0,0,.10);
-    backdrop-filter: blur(34px) saturate(1.8);
-    -webkit-backdrop-filter: blur(34px) saturate(1.8);
+        0 18px 46px rgba(0,0,0,0.34),
+        inset 0 1px 0 rgba(255,255,255,.10);
+    backdrop-filter: blur(24px) saturate(1.35);
+    -webkit-backdrop-filter: blur(24px) saturate(1.35);
     transform-origin: var(--menu-origin-x, 50%) var(--menu-origin-y, 50%);
-    animation: panelMenuDynamicIslandIn .62s var(--ios-open);
+    animation: panelMenuPopIn .28s cubic-bezier(.16,1,.3,1) both;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-    will-change: transform, opacity, filter, border-radius, clip-path;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    gap: 4px;
+    will-change: transform, opacity, filter;
     overflow: hidden;
     contain: none;
-    clip-path: inset(0 round 36px);
 }
 .panel-layout-menu::before {
     content: none;
@@ -2757,46 +2760,32 @@ html.keyboard-open .terminal-page {
     78% { transform: translateY(0) scaleX(0.998) scaleY(0.992); }
     100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
-@keyframes panelMenuDynamicIslandIn {
+@keyframes panelMenuPopIn {
     0% {
-        opacity: .94;
+        opacity: 0;
         transform:
             translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
-            scaleX(var(--island-start-scale-x, .18))
-            scaleY(var(--island-start-scale-y, .42));
-        border-radius: 999px;
-        clip-path: inset(0 round 999px);
-        filter: blur(0) saturate(1.05);
+            scaleX(max(var(--island-start-scale-x, .24), .24))
+            scaleY(max(var(--island-start-scale-y, .32), .32));
+        filter: blur(6px) saturate(.92);
     }
-    42% {
+    70% {
         opacity: 1;
-        transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .08), calc(var(--island-start-dy, 0px) * .08), 0)
-            scaleX(1.035)
-            scaleY(.96);
-        border-radius: 32px;
-        clip-path: inset(0 round 32px);
-        filter: blur(0) saturate(1.08);
-    }
-    68% {
-        transform: translate3d(0, 0, 0) scaleX(.992) scaleY(1.018);
-        border-radius: 28px;
-        clip-path: inset(0 round 28px);
+        transform: translate3d(0, 1px, 0) scale(1.018);
+        filter: blur(0) saturate(1.04);
     }
     100% {
         opacity: 1;
         transform: translate3d(0, 0, 0) scale(1);
-        border-radius: 36px;
-        clip-path: inset(0 round 36px);
         filter: blur(0) saturate(1);
     }
 }
 .panel-layout-menu button {
     width: 100%;
-    min-width: 38px;
-    height: 52px;
+    min-width: 0;
+    height: 38px;
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: 12px;
     padding: 0;
     background: transparent;
     color: var(--text);
@@ -2804,30 +2793,29 @@ html.keyboard-open .terminal-page {
     display: flex;
     align-items: center;
     justify-content: center;
-    transform: translate3d(0, 4px, 0) scale(.86);
+    transform: translate3d(0, 3px, 0) scale(.96);
     opacity: 0;
-    animation: panelMenuItemDynamicIslandIn .36s var(--ios-open) forwards;
-    animation-delay: calc(.13s + (var(--item-index, 0) * 24ms));
-    transition: background 0.16s ease, transform 0.28s cubic-bezier(0.2, 0.9, 0.2, 1);
+    animation: panelMenuItemIn .20s cubic-bezier(.16,1,.3,1) forwards;
+    animation-delay: calc(.06s + (var(--item-index, 0) * 18ms));
+    transition: background 0.14s ease, transform 0.18s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
 .panel-layout-menu button:nth-child(1) { --item-index: 0; }
 .panel-layout-menu button:nth-child(2) { --item-index: 1; }
 .panel-layout-menu button:nth-child(3) { --item-index: 2; }
 .panel-layout-menu button:nth-child(4) { --item-index: 3; }
 .panel-layout-menu button:nth-child(5) { --item-index: 4; }
-@keyframes panelMenuItemDynamicIslandIn {
-    0% { opacity: 0; transform: translate3d(0, 7px, 0) scale(.72); filter: blur(6px); }
-    72% { opacity: 1; transform: translate3d(0, -1px, 0) scale(1.045); filter: blur(0); }
+@keyframes panelMenuItemIn {
+    0% { opacity: 0; transform: translate3d(0, 4px, 0) scale(.92); filter: blur(3px); }
     100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
 }
 .panel-layout-menu button:hover,
-.panel-layout-menu button:active { background: rgba(88,166,255,0.16); }
+.panel-layout-menu button:active { background: rgba(255,255,255,0.10); }
 .panel-layout-menu button:active { transform: scale(0.9); }
 .panel-layout-icon {
-    width: min(32px, 100%);
-    height: 24px;
-    min-width: 24px;
-    border: 2px solid var(--text-secondary);
+    width: min(28px, 100%);
+    height: 20px;
+    min-width: 22px;
+    border: 1.5px solid var(--text-secondary);
     border-radius: var(--radius-sm);
     display: block;
     position: relative;
@@ -2842,7 +2830,7 @@ html.keyboard-open .terminal-page {
     position: absolute;
     left: 0; right: 0; bottom: 0;
     height: 50%;
-    border-top: 2px solid var(--accent);
+    border-top: 1.5px solid var(--accent);
     border-radius: 0 0 4px 4px;
     background: rgba(88,166,255,0.2);
 }
@@ -2852,11 +2840,11 @@ html.keyboard-open .terminal-page {
     position: absolute;
     top: 0; bottom: 0;
     width: 25%;
-    border-inline-end: 2px solid var(--accent);
+    border-inline-end: 1.5px solid var(--accent);
     background: rgba(88,166,255,0.2);
 }
 .panel-layout-icon.left::after { left: 0; border-radius: 4px 0 0 4px; }
-.panel-layout-icon.right::after { right: 0; border-inline-end: 0; border-inline-start: 2px solid var(--accent); border-radius: 0 4px 4px 0; }
+.panel-layout-icon.right::after { right: 0; border-inline-end: 0; border-inline-start: 1.5px solid var(--accent); border-radius: 0 4px 4px 0; }
 .panel-layout-close:hover,
 .panel-layout-close:active {
     background: rgba(248,81,73,0.14) !important;
