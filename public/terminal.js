@@ -3735,13 +3735,19 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
     `;
     document.body.appendChild(menu);
+    panelLayoutMenu = menu;
     positionPanelLayoutMenu(menu, button, { collapsed: true });
     button.style.opacity = '0';
+    menu.style.opacity = '1';
     menu.classList.add('island-animating');
+    void menu.offsetWidth;
     requestAnimationFrame(() => {
         menu.classList.add('island-open');
         positionPanelLayoutMenu(menu, button, { collapsed: false });
-        window.setTimeout(() => menu.classList.remove('island-animating'), 540);
+        window.setTimeout(() => {
+            menu.classList.remove('island-animating');
+            menu.style.removeProperty('opacity');
+        }, 540);
     });
     menu.addEventListener('click', (event) => {
         const item = event.target.closest('[data-layout]');
@@ -3755,7 +3761,7 @@ function openPanelLayoutMenu(button, panel) {
         applyPanelLayout(panel, item.dataset.layout);
         closePanelLayoutMenu();
     });
-    panelLayoutMenu = menu;
+    if (panelLayoutMenu !== menu) panelLayoutMenu = menu;
 }
 
 function setupPanelLayoutMenu() {
