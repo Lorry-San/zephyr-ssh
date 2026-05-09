@@ -1107,6 +1107,7 @@ body.terminal-mode .app-shell {
         background .24s ease,
         color .18s ease,
         box-shadow .36s ease,
+        opacity .12s ease,
         backdrop-filter .24s ease,
         -webkit-backdrop-filter .24s ease;
     will-change: width, height, transform, clip-path, border-radius, box-shadow, background, filter;
@@ -1181,7 +1182,7 @@ body.terminal-mode .app-shell {
         0 0 0 3px rgba(88,166,255,.07);
 }
 .terminal-grip.island-pressing {
-    animation: terminalIslandTapBounce .34s cubic-bezier(0.32, 0.72, 0, 1) both;
+    animation: terminalIslandTapBounce .20s cubic-bezier(0.32, 0.72, 0, 1) both;
     transition:
         background .14s ease,
         box-shadow .14s ease;
@@ -1427,7 +1428,7 @@ body.terminal-mode .app-shell {
         --island-dot-spread: 10px;
         --island-dot-scale: 1;
         --island-fluid-blur: 0px;
-        transform: scale(1);
+        transform: translate3d(var(--island-x), var(--island-y), 0) scale3d(1, 1, 1);
     }
     38% {
         --island-fluid-scale-x: .92;
@@ -1435,7 +1436,7 @@ body.terminal-mode .app-shell {
         --island-dot-spread: 8px;
         --island-dot-scale: .88;
         --island-fluid-blur: .7px;
-        transform: scale(.94);
+        transform: translate3d(var(--island-x), var(--island-y), 0) scale3d(.94, .94, 1);
     }
     72% {
         --island-fluid-scale-x: 1.035;
@@ -1443,7 +1444,7 @@ body.terminal-mode .app-shell {
         --island-dot-spread: 10.5px;
         --island-dot-scale: 1.04;
         --island-fluid-blur: 0px;
-        transform: scale(1.025);
+        transform: translate3d(var(--island-x), var(--island-y), 0) scale3d(1.025, 1.025, 1);
     }
     100% {
         --island-fluid-scale-x: 1;
@@ -1451,7 +1452,7 @@ body.terminal-mode .app-shell {
         --island-dot-spread: 10px;
         --island-dot-scale: 1;
         --island-fluid-blur: 0px;
-        transform: scale(1);
+        transform: translate3d(var(--island-x), var(--island-y), 0) scale3d(1, 1, 1);
     }
 }
 @keyframes terminalIslandSourceDotsToPanel {
