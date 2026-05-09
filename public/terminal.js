@@ -139,6 +139,8 @@ let sftpReady = false;
 let currentPath = '.';
 let allFiles = [];
 let pendingUploadFiles = [];
+const SFTP_UPLOAD_CHUNK_SIZE = 192 * 1024;
+const activeSftpUploads = new Map();
 let fileDragDepth = 0;
 let searchQuery = '';
 let editorFilePath = null;
@@ -1469,16 +1471,49 @@ fmNewFileBtn.addEventListener('click', () => {
     if (!name) return;
     wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: currentPath.replace(/\/+$/, '') + '/' + name }));
 });
-// 上传文件
-function uploadFile(file) {
-    if (!file || !sftpReady || !wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+// 上传文件：分片发送，避免拖拽大文件时单条 WebSocket 消息过大导致连接断开。
+function sendSftpUploadChunk(upload, offset = 0) {
+    if (!upload || upload.cancelled) return;
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
+        showToast(`上传中断：SSH 连接不可用（${upload.file.name}）`, 'error');
+        activeSftpUploads.delete(upload.id);
+        return;
+    }
+    if (offset >= upload.file.size) {
+        wsConnection.send(JSON.stringify({ type: 'sftp-upload-complete', uploadId: upload.id, path: upload.path }));
+        return;
+    }
+    const chunk = upload.file.slice(offset, Math.min(offset + SFTP_UPLOAD_CHUNK_SIZE, upload.file.size));
     const reader = new FileReader();
     reader.onload = (ev) => {
-        const base64 = ev.target.result.split(',')[1];
-        wsConnection.send(JSON.stringify({ type: 'sftp-upload', path: currentPath.replace(/\/+$/, '') + '/' + file.name, data: base64 }));
+        const base64 = String(ev.target.result || '').split(',')[1] || '';
+        wsConnection.send(JSON.stringify({
+            type: 'sftp-upload-chunk',
+            uploadId: upload.id,
+            path: upload.path,
+            name: upload.file.name,
+            offset,
+            size: upload.file.size,
+            data: base64,
+        }));
     };
-    reader.onerror = () => showToast(`读取文件失败：${file.name}`, 'error');
-    reader.readAsDataURL(file);
+    reader.onerror = () => {
+        showToast(`读取文件失败：${upload.file.name}`, 'error');
+        activeSftpUploads.delete(upload.id);
+    };
+    reader.readAsDataURL(chunk);
+}
+
+function uploadFile(file) {
+    if (!file || !sftpReady || !wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+    const upload = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        path: currentPath.replace(/\/+$/, '') + '/' + file.name,
+        cancelled: false,
+    };
+    activeSftpUploads.set(upload.id, upload);
+    wsConnection.send(JSON.stringify({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: file.name, size: file.size }));
 }
 
 function uploadFiles(fileList) {
@@ -2379,6 +2414,25 @@ function handleSFTPMessage(msg) {
         case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload':
             if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); }
             else showToast('操作失败: ' + (msg.error || '未知错误'), 'error');
+            break;
+        case 'sftp-upload-ready': {
+            const upload = activeSftpUploads.get(msg.uploadId);
+            if (upload) sendSftpUploadChunk(upload, 0);
+            break;
+        }
+        case 'sftp-upload-progress': {
+            const upload = activeSftpUploads.get(msg.uploadId);
+            if (upload) sendSftpUploadChunk(upload, Number(msg.nextOffset) || 0);
+            break;
+        }
+        case 'sftp-upload-complete':
+            activeSftpUploads.delete(msg.uploadId);
+            refreshFileList();
+            showToast('文件上传完成', 'success');
+            break;
+        case 'sftp-upload-error':
+            activeSftpUploads.delete(msg.uploadId);
+            showToast('上传失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-download':
             if (msg.error) alert('下载失败: ' + msg.error);

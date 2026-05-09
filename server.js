@@ -1946,6 +1946,7 @@ wss.on('connection', (ws, req) => {
     let statsRunning = false;
     let remoteStatsState = {};
     const dockerLogStreams = new Map();
+    const sftpUploadStreams = new Map();
 
     const sendJSON = (obj) => {
         if (ws.readyState === ws.OPEN) {
@@ -2020,9 +2021,18 @@ wss.on('connection', (ws, req) => {
         dockerLogStreams.clear();
     }
 
+    function stopSftpUploadStreams() {
+        for (const upload of sftpUploadStreams.values()) {
+            try { upload.stream?.end?.(); } catch {}
+            try { upload.stream?.destroy?.(); } catch {}
+        }
+        sftpUploadStreams.clear();
+    }
+
     const detachSshSession = (reason = 'ws-detach') => {
         stopStatsPush();
         stopDockerLogStreams();
+        stopSftpUploadStreams();
         if (attachedSshSession) {
             attachedSshSession.attachedWs?.delete(ws);
             attachedSshSession.lastDetachedAt = Date.now();
@@ -2042,6 +2052,7 @@ wss.on('connection', (ws, req) => {
     const cleanup = ({ destroySsh = true, reason = 'cleanup' } = {}) => {
         stopStatsPush();
         stopDockerLogStreams();
+        stopSftpUploadStreams();
         if (guacdSocket) {
             console.info('[guacamole]', 'closing guacd session', { uuid: guacdSessionUuid || '-' });
             try { guacdSocket.write(guacInstruction('disconnect')); } catch {}
@@ -2642,16 +2653,77 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             return;
         }
 
-        // 上传文件（base64）
+        // 上传文件：兼容旧版整包上传；新版使用分片，避免大文件撑爆 WebSocket/内存导致 SSH 断开。
         if (msg.type === 'sftp-upload') {
-            const buffer = Buffer.from(msg.data, 'base64');
+            const buffer = Buffer.from(msg.data || '', 'base64');
             const writeStream = sftpStream.createWriteStream(msg.path);
+            let settled = false;
             writeStream.on('error', (err) => {
+                if (settled) return;
+                settled = true;
                 sendJSON({ type: 'sftp-upload', path: msg.path, success: false, error: err.message });
             });
             writeStream.end(buffer, () => {
+                if (settled) return;
+                settled = true;
                 sendJSON({ type: 'sftp-upload', path: msg.path, success: true });
             });
+            return;
+        }
+
+        if (msg.type === 'sftp-upload-start') {
+            const uploadId = String(msg.uploadId || '');
+            if (!uploadId) {
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: '缺少上传 ID' });
+                return;
+            }
+            const writeStream = sftpStream.createWriteStream(msg.path);
+            const upload = { stream: writeStream, path: msg.path, size: Number(msg.size) || 0, offset: 0, failed: false, ending: false };
+            sftpUploadStreams.set(uploadId, upload);
+            writeStream.on('error', (err) => {
+                if (upload.failed) return;
+                upload.failed = true;
+                sftpUploadStreams.delete(uploadId);
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: err.message });
+            });
+            writeStream.on('finish', () => {
+                if (upload.failed) return;
+                sftpUploadStreams.delete(uploadId);
+                sendJSON({ type: 'sftp-upload-complete', uploadId, path: upload.path, success: true });
+            });
+            sendJSON({ type: 'sftp-upload-ready', uploadId, path: msg.path });
+            return;
+        }
+
+        if (msg.type === 'sftp-upload-chunk') {
+            const uploadId = String(msg.uploadId || '');
+            const upload = sftpUploadStreams.get(uploadId);
+            if (!upload || upload.failed) {
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: '上传会话不存在' });
+                return;
+            }
+            const offset = Number(msg.offset) || 0;
+            if (offset !== upload.offset) {
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: upload.path, error: `上传偏移错误：期望 ${upload.offset}，收到 ${offset}` });
+                return;
+            }
+            const buffer = Buffer.from(msg.data || '', 'base64');
+            upload.offset += buffer.length;
+            const next = () => sendJSON({ type: 'sftp-upload-progress', uploadId, path: upload.path, nextOffset: upload.offset, size: upload.size });
+            if (!upload.stream.write(buffer)) upload.stream.once('drain', next);
+            else next();
+            return;
+        }
+
+        if (msg.type === 'sftp-upload-complete') {
+            const uploadId = String(msg.uploadId || '');
+            const upload = sftpUploadStreams.get(uploadId);
+            if (!upload || upload.failed) {
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: '上传会话不存在' });
+                return;
+            }
+            upload.ending = true;
+            upload.stream.end();
             return;
         }
 
