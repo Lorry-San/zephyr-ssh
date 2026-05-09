@@ -3734,7 +3734,7 @@ function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
     const finalTop = rect.top;
     menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
     menu.style.top = `${collapsed ? rect.top : finalTop}px`;
-    menu.style.width = `${collapsed ? rect.width : finalWidth}px`;
+    menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
     menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : finalHeight}px`);
     menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
     menu.dataset.placement = 'inline';

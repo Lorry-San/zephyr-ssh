@@ -3150,9 +3150,10 @@ html.keyboard-open .terminal-page {
 .panel-layout-menu {
     position: fixed;
     z-index: 100;
-    width: min(236px, calc(100vw - 16px));
-    min-height: 50px;
-    height: var(--panel-island-menu-height, auto);
+    width: var(--panel-island-menu-width, min(236px, calc(100vw - 16px)));
+    height: var(--panel-island-menu-height, 50px);
+    min-height: 0;
+    box-sizing: border-box;
     padding: 6px;
     border: 1px solid rgba(139,148,158,.22);
     border-radius: var(--panel-island-radius, 999px);
