@@ -1204,15 +1204,17 @@ body.terminal-mode .app-shell {
     --island-dot-opacity: .02;
     --island-fluid-blur: 5px;
     border-color: transparent;
-    background: rgba(28,28,30,.28);
+    background: transparent;
     color: var(--text);
     opacity: 0;
     pointer-events: none;
     box-shadow: none;
-    animation: terminalIslandSourceMelt .42s cubic-bezier(.2,.8,.2,1) both;
+    transition: opacity .18s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-grip span {
-    animation: terminalIslandDotMelt .66s cubic-bezier(.2,.8,.2,1) both;
+    opacity: 1;
+    transform: none;
+    transition: opacity .12s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-grip span::before,
 .terminal-window-titlebar.menu-open .terminal-grip span::after {
@@ -1265,7 +1267,7 @@ body.terminal-mode .app-shell {
     pointer-events: none;
     overflow: hidden;
     transform:
-        translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
+        translate3d(var(--island-start-dx, 0px), 0, 0)
         scaleX(max(var(--island-start-scale-x, .24), .18))
         scaleY(max(var(--island-start-scale-y, .14), .08));
     transform-origin: var(--island-origin-x, 50%) var(--island-origin-y, 0px);
@@ -1482,31 +1484,31 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandFluidOpen {
     0% {
-        opacity: .62;
+        opacity: .72;
         border-radius: 999px;
-        clip-path: inset(42% 44% 42% 44% round 999px);
+        clip-path: inset(0 44% 86% 44% round 999px);
         transform:
-            translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
+            translate3d(var(--island-start-dx, 0px), 0, 0)
             scaleX(max(var(--island-start-scale-x, .24), .18))
             scaleY(max(var(--island-start-scale-y, .14), .08));
         filter: blur(8px) saturate(.88);
     }
     24% {
-        opacity: .88;
+        opacity: .90;
         border-radius: 999px;
-        clip-path: inset(34% 32% 34% 32% round 999px);
+        clip-path: inset(0 32% 72% 32% round 999px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .72), calc(var(--island-start-dy, 0px) * .80), 0)
+            translate3d(calc(var(--island-start-dx, 0px) * .72), 0, 0)
             scaleX(.54)
-            scaleY(.26);
-        filter: blur(10px) saturate(.98);
+            scaleY(.30);
+        filter: blur(9px) saturate(.98);
     }
     48% {
         opacity: 1;
         border-radius: 28px;
-        clip-path: inset(5% 2% 5% 2% round 28px);
+        clip-path: inset(0 2% 10% 2% round 28px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .32), calc(var(--island-start-dy, 0px) * .38), 0)
+            translate3d(calc(var(--island-start-dx, 0px) * .32), 0, 0)
             scaleX(1.025)
             scaleY(.92);
         filter: blur(3px) saturate(1.14);

@@ -990,16 +990,16 @@ function positionTerminalWindowMenu(titlebar) {
     const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
     const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
     const clampedLeft = Math.min(Math.max(idealLeft, minLeft), maxLeft);
-    const top = Math.round(islandCenterY - titleRect.top + buttonRect.height / 2 + 8);
+    const top = Math.round(islandCenterY - titleRect.top - buttonRect.height / 2);
     menu.style.top = `${top}px`;
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
     menu.style.setProperty('--terminal-island-menu-width', `${menuWidth}px`);
     menu.style.setProperty('--terminal-island-menu-height', `${targetHeight}px`);
 
     const originX = Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - clampedLeft));
-    const originY = openDown ? 0 : targetHeight;
+    const originY = 0;
     const startDx = islandCenterX - (titleRect.left + clampedLeft + originX);
-    const startDy = islandCenterY - (titleRect.top + top + originY);
+    const startDy = 0;
     const startScaleX = Math.max(0.18, Math.min(0.42, buttonRect.width / Math.max(menuWidth, 1)));
     const startScaleY = Math.max(0.08, Math.min(0.24, buttonRect.height / Math.max(targetHeight, 1)));
 
