@@ -1240,37 +1240,40 @@ body.terminal-mode .app-shell {
 .terminal-window-more:hover { color: var(--text); background: rgba(88,166,255,.14); transform: scale(1.08); }
 .terminal-window-menu {
     position: absolute;
-    top: calc(50% + 23px);
+    top: calc(50% - 17px);
     left: var(--terminal-window-menu-left, calc(50% - 107px));
     right: auto;
     z-index: 16;
-    width: min(214px, calc(100% - 16px));
-    min-height: 36px;
-    display: grid;
-    grid-auto-rows: minmax(30px, auto);
+    width: min(var(--terminal-island-menu-width, 214px), calc(100% - 16px));
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 4px;
-    padding: 7px;
-    border: 1px solid rgba(139,148,158,.26);
+    padding: 4px 5px;
+    border: .5px solid rgba(255,255,255,.14);
     border-radius: 999px;
     background:
-        radial-gradient(circle at var(--island-origin-x, 50%) var(--island-origin-y, 0px), rgba(255,255,255,.20), transparent 24%),
-        radial-gradient(circle at var(--island-origin-x, 50%) -10%, rgba(88,166,255,.18), transparent 34%),
-        linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, rgba(255,255,255,.08)), color-mix(in srgb, var(--surface) 82%, rgba(0,0,0,.24)));
+        radial-gradient(ellipse at var(--island-origin-x, 50%) 8%, rgba(255,255,255,.18), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.025)),
+        rgba(18,18,20,.82);
     box-shadow:
-        0 18px 48px rgba(0,0,0,.34),
-        inset 0 1px 0 rgba(255,255,255,.10);
-    backdrop-filter: blur(24px) saturate(1.35);
-    -webkit-backdrop-filter: blur(24px) saturate(1.35);
+        0 12px 34px rgba(0,0,0,.28),
+        0 0 0 1px rgba(255,255,255,.045),
+        inset 0 1px 0 rgba(255,255,255,.16),
+        inset 0 -12px 28px rgba(0,0,0,.16);
+    backdrop-filter: blur(28px) saturate(1.8);
+    -webkit-backdrop-filter: blur(28px) saturate(1.8);
     opacity: 0;
     pointer-events: none;
     overflow: hidden;
     transform:
-        translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
+        translate3d(0, 0, 0)
         scaleX(max(var(--island-start-scale-x, .18), .18))
-        scaleY(max(var(--island-start-scale-y, .24), .24));
-    transform-origin: var(--island-origin-x, 50%) var(--island-origin-y, 0px);
-    filter: blur(10px) saturate(.86);
-    clip-path: inset(42% 49% 42% 49% round 999px);
+        scaleY(max(var(--island-start-scale-y, .56), .48));
+    transform-origin: var(--island-origin-x, 50%) 50%;
+    filter: blur(8px) saturate(.92);
+    clip-path: inset(0 48% 0 48% round 999px);
     transition: none;
     will-change: opacity, transform, filter, clip-path, border-radius;
     contain: paint;
@@ -1278,49 +1281,84 @@ body.terminal-mode .app-shell {
 .terminal-window-menu::before {
     content: '';
     position: absolute;
-    inset: -18px;
+    inset: -16px;
     z-index: -1;
     border-radius: inherit;
     background:
-        radial-gradient(ellipse at var(--island-origin-x, 50%) var(--island-origin-y, 0px), rgba(255,255,255,.18), transparent 30%),
-        radial-gradient(ellipse at 50% 0%, rgba(88,166,255,.14), transparent 42%);
+        radial-gradient(ellipse at var(--island-origin-x, 50%) 50%, rgba(255,255,255,.22), transparent 32%),
+        radial-gradient(ellipse at 50% 50%, rgba(88,166,255,.12), transparent 58%);
     opacity: 0;
-    filter: blur(16px);
-    transform: scale3d(.36, .62, 1);
+    filter: blur(18px);
+    transform: scale3d(.28, .72, 1);
     pointer-events: none;
+}
+:root[data-theme="light"] .terminal-window-menu {
+    border-color: rgba(0,0,0,.06);
+    background:
+        radial-gradient(ellipse at var(--island-origin-x, 50%) 8%, rgba(255,255,255,.72), transparent 38%),
+        linear-gradient(180deg, rgba(255,255,255,.86), rgba(250,250,250,.72)),
+        rgba(250,250,250,.80);
+    color: #1f2328;
+    box-shadow:
+        0 8px 32px rgba(0,0,0,.055),
+        0 0 0 .5px rgba(0,0,0,.045),
+        inset 0 1px 0 rgba(255,255,255,.85),
+        inset 0 -10px 24px rgba(0,0,0,.035);
+    backdrop-filter: blur(25px) saturate(1.8);
+    -webkit-backdrop-filter: blur(25px) saturate(1.8);
+}
+:root[data-theme="light"] .terminal-window-menu::before {
+    background:
+        radial-gradient(ellipse at var(--island-origin-x, 50%) 50%, rgba(255,255,255,.88), transparent 36%),
+        radial-gradient(ellipse at 50% 50%, rgba(9,105,218,.10), transparent 60%);
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu {
     opacity: 1;
     pointer-events: auto;
-    border-radius: 18px;
-    clip-path: inset(0 round 18px);
-    animation: terminalIslandFluidOpen .68s cubic-bezier(.22,1,.36,1) both;
+    border-radius: 999px;
+    clip-path: inset(0 round 999px);
+    animation: terminalIslandFluidOpen .62s cubic-bezier(.16,1,.3,1) both;
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu::before {
-    animation: terminalIslandLiquidGlow .68s cubic-bezier(.22,1,.36,1) both;
+    animation: terminalIslandLiquidGlow .62s cubic-bezier(.16,1,.3,1) both;
 }
 .terminal-window-menu button {
     position: relative;
-    width: 100%;
-    padding: 8px 10px;
+    flex: 1 1 0;
+    min-width: 0;
+    height: 26px;
+    padding: 0 7px;
     border: 0;
-    border-radius: 11px;
-    background: transparent;
-    color: var(--text);
-    text-align: left;
+    border-radius: 999px;
+    background: rgba(255,255,255,.055);
+    color: rgba(255,255,255,.86);
+    text-align: center;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 26px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     opacity: 0;
-    transform: translate3d(0, 4px, 0) scale(.98);
+    transform: translate3d(0, 4px, 0) scale(.88);
+    filter: blur(3px);
     transition:
         opacity .20s ease,
-        transform .30s cubic-bezier(.22,1,.36,1),
-        background .14s ease;
+        transform .34s cubic-bezier(.34,1.56,.64,1),
+        filter .20s ease,
+        background .16s ease,
+        color .16s ease;
+}
+:root[data-theme="light"] .terminal-window-menu button {
+    color: rgba(31,35,40,.82);
+    background: rgba(255,255,255,.38);
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    transition-delay: calc(.12s + (var(--item-index, 0) * 28ms));
+    filter: blur(0);
+    transition-delay: calc(.11s + (var(--item-index, 0) * 20ms));
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(1) { --item-index: 0; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(2) { --item-index: 1; }
@@ -1331,7 +1369,8 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(7) { --item-index: 6; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(8) { --item-index: 7; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(9) { --item-index: 8; }
-.terminal-window-menu button:hover { background: rgba(255,255,255,.10); }
+.terminal-window-menu button:hover { background: rgba(255,255,255,.14); transform: translate3d(0, -1px, 0) scale(1.035); }
+:root[data-theme="light"] .terminal-window-menu button:hover { background: rgba(255,255,255,.66); }
 .terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-frame,
 .terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-placeholder {
     pointer-events: none;
@@ -1417,58 +1456,48 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandFluidOpen {
     0% {
-        opacity: .62;
+        opacity: .72;
         border-radius: 999px;
-        clip-path: inset(46% 48% 46% 48% round 999px);
+        clip-path: inset(0 48% 0 48% round 999px);
         transform:
-            translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
-            scaleX(max(var(--island-start-scale-x, .18), .18))
-            scaleY(max(var(--island-start-scale-y, .24), .24));
-        filter: blur(10px) saturate(.84);
+            translate3d(0, 0, 0)
+            scaleX(max(var(--island-start-scale-x, .16), .16))
+            scaleY(max(var(--island-start-scale-y, .54), .50));
+        filter: blur(8px) saturate(.9);
     }
-    26% {
-        opacity: .88;
+    24% {
+        opacity: .92;
         border-radius: 999px;
-        clip-path: inset(42% 39% 42% 39% round 999px);
-        transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .72), calc(var(--island-start-dy, 0px) * .78), 0)
-            scaleX(.82)
-            scaleY(.32);
-        filter: blur(12px) saturate(.94);
+        clip-path: inset(0 34% 0 34% round 999px);
+        transform: translate3d(0, 0, 0) scaleX(.70) scaleY(.86);
+        filter: blur(9px) saturate(1.02);
     }
-    46% {
+    50% {
         opacity: 1;
         border-radius: 999px;
-        clip-path: inset(34% 2% 34% 2% round 999px);
-        transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .30), calc(var(--island-start-dy, 0px) * .36), 0)
-            scaleX(1.035)
-            scaleY(.48);
-        filter: blur(4px) saturate(1.08);
+        clip-path: inset(0 2% 0 2% round 999px);
+        transform: translate3d(0, 0, 0) scaleX(1.045) scaleY(1.08);
+        filter: blur(2px) saturate(1.22);
     }
-    68% {
+    76% {
         opacity: 1;
-        border-radius: 22px;
-        clip-path: inset(0 round 22px);
-        transform: translate3d(0, 1px, 0) scaleX(1.025) scaleY(1.06);
-        filter: blur(0) saturate(1.06);
-    }
-    84% {
-        border-radius: 16px;
-        transform: translate3d(0, -1px, 0) scaleX(.992) scaleY(.985);
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
+        transform: translate3d(0, 0, 0) scaleX(.986) scaleY(.965);
+        filter: blur(0) saturate(1.12);
     }
     100% {
         opacity: 1;
-        border-radius: 18px;
-        clip-path: inset(0 round 18px);
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
         transform: translate3d(0, 0, 0) scale(1);
         filter: blur(0) saturate(1);
     }
 }
 @keyframes terminalIslandLiquidGlow {
-    0% { opacity: .68; transform: scale3d(.26, .54, 1); filter: blur(18px); }
-    42% { opacity: .92; transform: scale3d(1.08, .72, 1); filter: blur(14px); }
-    72% { opacity: .58; transform: scale3d(1.04, 1.08, 1); filter: blur(12px); }
+    0% { opacity: .72; transform: scale3d(.24, .70, 1); filter: blur(18px); }
+    45% { opacity: .92; transform: scale3d(1.10, .86, 1); filter: blur(13px); }
+    72% { opacity: .50; transform: scale3d(1.02, 1.06, 1); filter: blur(12px); }
     100% { opacity: 0; transform: scale3d(1, 1, 1); filter: blur(16px); }
 }
 @keyframes terminalIslandBreath {

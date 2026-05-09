@@ -955,16 +955,16 @@ function terminalWindowMenu(t) {
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     const winFullscreen = fullscreenElement?.classList?.contains('terminal-window') || fullscreenElement === workspace;
     const customFullscreen = workspace?.classList.contains('custom-fullscreen');
-    const fullscreenItem = (customFullscreen || winFullscreen) ? ['exit-fullscreen', '退出全屏'] : ['fullscreen', '全屏'];
+    const fullscreenItem = (customFullscreen || winFullscreen) ? ['exit-fullscreen', '退出全屏', '退出'] : ['fullscreen', '全屏', '全屏'];
     let items;
     if (maxWindows <= 1 || visibleCount <= 1) {
-        items = compact ? [fullscreenItem, ['minimize', '最小化'], ['close', '关闭']] : [['minimize', '最小化'], ['close', '关闭']];
+        items = compact ? [fullscreenItem, ['minimize', '最小化', '最小'], ['close', '关闭', '关闭']] : [['minimize', '最小化', '最小'], ['close', '关闭', '关闭']];
     } else if (maxWindows === 2 || visibleCount === 2) {
-        items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
+        items = [fullscreenItem, ['left-half', '左半屏', '左'], ['right-half', '右半屏', '右'], ['minimize', '最小化', '最小'], ['close', '关闭', '关闭']];
     } else {
-        items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['right-top', '右侧 1/3 上半部'], ['right-bottom', '右侧 1/3 下半部'], ['left-two-thirds', '左侧 2/3'], ['right-two-thirds', '右侧 2/3'], ['minimize', '最小化'], ['close', '关闭']];
+        items = [fullscreenItem, ['left-half', '左半屏', '左'], ['right-half', '右半屏', '右'], ['right-top', '右侧 1/3 上半部', '右上'], ['right-bottom', '右侧 1/3 下半部', '右下'], ['left-two-thirds', '左侧 2/3', '左⅔'], ['right-two-thirds', '右侧 2/3', '右⅔'], ['minimize', '最小化', '最小'], ['close', '关闭', '关闭']];
     }
-    return `<div class="terminal-window-menu" role="menu">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}">${label}</button>`).join('')}</div>`;
+    return `<div class="terminal-window-menu" role="menu" style="--island-action-count:${items.length}">${items.map(([action, label, shortLabel]) => `<button data-window-action="${action}" data-window="${t.id}" title="${label}" aria-label="${label}">${shortLabel || label}</button>`).join('')}</div>`;
 }
 function terminalWindowTitlebarHtml(t) {
     return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
@@ -976,38 +976,36 @@ function positionTerminalWindowMenu(titlebar) {
     if (!button || !menu) return;
     const titleRect = titlebar.getBoundingClientRect();
     const buttonRect = button.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
 
-    // 以三个点按钮自身的几何中心作为唯一锚点：CSS 形变、clip-path 展开和内容淡入都围绕该点连续展开。
+    // 真正的“岛内展开”：菜单不再作为下方二级浮窗，而是与三个点共用同一几何中心和同一条水平轴线。
     const islandCenterX = buttonRect.left + buttonRect.width / 2;
     const islandCenterY = buttonRect.top + buttonRect.height / 2;
+    const menuWidth = Math.min(320, Math.max(154, titleRect.width - 16));
+    const menuHeight = menu.offsetHeight || 36;
     const minLeft = 8;
-    const maxLeft = Math.max(minLeft, titleRect.width - menuRect.width - 8);
-    const idealLeft = islandCenterX - titleRect.left - menuRect.width / 2;
+    const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
+    const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
     const clampedLeft = Math.min(Math.max(idealLeft, minLeft), maxLeft);
-    const top = Math.round(islandCenterY - titleRect.top + buttonRect.height / 2 + 6);
+    const top = Math.round(islandCenterY - titleRect.top - menuHeight / 2);
     menu.style.top = `${top}px`;
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
+    menu.style.setProperty('--terminal-island-menu-width', `${menuWidth}px`);
 
-    const actualMenuRect = menu.getBoundingClientRect();
-    const originX = Math.min(actualMenuRect.width - 18, Math.max(18, islandCenterX - actualMenuRect.left));
-    const originY = Math.min(actualMenuRect.height - 18, Math.max(0, islandCenterY - actualMenuRect.top));
-    const islandLocalCenterX = actualMenuRect.left + originX;
-    const islandLocalCenterY = actualMenuRect.top + originY;
-    const startDx = islandCenterX - islandLocalCenterX;
-    const startDy = islandCenterY - islandLocalCenterY;
-    const startScaleX = Math.max(0.16, Math.min(0.42, buttonRect.width / Math.max(actualMenuRect.width, 1)));
-    const startScaleY = Math.max(0.22, Math.min(0.52, buttonRect.height / Math.max(actualMenuRect.height, 1)));
+    const originX = Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - clampedLeft));
+    const originY = menuHeight / 2;
+    const startScaleX = Math.max(0.12, Math.min(0.32, buttonRect.width / Math.max(menuWidth, 1)));
+    const startScaleY = Math.max(0.48, Math.min(0.72, buttonRect.height / Math.max(menuHeight, 1)));
 
     menu.style.setProperty('--island-origin-x', `${originX}px`);
     menu.style.setProperty('--island-origin-y', `${originY}px`);
-    menu.style.setProperty('--island-start-dx', `${startDx}px`);
-    menu.style.setProperty('--island-start-dy', `${startDy}px`);
+    menu.style.setProperty('--island-start-dx', `0px`);
+    menu.style.setProperty('--island-start-dy', `0px`);
     menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
     menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
     console.info('[DynamicIslandDiagnostics]', {
         event: 'terminal-window-menu-align',
         tabId: button?.dataset.windowControl || '',
+        mode: 'inline-island',
         titlebarOpen: titlebar.classList.contains('menu-open'),
         buttonRect: {
             left: Number(buttonRect.left.toFixed(2)),
@@ -1017,17 +1015,15 @@ function positionTerminalWindowMenu(titlebar) {
             centerX: Number(islandCenterX.toFixed(2)),
             centerY: Number(islandCenterY.toFixed(2)),
         },
-        menuRect: {
-            left: Number(actualMenuRect.left.toFixed(2)),
-            top: Number(actualMenuRect.top.toFixed(2)),
-            width: Number(actualMenuRect.width.toFixed(2)),
-            height: Number(actualMenuRect.height.toFixed(2)),
+        islandRect: {
+            left: Number((titleRect.left + clampedLeft).toFixed(2)),
+            top: Number((titleRect.top + top).toFixed(2)),
+            width: Number(menuWidth.toFixed(2)),
+            height: Number(menuHeight.toFixed(2)),
             originX: Number(originX.toFixed(2)),
             originY: Number(originY.toFixed(2)),
         },
         startTransform: {
-            dx: Number(startDx.toFixed(2)),
-            dy: Number(startDy.toFixed(2)),
             scaleX: Number(startScaleX.toFixed(3)),
             scaleY: Number(startScaleY.toFixed(3)),
         },
