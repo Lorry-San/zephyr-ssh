@@ -1003,8 +1003,12 @@ function positionTerminalWindowMenu(titlebar, { collapsed = false, force = false
 
     const originX = collapsed ? currentWidth / 2 : Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - finalLeft));
     const originY = collapsed ? currentHeight / 2 : Math.max(0, Math.min(currentHeight, islandCenterY - titleRect.top - finalTop));
+    const finalOriginX = Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - finalLeft));
+    const finalOriginY = Math.max(0, Math.min(targetHeight, islandCenterY - titleRect.top - finalTop));
     menu.style.setProperty('--island-origin-x', `${originX}px`);
     menu.style.setProperty('--island-origin-y', `${originY}px`);
+    menu.style.setProperty('--island-dots-x', `${collapsed ? currentWidth / 2 : finalOriginX}px`);
+    menu.style.setProperty('--island-dots-y', `${collapsed ? currentHeight / 2 : finalOriginY}px`);
     menu.style.setProperty('--terminal-island-final-left', `${finalLeft}px`);
     menu.style.setProperty('--terminal-island-final-top', `${finalTop}px`);
     menu.style.setProperty('--terminal-island-final-width', `${menuWidth}px`);
