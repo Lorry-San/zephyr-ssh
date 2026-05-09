@@ -97,7 +97,7 @@ function applyTheme(theme, { persist = false } = {}) {
     applyTheme._timer = window.setTimeout(() => {
         root.classList.remove('theme-transitioning');
         document.body?.classList.remove('theme-ripple-active');
-    }, 560);
+    }, 460);
     root.setAttribute('data-theme', theme);
     if (persist) localStorage.setItem('zephyr-theme', theme);
     $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
@@ -969,8 +969,8 @@ function terminalWindowMenu(t) {
 function terminalWindowTitlebarHtml(t) {
     return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
 }
-function positionTerminalWindowMenu(titlebar) {
-    if (!titlebar?.classList.contains('menu-open')) return;
+function positionTerminalWindowMenu(titlebar, { collapsed = false, force = false } = {}) {
+    if (!force && !titlebar?.classList.contains('menu-open')) return;
     const button = titlebar.querySelector('[data-window-control]');
     const menu = titlebar.querySelector('.terminal-window-menu');
     if (!button || !menu) return;
@@ -985,30 +985,30 @@ function positionTerminalWindowMenu(titlebar) {
     const menuWidth = Math.min(260, Math.max(220, titleRect.width - 16));
     const naturalHeight = 26 + itemCount * 45;
     const targetHeight = naturalHeight;
+    const finalLeft = Math.min(Math.max(islandCenterX - titleRect.left - menuWidth / 2, 8), Math.max(8, titleRect.width - menuWidth - 8));
+    const finalTop = Math.round(islandCenterY - titleRect.top - buttonRect.height / 2);
+    const startWidth = Math.round(buttonRect.width);
+    const startHeight = Math.round(buttonRect.height);
+    const startLeft = Math.round(islandCenterX - titleRect.left - startWidth / 2);
+    const startTop = Math.round(buttonRect.top - titleRect.top);
     const openDown = true;
-    const minLeft = 8;
-    const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
-    const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
-    const clampedLeft = Math.min(Math.max(idealLeft, minLeft), maxLeft);
-    const top = Math.round(islandCenterY - titleRect.top - buttonRect.height / 2);
+    const clampedLeft = collapsed ? startLeft : finalLeft;
+    const top = collapsed ? startTop : finalTop;
+    const currentWidth = collapsed ? startWidth : menuWidth;
+    const currentHeight = collapsed ? startHeight : targetHeight;
     menu.style.top = `${top}px`;
     menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
-    menu.style.setProperty('--terminal-island-menu-width', `${menuWidth}px`);
-    menu.style.setProperty('--terminal-island-menu-height', `${targetHeight}px`);
+    menu.style.setProperty('--terminal-island-menu-width', `${currentWidth}px`);
+    menu.style.setProperty('--terminal-island-menu-height', `${currentHeight}px`);
 
-    const originX = Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - clampedLeft));
-    const originY = 0;
-    const startDx = islandCenterX - (titleRect.left + clampedLeft + originX);
-    const startDy = 0;
-    const startScaleX = Math.max(0.18, Math.min(0.42, buttonRect.width / Math.max(menuWidth, 1)));
-    const startScaleY = Math.max(0.08, Math.min(0.24, buttonRect.height / Math.max(targetHeight, 1)));
-
+    const originX = collapsed ? currentWidth / 2 : Math.min(menuWidth - 18, Math.max(18, islandCenterX - titleRect.left - finalLeft));
+    const originY = collapsed ? currentHeight / 2 : Math.max(0, Math.min(currentHeight, islandCenterY - titleRect.top - finalTop));
     menu.style.setProperty('--island-origin-x', `${originX}px`);
     menu.style.setProperty('--island-origin-y', `${originY}px`);
-    menu.style.setProperty('--island-start-dx', `${startDx}px`);
-    menu.style.setProperty('--island-start-dy', `${startDy}px`);
-    menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
-    menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
+    menu.style.setProperty('--terminal-island-final-left', `${finalLeft}px`);
+    menu.style.setProperty('--terminal-island-final-top', `${finalTop}px`);
+    menu.style.setProperty('--terminal-island-final-width', `${menuWidth}px`);
+    menu.style.setProperty('--terminal-island-final-height', `${targetHeight}px`);
     console.info('[DynamicIslandDiagnostics]', {
         event: 'terminal-window-menu-align',
         tabId: button?.dataset.windowControl || '',
@@ -1032,12 +1032,39 @@ function positionTerminalWindowMenu(titlebar) {
             openDown,
         },
         startTransform: {
-            dx: Number(startDx.toFixed(2)),
-            dy: Number(startDy.toFixed(2)),
-            scaleX: Number(startScaleX.toFixed(3)),
-            scaleY: Number(startScaleY.toFixed(3)),
+            left: Number(clampedLeft.toFixed(2)),
+            top: Number(top.toFixed(2)),
+            width: Number(currentWidth.toFixed(2)),
+            height: Number(currentHeight.toFixed(2)),
+            collapsed,
         },
         menuAnimation: getComputedStyle(menu).animationName,
+    });
+}
+function openTerminalWindowMenu(titlebar) {
+    if (!titlebar) return;
+    titlebar.classList.remove('menu-closing', 'menu-animating');
+    positionTerminalWindowMenu(titlebar, { collapsed: true, force: true });
+    titlebar.classList.add('menu-open', 'menu-animating');
+    requestAnimationFrame(() => {
+        positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
+        window.setTimeout(() => titlebar.classList.remove('menu-animating'), 560);
+    });
+}
+function closeTerminalWindowMenu(titlebar) {
+    if (!titlebar) return;
+    window.clearTimeout(titlebar._terminalMenuCloseTimer);
+    positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
+    titlebar.classList.add('menu-closing', 'menu-animating');
+    titlebar.classList.remove('menu-open');
+    requestAnimationFrame(() => positionTerminalWindowMenu(titlebar, { collapsed: true, force: true }));
+    titlebar._terminalMenuCloseTimer = window.setTimeout(() => {
+        titlebar.classList.remove('menu-closing', 'menu-animating');
+    }, 460);
+}
+function closeOtherTerminalWindowMenus(currentButton = null) {
+    $$('.terminal-window-titlebar.menu-open').forEach((el) => {
+        if (!currentButton || !el.contains(currentButton)) closeTerminalWindowMenu(el);
     });
 }
 function getMinimizedKeepAliveSessions() {
@@ -1790,13 +1817,7 @@ function bindEvents() {
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
         const menuBtn = e.target.closest('[data-window-control]');
-        $$('.terminal-window-titlebar.menu-open').forEach((el) => {
-            if (!menuBtn || !el.contains(menuBtn)) {
-                el.classList.add('menu-closing');
-                el.classList.remove('menu-open');
-                window.setTimeout(() => el.classList.remove('menu-closing'), 360);
-            }
-        });
+        closeOtherTerminalWindowMenus(menuBtn);
         if (menuBtn) {
             e.stopPropagation();
             if (terminalControlLongPress) {
@@ -1805,12 +1826,9 @@ function bindEvents() {
             }
             const titlebar = menuBtn.closest('.terminal-window-titlebar');
             if (titlebar?.classList.contains('menu-open')) {
-                titlebar.classList.add('menu-closing');
-                titlebar.classList.remove('menu-open');
-                window.setTimeout(() => titlebar.classList.remove('menu-closing'), 360);
+                closeTerminalWindowMenu(titlebar);
             } else {
-                titlebar?.classList.remove('menu-closing');
-                titlebar?.classList.add('menu-open');
+                openTerminalWindowMenu(titlebar);
             }
             console.info('[DynamicIslandDiagnostics]', {
                 event: 'terminal-window-menu-toggle',
@@ -1818,16 +1836,13 @@ function bindEvents() {
                 open: titlebar?.classList.contains('menu-open') || false,
                 longPressSuppressed: false,
             });
-            requestAnimationFrame(() => positionTerminalWindowMenu(titlebar));
             return;
         }
         const action = e.target.closest('[data-window-action]');
         if (action) {
             e.stopPropagation();
             const actionTitlebar = action.closest('.terminal-window-titlebar');
-            actionTitlebar?.classList.add('menu-closing');
-            actionTitlebar?.classList.remove('menu-open');
-            window.setTimeout(() => actionTitlebar?.classList.remove('menu-closing'), 360);
+            closeTerminalWindowMenu(actionTitlebar);
             applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction);
             return;
         }
@@ -1861,11 +1876,7 @@ function bindEvents() {
     });
     document.addEventListener('pointerdown', (e) => {
         if (e.target.closest?.('[data-window-control], .terminal-window-menu')) return;
-        $$('.terminal-window-titlebar.menu-open').forEach((el) => {
-            el.classList.add('menu-closing');
-            el.classList.remove('menu-open');
-            window.setTimeout(() => el.classList.remove('menu-closing'), 360);
-        });
+        closeOtherTerminalWindowMenus();
     }, true);
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {
