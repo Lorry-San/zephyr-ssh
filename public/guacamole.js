@@ -654,13 +654,18 @@ function applyPanelLayout(panel, layout) {
     console.info('[guac-client]', 'floating panel layout applied', { id: panel.id, layout, left, top, width, height });
 }
 
+let panelLayoutButton = null;
 function closePanelLayoutMenu() {
+    panelLayoutButton?.classList.remove('active-layout');
     panelLayoutMenu?.remove();
     panelLayoutMenu = null;
+    panelLayoutButton = null;
 }
 
 function openPanelLayoutMenu(button, panel) {
     closePanelLayoutMenu();
+    panelLayoutButton = button;
+    button?.classList.add('active-layout');
     const menu = document.createElement('div');
     menu.className = 'panel-layout-menu';
     menu.setAttribute('role', 'menu');

@@ -1775,7 +1775,7 @@ function bindEvents() {
         }
     });
     document.addEventListener('pointerdown', (e) => {
-        if (e.target.closest?.('.terminal-window-titlebar.menu-open')) return;
+        if (e.target.closest?.('[data-window-control], .terminal-window-menu')) return;
         $$('.terminal-window-titlebar.menu-open').forEach((el) => el.classList.remove('menu-open'));
     }, true);
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));

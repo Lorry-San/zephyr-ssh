@@ -1236,6 +1236,10 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(8) { --item-index: 7; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(9) { --item-index: 8; }
 .terminal-window-menu button:hover { background: rgba(88,166,255,.16); }
+.terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-frame,
+.terminal-window-titlebar.menu-open ~ .terminal-window-body .terminal-placeholder {
+    pointer-events: none;
+}
 @keyframes terminalIslandBreath {
     0%, 100% {
         transform: translate3d(var(--island-x), calc(var(--island-y) - .2px), 0);
@@ -2549,10 +2553,12 @@ html.keyboard-open .terminal-page {
     pointer-events: auto;
 }
 .panel-traffic-btn {
-    width: 52px;
-    height: 24px;
+    --panel-island-w: 52px;
+    --panel-island-h: 24px;
+    width: var(--panel-island-w);
+    height: var(--panel-island-h);
     border: 0;
-    border-radius: var(--radius-lg);
+    border-radius: 999px;
     background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
     display: inline-flex;
     align-items: center;
@@ -2560,8 +2566,52 @@ html.keyboard-open .terminal-page {
     cursor: pointer;
     touch-action: none;
     transform: translateZ(0);
-    transition: background 0.18s ease, transform 0.34s cubic-bezier(0.2, 0.9, 0.2, 1);
+    transition:
+        width .58s cubic-bezier(.22,1,.36,1),
+        height .58s cubic-bezier(.22,1,.36,1),
+        border-radius .58s cubic-bezier(.22,1,.36,1),
+        background .34s ease,
+        box-shadow .58s cubic-bezier(.22,1,.36,1),
+        transform .34s cubic-bezier(.2,.9,.2,1),
+        backdrop-filter .42s ease,
+        -webkit-backdrop-filter .42s ease;
     pointer-events: auto;
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    box-shadow: none;
+    backdrop-filter: blur(0) saturate(1);
+    -webkit-backdrop-filter: blur(0) saturate(1);
+    will-change: width, height, border-radius, transform, box-shadow, backdrop-filter;
+}
+.panel-traffic-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background:
+        radial-gradient(circle at 28% 4%, rgba(255,255,255,.20), transparent 38%),
+        radial-gradient(circle at 76% 12%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
+        color-mix(in srgb, var(--surface) 78%, transparent);
+    opacity: 0;
+    transform: scaleX(.36) scaleY(.72);
+    filter: blur(8px) saturate(.9);
+    transition:
+        opacity .18s ease,
+        transform .58s cubic-bezier(.22,1,.36,1),
+        filter .46s ease;
+}
+.panel-traffic-btn::after {
+    content: '';
+    position: absolute;
+    inset: 1px 1px auto 1px;
+    height: 46%;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .28s ease .08s;
 }
 .panel-traffic-btn:hover { background: rgba(139,148,158,0.10); }
 .panel-traffic-btn:active,
@@ -2569,6 +2619,27 @@ html.keyboard-open .terminal-page {
     background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
     transform: scale(0.94);
 }
+.panel-traffic-btn.active-layout {
+    --panel-island-w: min(204px, calc(100% - 16px));
+    --panel-island-h: 36px;
+    border-radius: 19px;
+    background: color-mix(in srgb, var(--surface) 68%, transparent);
+    color: var(--text);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.16),
+        inset 0 -10px 24px rgba(0,0,0,.10),
+        0 14px 34px rgba(0,0,0,.28),
+        0 0 0 1px rgba(255,255,255,.07);
+    backdrop-filter: blur(30px) saturate(1.75);
+    -webkit-backdrop-filter: blur(30px) saturate(1.75);
+    animation: panelTrafficIslandBreath 3.8s ease-in-out .62s infinite;
+}
+.panel-traffic-btn.active-layout::before {
+    opacity: 1;
+    transform: scaleX(1) scaleY(1);
+    filter: blur(0) saturate(1);
+}
+.panel-traffic-btn.active-layout::after { opacity: .72; }
 .panel-traffic-btn span,
 .panel-traffic-btn span::before,
 .panel-traffic-btn span::after {
@@ -2609,6 +2680,31 @@ html.keyboard-open .terminal-page {
 .panel-traffic-btn.pressing span::after {
     transform: translateX(-4px) scale(1.18);
     background: var(--accent);
+}
+.panel-traffic-btn.active-layout span {
+    opacity: 0;
+    transform: scale(.2);
+    filter: blur(7px);
+}
+.panel-traffic-btn.active-layout span::before { transform: translateX(8px) scale(.4); }
+.panel-traffic-btn.active-layout span::after { transform: translateX(-8px) scale(.4); }
+@keyframes panelTrafficIslandBreath {
+    0%, 100% {
+        transform: translateZ(0) translateY(-.2px);
+        box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.16),
+            inset 0 -10px 24px rgba(0,0,0,.10),
+            0 14px 34px rgba(0,0,0,.28),
+            0 0 0 1px rgba(255,255,255,.07);
+    }
+    50% {
+        transform: translateZ(0) translateY(.3px);
+        box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.18),
+            inset 0 -9px 22px rgba(0,0,0,.09),
+            0 15px 36px rgba(0,0,0,.30),
+            0 0 0 1px rgba(255,255,255,.08);
+    }
 }
 .panel-drag-handle:active,
 .panel-titlebar:active { cursor: default; }

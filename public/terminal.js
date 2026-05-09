@@ -3660,13 +3660,18 @@ function applyPanelLayout(panel, layout) {
 }
 
 let panelLayoutMenu = null;
+let panelLayoutButton = null;
 function closePanelLayoutMenu() {
+    panelLayoutButton?.classList.remove('active-layout');
     panelLayoutMenu?.remove();
     panelLayoutMenu = null;
+    panelLayoutButton = null;
 }
 
 function openPanelLayoutMenu(button, panel) {
     closePanelLayoutMenu();
+    panelLayoutButton = button;
+    button?.classList.add('active-layout');
     const menu = document.createElement('div');
     menu.className = 'panel-layout-menu';
     menu.setAttribute('role', 'menu');
@@ -3691,7 +3696,8 @@ function openPanelLayoutMenu(button, panel) {
         menu.style.width = `${Math.min(284, maxMenuWidth)}px`;
         const menuRect = menu.getBoundingClientRect();
         const buttonSlotOffset = menuRect.width / 5;
-        const left = anchorX - menuRect.width / 2 - buttonSlotOffset;
+        const idealLeft = anchorX - menuRect.width / 2 - buttonSlotOffset;
+        const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, idealLeft));
         const belowTop = rect.bottom + 8;
         const aboveTop = rect.top - menuRect.height - 8;
         const opensBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
