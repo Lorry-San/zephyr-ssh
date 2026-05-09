@@ -977,19 +977,28 @@ function positionTerminalWindowMenu(titlebar) {
     const titleRect = titlebar.getBoundingClientRect();
     const buttonRect = button.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
-    const left = (buttonRect.left + buttonRect.width / 2) - titleRect.left - (menuRect.width / 2);
-    const clampedLeft = Math.min(Math.max(left, 8), titleRect.width - menuRect.width - 8);
     const anchorX = buttonRect.left + buttonRect.width / 2;
     const anchorY = buttonRect.top + buttonRect.height / 2;
-    const menuCenterX = titleRect.left + clampedLeft + menuRect.width / 2;
-    const menuCenterY = titleRect.top + menu.offsetTop + menuRect.height / 2;
+    const minLeft = 8;
+    const maxLeft = Math.max(minLeft, titleRect.width - menuRect.width - 8);
+    const idealLeft = anchorX - titleRect.left - menuRect.width / 2;
+    const clampedLeft = Math.min(Math.max(idealLeft, minLeft), maxLeft);
+    const top = Math.round(anchorY - titleRect.top + buttonRect.height / 2 + 6);
+    menu.style.top = `${top}px`;
+    menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
+
+    const actualMenuRect = menu.getBoundingClientRect();
+    const menuCenterX = actualMenuRect.left + actualMenuRect.width / 2;
+    const menuCenterY = actualMenuRect.top + actualMenuRect.height / 2;
+    const originX = Math.min(actualMenuRect.width - 18, Math.max(18, anchorX - actualMenuRect.left));
+    const originY = Math.min(actualMenuRect.height - 18, Math.max(18, anchorY - actualMenuRect.top));
     const startDx = anchorX - menuCenterX;
     const startDy = anchorY - menuCenterY;
-    const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - (titleRect.left + clampedLeft)));
-    const startScaleX = Math.max(0.12, Math.min(1, buttonRect.width / Math.max(menuRect.width, 1)));
-    const startScaleY = Math.max(0.12, Math.min(1, buttonRect.height / Math.max(menuRect.height, 1)));
-    menu.style.setProperty('--terminal-window-menu-left', `${clampedLeft}px`);
+    const startScaleX = Math.max(0.12, Math.min(1, buttonRect.width / Math.max(actualMenuRect.width, 1)));
+    const startScaleY = Math.max(0.12, Math.min(1, buttonRect.height / Math.max(actualMenuRect.height, 1)));
+
     menu.style.setProperty('--island-origin-x', `${originX}px`);
+    menu.style.setProperty('--island-origin-y', `${originY}px`);
     menu.style.setProperty('--island-start-dx', `${startDx}px`);
     menu.style.setProperty('--island-start-dy', `${startDy}px`);
     menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
@@ -1007,10 +1016,10 @@ function positionTerminalWindowMenu(titlebar) {
             centerY: Number(anchorY.toFixed(2)),
         },
         menuRect: {
-            left: Number((titleRect.left + clampedLeft).toFixed(2)),
-            top: Number(menuRect.top.toFixed(2)),
-            width: Number(menuRect.width.toFixed(2)),
-            height: Number(menuRect.height.toFixed(2)),
+            left: Number(actualMenuRect.left.toFixed(2)),
+            top: Number(actualMenuRect.top.toFixed(2)),
+            width: Number(actualMenuRect.width.toFixed(2)),
+            height: Number(actualMenuRect.height.toFixed(2)),
             centerX: Number(menuCenterX.toFixed(2)),
             centerY: Number(menuCenterY.toFixed(2)),
         },

@@ -687,24 +687,26 @@ function openPanelLayoutMenu(button, panel) {
         const vvHeight = viewport?.height || window.innerHeight;
         const anchorX = rect.left + rect.width / 2;
         const anchorY = rect.top + rect.height / 2;
-        const panelRect = panel?.getBoundingClientRect?.();
-        const targetCenterX = panelRect
-            ? panelRect.left + panelRect.width / 2
-            : anchorX;
+        const targetCenterX = anchorX;
         menu.style.width = `${Math.min(284, Math.max(160, vvWidth - 16))}px`;
         const menuRect = menu.getBoundingClientRect();
         const idealLeft = targetCenterX - menuRect.width / 2;
         const left = Math.min(vvLeft + vvWidth - menuRect.width - 8, Math.max(vvLeft + 8, idealLeft));
-        const top = Math.max(vvTop + 8, rect.bottom);
+        const belowTop = rect.bottom + 8;
+        const aboveTop = rect.top - menuRect.height - 8;
+        const canPlaceBelow = belowTop + menuRect.height <= vvTop + vvHeight - 8;
+        const top = canPlaceBelow ? belowTop : Math.max(vvTop + 8, aboveTop);
+        const placement = canPlaceBelow ? 'below' : 'above';
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
-        const originX = Math.min(menuRect.width - 18, Math.max(18, anchorX - left));
-        const originY = Math.min(menuRect.height - 18, Math.max(18, anchorY - top));
-        const menuCenterX = left + menuRect.width / 2;
-        const menuCenterY = top + menuRect.height / 2;
+        const actualMenuRect = menu.getBoundingClientRect();
+        const originX = Math.min(actualMenuRect.width - 18, Math.max(18, anchorX - actualMenuRect.left));
+        const originY = Math.min(actualMenuRect.height - 18, Math.max(18, anchorY - actualMenuRect.top));
+        const menuCenterX = actualMenuRect.left + actualMenuRect.width / 2;
+        const menuCenterY = actualMenuRect.top + actualMenuRect.height / 2;
         const centerDelta = menuCenterX - targetCenterX;
-        const startScaleX = Math.max(0.12, Math.min(1, rect.width / Math.max(menuRect.width, 1)));
-        const startScaleY = Math.max(0.12, Math.min(1, rect.height / Math.max(menuRect.height, 1)));
+        const startScaleX = Math.max(0.12, Math.min(1, rect.width / Math.max(actualMenuRect.width, 1)));
+        const startScaleY = Math.max(0.12, Math.min(1, rect.height / Math.max(actualMenuRect.height, 1)));
         const startDx = anchorX - menuCenterX;
         const startDy = anchorY - menuCenterY;
         menu.style.setProperty('--menu-origin-x', `${originX}px`);
@@ -713,7 +715,7 @@ function openPanelLayoutMenu(button, panel) {
         menu.style.setProperty('--island-start-dy', `${startDy}px`);
         menu.style.setProperty('--island-start-scale-x', `${startScaleX}`);
         menu.style.setProperty('--island-start-scale-y', `${startScaleY}`);
-        menu.dataset.placement = 'below';
+        menu.dataset.placement = placement;
         console.info('[DynamicIslandDiagnostics]', {
             event: 'guac-layout-menu-align',
             panelId: panel?.id || '',
@@ -735,8 +737,8 @@ function openPanelLayoutMenu(button, panel) {
             menuRect: {
                 left: Number(left.toFixed(2)),
                 top: Number(top.toFixed(2)),
-                width: Number(menuRect.width.toFixed(2)),
-                height: Number(menuRect.height.toFixed(2)),
+                width: Number(actualMenuRect.width.toFixed(2)),
+                height: Number(actualMenuRect.height.toFixed(2)),
                 centerX: Number(menuCenterX.toFixed(2)),
                 centerY: Number(menuCenterY.toFixed(2)),
             },

@@ -1014,7 +1014,7 @@ body.terminal-mode .app-shell {
 .terminal-grip {
     --island-x: -50%;
     --island-y: -50%;
-    --island-w: 54px;
+    --island-w: 58px;
     --island-h: 22px;
     --island-radius: 999px;
     position: absolute;
@@ -1044,16 +1044,16 @@ body.terminal-mode .app-shell {
         inset 0 1px 0 rgba(255,255,255,.08);
     clip-path: inset(0 round var(--island-radius));
     transition:
-        width .36s cubic-bezier(.16,1,.3,1),
-        height .36s cubic-bezier(.16,1,.3,1),
-        border-color .22s ease,
-        background .22s ease,
+        width .52s cubic-bezier(.16,1,.3,1),
+        height .52s cubic-bezier(.16,1,.3,1),
+        border-color .24s ease,
+        background .24s ease,
         color .18s ease,
-        box-shadow .28s ease,
-        transform .32s cubic-bezier(.18,1.18,.2,1),
-        backdrop-filter .22s ease,
-        -webkit-backdrop-filter .22s ease;
-    will-change: transform, box-shadow, background;
+        box-shadow .36s ease,
+        transform .44s cubic-bezier(.16,1,.3,1),
+        backdrop-filter .24s ease,
+        -webkit-backdrop-filter .24s ease;
+    will-change: transform, width, height, box-shadow, background;
 }
 .terminal-grip::before {
     content: '';
@@ -1117,24 +1117,24 @@ body.terminal-mode .app-shell {
 .terminal-grip:hover span::before { transform: translateX(1px); }
 .terminal-grip:hover span::after { transform: translateX(-1px); }
 .terminal-window-titlebar.menu-open .terminal-grip {
-    width: 46px;
-    height: 20px;
+    width: 62px;
+    height: 22px;
     border-color: rgba(88,166,255,.38);
     background:
-        linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02)),
-        rgba(28,28,30,.78);
+        linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.02)),
+        rgba(28,28,30,.82);
     color: var(--text);
     box-shadow:
-        0 4px 14px rgba(0,0,0,.24),
+        0 6px 18px rgba(0,0,0,.26),
         0 0 0 3px rgba(88,166,255,.08),
-        inset 0 1px 0 rgba(255,255,255,.10);
+        inset 0 1px 0 rgba(255,255,255,.12);
 }
 .terminal-window-titlebar.menu-open .terminal-grip span,
 .terminal-window-titlebar.menu-open .terminal-grip span::before,
 .terminal-window-titlebar.menu-open .terminal-grip span::after {
     opacity: 0;
-    transform: scale(.35);
-    filter: blur(5px);
+    transform: scale(.28);
+    filter: blur(6px);
 }
 .terminal-window.dragging .terminal-grip { cursor: grabbing; }
 .terminal-window-titlebar strong { font-size: 11px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1155,8 +1155,8 @@ body.terminal-mode .app-shell {
 .terminal-window-more:hover { color: var(--text); background: rgba(88,166,255,.14); transform: scale(1.08); }
 .terminal-window-menu {
     position: absolute;
-    top: calc(100% + 8px);
-    left: var(--terminal-window-menu-left, calc(50% - 102px));
+    top: calc(50% + 16px);
+    left: var(--terminal-window-menu-left, calc(50% - 107px));
     right: auto;
     z-index: 16;
     width: min(214px, calc(100% - 16px));
@@ -1166,7 +1166,7 @@ body.terminal-mode .app-shell {
     gap: 4px;
     padding: 7px;
     border: 1px solid rgba(139,148,158,.26);
-    border-radius: 18px;
+    border-radius: 999px;
     background:
         radial-gradient(circle at var(--island-origin-x, 50%) -10%, rgba(88,166,255,.14), transparent 34%),
         linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, rgba(255,255,255,.08)), color-mix(in srgb, var(--surface) 82%, rgba(0,0,0,.24)));
@@ -1179,31 +1179,23 @@ body.terminal-mode .app-shell {
     pointer-events: none;
     overflow: hidden;
     transform:
-        translate3d(var(--island-start-dx, 0px), calc(var(--island-start-dy, 0px) - 8px), 0)
+        translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
         scaleX(max(var(--island-start-scale-x, .22), .22))
         scaleY(max(var(--island-start-scale-y, .30), .30));
-    transform-origin: var(--island-origin-x, 50%) 0;
-    filter: blur(4px) saturate(.92);
+    transform-origin: var(--island-origin-x, 50%) var(--island-origin-y, 0px);
+    filter: blur(8px) saturate(.9);
     clip-path: inset(0 round 999px);
     transition:
-        opacity .14s ease,
-        transform .34s cubic-bezier(.16,1,.3,1),
-        filter .24s ease,
-        border-radius .34s cubic-bezier(.16,1,.3,1),
-        clip-path .34s cubic-bezier(.16,1,.3,1);
+        opacity .16s ease,
+        transform .46s cubic-bezier(.16,1,.3,1),
+        filter .34s ease,
+        border-radius .46s cubic-bezier(.16,1,.3,1),
+        clip-path .46s cubic-bezier(.16,1,.3,1);
     will-change: opacity, transform, filter, clip-path, border-radius;
 }
 .terminal-window-menu::before {
-    content: '';
-    position: absolute;
-    top: -5px;
-    left: var(--island-origin-x, 50%);
-    width: 10px;
-    height: 10px;
-    border-left: 1px solid rgba(139,148,158,.26);
-    border-top: 1px solid rgba(139,148,158,.26);
-    background: inherit;
-    transform: translateX(-50%) rotate(45deg);
+    content: none;
+    display: none;
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu {
     opacity: 1;
@@ -2564,7 +2556,7 @@ html.keyboard-open .terminal-page {
 }
 .panel-traffic-btn {
     --panel-island-w: 58px;
-    --panel-island-h: 20px;
+    --panel-island-h: 22px;
     width: var(--panel-island-w);
     height: var(--panel-island-h);
     border: 1px solid rgba(139,148,158,.22);
@@ -2579,10 +2571,12 @@ html.keyboard-open .terminal-page {
     touch-action: none;
     transform: translateZ(0);
     transition:
-        border-color .18s ease,
-        background .18s ease,
-        box-shadow .22s ease,
-        transform .18s cubic-bezier(.2,.9,.2,1),
+        width .52s cubic-bezier(.16,1,.3,1),
+        height .52s cubic-bezier(.16,1,.3,1),
+        border-color .22s ease,
+        background .22s ease,
+        box-shadow .32s ease,
+        transform .28s cubic-bezier(.16,1,.3,1),
         backdrop-filter .22s ease,
         -webkit-backdrop-filter .22s ease;
     pointer-events: auto;
@@ -2630,6 +2624,8 @@ html.keyboard-open .terminal-page {
     transform: scale(.96);
 }
 .panel-traffic-btn.active-layout {
+    --panel-island-w: 64px;
+    --panel-island-h: 22px;
     border-color: rgba(88,166,255,.42);
     background:
         linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.02)),
@@ -2715,7 +2711,7 @@ html.keyboard-open .terminal-page {
     min-height: 50px;
     padding: 6px;
     border: 1px solid rgba(139,148,158,.28);
-    border-radius: 18px;
+    border-radius: 999px;
     background:
         radial-gradient(circle at var(--menu-origin-x, 50%) -10%, rgba(88,166,255,.14), transparent 34%),
         linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, rgba(255,255,255,.08)), color-mix(in srgb, var(--surface) 84%, rgba(0,0,0,.20)));
@@ -2725,7 +2721,7 @@ html.keyboard-open .terminal-page {
     backdrop-filter: blur(24px) saturate(1.35);
     -webkit-backdrop-filter: blur(24px) saturate(1.35);
     transform-origin: var(--menu-origin-x, 50%) var(--menu-origin-y, 50%);
-    animation: panelMenuPopIn .28s cubic-bezier(.16,1,.3,1) both;
+    animation: panelMenuPopIn .46s cubic-bezier(.16,1,.3,1) both;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     align-items: center;
@@ -2763,19 +2759,25 @@ html.keyboard-open .terminal-page {
 @keyframes panelMenuPopIn {
     0% {
         opacity: 0;
+        border-radius: 999px;
+        clip-path: inset(0 round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
             scaleX(max(var(--island-start-scale-x, .24), .24))
-            scaleY(max(var(--island-start-scale-y, .32), .32));
-        filter: blur(6px) saturate(.92);
+            scaleY(max(var(--island-start-scale-y, .34), .34));
+        filter: blur(8px) saturate(.9);
     }
-    70% {
+    62% {
         opacity: 1;
+        border-radius: 22px;
+        clip-path: inset(0 round 22px);
         transform: translate3d(0, 1px, 0) scale(1.018);
         filter: blur(0) saturate(1.04);
     }
     100% {
         opacity: 1;
+        border-radius: 18px;
+        clip-path: inset(0 round 18px);
         transform: translate3d(0, 0, 0) scale(1);
         filter: blur(0) saturate(1);
     }
