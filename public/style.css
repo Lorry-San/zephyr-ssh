@@ -3161,12 +3161,11 @@ html.keyboard-open .terminal-page {
     box-shadow: none;
     backdrop-filter: blur(24px) saturate(1.35);
     -webkit-backdrop-filter: blur(24px) saturate(1.35);
-    transform-origin: center center;
+    transform-origin: top center;
     opacity: 0;
     pointer-events: none;
     transition:
         top .52s cubic-bezier(0.32, 0.72, 0, 1),
-        left .52s cubic-bezier(0.32, 0.72, 0, 1),
         width .52s cubic-bezier(0.32, 0.72, 0, 1),
         height .52s cubic-bezier(0.32, 0.72, 0, 1),
         border-radius .52s cubic-bezier(0.32, 0.72, 0, 1),
@@ -3198,7 +3197,6 @@ html.keyboard-open .terminal-page {
     box-shadow: none;
     transition:
         top .42s cubic-bezier(0.4, 0, 0.6, 1),
-        left .42s cubic-bezier(0.4, 0, 0.6, 1),
         width .42s cubic-bezier(0.4, 0, 0.6, 1),
         height .42s cubic-bezier(0.4, 0, 0.6, 1),
         border-radius .42s cubic-bezier(0.4, 0, 0.6, 1),

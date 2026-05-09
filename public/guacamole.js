@@ -683,12 +683,18 @@ function closePanelLayoutMenu({ instant = false } = {}) {
     if (instant || !button?.isConnected) {
         button?.classList.remove('active-layout'); button?.style.removeProperty('opacity'); menu.remove(); panelLayoutMenu = null; panelLayoutButton = null; return;
     }
+    menu.style.transition = 'none';
     positionPanelLayoutMenu(menu, button, { collapsed: false });
+    menu.style.opacity = '1';
+    void menu.offsetWidth;
     menu.classList.remove('island-open');
     menu.classList.add('island-closing', 'island-animating');
     button.classList.add('active-layout');
     button.style.opacity = '0';
-    requestAnimationFrame(() => positionPanelLayoutMenu(menu, button, { collapsed: true }));
+    requestAnimationFrame(() => {
+        menu.style.removeProperty('transition');
+        positionPanelLayoutMenu(menu, button, { collapsed: true });
+    });
     menu._closeTimer = window.setTimeout(() => {
         button.classList.remove('active-layout'); button.style.removeProperty('opacity'); menu.remove();
         if (panelLayoutMenu === menu) panelLayoutMenu = null;
@@ -711,6 +717,7 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
         <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
     `;
+    menu.style.transition = 'none';
     document.body.appendChild(menu);
     panelLayoutMenu = menu;
     positionPanelLayoutMenu(menu, button, { collapsed: true });
@@ -719,6 +726,7 @@ function openPanelLayoutMenu(button, panel) {
     menu.classList.add('island-animating');
     void menu.offsetWidth;
     requestAnimationFrame(() => {
+        menu.style.removeProperty('transition');
         menu.classList.add('island-open');
         positionPanelLayoutMenu(menu, button, { collapsed: false });
         window.setTimeout(() => {
