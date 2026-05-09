@@ -1790,7 +1790,13 @@ function bindEvents() {
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
         const menuBtn = e.target.closest('[data-window-control]');
-        $$('.terminal-window-titlebar.menu-open').forEach((el) => { if (!menuBtn || !el.contains(menuBtn)) el.classList.remove('menu-open'); });
+        $$('.terminal-window-titlebar.menu-open').forEach((el) => {
+            if (!menuBtn || !el.contains(menuBtn)) {
+                el.classList.add('menu-closing');
+                el.classList.remove('menu-open');
+                window.setTimeout(() => el.classList.remove('menu-closing'), 360);
+            }
+        });
         if (menuBtn) {
             e.stopPropagation();
             if (terminalControlLongPress) {
@@ -1798,7 +1804,14 @@ function bindEvents() {
                 return;
             }
             const titlebar = menuBtn.closest('.terminal-window-titlebar');
-            titlebar?.classList.toggle('menu-open');
+            if (titlebar?.classList.contains('menu-open')) {
+                titlebar.classList.add('menu-closing');
+                titlebar.classList.remove('menu-open');
+                window.setTimeout(() => titlebar.classList.remove('menu-closing'), 360);
+            } else {
+                titlebar?.classList.remove('menu-closing');
+                titlebar?.classList.add('menu-open');
+            }
             console.info('[DynamicIslandDiagnostics]', {
                 event: 'terminal-window-menu-toggle',
                 tabId: menuBtn.dataset.windowControl || '',
@@ -1811,7 +1824,10 @@ function bindEvents() {
         const action = e.target.closest('[data-window-action]');
         if (action) {
             e.stopPropagation();
-            action.closest('.terminal-window-titlebar')?.classList.remove('menu-open');
+            const actionTitlebar = action.closest('.terminal-window-titlebar');
+            actionTitlebar?.classList.add('menu-closing');
+            actionTitlebar?.classList.remove('menu-open');
+            window.setTimeout(() => actionTitlebar?.classList.remove('menu-closing'), 360);
             applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction);
             return;
         }
@@ -1845,7 +1861,11 @@ function bindEvents() {
     });
     document.addEventListener('pointerdown', (e) => {
         if (e.target.closest?.('[data-window-control], .terminal-window-menu')) return;
-        $$('.terminal-window-titlebar.menu-open').forEach((el) => el.classList.remove('menu-open'));
+        $$('.terminal-window-titlebar.menu-open').forEach((el) => {
+            el.classList.add('menu-closing');
+            el.classList.remove('menu-open');
+            window.setTimeout(() => el.classList.remove('menu-closing'), 360);
+        });
     }, true);
     ['keydown', 'pointerdown'].forEach((eventName) => document.addEventListener(eventName, (e) => { if (e.target.closest?.('#terminalWorkspace')) noteTerminalWorkspaceActivity(); }, true));
     ['fullscreenchange', 'webkitfullscreenchange'].forEach((eventName) => document.addEventListener(eventName, () => {

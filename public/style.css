@@ -1209,12 +1209,12 @@ body.terminal-mode .app-shell {
     opacity: 0;
     pointer-events: none;
     box-shadow: none;
-    transition: opacity .18s ease;
+    transition: opacity .08s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-grip span {
     opacity: 1;
     transform: none;
-    transition: opacity .12s ease;
+    transition: opacity .08s ease;
 }
 .terminal-window-titlebar.menu-open .terminal-grip span::before,
 .terminal-window-titlebar.menu-open .terminal-grip span::after {
@@ -1316,10 +1316,29 @@ body.terminal-mode .app-shell {
     pointer-events: auto;
     border-radius: 22px;
     clip-path: inset(0 round 22px);
-    animation: terminalIslandFluidOpen .64s cubic-bezier(.16,1,.3,1) both;
+    animation: terminalIslandFluidOpen .54s cubic-bezier(.16,1,.3,1) both;
 }
-.terminal-window-titlebar.menu-open .terminal-window-menu::before {
-    animation: terminalIslandLiquidGlow .64s cubic-bezier(.16,1,.3,1) both;
+.terminal-window-titlebar.menu-closing .terminal-window-menu {
+    opacity: 0;
+    pointer-events: none;
+    border-radius: 999px;
+    clip-path: inset(0 44% 86% 44% round 999px);
+    animation: terminalIslandFluidClose .34s cubic-bezier(.2,.8,.2,1) both;
+}
+.terminal-window-titlebar.menu-closing .terminal-window-menu button {
+    opacity: 0;
+    transform: translate3d(0, -4px, 0) scale(.94);
+    filter: blur(3px);
+    transition-delay: 0ms;
+}
+.terminal-window-titlebar.menu-closing .terminal-grip {
+    opacity: 1;
+    pointer-events: auto;
+    animation: terminalIslandDotsReturn .34s cubic-bezier(.34,1.56,.64,1) both;
+}
+.terminal-window-titlebar.menu-closing .terminal-grip span {
+    opacity: 1;
+    animation: terminalIslandDotBreath 2.2s cubic-bezier(.22,1,.36,1) infinite;
 }
 .terminal-window-menu button {
     position: relative;
@@ -1342,12 +1361,7 @@ body.terminal-mode .app-shell {
     opacity: 0;
     transform: translate3d(0, 4px, 0) scale(.96);
     filter: blur(3px);
-    transition:
-        opacity .20s ease,
-        transform .32s cubic-bezier(.22,1,.36,1),
-        filter .20s ease,
-        background .16s ease,
-        color .16s ease;
+    transition: opacity .12s ease .42s, transform .18s cubic-bezier(.22,1,.36,1) .42s, filter .12s ease .42s;
 }
 :root[data-theme="light"] .terminal-window-menu button {
     color: rgba(31,35,40,.84);
@@ -1357,7 +1371,13 @@ body.terminal-mode .app-shell {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
     filter: blur(0);
-    transition-delay: calc(.12s + (var(--item-index, 0) * 22ms));
+    transition:
+        opacity .18s ease,
+        transform .30s cubic-bezier(.22,1,.36,1),
+        filter .18s ease,
+        background .16s ease,
+        color .16s ease;
+    transition-delay: calc(.08s + (var(--item-index, 0) * 20ms));
 }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(1) { --item-index: 0; }
 .terminal-window-titlebar.menu-open .terminal-window-menu button:nth-child(2) { --item-index: 1; }
@@ -1484,16 +1504,16 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandFluidOpen {
     0% {
-        opacity: .72;
+        opacity: .88;
         border-radius: 999px;
         clip-path: inset(0 44% 86% 44% round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), 0, 0)
             scaleX(max(var(--island-start-scale-x, .24), .18))
             scaleY(max(var(--island-start-scale-y, .14), .08));
-        filter: blur(8px) saturate(.88);
+        filter: blur(6px) saturate(.92);
     }
-    24% {
+    20% {
         opacity: .90;
         border-radius: 999px;
         clip-path: inset(0 32% 72% 32% round 999px);
@@ -1503,7 +1523,7 @@ body.terminal-mode .app-shell {
             scaleY(.30);
         filter: blur(9px) saturate(.98);
     }
-    48% {
+    44% {
         opacity: 1;
         border-radius: 28px;
         clip-path: inset(0 2% 10% 2% round 28px);
@@ -1513,7 +1533,7 @@ body.terminal-mode .app-shell {
             scaleY(.92);
         filter: blur(3px) saturate(1.14);
     }
-    72% {
+    68% {
         opacity: 1;
         border-radius: 21px;
         clip-path: inset(0 round 21px);
@@ -1526,6 +1546,61 @@ body.terminal-mode .app-shell {
         clip-path: inset(0 round 22px);
         transform: translate3d(0, 0, 0) scale(1);
         filter: blur(0) saturate(1);
+    }
+}
+@keyframes terminalIslandFluidClose {
+    0% {
+        opacity: 1;
+        border-radius: 22px;
+        clip-path: inset(0 round 22px);
+        transform: translate3d(0, 0, 0) scale(1);
+        filter: blur(0) saturate(1);
+    }
+    46% {
+        opacity: .86;
+        border-radius: 999px;
+        clip-path: inset(0 18% 54% 18% round 999px);
+        transform: translate3d(calc(var(--island-start-dx, 0px) * .18), 0, 0) scaleX(.78) scaleY(.34);
+        filter: blur(4px) saturate(1.02);
+    }
+    100% {
+        opacity: 0;
+        border-radius: 999px;
+        clip-path: inset(0 44% 86% 44% round 999px);
+        transform:
+            translate3d(var(--island-start-dx, 0px), 0, 0)
+            scaleX(max(var(--island-start-scale-x, .24), .18))
+            scaleY(max(var(--island-start-scale-y, .14), .08));
+        filter: blur(8px) saturate(.86);
+    }
+}
+@keyframes terminalIslandDotsReturn {
+    0% {
+        --island-dot-spread: 0px;
+        --island-dot-scale: .16;
+        --island-dot-opacity: .02;
+        --island-fluid-scale-x: .58;
+        --island-fluid-scale-y: .54;
+        --island-fluid-blur: 6px;
+        opacity: 0;
+    }
+    62% {
+        --island-dot-spread: 4px;
+        --island-dot-scale: .72;
+        --island-dot-opacity: .72;
+        --island-fluid-scale-x: .88;
+        --island-fluid-scale-y: .82;
+        --island-fluid-blur: 1px;
+        opacity: .86;
+    }
+    100% {
+        --island-dot-spread: 10px;
+        --island-dot-scale: 1;
+        --island-dot-opacity: 1;
+        --island-fluid-scale-x: 1;
+        --island-fluid-scale-y: 1;
+        --island-fluid-blur: 0px;
+        opacity: 1;
     }
 }
 @keyframes terminalIslandLiquidGlow {
