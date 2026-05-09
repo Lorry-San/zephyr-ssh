@@ -3733,7 +3733,7 @@ function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
     const finalLeft = anchorX - finalWidth / 2;
     const finalTop = rect.top;
     menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
-    menu.style.top = `${collapsed ? rect.top : finalTop}px`;
+    menu.style.top = `${finalTop}px`;
     menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
     menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : finalHeight}px`);
     menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
@@ -3781,7 +3781,7 @@ function closePanelLayoutMenu({ instant = false } = {}) {
 function openPanelLayoutMenu(button, panel) {
     closePanelLayoutMenu({ instant: true });
     panelLayoutButton = button;
-    button?.classList.add('active-layout');
+    button?.classList.remove('active-layout');
     const menu = document.createElement('div');
     menu.className = 'panel-layout-menu';
     menu.setAttribute('role', 'menu');
