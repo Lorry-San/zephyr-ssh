@@ -1258,7 +1258,7 @@ body.terminal-mode .app-shell {
     transform: translate3d(0, 0, 0) scale(1);
     transform-origin: center center;
     filter: none;
-    clip-path: inset(0 round 999px);
+    clip-path: none;
     transition:
         top .52s cubic-bezier(0.32, 0.72, 0, 1),
         left .52s cubic-bezier(0.32, 0.72, 0, 1),
@@ -1296,8 +1296,7 @@ body.terminal-mode .app-shell {
     animation: terminalIslandSourceDotsToPanel .18s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 .terminal-window-titlebar.menu-closing .terminal-window-menu::after {
-    animation: none;
-    opacity: 0;
+    animation: terminalIslandSourceDotsReturn .42s cubic-bezier(0.4, 0, 0.6, 1) both;
 }
 :root[data-theme="light"] .terminal-window-menu {
     border-color: transparent;
@@ -1315,8 +1314,8 @@ body.terminal-mode .app-shell {
 .terminal-window-titlebar.menu-open .terminal-window-menu {
     opacity: 1;
     pointer-events: auto;
-    border-radius: 22px;
-    clip-path: inset(0 round 22px);
+    border-radius: var(--terminal-island-radius, 22px);
+    clip-path: none;
     box-shadow: 0 18px 42px rgba(31,35,40,.075);
 }
 :root[data-theme="dark"] .terminal-window-titlebar.menu-open .terminal-window-menu {
@@ -1326,10 +1325,10 @@ body.terminal-mode .app-shell {
     box-shadow: 0 18px 44px rgba(0,0,0,.16);
 }
 .terminal-window-titlebar.menu-closing .terminal-window-menu {
-    opacity: 0;
+    opacity: 1;
     pointer-events: none;
-    border-radius: 999px;
-    clip-path: inset(0 round 999px);
+    border-radius: var(--terminal-island-radius, var(--terminal-island-collapsed-radius, 11px));
+    clip-path: none;
     box-shadow: none;
     transition:
         top .42s cubic-bezier(0.4, 0, 0.6, 1),
@@ -1337,7 +1336,7 @@ body.terminal-mode .app-shell {
         width .42s cubic-bezier(0.4, 0, 0.6, 1),
         height .42s cubic-bezier(0.4, 0, 0.6, 1),
         border-radius .42s cubic-bezier(0.4, 0, 0.6, 1),
-        opacity .18s ease .10s;
+        opacity .08s linear .40s;
 }
 .terminal-window-titlebar.menu-closing .terminal-window-menu button {
     opacity: 0;
@@ -1457,7 +1456,7 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandSourceDotsReturn {
     0% { opacity: 0; transform: scale(.48); filter: blur(4px); }
-    58% { opacity: .82; transform: scale(.88); filter: blur(.8px); }
+    45% { opacity: .42; transform: scale(.72); filter: blur(1.2px); }
     100% { opacity: 1; transform: scale(1); filter: blur(0); }
 }
 @keyframes terminalIslandSourceMelt {

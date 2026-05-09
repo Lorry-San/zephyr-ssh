@@ -1009,6 +1009,11 @@ function positionTerminalWindowMenu(titlebar, { collapsed = false, force = false
     menu.style.setProperty('--island-origin-y', `${originY}px`);
     menu.style.setProperty('--island-dots-x', `${collapsed ? currentWidth / 2 : finalOriginX}px`);
     menu.style.setProperty('--island-dots-y', `${collapsed ? currentHeight / 2 : finalOriginY}px`);
+    const collapsedRadius = Math.round(startHeight / 2);
+    const finalRadius = 22;
+    menu.style.setProperty('--terminal-island-radius', `${collapsed ? collapsedRadius : finalRadius}px`);
+    menu.style.setProperty('--terminal-island-collapsed-radius', `${collapsedRadius}px`);
+    menu.style.setProperty('--terminal-island-final-radius', `${finalRadius}px`);
     menu.style.setProperty('--terminal-island-final-left', `${finalLeft}px`);
     menu.style.setProperty('--terminal-island-final-top', `${finalTop}px`);
     menu.style.setProperty('--terminal-island-final-width', `${menuWidth}px`);
@@ -1049,21 +1054,33 @@ function openTerminalWindowMenu(titlebar) {
     if (!titlebar) return;
     titlebar.classList.remove('menu-closing', 'menu-animating');
     positionTerminalWindowMenu(titlebar, { collapsed: true, force: true });
+    const menu = titlebar.querySelector('.terminal-window-menu');
+    menu?.style.setProperty('opacity', '1');
     titlebar.classList.add('menu-open', 'menu-animating');
+    const button = titlebar.querySelector('[data-window-control]');
+    if (button) button.style.opacity = '0';
     requestAnimationFrame(() => {
         positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
-        window.setTimeout(() => titlebar.classList.remove('menu-animating'), 560);
+        window.setTimeout(() => {
+            titlebar.classList.remove('menu-animating');
+            menu?.style.removeProperty('opacity');
+        }, 540);
     });
 }
 function closeTerminalWindowMenu(titlebar) {
     if (!titlebar) return;
     window.clearTimeout(titlebar._terminalMenuCloseTimer);
+    const menu = titlebar.querySelector('.terminal-window-menu');
     positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
+    menu?.style.setProperty('opacity', '1');
     titlebar.classList.add('menu-closing', 'menu-animating');
     titlebar.classList.remove('menu-open');
     requestAnimationFrame(() => positionTerminalWindowMenu(titlebar, { collapsed: true, force: true }));
     titlebar._terminalMenuCloseTimer = window.setTimeout(() => {
         titlebar.classList.remove('menu-closing', 'menu-animating');
+        menu?.style.removeProperty('opacity');
+        const button = titlebar.querySelector('[data-window-control]');
+        button?.style.removeProperty('opacity');
     }, 460);
 }
 function closeOtherTerminalWindowMenus(currentButton = null) {
