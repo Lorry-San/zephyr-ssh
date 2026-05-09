@@ -1242,8 +1242,8 @@ body.terminal-mode .app-shell {
     right: auto;
     z-index: 16;
     width: min(var(--terminal-island-menu-width, 260px), calc(100% - 16px));
-    min-height: min(var(--terminal-island-menu-height, 184px), 360px);
-    max-height: min(var(--terminal-island-menu-height, 360px), calc(100dvh - 96px));
+    height: var(--terminal-island-menu-height, auto);
+    max-height: none;
     display: grid;
     grid-auto-rows: minmax(38px, auto);
     gap: 7px;
@@ -1263,9 +1263,7 @@ body.terminal-mode .app-shell {
     -webkit-backdrop-filter: blur(28px) saturate(1.8);
     opacity: 0;
     pointer-events: none;
-    overflow: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
+    overflow: visible;
     transform:
         translate3d(var(--island-start-dx, 0px), var(--island-start-dy, 0px), 0)
         scaleX(max(var(--island-start-scale-x, .24), .18))
@@ -1277,8 +1275,6 @@ body.terminal-mode .app-shell {
     will-change: opacity, transform, filter, clip-path, border-radius;
     contain: paint;
 }
-.terminal-window-menu::-webkit-scrollbar { width: 6px; }
-.terminal-window-menu::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; }
 .terminal-window-menu::before {
     content: '';
     position: absolute;

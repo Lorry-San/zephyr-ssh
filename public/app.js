@@ -984,9 +984,8 @@ function positionTerminalWindowMenu(titlebar) {
     const windowRect = titlebar.closest('.terminal-window')?.getBoundingClientRect() || titleRect;
     const menuWidth = Math.min(260, Math.max(220, titleRect.width - 16));
     const naturalHeight = 16 + itemCount * 42;
-    const availableBelow = Math.max(96, windowRect.bottom - islandCenterY - 12);
+    const targetHeight = naturalHeight;
     const openDown = true;
-    const targetHeight = Math.min(naturalHeight, availableBelow);
     const minLeft = 8;
     const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
     const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
