@@ -1290,6 +1290,32 @@ body.terminal-mode .app-shell {
     transform: scale3d(.28, .72, 1);
     pointer-events: none;
 }
+.terminal-window-menu::after {
+    content: '';
+    position: absolute;
+    left: calc(var(--island-origin-x, 50%) - 2.5px);
+    top: 8.5px;
+    z-index: 2;
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+    box-shadow:
+        -10px 0 0 color-mix(in srgb, var(--text-secondary) 72%, transparent),
+        10px 0 0 color-mix(in srgb, var(--text-secondary) 72%, transparent),
+        0 0 9px rgba(255,255,255,.08);
+    opacity: 1;
+    transform: scale(1);
+    transform-origin: center center;
+    filter: blur(0);
+    pointer-events: none;
+}
+.terminal-window-titlebar.menu-open .terminal-window-menu::after {
+    animation: terminalIslandSourceDotsToPanel .24s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.terminal-window-titlebar.menu-closing .terminal-window-menu::after {
+    animation: terminalIslandSourceDotsReturn .30s cubic-bezier(.34,1.56,.64,1) both;
+}
 :root[data-theme="light"] .terminal-window-menu {
     border-color: rgba(0,0,0,.06);
     background:
@@ -1397,6 +1423,16 @@ body.terminal-mode .app-shell {
     0%, 100% { transform: scale(var(--island-dot-scale)); filter: blur(0); }
     50% { transform: scale(calc(var(--island-dot-scale) * 1.08)); filter: blur(.15px); }
 }
+@keyframes terminalIslandSourceDotsToPanel {
+    0% { opacity: 1; transform: scale(1); filter: blur(0); }
+    55% { opacity: .46; transform: scale(.72); filter: blur(1.2px); }
+    100% { opacity: 0; transform: scale(.48); filter: blur(4px); }
+}
+@keyframes terminalIslandSourceDotsReturn {
+    0% { opacity: 0; transform: scale(.48); filter: blur(4px); }
+    58% { opacity: .82; transform: scale(.88); filter: blur(.8px); }
+    100% { opacity: 1; transform: scale(1); filter: blur(0); }
+}
 @keyframes terminalIslandSourceMelt {
     0% {
         opacity: 1;
@@ -1498,23 +1534,23 @@ body.terminal-mode .app-shell {
 }
 @keyframes terminalIslandFluidOpen {
     0% {
-        opacity: .02;
+        opacity: .68;
         border-radius: 999px;
         clip-path: inset(0 44% 86% 44% round 999px);
         transform:
             translate3d(var(--island-start-dx, 0px), 0, 0)
             scaleX(max(var(--island-start-scale-x, .34), .28))
             scaleY(max(var(--island-start-scale-y, .18), .14));
-        filter: blur(4px) saturate(1);
+        filter: blur(3px) saturate(1);
     }
-    10% {
-        opacity: .38;
+    12% {
+        opacity: .74;
         border-radius: 999px;
-        clip-path: inset(0 42% 82% 42% round 999px);
+        clip-path: inset(0 40% 80% 40% round 999px);
         transform:
-            translate3d(calc(var(--island-start-dx, 0px) * .88), 0, 0)
-            scaleX(.40)
-            scaleY(.22);
+            translate3d(calc(var(--island-start-dx, 0px) * .86), 0, 0)
+            scaleX(.42)
+            scaleY(.24);
         filter: blur(4px) saturate(1);
     }
     24% {
