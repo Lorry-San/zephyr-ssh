@@ -981,8 +981,8 @@ function positionTerminalWindowMenu(titlebar) {
     const islandCenterX = buttonRect.left + buttonRect.width / 2;
     const islandCenterY = buttonRect.top + buttonRect.height / 2;
     const itemCount = Number.parseInt(menu.style.getPropertyValue('--island-action-count'), 10) || menu.children.length || 3;
-    const menuWidth = Math.min(184, Math.max(136, titleRect.width - 16));
-    const targetHeight = Math.min(304, 10 + itemCount * 30);
+    const menuWidth = Math.min(220, Math.max(172, titleRect.width - 16));
+    const targetHeight = Math.min(360, 16 + itemCount * 38);
     const minLeft = 8;
     const maxLeft = Math.max(minLeft, titleRect.width - menuWidth - 8);
     const idealLeft = islandCenterX - titleRect.left - menuWidth / 2;
