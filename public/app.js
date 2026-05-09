@@ -1055,7 +1055,9 @@ function openTerminalWindowMenu(titlebar) {
     titlebar.classList.remove('menu-closing', 'menu-animating');
     positionTerminalWindowMenu(titlebar, { collapsed: true, force: true });
     const menu = titlebar.querySelector('.terminal-window-menu');
+    const button = titlebar.querySelector('[data-window-control]');
     menu?.style.setProperty('opacity', '1');
+    button?.style.setProperty('opacity', '0');
     titlebar.classList.add('menu-open', 'menu-animating');
     requestAnimationFrame(() => {
         positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
@@ -1069,14 +1071,17 @@ function closeTerminalWindowMenu(titlebar) {
     if (!titlebar) return;
     window.clearTimeout(titlebar._terminalMenuCloseTimer);
     const menu = titlebar.querySelector('.terminal-window-menu');
+    const button = titlebar.querySelector('[data-window-control]');
     positionTerminalWindowMenu(titlebar, { collapsed: false, force: true });
     menu?.style.setProperty('opacity', '1');
+    button?.style.setProperty('opacity', '0');
     titlebar.classList.add('menu-closing', 'menu-animating');
     titlebar.classList.remove('menu-open');
     requestAnimationFrame(() => positionTerminalWindowMenu(titlebar, { collapsed: true, force: true }));
     titlebar._terminalMenuCloseTimer = window.setTimeout(() => {
         titlebar.classList.remove('menu-closing', 'menu-animating');
         menu?.style.removeProperty('opacity');
+        button?.style.removeProperty('opacity');
     }, 460);
 }
 function closeOtherTerminalWindowMenus(currentButton = null) {
