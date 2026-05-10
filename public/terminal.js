@@ -3746,33 +3746,27 @@ function showInfoModal() {
 
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
-    // @wterm/dom 官方 InputHandler 在每次键盘输入前会调用 _scrollToBottom()，
-    // 这是官方 demo 在终端本身作为唯一滚动容器时可接受的行为；但本项目有历史输出浏览场景，
-    // 用户滚到上方后输入普通字符不应被外层强制拉到底。这里按官方 write() 的语义改为：
-    // 只有输入发生前已经在底部，才继续保持底部；否则保持用户当前 scrollTop。
     const originalScrollToBottom = typeof term._scrollToBottom === 'function' ? term._scrollToBottom.bind(term) : null;
+    const originalIsScrolledToBottom = typeof term._isScrolledToBottom === 'function' ? term._isScrolledToBottom.bind(term) : null;
+    const getWTermBottomDistance = () => {
+        const el = term.element || wtermWrapper;
+        if (!el) return 0;
+        return el.scrollHeight - el.scrollTop - el.clientHeight;
+    };
+    // WTerm 官方 write() 依赖“写入前是否位于底部”来决定输出后是否跟随。
+    // 这里必须保持这个语义，不能用过大的外层阈值，否则会把历史区误判为底部。
+    term._isScrolledToBottom = () => getWTermBottomDistance() < 5;
     term._scrollToBottom = () => {
         const el = term.element || wtermWrapper;
         if (!el) return;
-        if (!isTerminalAtBottom(el)) {
-            shouldFollowTerminalOutput = false;
-            terminalAutoScrollLockedByUser = true;
-            scheduleTerminalScrollbarUpdate();
-            return;
-        }
+        const wasAtOfficialBottom = originalIsScrolledToBottom ? originalIsScrolledToBottom() : getWTermBottomDistance() < 5;
         const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-        el.scrollTop = maxScroll;
-        shouldFollowTerminalOutput = true;
-        terminalAutoScrollLockedByUser = false;
+        // 输入前如果已经在官方定义的底部，按官方逻辑贴底；如果用户明确在历史区，
+        // 不因为输入事件强制跳到底，后续远端输出仍交给 WTerm.write() 自己判断。
+        if (wasAtOfficialBottom) el.scrollTop = maxScroll;
+        scheduleTerminalScrollbarUpdate();
     };
     term._zephyrOriginalScrollToBottom = originalScrollToBottom;
-    if (typeof term._isScrolledToBottom === 'function') {
-        term._isScrolledToBottom = () => {
-            const el = term.element || wtermWrapper;
-            if (!el) return true;
-            return isTerminalAtBottom(el);
-        };
-    }
     term._zephyrScrollPatched = true;
 }
 
