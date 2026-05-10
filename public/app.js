@@ -915,6 +915,7 @@ function showTerminalSessionInWorkspace(id) {
     const maxWindows = getEffectiveTerminalMaxWindows();
     if (maxWindows <= 1) {
         terminalTabs.forEach((item) => { if (item.id !== id) item.minimized = true; });
+        visualLayout = [id];
     } else {
         const visibleIds = orderedVisibleIds();
         if (!visualLayout.includes(id)) visualLayout.push(id);
@@ -925,8 +926,12 @@ function showTerminalSessionInWorkspace(id) {
             if (victim) victim.minimized = true;
             visualLayout = visualLayout.filter((itemId) => itemId !== victimId);
         }
-        visualLayout = [...visualLayout.filter((itemId) => visibleTerminalTabs().some((item) => item.id === itemId)), ...visibleIds.filter((itemId) => !visualLayout.includes(itemId))].slice(-maxWindows);
+        const stillVisibleIds = orderedVisibleIds();
+        visualLayout = [...visualLayout.filter((itemId) => stillVisibleIds.includes(itemId)), ...visibleIds.filter((itemId) => !visualLayout.includes(itemId) && stillVisibleIds.includes(itemId))];
+        if (!visualLayout.includes(id)) visualLayout.push(id);
+        visualLayout = visualLayout.slice(-maxWindows);
     }
+    if (!visualLayout.includes(id)) visualLayout = [id, ...visualLayout].slice(0, maxWindows);
     syncVisualLayout({ preserve: true });
 }
 function enforceTerminalWorkspaceLimit(newId) {
@@ -1768,6 +1773,13 @@ function startSmartbarIconDrag(e, tabId) {
             }
             if (targetWin && targetWin !== tabId) {
                 replaceWindowWithDockTab(targetWin, tabId);
+                animateWindowFromDock(tabId, source, { swap: true });
+                ghost.remove();
+                return;
+            }
+            if (!targetWin && !targetDock) {
+                showTerminalSessionInWorkspace(tabId);
+                renderTerminalTabs();
                 animateWindowFromDock(tabId, source, { swap: true });
                 ghost.remove();
                 return;
