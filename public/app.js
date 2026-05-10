@@ -197,8 +197,16 @@ function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
 function switchView(name) {
     $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+    const wasTerminal = document.body.classList.contains('terminal-mode');
     document.body.classList.toggle('terminal-mode', name === 'terminal');
-    if (name === 'terminal') scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
+    document.body.classList.toggle('terminal-mode-entering', name === 'terminal' && !wasTerminal);
+    window.clearTimeout(switchView._navTimer);
+    if (name === 'terminal') {
+        switchView._navTimer = window.setTimeout(() => document.body.classList.remove('terminal-mode-entering'), 680);
+        scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
+    } else {
+        document.body.classList.remove('terminal-mode-entering');
+    }
 }
 function parseTags(v) { return String(v || '').split(',').map((x) => x.trim()).filter(Boolean); }
 function base64urlToBuffer(value) { const s = String(value).replace(/-/g, '+').replace(/_/g, '/'); return Uint8Array.from(atob(s + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)); }
@@ -915,28 +923,21 @@ function positionSmartbarPicker() {
     if (!smartbar || !picker || !addButton) return;
     const viewport = window.visualViewport;
     const vvLeft = viewport?.offsetLeft || 0;
-    const vvTop = viewport?.offsetTop || 0;
     const vvWidth = viewport?.width || window.innerWidth;
-    const vvHeight = viewport?.height || window.innerHeight;
     const margin = 14;
     const addRect = addButton.getBoundingClientRect();
+    const dockRect = smartbar.querySelector('.smartbar-panel')?.getBoundingClientRect?.();
     const pickerRect = picker.getBoundingClientRect();
-    const pickerWidth = Math.min(pickerRect.width || 300, Math.max(160, vvWidth - margin * 2));
-    const pickerHeight = pickerRect.height || 220;
+    const pickerWidth = Math.min(pickerRect.width || 310, Math.max(180, vvWidth - margin * 2));
     const anchorX = addRect.left + addRect.width / 2;
-    const idealLeft = anchorX - pickerWidth / 2;
-    const minLeft = vvLeft + margin;
-    const maxLeft = vvLeft + vvWidth - pickerWidth - margin;
-    const left = Math.min(Math.max(idealLeft, minLeft), Math.max(minLeft, maxLeft));
-    const belowTop = addRect.bottom + 12;
-    const aboveTop = addRect.top - pickerHeight - 12;
-    const top = belowTop + pickerHeight <= vvTop + vvHeight - margin ? belowTop : Math.max(vvTop + margin, aboveTop);
-    const arrowLeft = Math.min(pickerWidth - 18, Math.max(18, anchorX - left));
-
+    const left = Math.min(Math.max(anchorX - pickerWidth / 2, vvLeft + margin), vvLeft + vvWidth - pickerWidth - margin);
+    const top = Math.round((dockRect?.bottom || addRect.bottom) + 10);
+    const arrowLeft = Math.min(pickerWidth - 20, Math.max(20, anchorX - left));
     picker.style.width = `${pickerWidth}px`;
     picker.style.setProperty('--smartbar-picker-left', `${left}px`);
     picker.style.setProperty('--smartbar-picker-top', `${top}px`);
     picker.style.setProperty('--smartbar-picker-arrow-left', `${arrowLeft}px`);
+    picker.style.setProperty('--smartbar-picker-origin-x', `${arrowLeft}px`);
 }
 function renderTerminalSmartbar() {
     const order = getTerminalSmartbarOrder();

@@ -423,13 +423,29 @@ body.app-body.terminal-mode {
     backdrop-filter: blur(20px) saturate(1.4);
     -webkit-backdrop-filter: blur(20px) saturate(1.4);
 }
+.main-nav {
+    transition:
+        padding-bottom .62s cubic-bezier(.16,1,.3,1),
+        background .30s ease,
+        box-shadow .42s ease,
+        border-radius .42s ease;
+}
 body.terminal-mode .main-nav {
     position: sticky;
     top: 0;
     padding-bottom: 27px;
     transform: none;
     opacity: 1;
-    transition: padding-bottom .58s cubic-bezier(.16,1,.3,1), background .3s ease;
+    box-shadow: 0 12px 30px rgba(0,0,0,.10);
+}
+body.terminal-mode-entering .main-nav {
+    animation: navDockShelfDrop .66s cubic-bezier(.16,1,.3,1) both;
+}
+@keyframes navDockShelfDrop {
+    0% { padding-bottom: 12px; filter: blur(.2px); }
+    58% { padding-bottom: 31px; filter: blur(0); }
+    82% { padding-bottom: 25px; }
+    100% { padding-bottom: 27px; }
 }
 .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--text); text-decoration: none; font-size: 18px; }
 .brand span { display: inline-grid; place-items: center; min-width: 24px; }
@@ -767,22 +783,22 @@ body.terminal-mode .terminal-smartbar .smartbar-handle,
     position: fixed;
     left: var(--smartbar-picker-left, 18px);
     top: var(--smartbar-picker-top, 120px);
-    width: min(300px, calc(100vw - 28px));
+    width: min(310px, calc(100vw - 28px));
     max-height: min(330px, 58vh);
     pointer-events: auto;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
     border: 1px solid rgba(139,148,158,.30);
-    border-radius: 20px;
+    border-radius: 22px;
     background:
-        radial-gradient(circle at 28% 0%, rgba(255,255,255,.20), transparent 34%),
-        color-mix(in srgb, var(--surface) 84%, transparent);
-    box-shadow: 0 20px 58px rgba(0,0,0,.36), inset 0 1px 0 rgba(255,255,255,.12);
-    backdrop-filter: blur(26px) saturate(1.55);
-    -webkit-backdrop-filter: blur(26px) saturate(1.55);
-    transform-origin: top center;
-    animation: smartbarPickerFloat .34s cubic-bezier(.18,1.22,.2,1);
+        radial-gradient(circle at var(--smartbar-picker-origin-x, 50%) 0%, rgba(255,255,255,.24), transparent 34%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, transparent), color-mix(in srgb, var(--surface) 72%, transparent));
+    box-shadow: 0 24px 68px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.14);
+    backdrop-filter: blur(30px) saturate(1.7);
+    -webkit-backdrop-filter: blur(30px) saturate(1.7);
+    transform-origin: var(--smartbar-picker-origin-x, 50%) 0%;
+    animation: smartbarPickerFloat .52s cubic-bezier(.16,1,.3,1) both;
 }
 .smartbar-picker::before {
     content: '';
@@ -797,9 +813,10 @@ body.terminal-mode .terminal-smartbar .smartbar-handle,
     transform: translateX(-50%) rotate(45deg);
 }
 @keyframes smartbarPickerFloat {
-    0% { opacity: 0; transform: translateY(-8px) scale(.88); filter: blur(8px); }
-    70% { opacity: 1; transform: translateY(1px) scale(1.025); filter: blur(0); }
-    100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+    0% { opacity: 0; transform: translate3d(0, -10px, 0) scale3d(.26, .18, 1); filter: blur(12px) saturate(.85); border-radius: 999px; }
+    58% { opacity: 1; transform: translate3d(0, 2px, 0) scale3d(1.035, 1.025, 1); filter: blur(0) saturate(1.06); border-radius: 24px; }
+    82% { transform: translate3d(0, -1px, 0) scale3d(.992, .996, 1); }
+    100% { opacity: 1; transform: translate3d(0, 0, 0) scale3d(1, 1, 1); filter: blur(0) saturate(1); border-radius: 22px; }
 }
 .smartbar-picker-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid rgba(139,148,158,.20); }
 .smartbar-picker-head strong { font-size: 13px; }
