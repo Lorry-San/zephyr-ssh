@@ -1724,9 +1724,10 @@ function activateTerminalFromDock(tabId, sourceEl = null) {
     const t = getTerminalSession(tabId);
     if (!t) return;
     dockLaunchAnimatingWindows.add(tabId);
-    if (t && !t.minimized && activeTerminalTab === tabId) minimizeTerminalSession(tabId);
+    const mobileFullscreen = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
+    if (!mobileFullscreen && t && !t.minimized && activeTerminalTab === tabId) minimizeTerminalSession(tabId);
     else showTerminalSessionInWorkspace(tabId);
-    setTerminalSmartbarOpen(false);
+    if (!mobileFullscreen) setTerminalSmartbarOpen(false);
     renderTerminalTabs();
     animateWindowFromDock(tabId, sourceRect, { swap: false });
     window.setTimeout(() => {
@@ -2266,7 +2267,10 @@ function bindEvents() {
     });
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
-        if (tabBtn && e.pointerType !== 'touch') startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+        if (!tabBtn) return;
+        const mobileFullscreen = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
+        if (mobileFullscreen && e.pointerType === 'touch') return;
+        startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');

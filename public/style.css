@@ -5636,3 +5636,36 @@ body.smartbar-trash-hover .smartbar-trash-target {
         display: none !important;
     }
 }
+
+/* ===== 移动 Dock 对齐和触屏手感修正 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        top: max(12px, env(safe-area-inset-top)) !important;
+        right: max(22px, env(safe-area-inset-right)) !important;
+        width: 42px !important;
+        height: 22px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(42px, calc(env(safe-area-inset-top) + 42px)) !important;
+        right: max(16px, env(safe-area-inset-right)) !important;
+        width: 92px !important;
+        pointer-events: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        pointer-events: auto !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-dock {
+        touch-action: manipulation !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-session,
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-add {
+        touch-action: manipulation !important;
+        -webkit-tap-highlight-color: transparent;
+        transition: transform .22s cubic-bezier(.16,1,.3,1), filter .22s ease, opacity .18s ease !important;
+    }
+    .terminal-smartbar:not(.open) .smartbar-panel {
+        pointer-events: none !important;
+    }
+}
