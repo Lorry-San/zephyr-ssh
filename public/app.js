@@ -2258,7 +2258,14 @@ function bindEvents() {
         if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
             e.preventDefault();
             e.stopPropagation();
-            setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            return;
+        }
+        if (e.target.closest('[data-smartbar-add]')) {
+            e.preventDefault();
+            e.stopPropagation();
+            terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen;
+            setTerminalSmartbarOpen(true);
+            requestAnimationFrame(positionSmartbarPicker);
             return;
         }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }

@@ -3656,10 +3656,55 @@ function restoreMobileWTermNativeInput() {
         try { wtermWrapper.removeEventListener('click', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
         try { wtermWrapper.removeEventListener('pointerdown', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
         try { wtermWrapper.removeEventListener('touchstart', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
+        try { document.removeEventListener('selectionchange', mobileWTermInputGuard.keepFocus, true); } catch (_) {}
+        try { document.removeEventListener('touchend', mobileWTermInputGuard.keepFocus, true); } catch (_) {}
+        try { document.removeEventListener('click', mobileWTermInputGuard.keepFocus, true); } catch (_) {}
+        try { window.visualViewport?.removeEventListener('resize', mobileWTermInputGuard.syncViewport); } catch (_) {}
+        try { window.visualViewport?.removeEventListener('scroll', mobileWTermInputGuard.syncViewport); } catch (_) {}
         if (mobileWTermInputGuard.originalFocus) term.focus = mobileWTermInputGuard.originalFocus;
         if (mobileWTermInputGuard.originalInputFocus) term.input.focus = mobileWTermInputGuard.originalInputFocus;
         mobileWTermInputGuard = null;
     }
+    const syncViewport = () => {
+        const h = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
+        if (h > 0) document.documentElement.style.setProperty('--mobile-terminal-vh', `${h}px`);
+    };
+    const shouldKeepFocus = () => {
+        if (!isTouchKeyboardDevice()) return false;
+        if (!term?.input?.textarea) return false;
+        if (mobileClipboardActionInProgress) return true;
+        const ae = document.activeElement;
+        if (ae === textarea) return false;
+        if (ae === cmdInput) return false;
+        if (ae?.closest?.('input, textarea, select, button, .smartbar-picker, .panel-layout-menu, .file-manager, .docker-panel, .info-modal, .snippet-panel, .shortcut-panel')) return false;
+        return document.hasFocus();
+    };
+    const keepFocus = () => {
+        if (!shouldKeepFocus()) return;
+        window.setTimeout(() => {
+            if (!shouldKeepFocus()) return;
+            try {
+                const ro = textarea.readOnly;
+                textarea.readOnly = true;
+                textarea.focus({ preventScroll: true });
+                textarea.readOnly = false;
+                markKeyboardFocusActive();
+                updateViewportInsets();
+            } catch (_) {}
+        }, 0);
+    };
+    const originalFocus = term.focus?.bind(term);
+    const originalInputFocus = term.input.focus?.bind(term.input);
+    term.focus = () => keepFocus();
+    term.input.focus = () => keepFocus();
+    document.addEventListener('selectionchange', keepFocus, true);
+    document.addEventListener('touchend', keepFocus, true);
+    document.addEventListener('click', keepFocus, true);
+    window.visualViewport?.addEventListener('resize', syncViewport, { passive: true });
+    window.visualViewport?.addEventListener('scroll', syncViewport, { passive: true });
+    mobileWTermInputGuard = { guard: () => {}, stopPointer: () => {}, keepFocus, syncViewport, originalFocus, originalInputFocus };
+    syncViewport();
+    keepFocus();
 }
 
 function setupHorizontalScrollbarVisibility(...elements) {
