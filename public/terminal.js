@@ -62,6 +62,7 @@ const cmdInput = $('#cmdInput');
 const cmdKeyboardBtn = $('#cmdKeyboardBtn');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
+const pasteBtn = $('#pasteBtn');
 const fileBtn = $('#fileBtn');
 const infoBtn = $('#infoBtn');
 const dockerBtn = $('#dockerBtn');
@@ -1039,16 +1040,15 @@ copyBtn.addEventListener('click', async () => {
     const wasKeyboardUserControlled = mobileKeyboardUserControlled;
     const text = getCopyableSelectionText();
     if (!text) {
-        const pasted = await pasteClipboardIntoTerminal('mobile-copy-paste-button');
+        toast?.('请先选择要复制的终端内容');
         if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
-        if (!pasted) toast?.('剪贴板为空或浏览器未授权');
         return;
     }
     enterMobileTerminalSelectionMode('copy-button');
     const originalText = copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(text);
-        copyBtn.textContent = '✅ 已复制';
+        copyBtn.textContent = '已复制';
     } catch {
         const ta = document.createElement('textarea');
         ta.value = text;
@@ -1056,7 +1056,7 @@ copyBtn.addEventListener('click', async () => {
         ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
-        try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; } catch (_) { copyBtn.textContent = '❌ 失败'; }
+        try { document.execCommand('copy'); copyBtn.textContent = '已复制'; } catch (_) { copyBtn.textContent = '失败'; }
         document.body.removeChild(ta);
     }
     if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
@@ -1064,8 +1064,17 @@ copyBtn.addEventListener('click', async () => {
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
+pasteBtn?.addEventListener('click', async () => {
+    const wasKeyboardUserControlled = mobileKeyboardUserControlled;
+    const pasted = await pasteClipboardIntoTerminal('mobile-paste-button');
+    if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
+    if (!pasted) toast?.('剪贴板为空或浏览器未授权');
+});
+
 copyBtn.addEventListener('pointerdown', (e) => e.preventDefault(), { passive: false });
 copyBtn.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+pasteBtn?.addEventListener('pointerdown', (e) => e.preventDefault(), { passive: false });
+pasteBtn?.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
 
 document.addEventListener('copy', (e) => {
     const selection = window.getSelection?.();
@@ -3501,7 +3510,7 @@ function updateViewportInsets() {
     mobileKeyboardOpen = keyboardOpen;
     cmdKeyboardBtn?.classList.toggle('keyboard-visible', keyboardOpen && mobileKeyboardUserControlled);
     if (cmdKeyboardBtn && mobileKeyboardUserControlled) {
-        cmdKeyboardBtn.textContent = keyboardOpen ? '⌄' : '⌄';
+        cmdKeyboardBtn.textContent = '';
         cmdKeyboardBtn.title = '关闭键盘';
         cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
     }
@@ -3662,7 +3671,7 @@ function closeMobileCommandKeyboard() {
     cmdInput?.setAttribute('readonly', 'readonly');
     cmdKeyboardBtn?.classList.remove('keyboard-visible');
     if (cmdKeyboardBtn) {
-        cmdKeyboardBtn.textContent = '⌨';
+        cmdKeyboardBtn.textContent = '';
         cmdKeyboardBtn.title = '打开键盘';
         cmdKeyboardBtn.setAttribute('aria-label', '打开键盘');
     }
@@ -3682,19 +3691,20 @@ function openMobileCommandKeyboard() {
     cmdInput?.removeAttribute('readonly');
     cmdKeyboardBtn?.classList.add('keyboard-visible');
     if (cmdKeyboardBtn) {
-        cmdKeyboardBtn.textContent = '⌄';
+        cmdKeyboardBtn.textContent = '';
         cmdKeyboardBtn.title = '关闭键盘';
         cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
     }
-    cmdInput?.focus?.({ preventScroll: true });
+    const target = term?.input?.textarea || cmdInput;
+    target?.focus?.({ preventScroll: true });
     markKeyboardFocusActive();
-    window.setTimeout(() => {
+    updateViewportInsets();
+    [40, 120, 260, 520].forEach((delay) => window.setTimeout(() => {
         if (term?.input?.textarea && mobileKeyboardUserControlled) {
             try { term.input.textarea.focus({ preventScroll: true }); } catch (_) {}
         }
-    }, 80);
-    updateViewportInsets();
-    [80, 260, 520].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
+        updateViewportInsets();
+    }, delay));
 }
 
 function toggleMobileCommandKeyboard() {

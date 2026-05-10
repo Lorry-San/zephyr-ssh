@@ -2265,7 +2265,7 @@ function bindEvents() {
     });
     document.addEventListener('pointerdown', (e) => {
         if (!terminalSmartbarOpen) return;
-        if (e.target.closest?.('[data-smartbar-toggle]')) return;
+        if (e.target.closest?.('[data-smartbar-toggle], .mobile-fullscreen-dock-toggle')) return;
         if (e.target.closest?.('.smartbar-picker')) return;
         if (e.target.closest?.('[data-smartbar-add]')) return;
         if (e.target.closest?.('.smartbar-dock')) {
