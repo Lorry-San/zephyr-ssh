@@ -777,7 +777,7 @@ async function openConnection(id) {
         terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
         console.debug('[guac-client]', 'open guacamole tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {
-        const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now() };
+        const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
         // 移动端直接进入独立终端页，不走 iframe 工作区。
         // 这样键盘只影响 terminal.html 自己，避免父页面 + iframe 双重 visualViewport 抖动。
@@ -2039,12 +2039,34 @@ async function saveTerminalLayout(e) {
 }
 
 const SNIPPET_STORAGE_KEY = 'zephyr-ssh-snippets';
-function getSnippets() {
-    try { const data = JSON.parse(localStorage.getItem(SNIPPET_STORAGE_KEY) || '[]'); return Array.isArray(data) ? data : []; }
-    catch { return []; }
+function normalizeSnippets(list) {
+    return Array.isArray(list) ? list.filter((item) => item && item.command).map((item) => ({
+        id: String(item.id || `snippet-${Date.now()}-${Math.random().toString(16).slice(2)}`),
+        name: String(item.name || '').slice(0, 60),
+        command: String(item.command || ''),
+        group: String(item.group || '').slice(0, 40),
+        autoRun: !!item.autoRun,
+        updatedAt: Number(item.updatedAt || Date.now()),
+    })) : [];
 }
-function saveSnippets(list) {
-    localStorage.setItem(SNIPPET_STORAGE_KEY, JSON.stringify(list));
+function getSnippets() {
+    return normalizeSnippets(settings?.snippets || []);
+}
+async function persistSnippets(list) {
+    const snippets = normalizeSnippets(list);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ snippets }) });
+    settings.snippets = normalizeSnippets(settings.snippets || snippets);
+    return settings.snippets;
+}
+async function migrateLocalSnippetsToServer() {
+    if (getSnippets().length) return;
+    try {
+        const local = normalizeSnippets(JSON.parse(localStorage.getItem(SNIPPET_STORAGE_KEY) || '[]'));
+        if (!local.length) return;
+        await persistSnippets(local);
+        localStorage.removeItem(SNIPPET_STORAGE_KEY);
+        toast('已将本地代码片段迁移到服务端');
+    } catch (_) {}
 }
 function resetSnippetForm() {
     $('#snippetId').value = '';
@@ -2059,7 +2081,7 @@ function renderSnippetSettings() {
     const snippets = getSnippets();
     list.innerHTML = snippets.length ? snippets.map((item) => `<div class="snippet-settings-item" data-id="${escapeHtml(item.id)}"><div><strong>${escapeHtml(item.name || '未命名片段')}</strong><em>${escapeHtml(item.group || '未分组')} · ${item.autoRun ? '直接执行' : '填入输入框'}</em><code>${escapeHtml(item.command || '')}</code></div><button class="tool-btn" data-edit-snippet="${escapeHtml(item.id)}">编辑</button><button class="tool-btn danger" data-delete-snippet="${escapeHtml(item.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无代码片段。</p>';
 }
-function saveSnippet(e) {
+async function saveSnippet(e) {
     e.preventDefault();
     const name = $('#snippetName').value.trim();
     const command = $('#snippetCommand').value;
@@ -2069,10 +2091,10 @@ function saveSnippet(e) {
     const snippets = getSnippets();
     const idx = snippets.findIndex((x) => x.id === id);
     if (idx >= 0) snippets[idx] = item; else snippets.unshift(item);
-    saveSnippets(snippets);
+    await persistSnippets(snippets);
     resetSnippetForm();
     renderSnippetSettings();
-    toast('代码片段已保存');
+    toast('代码片段已保存到服务端');
 }
 function setupSnippetSettings() {
     $('#snippetForm')?.addEventListener('submit', saveSnippet);
@@ -2087,9 +2109,10 @@ function setupSnippetSettings() {
             $('#snippetId').value = item.id; $('#snippetName').value = item.name || ''; $('#snippetCommand').value = item.command || ''; $('#snippetGroup').value = item.group || ''; $('#snippetAutoRun').checked = !!item.autoRun;
         }
         if (deleteId) {
-            saveSnippets(snippets.filter((x) => x.id !== deleteId));
-            renderSnippetSettings();
-            toast('代码片段已删除');
+            persistSnippets(snippets.filter((x) => x.id !== deleteId)).then(() => {
+                renderSnippetSettings();
+                toast('代码片段已从服务端删除');
+            }).catch((err) => toast(err.message || '删除失败'));
         }
     });
     renderSnippetSettings();
@@ -2390,5 +2413,5 @@ function bindEvents() {
     $('#clearLoginEventsBtn').addEventListener('click', async () => { if (!confirm('确定清理登录事件日志？')) return; await api('/api/security/login-events', { method: 'DELETE' }); await loadSecurityLists(); toast('登录事件已清理'); });
     $('#importDataForm').addEventListener('submit', async (e) => { e.preventDefault(); if (!confirm('导入会覆盖当前数据库，系统会先生成本地备份。继续？')) return; const fd = new FormData(); fd.append('backup', $('#backupFile').files[0]); fd.append('loginPassword', $('#importLoginPassword').value); fd.append('backupPassword', $('#backupPassword').value); const res = await fetch('/api/data/import', { method: 'POST', body: fd, credentials: 'same-origin' }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || '导入失败'); toast(data.message || '导入完成'); });
 }
-async function init() { applyTheme(getPreferredTheme()); try { const me = await api('/api/auth/me'); if (me.mustChangePassword) location.href = '/'; bindEvents(); await loadSettings(); await loadConnections(); await loadNetwork(); } catch { location.href = '/'; } }
+async function init() { applyTheme(getPreferredTheme()); try { const me = await api('/api/auth/me'); if (me.mustChangePassword) location.href = '/'; bindEvents(); await loadSettings(); await migrateLocalSnippetsToServer(); renderSnippetSettings(); await loadConnections(); await loadNetwork(); } catch { location.href = '/'; } }
 init();

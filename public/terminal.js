@@ -1415,6 +1415,7 @@ fmCloseBtn.addEventListener('click', hideFileManager);
 
 const SNIPPET_STORAGE_KEY = 'zephyr-ssh-snippets';
 function loadTerminalSnippets() {
+    if (Array.isArray(params?.snippets)) return params.snippets.filter((item) => item && item.command);
     try {
         const data = JSON.parse(localStorage.getItem(SNIPPET_STORAGE_KEY) || '[]');
         return Array.isArray(data) ? data.filter((item) => item && item.command) : [];

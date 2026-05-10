@@ -957,6 +957,16 @@ function normalizeSettingsInput(body) {
         next.policeBeianUrl = next.beian.policeBeianUrl || '';
         next.showBeian = next.beian.show !== false;
     }
+    if (Array.isArray(body.snippets)) {
+        next.snippets = body.snippets.slice(0, 500).map((item) => ({
+            id: String(item?.id || crypto.randomUUID()).slice(0, 80),
+            name: String(item?.name || '').slice(0, 60),
+            command: String(item?.command || '').slice(0, 20000),
+            group: String(item?.group || '').slice(0, 40),
+            autoRun: !!item?.autoRun,
+            updatedAt: Number(item?.updatedAt || Date.now()),
+        })).filter((item) => item.name && item.command.trim());
+    }
     return next;
 }
 
