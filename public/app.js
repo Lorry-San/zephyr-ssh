@@ -17,6 +17,7 @@ let smartbarDragState = null;
 let suppressSmartbarClick = false;
 let smartbarHoverWindowId = null;
 let dockSwapAnimatingWindows = new Set();
+let dockLaunchAnimatingWindows = new Set();
 let terminalDragState = null;
 let terminalControlLongPress = false;
 let fullscreenLoadingTimer = 0;
@@ -1224,7 +1225,7 @@ function renderTerminalWorkspace() {
         if (titlebar) {
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
-        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''}`;
+        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''} ${dockLaunchAnimatingWindows.has(t.id) ? 'dock-launching' : ''}`;
     });
     keepAliveMinimized.forEach((t) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
@@ -1565,6 +1566,63 @@ function reorderTerminalOrder(dragId, targetId) {
     const [id] = openOrderStack.splice(from, 1);
     openOrderStack.splice(to, 0, id);
 }
+function resetDockMagnification(dock = document.querySelector('.smartbar-dock')) {
+    dock?.querySelectorAll('.smartbar-session, .smartbar-add').forEach((item) => {
+        item.style.removeProperty('--dock-scale');
+        item.style.removeProperty('--dock-lift');
+        item.style.removeProperty('--dock-shift');
+        item.style.removeProperty('--dock-blur');
+    });
+}
+function updateDockMagnification(clientX, dock = document.querySelector('.smartbar-dock')) {
+    if (!dock) return;
+    const influence = 132;
+    dock.querySelectorAll('.smartbar-session, .smartbar-add').forEach((item) => {
+        const rect = item.getBoundingClientRect();
+        const center = rect.left + rect.width / 2;
+        const d = Math.abs(clientX - center);
+        const t = Math.max(0, 1 - d / influence);
+        const eased = t * t * (3 - 2 * t);
+        const direction = Math.sign(center - clientX);
+        item.style.setProperty('--dock-scale', (1 + eased * 0.22).toFixed(3));
+        item.style.setProperty('--dock-lift', `${(-eased * 13).toFixed(2)}px`);
+        item.style.setProperty('--dock-shift', `${(direction * eased * 7).toFixed(2)}px`);
+        item.style.setProperty('--dock-blur', `${((1 - eased) * 0.2).toFixed(2)}px`);
+    });
+}
+function animateWindowFromDock(tabId, sourceRect, { swap = false } = {}) {
+    if (!tabId || !sourceRect) return;
+    requestAnimationFrame(() => {
+        const win = document.querySelector(`#terminalWorkspace .terminal-window[data-window="${CSS.escape(tabId)}"]`);
+        if (!win) return;
+        const rect = win.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const sx = Math.max(0.08, sourceRect.width / rect.width);
+        const sy = Math.max(0.06, sourceRect.height / rect.height);
+        const dx = (sourceRect.left + sourceRect.width / 2) - (rect.left + rect.width / 2);
+        const dy = (sourceRect.top + sourceRect.height / 2) - (rect.top + rect.height / 2);
+        win.animate([
+            { transform: `translate3d(${dx}px, ${dy}px, 0) scale3d(${sx}, ${sy}, 1)`, opacity: 0.28, filter: 'blur(18px) saturate(.82)', borderRadius: '30px' },
+            { transform: `translate3d(${dx * 0.16}px, ${dy * 0.16 - 8}px, 0) scale3d(1.025, 1.018, 1)`, opacity: 1, filter: 'blur(0) saturate(1.08)', borderRadius: '12px', offset: 0.72 },
+            { transform: 'translate3d(0, 0, 0) scale3d(1, 1, 1)', opacity: 1, filter: 'blur(0) saturate(1)', borderRadius: '0px' }
+        ], { duration: swap ? 620 : 560, easing: 'cubic-bezier(.16,1,.3,1)' });
+    });
+}
+function activateTerminalFromDock(tabId, sourceEl = null) {
+    const sourceRect = sourceEl?.getBoundingClientRect?.();
+    const t = getTerminalSession(tabId);
+    if (!t) return;
+    dockLaunchAnimatingWindows.add(tabId);
+    if (t && !t.minimized && activeTerminalTab === tabId) minimizeTerminalSession(tabId);
+    else { restoreTerminalSession(tabId); activeTerminalTab = tabId; touchTerminalSession(tabId); }
+    setTerminalSmartbarOpen(false);
+    renderTerminalTabs();
+    animateWindowFromDock(tabId, sourceRect, { swap: false });
+    window.setTimeout(() => {
+        dockLaunchAnimatingWindows.delete(tabId);
+        renderTerminalTabs({ rebuildWorkspace: false });
+    }, 620);
+}
 function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     if (!targetWindowId || !draggedTabId || targetWindowId === draggedTabId) return false;
     const target = getTerminalSession(targetWindowId);
@@ -1627,9 +1685,11 @@ function startSmartbarIconDrag(e, tabId) {
             const targetDock = el?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
             const targetWin = el?.closest?.('[data-window]')?.dataset.window;
             if (targetWin && targetWin !== tabId) {
+                const sourceRect = ghost.getBoundingClientRect();
                 replaceWindowWithDockTab(targetWin, tabId);
                 setTerminalSmartbarOpen(false);
                 renderTerminalTabs();
+                animateWindowFromDock(tabId, sourceRect, { swap: true });
             } else if (targetDock && targetDock !== tabId) {
                 reorderTerminalOrder(tabId, targetDock);
                 renderTerminalSmartbar();
@@ -1934,18 +1994,20 @@ function bindEvents() {
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
         const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
         if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); return; }
-        const tab = e.target.closest('[data-smartbar-tab]')?.dataset.smartbarTab;
-        if (tab) {
-            const t = getTerminalSession(tab);
-            if (t && !t.minimized && activeTerminalTab === tab) minimizeTerminalSession(tab);
-            else { restoreTerminalSession(tab); activeTerminalTab = tab; touchTerminalSession(tab); }
-            setTerminalSmartbarOpen(false);
-            renderTerminalTabs();
-        }
+        const tabButton = e.target.closest('[data-smartbar-tab]');
+        const tab = tabButton?.dataset.smartbarTab;
+        if (tab) activateTerminalFromDock(tab, tabButton);
     });
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
         if (tabBtn) startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+    });
+    $('#sessionTabs').addEventListener('pointermove', (e) => {
+        const dock = e.target.closest('.smartbar-dock');
+        if (dock) updateDockMagnification(e.clientX, dock);
+    });
+    $('#sessionTabs').addEventListener('pointerleave', (e) => {
+        resetDockMagnification(e.currentTarget.querySelector('.smartbar-dock'));
     });
     document.addEventListener('pointerdown', (e) => {
         if (!terminalSmartbarOpen) return;
