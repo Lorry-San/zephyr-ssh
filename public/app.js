@@ -16,6 +16,7 @@ let terminalSmartbarClosing = false;
 let smartbarDragState = null;
 let suppressSmartbarClick = false;
 let smartbarHoverWindowId = null;
+let smartbarTrashHover = false;
 let dockSwapAnimatingWindows = new Set();
 let dockLaunchAnimatingWindows = new Set();
 let terminalDragState = null;
@@ -906,6 +907,28 @@ function restoreTerminalSession(id) {
     touchTerminalSession(id);
     enforceTerminalWorkspaceLimit(id);
 }
+function showTerminalSessionInWorkspace(id) {
+    const t = getTerminalSession(id); if (!t) return;
+    t.minimized = false;
+    activeTerminalTab = id;
+    touchTerminalSession(id);
+    const maxWindows = getEffectiveTerminalMaxWindows();
+    if (maxWindows <= 1) {
+        terminalTabs.forEach((item) => { if (item.id !== id) item.minimized = true; });
+    } else {
+        const visibleIds = orderedVisibleIds();
+        if (!visualLayout.includes(id)) visualLayout.push(id);
+        while (visibleTerminalTabs().length > maxWindows) {
+            const victimId = visualLayout.find((itemId) => itemId !== id);
+            if (!victimId) break;
+            const victim = getTerminalSession(victimId);
+            if (victim) victim.minimized = true;
+            visualLayout = visualLayout.filter((itemId) => itemId !== victimId);
+        }
+        visualLayout = [...visualLayout.filter((itemId) => visibleTerminalTabs().some((item) => item.id === itemId)), ...visibleIds.filter((itemId) => !visualLayout.includes(itemId))].slice(-maxWindows);
+    }
+    syncVisualLayout({ preserve: true });
+}
 function enforceTerminalWorkspaceLimit(newId) {
     const maxWindows = getEffectiveTerminalMaxWindows();
     if (maxWindows <= 1) {
@@ -1146,7 +1169,7 @@ function getMinimizedKeepAliveSessions() {
         .filter((t) => t.minimized && !closingTerminalTabs.has(t.id) && t.iframe)
         .sort((a, b) => (b.lastUsedAt || 0) - (a.lastUsedAt || 0));
     if (limit === -1) return minimized;
-    if (limit <= 0) return [];
+    if (limit <= 0) return minimized;
     return minimized.slice(0, limit);
 }
 function createTerminalWindowElement(t) {
@@ -1627,7 +1650,7 @@ function activateTerminalFromDock(tabId, sourceEl = null) {
     if (!t) return;
     dockLaunchAnimatingWindows.add(tabId);
     if (t && !t.minimized && activeTerminalTab === tabId) minimizeTerminalSession(tabId);
-    else { restoreTerminalSession(tabId); activeTerminalTab = tabId; touchTerminalSession(tabId); }
+    else showTerminalSessionInWorkspace(tabId);
     setTerminalSmartbarOpen(false);
     renderTerminalTabs();
     animateWindowFromDock(tabId, sourceRect, { swap: false });
@@ -1659,6 +1682,24 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     }, 560);
     return true;
 }
+function ensureSmartbarTrashTarget() {
+    let trash = document.querySelector('.smartbar-trash-target');
+    if (!trash) {
+        trash = document.createElement('div');
+        trash.className = 'smartbar-trash-target';
+        trash.innerHTML = '<span>⌫</span><strong>关闭</strong>';
+        document.body.appendChild(trash);
+    }
+    return trash;
+}
+function removeSmartbarTrashTarget() {
+    document.querySelector('.smartbar-trash-target')?.remove();
+    document.body.classList.remove('smartbar-trash-hover');
+    smartbarTrashHover = false;
+}
+function isPointInRect(x, y, rect, pad = 0) {
+    return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+}
 function startSmartbarIconDrag(e, tabId) {
     const btn = e.target.closest('[data-smartbar-tab]');
     if (!btn || e.button === 2) return;
@@ -1667,51 +1708,85 @@ function startSmartbarIconDrag(e, tabId) {
     const ghost = btn.cloneNode(true);
     ghost.classList.add('smartbar-drag-ghost');
     document.body.appendChild(ghost);
+    const trash = ensureSmartbarTrashTarget();
+    document.body.classList.add('smartbar-dragging-dock');
+    const sourceRect = btn.getBoundingClientRect();
+    smartbarDragState = { tabId, startX: e.clientX, startY: e.clientY, moved: false, ghost, sourceRect };
+    btn.classList.add('dragging');
     const moveGhost = (ev) => {
+        const dx = ev.clientX - smartbarDragState.startX;
+        const dy = ev.clientY - smartbarDragState.startY;
         ghost.style.left = `${ev.clientX}px`;
         ghost.style.top = `${ev.clientY}px`;
+        ghost.style.transform = `translate(-50%, -50%) scale(${smartbarDragState.moved ? 1.12 : 1.04}) rotate(${Math.max(-8, Math.min(8, dx * 0.035))}deg)`;
+        ghost.style.setProperty('--ghost-dx', `${dx}px`);
+        ghost.style.setProperty('--ghost-dy', `${dy}px`);
     };
-    smartbarDragState = { tabId, startX: e.clientX, startY: e.clientY, moved: false, ghost };
-    btn.classList.add('dragging');
     moveGhost(e);
     const onMove = (ev) => {
         const dx = ev.clientX - smartbarDragState.startX;
         const dy = ev.clientY - smartbarDragState.startY;
-        if (Math.hypot(dx, dy) > 6) smartbarDragState.moved = true;
+        if (Math.hypot(dx, dy) > 8) smartbarDragState.moved = true;
         moveGhost(ev);
         ghost.style.pointerEvents = 'none';
-        const hoverWin = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window || null;
+        const trashRect = trash.getBoundingClientRect();
+        smartbarTrashHover = isPointInRect(ev.clientX, ev.clientY, trashRect, 18);
+        document.body.classList.toggle('smartbar-trash-hover', smartbarTrashHover);
+        trash.classList.toggle('hover', smartbarTrashHover);
+        const hoverWin = smartbarTrashHover ? null : document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window || null;
         if (hoverWin !== smartbarHoverWindowId) {
             smartbarHoverWindowId = hoverWin;
             document.querySelectorAll('.terminal-window').forEach((el) => el.classList.toggle('dock-drop-target', !!hoverWin && el.dataset.window === hoverWin && hoverWin !== tabId));
         }
     };
-    const onUp = (ev) => {
+    const cleanup = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         btn.classList.remove('dragging');
+        document.body.classList.remove('smartbar-dragging-dock');
         document.querySelectorAll('.terminal-window.dock-drop-target').forEach((el) => el.classList.remove('dock-drop-target'));
         smartbarHoverWindowId = null;
-        ghost.remove();
-        if (smartbarDragState?.moved) {
+        window.setTimeout(removeSmartbarTrashTarget, 180);
+        smartbarDragState = null;
+    };
+    const onUp = (ev) => {
+        const moved = smartbarDragState?.moved;
+        const source = smartbarDragState?.sourceRect || ghost.getBoundingClientRect();
+        const targetWin = smartbarHoverWindowId || document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window;
+        const targetDock = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
+        const dropToTrash = smartbarTrashHover;
+        cleanup();
+        if (moved) {
             suppressSmartbarClick = true;
-            const targetWin = smartbarHoverWindowId || document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window;
-            const targetDock = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
+            if (dropToTrash) {
+                ghost.classList.add('smartbar-drag-ghost-closing');
+                window.setTimeout(() => ghost.remove(), 220);
+                closeTerminalTab(tabId, { reason: 'dock-trash' });
+                return;
+            }
             if (targetWin && targetWin !== tabId) {
-                const sourceRect = ghost.getBoundingClientRect();
                 replaceWindowWithDockTab(targetWin, tabId);
                 setTerminalSmartbarOpen(false);
-                animateWindowFromDock(tabId, sourceRect, { swap: true });
-            } else if (targetDock && targetDock !== tabId) {
+                animateWindowFromDock(tabId, source, { swap: true });
+                ghost.remove();
+                return;
+            }
+            if (targetDock && targetDock !== tabId) {
                 reorderTerminalOrder(tabId, targetDock);
                 renderTerminalSmartbar();
+                ghost.remove();
+                return;
             }
         }
-        smartbarDragState = null;
+        ghost.animate([
+            { transform: ghost.style.transform || 'translate(-50%, -50%) scale(1.1)', opacity: 1 },
+            { transform: 'translate(-50%, -50%) scale(.78)', opacity: 0 }
+        ], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => ghost.remove();
     };
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerup', onUp, { once: true });
 }
+
 function startTerminalWindowDrag(e, tabId) {
     if (isCompactTerminalWorkspace() || (e.target.closest('button') && !e.target.closest('.terminal-grip'))) return;
     const win = e.target.closest('.terminal-window');
