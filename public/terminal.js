@@ -296,6 +296,9 @@ const TERMINAL_LAYOUT_DIAGNOSTICS = false;
 const TERMINAL_SCROLL_DIAGNOSTICS = false;
 const TERMINAL_MIN_RESIZE_WIDTH = 120;
 const TERMINAL_MIN_RESIZE_HEIGHT = 80;
+const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
+let lastSentTerminalSize = { cols: 0, rows: 0 };
+let pendingTerminalResize = { cols: 0, rows: 0, timer: 0, reason: '' };
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
 
 function logTerminalScrollDiagnostics(event, details = {}) {
@@ -699,13 +702,22 @@ function updateFontSizeButtons() {
 
 function getTerminalCharMetrics() {
     const root = getTerminalScrollElement?.() || wtermWrapper;
+    const grid = wtermWrapper?.querySelector?.('.term-grid');
     const computed = getComputedStyle(root);
+    const probe = document.createElement('span');
+    probe.textContent = 'W';
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    probe.style.whiteSpace = 'pre';
+    probe.style.pointerEvents = 'none';
+    (grid || root).appendChild(probe);
+    const probeRect = probe.getBoundingClientRect();
+    probe.remove();
     const fontSize = terminalFontSize || parseFloat(computed.fontSize) || 14;
-    const lineHeight = parseFloat(computed.lineHeight) || fontSize * 1.25;
-    return {
-        lineHeight,
-        charWidth: fontSize * 0.62,
-    };
+    const cssLineHeight = parseFloat(computed.getPropertyValue('--term-row-height')) || parseFloat(computed.lineHeight) || fontSize * 1.2;
+    const lineHeight = Math.max(1, probeRect.height || term?._rowHeight || cssLineHeight);
+    const charWidth = Math.max(1, probeRect.width || fontSize * 0.62);
+    return { lineHeight, charWidth };
 }
 
 function getMeasuredTerminalSize() {
@@ -828,8 +840,9 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     const explicitRows = Math.floor(Number(rows));
 
     if (reason === 'wterm-onResize') {
-        // 官方路径：WTerm 内置 autoResize 测量出 cols/rows 后，通过 onResize 通知外层。
-        // 这里不要再次测量 DOM 或覆盖尺寸，否则会和官方 autoResize 竞争导致输入/渲染跳动。
+        // WTerm 的 ResizeObserver 在 iframe 被隐藏/最小化/父标签切换时会收到 0/1px 的瞬时尺寸。
+        // ssh2 的 Channel#setWindow(rows, cols, height, width) 会立刻改变远端 PTY；
+        // 如果把这些瞬时小尺寸发给后端，远端程序会按 1~几列重排，回来后就出现截图里的竖向破损。
         if (!Number.isFinite(explicitCols) || !Number.isFinite(explicitRows) || explicitCols < 20 || explicitRows < 2) {
             logTerminalLayoutDiagnostics('resize:ignored-invalid-wterm-size', {
                 reason,
@@ -838,13 +851,40 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
             });
             return;
         }
-        wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
-        logTerminalLayoutDiagnostics('resize:sent', {
-            reason,
-            force,
-            cols: explicitCols,
-            rows: explicitRows,
-        });
+        const rect = wtermWrapper?.getBoundingClientRect?.();
+        const visibleSurface = rect
+            && rect.width >= TERMINAL_MIN_RESIZE_WIDTH
+            && rect.height >= TERMINAL_MIN_RESIZE_HEIGHT
+            && wtermWrapper?.offsetParent !== null
+            && document.visibilityState === 'visible';
+        if (!visibleSurface) {
+            logTerminalLayoutDiagnostics('resize:defer-hidden-wterm-size', {
+                reason,
+                explicitCols,
+                explicitRows,
+                rectWidth: Math.round(rect?.width || 0),
+                rectHeight: Math.round(rect?.height || 0),
+            });
+            pendingTerminalResize.cols = explicitCols;
+            pendingTerminalResize.rows = explicitRows;
+            pendingTerminalResize.reason = reason;
+            return;
+        }
+        window.clearTimeout(pendingTerminalResize.timer);
+        pendingTerminalResize = { cols: explicitCols, rows: explicitRows, reason, timer: window.setTimeout(() => {
+            if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+            const freshRect = wtermWrapper?.getBoundingClientRect?.();
+            if (!freshRect || freshRect.width < TERMINAL_MIN_RESIZE_WIDTH || freshRect.height < TERMINAL_MIN_RESIZE_HEIGHT || document.visibilityState !== 'visible') return;
+            const measured = getMeasuredTerminalSize();
+            if (Math.abs(measured.cols - explicitCols) > 1 || Math.abs(measured.rows - explicitRows) > 1) {
+                logTerminalLayoutDiagnostics('resize:ignored-stale-wterm-size', { reason, explicitCols, explicitRows, measuredCols: measured.cols, measuredRows: measured.rows });
+                return;
+            }
+            if (lastSentTerminalSize.cols === explicitCols && lastSentTerminalSize.rows === explicitRows && !force) return;
+            lastSentTerminalSize = { cols: explicitCols, rows: explicitRows };
+            wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
+            logTerminalLayoutDiagnostics('resize:sent', { reason, force, cols: explicitCols, rows: explicitRows });
+        }, TERMINAL_RESIZE_DEBOUNCE_MS) };
         return;
     }
 
@@ -889,9 +929,15 @@ function isMobileKeyboardActiveOrSettling() {
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
     window.clearTimeout(scheduleTerminalResize._timer);
-    // 以官方 @wterm/dom 行为为准：尺寸变化由 WTerm 内置 autoResize 处理，
-    // 后端 PTY resize 只应来自 WTerm onResize(cols, rows)，不要由外层布局/键盘事件测量后主动发送。
-    logTerminalLayoutDiagnostics('resize:schedule-official-noop', { reason, delay });
+    // 以官方 @wterm/dom 行为为准：尺寸变化由 WTerm 内置 autoResize 处理；
+    // 但在页面重新可见/父布局稳定后，主动做一次安全校正，避免隐藏期间的尺寸被跳过。
+    scheduleTerminalResize._timer = window.setTimeout(() => {
+        invokeWTermLayoutRefresh(reason);
+        const cols = Math.floor(Number(term?.cols ?? term?._cols ?? term?.options?.cols ?? 0));
+        const rows = Math.floor(Number(term?.rows ?? term?._rows ?? term?.options?.rows ?? 0));
+        if (cols >= 20 && rows >= 2) sendTerminalResize(cols, rows, { reason: 'wterm-onResize', force: true });
+    }, delay);
+    logTerminalLayoutDiagnostics('resize:scheduled-safe-refresh', { reason, delay });
     scheduleTerminalScrollbarUpdate();
 }
 
@@ -4089,6 +4135,7 @@ window.addEventListener('pageshow', (e) => {
 document.addEventListener('visibilitychange', () => {
     logTerminalLayoutDiagnostics('visibilitychange');
     if (document.visibilityState === 'visible') {
+        scheduleTerminalResize('visibility-visible', 160);
         requestStableTerminalLayout('visibility-visible', { includeResize: true, focus: true });
     }
 });
@@ -4359,6 +4406,8 @@ function stopTerminalResizeObserver() {
     terminalResizeCleanup?.();
     terminalResizeCleanup = null;
     window.clearTimeout(scheduleTerminalResize._timer);
+    window.clearTimeout(pendingTerminalResize.timer);
+    pendingTerminalResize = { cols: 0, rows: 0, timer: 0, reason: '' };
 }
 
 function destroyTerminalInstance({ clear = true } = {}) {
@@ -4503,6 +4552,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     }
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
+    lastSentTerminalSize = { cols: Number(term.cols || 80), rows: Number(term.rows || 24) };
     applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
@@ -4542,7 +4592,9 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                 username: params.username,
                 password: params.password || '',
                 privateKey: params.privateKey || '',
-                init: params.init || ''
+                init: params.init || '',
+                cols: Math.max(20, Math.floor(Number(term?.cols || 80))),
+                rows: Math.max(2, Math.floor(Number(term?.rows || 24)))
             }));
         });
 

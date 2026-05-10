@@ -2428,7 +2428,9 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             });
 
             // 打开 shell
-            sshClient.shell({ term: 'xterm-256color', rows: 24, cols: 80 }, (err, stream) => {
+            const initialRows = Number.isFinite(Number(msg.rows)) ? Math.min(200, Math.max(2, Math.floor(Number(msg.rows)))) : 24;
+            const initialCols = Number.isFinite(Number(msg.cols)) ? Math.min(500, Math.max(20, Math.floor(Number(msg.cols)))) : 80;
+            sshClient.shell({ term: 'xterm-256color', rows: initialRows, cols: initialCols }, (err, stream) => {
                 if (err) {
                     console.warn('[SSH-DIAG] shell open failed after ssh ready', {
                         connectionId: conn.id || connectionId || '',
@@ -2499,7 +2501,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         // 窗口大小调整
         if (msg.type === 'resize') {
-            if (sshStream && sshStream.setWindow) sshStream.setWindow(msg.rows, msg.cols, 0, 0);
+            const rows = Math.floor(Number(msg.rows));
+            const cols = Math.floor(Number(msg.cols));
+            if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows < 2 || cols < 20 || rows > 200 || cols > 500) {
+                console.warn('[SSH] 忽略异常 PTY resize', { rows: msg.rows, cols: msg.cols });
+                return;
+            }
+            if (sshStream && sshStream.setWindow) sshStream.setWindow(rows, cols, 0, 0);
             return;
         }
 

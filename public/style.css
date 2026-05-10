@@ -922,10 +922,10 @@ body.terminal-mode-entering .terminal-smartbar .smartbar-handle {
     position: absolute !important;
     left: -10000px !important;
     top: -10000px !important;
-    width: 1px !important;
-    height: 1px !important;
-    min-width: 0 !important;
-    min-height: 0 !important;
+    width: var(--terminal-keepalive-width, 960px) !important;
+    height: var(--terminal-keepalive-height, 600px) !important;
+    min-width: var(--terminal-keepalive-width, 960px) !important;
+    min-height: var(--terminal-keepalive-height, 600px) !important;
     opacity: 0 !important;
     pointer-events: none !important;
     overflow: hidden !important;
@@ -937,9 +937,12 @@ body.terminal-mode-entering .terminal-smartbar .smartbar-handle {
 }
 .terminal-window.minimized-keepalive .terminal-window-body,
 .terminal-window.minimized-keepalive .terminal-frame {
-    width: 1px !important;
-    height: 1px !important;
-    min-height: 0 !important;
+    width: var(--terminal-keepalive-width, 960px) !important;
+    height: var(--terminal-keepalive-height, 600px) !important;
+    min-height: var(--terminal-keepalive-height, 600px) !important;
+    max-width: none !important;
+    max-height: none !important;
+    flex: 0 0 auto !important;
 }
 .terminal-window.dragging {
     z-index: 8;
