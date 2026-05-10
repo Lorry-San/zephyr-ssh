@@ -736,9 +736,12 @@ function getMeasuredTerminalSize() {
     const paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
     const { lineHeight, charWidth } = getTerminalCharMetrics();
     let effectiveHeight = Math.max(0, rect.height - paddingY);
-    if (mobileKeyboardOpen && window.visualViewport) {
-        const viewportBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-        effectiveHeight = Math.max(lineHeight * 2, Math.min(effectiveHeight, viewportBottom - rect.top - paddingY));
+    if (isTouchKeyboardDevice()) {
+        const viewportBottom = mobileKeyboardUserControlled && mobileKeyboardOpen && window.visualViewport
+            ? window.visualViewport.offsetTop + window.visualViewport.height
+            : (window.innerHeight || document.documentElement.clientHeight || rect.bottom);
+        const visualLimit = Math.min(rect.height, Math.max(lineHeight * 2, viewportBottom - rect.top - paddingY));
+        effectiveHeight = Math.min(effectiveHeight, visualLimit);
     }
     const effectiveWidth = Math.max(0, rect.width - paddingX);
     return {
@@ -3475,6 +3478,12 @@ function updateViewportInsets() {
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
     const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled && (keyboardFocusLikely || mobileKeyboardOpen || isKeyboardAvoidanceTarget());
+    if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
+        // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
+        // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
+        closeMobileCommandKeyboard();
+        return;
+    }
     const inset = keyboardOpen ? metrics.keyboardInset : 0;
     const signature = `${keyboardOpen}:${Math.round(inset / 4) * 4}`;
     if (updateViewportInsets._lastSignature === signature) return;
@@ -3663,6 +3672,11 @@ function openMobileCommandKeyboard() {
     }
     cmdInput?.focus?.({ preventScroll: true });
     markKeyboardFocusActive();
+    window.setTimeout(() => {
+        if (term?.input?.textarea && mobileKeyboardUserControlled) {
+            try { term.input.textarea.focus({ preventScroll: true }); } catch (_) {}
+        }
+    }, 80);
     updateViewportInsets();
     [80, 260, 520].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
 }
