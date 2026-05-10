@@ -1037,7 +1037,7 @@ function terminalWindowMenu(t) {
     const fullscreenItem = (customFullscreen || winFullscreen) ? ['exit-fullscreen', '退出全屏'] : ['fullscreen', '全屏'];
     let items;
     if (maxWindows <= 1 || visibleCount <= 1) {
-        items = compact ? [fullscreenItem, ['minimize', '最小化'], ['close', '关闭']] : [['minimize', '最小化'], ['close', '关闭']];
+        items = compact ? [fullscreenItem, ['reconnect-mobile', '重连'], ['minimize', '最小化'], ['close', '关闭']] : [['minimize', '最小化'], ['close', '关闭']];
     } else if (maxWindows === 2 || visibleCount === 2) {
         items = [fullscreenItem, ['left-half', '左半屏'], ['right-half', '右半屏'], ['minimize', '最小化'], ['close', '关闭']];
     } else {
@@ -1206,6 +1206,12 @@ function createTerminalWindowElement(t) {
     article.append(titlebar, body);
     return article;
 }
+function mountMobileDockToggle(workspace) {
+    const toggle = document.getElementById('mobileFullscreenDockToggle');
+    const activeWindow = workspace?.querySelector('.terminal-window.active') || workspace?.querySelector('.terminal-window:not(.minimized-keepalive)');
+    if (!toggle || !activeWindow) return;
+    if (toggle.parentElement !== activeWindow) activeWindow.appendChild(toggle);
+}
 function renderTerminalWorkspace() {
     const visibleSessions = terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
     const visible = [
@@ -1248,6 +1254,7 @@ function renderTerminalWorkspace() {
         });
         return;
     }
+    mountMobileDockToggle(workspace);
     workspace.querySelectorAll(':scope > .terminal-placeholder, :scope > .workspace-splitter').forEach((el) => el.remove());
     workspace.querySelectorAll(':scope > .terminal-window').forEach((el) => {
         if (!keepAliveIds.has(el.dataset.window)) {
@@ -1268,6 +1275,7 @@ function renderTerminalWorkspace() {
         }
         win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''} ${dockLaunchAnimatingWindows.has(t.id) ? 'dock-launching' : ''}`;
     });
+    mountMobileDockToggle(workspace);
     keepAliveMinimized.forEach((t) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
         if (!win) {
@@ -1377,6 +1385,11 @@ function applyTerminalWindowPreset(tabId, action) {
     }
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
+    if (action === 'reconnect-mobile') {
+        const frame = document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(tabId)}"]`);
+        frame?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'reconnect-terminal' }, '*');
+        return;
+    }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
     restoreTerminalSession(tabId);
     const beforeRects = captureTerminalWindowRects();

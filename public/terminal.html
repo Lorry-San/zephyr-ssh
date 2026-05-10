@@ -32,7 +32,7 @@
                 <button class="btn-sm" id="dockerBtn" title="Docker 容器与镜像管理" aria-label="Docker" data-mobile-icon="🐳">🐳 Docker</button>
                 <button class="btn-sm" id="snippetBtn" title="代码片段" aria-label="代码片段" data-mobile-icon="⚡">⚡ 片段</button>
                 <button class="btn-sm" id="shortcutBtn" title="快捷键" aria-label="快捷键" data-mobile-icon="⌨️">⌨️ 快捷键</button>
-                <button class="btn-sm" id="copyBtn" title="复制选中内容" aria-label="复制选中内容" data-mobile-icon="📋">📋 复制</button>
+                <button class="btn-sm" id="copyBtn" title="复制 / 粘贴" aria-label="复制 / 粘贴" data-mobile-icon="📋">📋 复制/粘贴</button>
                 <button class="btn-sm wterm-theme-toggle" id="wtermThemeToggle" title="独立切换 wterm 终端主题，不跟随全局深浅色模式" aria-label="切换终端主题" data-mobile-icon="◐">终端: 默认</button>
                 <button class="btn-sm" id="themeToggle" title="切换主题" aria-label="切换主题" data-mobile-icon="🌓">🌓</button>
                 <button class="btn-sm" id="reconnectBtn" title="重新连接" aria-label="重新连接" data-mobile-icon="🔄">🔄 重连</button>
@@ -308,7 +308,7 @@
         <div class="terminal-input-panel" id="terminalInputPanel">
             <div class="toolbar" id="toolbar">
                 <div class="cmd-input-row">
-                    <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" readonly></textarea>
+                    <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="none" readonly></textarea>
                     <button class="cmd-keyboard-btn" id="cmdKeyboardBtn" title="打开键盘" aria-label="打开键盘">⌨</button>
                     <button class="cmd-send-btn" id="cmdSendBtn">发送</button>
                 </div>

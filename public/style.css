@@ -5116,3 +5116,50 @@ body.smartbar-trash-hover .smartbar-trash-target {
         box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 14px rgba(88,166,255,.20);
     }
 }
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .topbar-actions #reconnectBtn,
+    .terminal-page .topbar-actions #disconnectBtn {
+        display: none !important;
+    }
+}
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-window > .mobile-fullscreen-dock-toggle {
+        position: absolute;
+        top: 4px;
+        right: 10px;
+        z-index: 60;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 28px;
+        border: 0;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--surface) 76%, transparent);
+        box-shadow: 0 10px 26px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.26);
+        backdrop-filter: blur(18px) saturate(1.55);
+        -webkit-backdrop-filter: blur(18px) saturate(1.55);
+        pointer-events: auto;
+    }
+    .terminal-window > .mobile-fullscreen-dock-toggle span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--text-secondary) 78%, transparent);
+        box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 14px rgba(88,166,255,.20);
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        top: 4px;
+        right: 10px;
+        position: absolute;
+        z-index: 70;
+    }
+}
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-workspace.compact.custom-fullscreen .terminal-smartbar.open,
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open {
+        display: block !important;
+    }
+}

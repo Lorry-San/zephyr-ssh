@@ -682,6 +682,9 @@ window.addEventListener('message', (e) => {
     if (e.data.type === 'focus-terminal') {
         requestStableTerminalLayout('parent-focus-terminal', { includeResize: true, focus: true });
     }
+    if (e.data.type === 'reconnect-terminal') {
+        reconnectBtn?.click?.();
+    }
     if (e.data.type === 'layout-stabilize') {
         const reason = e.data.reason || 'parent-layout-stabilize';
         const keyboardRelated = isTouchKeyboardDevice() && (
@@ -1033,8 +1036,14 @@ setupTerminalPinchZoom();
 
 // ---------- 复制功能 ----------
 copyBtn.addEventListener('click', async () => {
+    const wasKeyboardUserControlled = mobileKeyboardUserControlled;
     const text = getCopyableSelectionText();
-    if (!text) return;
+    if (!text) {
+        const pasted = await pasteClipboardIntoTerminal('mobile-copy-paste-button');
+        if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
+        if (!pasted) toast?.('剪贴板为空或浏览器未授权');
+        return;
+    }
     enterMobileTerminalSelectionMode('copy-button');
     const originalText = copyBtn.textContent;
     try {
@@ -1050,6 +1059,7 @@ copyBtn.addEventListener('click', async () => {
         try { document.execCommand('copy'); copyBtn.textContent = '✅ 已复制'; } catch (_) { copyBtn.textContent = '❌ 失败'; }
         document.body.removeChild(ta);
     }
+    if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
     scheduleExitMobileTerminalSelectionMode(1200);
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
@@ -3628,12 +3638,17 @@ function setMobileWTermInputEnabled(enabled) {
     if (enabled) {
         textarea.removeAttribute('readonly');
         textarea.setAttribute('tabindex', '0');
-        textarea.removeAttribute('inputmode');
+        textarea.setAttribute('inputmode', 'none');
+        textarea.autocomplete = 'off';
+        textarea.autocorrect = 'off';
+        textarea.autocapitalize = 'off';
+        textarea.style.webkitTextSecurity = 'disc';
         textarea.style.pointerEvents = 'auto';
     } else {
         textarea.setAttribute('readonly', 'readonly');
         textarea.setAttribute('tabindex', '-1');
         textarea.setAttribute('inputmode', 'none');
+        textarea.style.webkitTextSecurity = '';
         textarea.style.pointerEvents = 'none';
         textarea.blur?.();
     }
