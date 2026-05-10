@@ -535,7 +535,6 @@ body.terminal-mode .app-shell {
     --smartbar-top: 61px;
     --smartbar-nav-bg: color-mix(in srgb, var(--surface) 88%, transparent);
     --smartbar-nav-border: var(--border);
-    --smartbar-panel-height: 156px;
     position: fixed;
     top: var(--smartbar-top);
     left: 0;
@@ -546,152 +545,85 @@ body.terminal-mode .app-shell {
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    padding: 0 clamp(18px, 4vw, 48px);
 }
 .terminal-smartbar .empty-state { display: none; }
-.smartbar-panel {
-    --smartbar-fusion-bg: color-mix(in srgb, var(--surface) 76%, transparent);
+.smartbar-handle {
     position: absolute;
-    top: 30px;
-    left: 18px;
-    right: auto;
-    transform: translate3d(0, -10px, 0) scale3d(.82, .82, 1);
-    transform-origin: top left;
+    top: 0;
+    left: 50%;
+    width: 112px;
+    height: 25px;
+    transform: translate3d(-50%, -22px, 0) scaleX(.72);
+    transform-origin: top center;
+    border: 1px solid var(--smartbar-nav-border);
+    border-top: 0;
+    border-radius: 0 0 22px 22px;
+    background: var(--smartbar-nav-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    pointer-events: auto;
+    box-shadow: 0 14px 30px rgba(0,0,0,.12), inset 0 1px 0 rgba(255,255,255,.12);
+    backdrop-filter: blur(22px) saturate(1.45);
+    -webkit-backdrop-filter: blur(22px) saturate(1.45);
+    transition: transform .58s cubic-bezier(.16,1,.3,1), width .58s cubic-bezier(.16,1,.3,1), filter .34s ease;
+}
+.smartbar-handle span {
+    position: absolute;
+    left: 50%;
+    bottom: 6px;
+    width: 42px;
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 62%, transparent);
+    transform: translateX(-50%);
+    box-shadow: 0 1px 6px rgba(0,0,0,.18);
+}
+body.terminal-mode .terminal-smartbar .smartbar-handle,
+.terminal-smartbar.open .smartbar-handle,
+.terminal-smartbar.closing .smartbar-handle {
+    transform: translate3d(-50%, 0, 0) scaleX(1);
+}
+.terminal-smartbar.open .smartbar-handle { filter: saturate(1.06); }
+.smartbar-panel {
+    position: absolute;
+    top: 25px;
+    left: 50%;
     width: min(max-content, calc(100vw - 36px));
-    max-width: min(720px, calc(100vw - 36px));
-    min-height: 0;
+    max-width: min(760px, calc(100vw - 36px));
     padding: 10px 12px 12px;
     border: 1px solid rgba(139,148,158,.30);
     border-radius: 30px;
     background:
-        radial-gradient(circle at 30% 8%, rgba(255,255,255,.24), transparent 34%),
+        radial-gradient(circle at 50% 0%, rgba(255,255,255,.24), transparent 34%),
         linear-gradient(180deg, color-mix(in srgb, var(--surface) 82%, transparent), color-mix(in srgb, var(--surface) 66%, transparent));
     overflow: visible;
-    box-shadow:
-        0 24px 72px rgba(0,0,0,.30),
-        0 0 0 1px rgba(255,255,255,.08) inset,
-        inset 0 1px 0 rgba(255,255,255,.18);
+    box-shadow: 0 24px 72px rgba(0,0,0,.28), 0 0 0 1px rgba(255,255,255,.08) inset, inset 0 1px 0 rgba(255,255,255,.18);
     backdrop-filter: blur(30px) saturate(1.75);
     -webkit-backdrop-filter: blur(30px) saturate(1.75);
     opacity: 0;
     pointer-events: none;
     filter: blur(12px) saturate(.92);
-    clip-path: none;
+    transform: translate3d(-50%, -18px, 0) scale3d(.26, .18, 1);
+    transform-origin: top center;
     z-index: 2;
-    transition:
-        transform .68s cubic-bezier(.16,1,.3,1),
-        opacity .32s ease,
-        filter .46s ease,
-        border-radius .68s cubic-bezier(.16,1,.3,1);
-}
-.smartbar-panel::before,
-.smartbar-panel::after {
-    content: none;
-    display: none;
-}
-.terminal-smartbar.from-left .smartbar-panel {
-    left: 18px;
-    right: auto;
-    transform: translate3d(0, -10px, 0) scale3d(.82, .82, 1);
-    transform-origin: top left;
-}
-.terminal-smartbar.from-right .smartbar-panel {
-    left: auto;
-    right: 18px;
-    transform: translate3d(0, -10px, 0) scale3d(.82, .82, 1);
-    transform-origin: top right;
+    transition: transform .68s cubic-bezier(.16,1,.3,1), opacity .30s ease, filter .44s ease, border-radius .68s cubic-bezier(.16,1,.3,1);
 }
 .terminal-smartbar.open .smartbar-panel {
-    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+    transform: translate3d(-50%, 0, 0) scale3d(1, 1, 1);
     opacity: 1;
     pointer-events: auto;
     filter: blur(0) saturate(1);
 }
 .terminal-smartbar.closing .smartbar-panel {
+    transform: translate3d(-50%, -18px, 0) scale3d(.26, .18, 1);
     opacity: 0;
-    transform: translate3d(0, -10px, 0) scale3d(.78, .78, 1);
-    filter: blur(10px) saturate(.86);
-}
-.terminal-smartbar.switching .smartbar-panel {
-    animation: smartbarSwitchPop .42s cubic-bezier(.18,1.28,.2,1);
-}
-@keyframes smartbarSwitchPop {
-    0% { transform: translate3d(0, -6px, 0) scale(.92); filter: blur(8px); opacity: .62; }
-    62% { transform: translate3d(0, 2px, 0) scale(1.035); filter: blur(0); opacity: 1; }
-    100% { transform: translate3d(0, 0, 0) scale(1); filter: blur(0); opacity: 1; }
-}
-.smartbar-handle {
-    --smartbar-tab-bg: var(--smartbar-nav-bg);
-    position: absolute;
-    top: 0;
-    width: 72px;
-    height: 22px;
-    border: 1px solid var(--smartbar-nav-border);
-    border-top: 0;
-    background: var(--smartbar-tab-bg);
-    color: var(--text-secondary);
-    cursor: pointer;
-    pointer-events: auto;
-    box-shadow: 0 -1px 0 0 var(--smartbar-tab-bg), 0 12px 26px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.08);
-    backdrop-filter: blur(20px) saturate(1.4);
-    -webkit-backdrop-filter: blur(20px) saturate(1.4);
-    transition:
-        transform .48s cubic-bezier(.18,1.18,.2,1),
-        color .18s ease,
-        background .18s ease,
-        border-color .18s ease,
-        border-radius .48s cubic-bezier(.18,1.18,.2,1);
-}
-.smartbar-handle::before,
-.smartbar-handle::after {
-    content: none;
-    display: none;
-}
-.smartbar-handle span {
-    display: block;
-    font-size: 14px;
-    line-height: 1;
-    transform: translateY(-1px);
-}
-.smartbar-handle:hover { color: var(--text); border-color: var(--smartbar-nav-border); background: var(--smartbar-tab-bg); }
-.smartbar-handle.left {
-    left: 18px;
-    border-radius: 0 0 18px 18px;
-}
-.smartbar-handle.right {
-    right: 18px;
-    border-radius: 0 0 18px 18px;
-}
-.smartbar-handle.right span { transform: translateY(-1px) rotate(0deg); }
-.terminal-smartbar.open .smartbar-handle {
-    opacity: 1;
-    pointer-events: auto;
-}
-.terminal-smartbar.open.from-left .smartbar-handle.left,
-.terminal-smartbar.open.from-right .smartbar-handle.right {
-    color: var(--accent-hover);
-    transform: translateY(1px) scale(.98);
-    border-color: rgba(88,166,255,.42);
-    box-shadow: 0 -1px 0 0 var(--smartbar-tab-bg), 0 8px 20px rgba(88,166,255,.10), inset 0 0 0 1px rgba(88,166,255,.12);
-    transition:
-        transform .34s cubic-bezier(.18,1.18,.2,1),
-        color .18s ease,
-        border-color .18s ease,
-        box-shadow .24s ease;
-}
-.terminal-smartbar.open.from-left .smartbar-handle.left span,
-.terminal-smartbar.open.from-right .smartbar-handle.right span {
-    opacity: 1;
-    transform: translateY(-1px) rotate(180deg);
-    transition: opacity .12s ease, transform .28s cubic-bezier(.18,1.18,.2,1);
+    filter: blur(12px) saturate(.9);
 }
 .smartbar-panel .smartbar-dock,
 .smartbar-panel .smartbar-picker {
     opacity: 0;
     transform: translateY(10px) scale(.94);
-    transition:
-        opacity .24s ease,
-        transform .48s cubic-bezier(.18,1.18,.2,1);
+    transition: opacity .24s ease, transform .48s cubic-bezier(.18,1.18,.2,1);
 }
 .terminal-smartbar.open .smartbar-panel .smartbar-dock,
 .terminal-smartbar.open .smartbar-panel .smartbar-picker {
@@ -702,7 +634,7 @@ body.terminal-mode .app-shell {
 .smartbar-dock {
     display: flex;
     align-items: flex-end;
-    justify-content: flex-start;
+    justify-content: center;
     gap: clamp(8px, 1vw, 14px);
     min-width: 0;
     max-width: 100%;
@@ -717,11 +649,6 @@ body.terminal-mode .app-shell {
     scroll-padding-inline: 20px;
 }
 .smartbar-dock::-webkit-scrollbar { display: none; }
-.terminal-smartbar.from-left .smartbar-dock,
-.terminal-smartbar.from-right .smartbar-dock {
-    justify-content: flex-start;
-    flex-direction: row;
-}
 .smartbar-session,
 .smartbar-add {
     --dock-scale: 1;
@@ -744,11 +671,16 @@ body.terminal-mode .app-shell {
     opacity: 0;
     transform: translate3d(0, 18px, 0) scale(.72) rotateX(10deg);
     transform-origin: 50% 100%;
-    transition:
-        transform .68s cubic-bezier(.16,1,.3,1),
-        opacity .32s ease,
-        filter .38s ease;
+    transition: transform .68s cubic-bezier(.16,1,.3,1), opacity .32s ease, filter .38s ease;
     will-change: transform, opacity, filter;
+}
+.smartbar-session.dragging { opacity: .35; }
+.smartbar-drag-ghost {
+    position: fixed;
+    z-index: 999;
+    pointer-events: none;
+    transform: translate(-50%, -50%) scale(1.08);
+    filter: drop-shadow(0 22px 38px rgba(0,0,0,.32));
 }
 .smartbar-session-icon,
 .smartbar-add::before {
@@ -766,11 +698,7 @@ body.terminal-mode .app-shell {
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    transition:
-        border-color .28s ease,
-        box-shadow .42s ease,
-        transform .68s cubic-bezier(.16,1,.3,1),
-        border-radius .42s ease;
+    transition: border-color .28s ease, box-shadow .42s ease, transform .68s cubic-bezier(.16,1,.3,1), border-radius .42s ease;
 }
 .terminal-smartbar.open .smartbar-session,
 .terminal-smartbar.open .smartbar-add {
@@ -779,64 +707,53 @@ body.terminal-mode .app-shell {
     animation: dockItemBloom .82s cubic-bezier(.16,1,.3,1) both;
     animation-delay: calc(.16s + (var(--dock-index, 0) * 56ms));
 }
-.smartbar-dock:hover .smartbar-session,
-.smartbar-dock:hover .smartbar-add {
-    filter: saturate(.96) brightness(.98);
-}
 .smartbar-session:hover,
-.smartbar-add:hover {
-    --dock-scale: 1.12;
-    --dock-lift: -7px;
-    --dock-rotate: -.5deg;
-    filter: saturate(1.05) brightness(1.025);
-}
+.smartbar-add:hover { --dock-scale: 1.12; --dock-lift: -7px; --dock-rotate: -.5deg; filter: saturate(1.05) brightness(1.025); }
 .smartbar-session:hover + .smartbar-session,
 .smartbar-session:hover + .smartbar-add,
-.smartbar-add:hover + .smartbar-session {
-    --dock-scale: 1.045;
-    --dock-lift: -3px;
-}
-.smartbar-dock:has(.smartbar-session:hover) .smartbar-session:has(+ .smartbar-session:hover),
-.smartbar-dock:has(.smartbar-add:hover) .smartbar-session:has(+ .smartbar-add:hover) {
-    --dock-scale: 1.045;
-    --dock-lift: -3px;
-}
+.smartbar-add:hover + .smartbar-session { --dock-scale: 1.045; --dock-lift: -3px; }
 .smartbar-session:hover .smartbar-session-icon,
-.smartbar-add:hover::before {
-    border-color: rgba(88,166,255,.58);
-    border-radius: 21px;
-    transform: translateY(-1px);
-    box-shadow: 0 22px 48px rgba(0,0,0,.30), 0 0 0 5px rgba(88,166,255,.09);
-}
-.smartbar-session.active .smartbar-session-icon {
-    border-color: var(--accent);
-    box-shadow: 0 16px 38px rgba(88,166,255,.22), 0 0 0 3px rgba(88,166,255,.14);
-    animation: dockActivePulse 2.2s ease-in-out infinite;
-}
-.smartbar-session.active::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    bottom: 0;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--accent-hover);
-    transform: translateX(-50%);
-    box-shadow: 0 0 12px rgba(88,166,255,.72);
-}
+.smartbar-add:hover::before { border-color: rgba(88,166,255,.58); border-radius: 21px; transform: translateY(-1px); box-shadow: 0 22px 48px rgba(0,0,0,.30), 0 0 0 5px rgba(88,166,255,.09); }
+.smartbar-session.active .smartbar-session-icon { border-color: var(--accent); box-shadow: 0 16px 38px rgba(88,166,255,.22), 0 0 0 3px rgba(88,166,255,.14); animation: dockActivePulse 2.2s ease-in-out infinite; }
+.smartbar-session.active::after { content: ''; position: absolute; left: 50%; bottom: 0; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-hover); transform: translateX(-50%); box-shadow: 0 0 12px rgba(88,166,255,.72); }
 .smartbar-session.minimized { opacity: .74; }
-@keyframes dockItemBloom {
-    0% { opacity: 0; transform: translate3d(0, 18px, 0) scale(.78) rotateX(8deg); filter: blur(8px); }
-    64% { opacity: 1; transform: translate3d(0, -3px, 0) scale(1.025) rotateX(0); filter: blur(0); }
-    86% { transform: translate3d(0, 1px, 0) scale(.995); }
-    100% { opacity: 1; transform: translate3d(0, var(--dock-lift), 0) scale(var(--dock-scale)) rotateZ(var(--dock-rotate)); filter: blur(0); }
+@keyframes dockItemBloom { 0% { opacity: 0; transform: translate3d(0, 18px, 0) scale(.78) rotateX(8deg); filter: blur(8px); } 64% { opacity: 1; transform: translate3d(0, -3px, 0) scale(1.025) rotateX(0); filter: blur(0); } 86% { transform: translate3d(0, 1px, 0) scale(.995); } 100% { opacity: 1; transform: translate3d(0, var(--dock-lift), 0) scale(var(--dock-scale)) rotateZ(var(--dock-rotate)); filter: blur(0); } }
+@keyframes dockActivePulse { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-1px) scale(1.025); } }
+.smartbar-session-icon .proto-dot { position: absolute; right: 7px; bottom: 7px; width: 10px; height: 10px; }
+.smartbar-session-icon b { font-size: 20px; letter-spacing: .02em; font-weight: 900; }
+.smartbar-session strong { max-width: 82px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1.15; font-weight: 700; }
+.smartbar-session em { display: none; }
+.smartbar-add { font-size: 0; font-weight: 600; color: var(--accent-hover); }
+.smartbar-add::before { font-size: 30px; font-weight: 500; color: var(--accent-hover); }
+.smartbar-empty { color: var(--text-secondary); font-size: 12px; padding: 0 8px; align-self: center; }
+.smartbar-picker {
+    position: fixed;
+    left: var(--smartbar-picker-left, 18px);
+    top: var(--smartbar-picker-top, 120px);
+    width: min(300px, calc(100vw - 28px));
+    max-height: min(330px, 58vh);
+    pointer-events: auto;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid rgba(139,148,158,.30);
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--surface) 84%, transparent);
+    box-shadow: 0 20px 58px rgba(0,0,0,.36), inset 0 1px 0 rgba(255,255,255,.12);
+    backdrop-filter: blur(26px) saturate(1.55);
+    -webkit-backdrop-filter: blur(26px) saturate(1.55);
+    transform-origin: top center;
+    animation: smartbarPickerFloat .34s cubic-bezier(.18,1.22,.2,1);
 }
-@keyframes dockActivePulse {
-    0%, 100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-1px) scale(1.025); }
-}
-.smartbar-session-icon .proto-dot {
+@keyframes smartbarPickerFloat { 0% { opacity: 0; transform: translateY(-8px) scale(.88); filter: blur(8px); } 70% { opacity: 1; transform: translateY(1px) scale(1.025); filter: blur(0); } 100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); } }
+.smartbar-picker-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid rgba(139,148,158,.20); }
+.smartbar-picker-head strong { font-size: 13px; }
+.smartbar-picker-head button { width: 28px; height: 28px; border: 0; border-radius: 999px; background: rgba(139,148,158,.14); color: var(--text); cursor: pointer; }
+.smartbar-picker-list { display: grid; gap: 6px; padding: 8px; overflow: auto; }
+.smartbar-picker-list button { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: center; padding: 9px 10px; border: 1px solid transparent; border-radius: 14px; background: transparent; color: var(--text); cursor: pointer; text-align: left; }
+.smartbar-picker-list button:hover { background: rgba(88,166,255,.14); border-color: rgba(88,166,255,.24); }
+.smartbar-picker-list button em { grid-column: 2; color: var(--text-secondary); font-size: 11px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proto-dot {
     position: absolute;
     right: 7px;
     bottom: 7px;
@@ -926,12 +843,6 @@ body.terminal-mode .app-shell {
 }
 .smartbar-picker-list button:hover { background: rgba(88,166,255,.14); border-color: rgba(88,166,255,.24); }
 .smartbar-picker-list button em { grid-column: 2; color: var(--text-secondary); font-size: 11px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.smartbar-close-corner {
-    display: none;
-}
-.smartbar-close-corner.left { left: 10px; }
-.smartbar-close-corner.right { right: 10px; }
-.smartbar-close-corner:hover { transform: translateY(-1px); background: rgba(88,166,255,.18); color: var(--text); }
 .proto-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--success); box-shadow: 0 0 12px color-mix(in srgb, var(--success) 65%, transparent); }
 .proto-dot.rdp { background: #58a6ff; box-shadow: 0 0 12px rgba(88,166,255,.7); }
 .proto-dot.vnc { background: #f0883e; box-shadow: 0 0 12px rgba(240,136,62,.7); }

@@ -9,9 +9,12 @@ let connectionModalOriginRect = null;
 let terminalTabs = [], activeTerminalTab = null;
 let openOrderStack = [], visualLayout = [], recentUseStack = [];
 let terminalSmartbarOpen = false;
-let terminalSmartbarSide = 'left';
+let terminalSmartbarSide = 'center';
 let terminalSmartbarPickerOpen = false;
 let terminalSmartbarTimer = 0;
+let terminalSmartbarClosing = false;
+let smartbarDragState = null;
+let suppressSmartbarClick = false;
 let terminalDragState = null;
 let terminalControlLongPress = false;
 let fullscreenLoadingTimer = 0;
@@ -837,8 +840,9 @@ function getConfiguredMinimizedKeepAlive() {
     return Math.max(0, Math.floor(value));
 }
 function getTerminalSmartbarOrder() {
-    const value = settings?.terminal?.smartbarOrder || localStorage.getItem('zephyr-terminal-smartbar-order') || 'old-left';
-    return value === 'new-left' ? 'new-left' : 'old-left';
+    const value = settings?.terminal?.smartbarOrder || localStorage.getItem('zephyr-terminal-smartbar-order') || 'old-first';
+    if (value === 'new-left' || value === 'new-first') return 'new-first';
+    return 'old-first';
 }
 function getEffectiveTerminalMaxWindows() { return isCompactTerminalWorkspace() ? 1 : getConfiguredTerminalMaxWindows(); }
 function getTerminalSession(id) { return terminalTabs.find((t) => t.id === id); }
@@ -932,7 +936,8 @@ function positionSmartbarPicker() {
     picker.style.setProperty('--smartbar-picker-arrow-left', `${arrowLeft}px`);
 }
 function renderTerminalSmartbar() {
-    const orderedIds = terminalSmartbarSide === 'left' ? openOrderStack : [...openOrderStack].reverse();
+    const order = getTerminalSmartbarOrder();
+    const orderedIds = order === 'new-first' ? [...openOrderStack].reverse() : [...openOrderStack];
     const seen = new Set();
     const sessions = orderedIds.map(getTerminalSession).filter(Boolean).filter((t) => {
         if (seen.has(t.id)) return false;
@@ -955,19 +960,16 @@ function renderTerminalSmartbar() {
         smartbarRoot.style.setProperty('--smartbar-top', smartbarTop);
         document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
     }
-    smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} from-${terminalSmartbarSide}`;
-    $('#sessionTabs').innerHTML = `
-        <button class="smartbar-handle left" data-smartbar-toggle="left" title="展开终端栏"><span>⌄</span></button>
+    smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} ${terminalSmartbarClosing ? 'closing' : ''}`;
+    smartbarRoot.innerHTML = `
+        <button class="smartbar-handle" data-smartbar-toggle title="展开/收回 Dock"><span></span></button>
         <div class="smartbar-panel">
-            <div class="smartbar-dock" aria-label="${terminalSmartbarSide === 'right' ? '最近使用会话' : '开启顺序会话'}">
+            <div class="smartbar-dock" aria-label="终端 Dock">
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
                 <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
             </div>
-            <button class="smartbar-close-corner left" data-smartbar-close title="收回">⌃</button>
-            <button class="smartbar-close-corner right" data-smartbar-close title="收回">⌃</button>
         </div>
-        ${picker}
-        <button class="smartbar-handle right" data-smartbar-toggle="right" title="展开终端栏"><span>⌄</span></button>`;
+        ${picker}`;
     requestAnimationFrame(() => {
         const nav = $('.main-nav');
         const smartbar = $('#sessionTabs');
@@ -1509,34 +1511,26 @@ async function fullscreenTerminalTab(tabId) {
     }
 }
 
-function setTerminalSmartbarOpen(open, side = terminalSmartbarSide) {
-    const nextSide = side || terminalSmartbarSide || 'left';
-    const sideChanged = terminalSmartbarSide !== nextSide;
-    terminalSmartbarSide = nextSide;
+function setTerminalSmartbarOpen(open) {
     window.clearTimeout(terminalSmartbarTimer);
-
+    window.clearTimeout(setTerminalSmartbarOpen._closeTimer);
     if (!open) {
+        if (!terminalSmartbarOpen) return;
         terminalSmartbarOpen = false;
         terminalSmartbarPickerOpen = false;
-        const root = $('#sessionTabs');
-        root?.classList.remove('open');
-        root?.classList.add('closing');
-        window.setTimeout(() => root?.classList.remove('closing'), 360);
+        terminalSmartbarClosing = true;
+        renderTerminalSmartbar();
+        setTerminalSmartbarOpen._closeTimer = window.setTimeout(() => {
+            terminalSmartbarClosing = false;
+            renderTerminalSmartbar();
+        }, 460);
         return;
     }
-
+    terminalSmartbarClosing = false;
     terminalSmartbarOpen = true;
-    if (sideChanged) {
-        const root = $('#sessionTabs');
-        root?.classList.add('switching');
-        window.setTimeout(() => root?.classList.remove('switching'), 420);
-    }
     renderTerminalSmartbar();
-    terminalSmartbarTimer = window.setTimeout(() => setTerminalSmartbarOpen(false), SMARTBAR_AUTO_HIDE_MS);
 }
-function noteTerminalWorkspaceActivity() {
-    if (terminalSmartbarOpen) setTerminalSmartbarOpen(false);
-}
+function noteTerminalWorkspaceActivity() {}
 function swapTerminalWindows(a, b) {
     if (!a || !b || a === b) return;
     const ia = visualLayout.indexOf(a), ib = visualLayout.indexOf(b);
@@ -1560,6 +1554,74 @@ function snapTerminalWindowToEdge(tabId, clientX, clientY) {
     else if (nearTop) applyTerminalWindowPreset(tabId, 'left-two-thirds');
     else applyTerminalWindowPreset(tabId, 'right-two-thirds');
     return true;
+}
+function reorderTerminalOrder(dragId, targetId) {
+    if (!dragId || !targetId || dragId === targetId) return;
+    const from = openOrderStack.indexOf(dragId);
+    const to = openOrderStack.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const [id] = openOrderStack.splice(from, 1);
+    openOrderStack.splice(to, 0, id);
+}
+function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
+    if (!targetWindowId || !draggedTabId || targetWindowId === draggedTabId) return false;
+    const target = getTerminalSession(targetWindowId);
+    const dragged = getTerminalSession(draggedTabId);
+    if (!target || !dragged) return false;
+    target.minimized = true;
+    dragged.minimized = false;
+    const idx = visualLayout.indexOf(targetWindowId);
+    if (idx >= 0) visualLayout[idx] = draggedTabId;
+    else visualLayout.unshift(draggedTabId);
+    activeTerminalTab = draggedTabId;
+    touchTerminalSession(draggedTabId);
+    syncVisualLayout({ preserve: true });
+    return true;
+}
+function startSmartbarIconDrag(e, tabId) {
+    const btn = e.target.closest('[data-smartbar-tab]');
+    if (!btn || e.button === 2) return;
+    e.preventDefault();
+    suppressSmartbarClick = false;
+    const ghost = btn.cloneNode(true);
+    ghost.classList.add('smartbar-drag-ghost');
+    document.body.appendChild(ghost);
+    const moveGhost = (ev) => {
+        ghost.style.left = `${ev.clientX}px`;
+        ghost.style.top = `${ev.clientY}px`;
+    };
+    smartbarDragState = { tabId, startX: e.clientX, startY: e.clientY, moved: false, ghost };
+    btn.classList.add('dragging');
+    moveGhost(e);
+    const onMove = (ev) => {
+        const dx = ev.clientX - smartbarDragState.startX;
+        const dy = ev.clientY - smartbarDragState.startY;
+        if (Math.hypot(dx, dy) > 6) smartbarDragState.moved = true;
+        moveGhost(ev);
+    };
+    const onUp = (ev) => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        btn.classList.remove('dragging');
+        ghost.remove();
+        if (smartbarDragState?.moved) {
+            suppressSmartbarClick = true;
+            const el = document.elementFromPoint(ev.clientX, ev.clientY);
+            const targetDock = el?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
+            const targetWin = el?.closest?.('[data-window]')?.dataset.window;
+            if (targetWin && targetWin !== tabId) {
+                replaceWindowWithDockTab(targetWin, tabId);
+                setTerminalSmartbarOpen(false);
+                renderTerminalTabs();
+            } else if (targetDock && targetDock !== tabId) {
+                reorderTerminalOrder(tabId, targetDock);
+                renderTerminalSmartbar();
+            }
+        }
+        smartbarDragState = null;
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { once: true });
 }
 function startTerminalWindowDrag(e, tabId) {
     if (isCompactTerminalWorkspace() || (e.target.closest('button') && !e.target.closest('.terminal-grip'))) return;
@@ -1730,7 +1792,7 @@ async function saveTerminalLayout(e) {
     const maxWindows = Math.min(3, Math.max(1, Number($('#terminalMaxWindows').value) || 3));
     const rawKeepAlive = Number($('#terminalMinimizedKeepAlive').value);
     const minimizedKeepAlive = rawKeepAlive === -1 ? -1 : Math.max(0, Math.floor(Number.isFinite(rawKeepAlive) ? rawKeepAlive : 0));
-    const smartbarOrder = $('#terminalSmartbarOrder').value === 'new-left' ? 'new-left' : 'old-left';
+    const smartbarOrder = $('#terminalSmartbarOrder').value === 'new-first' ? 'new-first' : 'old-first';
     localStorage.setItem('zephyr-terminal-max-windows', String(maxWindows));
     localStorage.setItem('zephyr-terminal-minimized-keepalive', String(minimizedKeepAlive));
     localStorage.setItem('zephyr-terminal-smartbar-order', smartbarOrder);
@@ -1843,12 +1905,12 @@ function bindEvents() {
         if (connect) openConnection(connect).catch((err) => toast(err.message));
     });
     $('#sessionTabs').addEventListener('click', (e) => {
+        if (suppressSmartbarClick) { suppressSmartbarClick = false; return; }
         const toggle = e.target.closest('[data-smartbar-toggle]');
-        if (toggle) { setTerminalSmartbarOpen(!(terminalSmartbarOpen && terminalSmartbarSide === toggle.dataset.smartbarToggle), toggle.dataset.smartbarToggle); return; }
-        if (e.target.closest('[data-smartbar-close]')) { setTerminalSmartbarOpen(false); return; }
+        if (toggle) { setTerminalSmartbarOpen(!terminalSmartbarOpen); return; }
         if (e.target.closest('[data-smartbar-add]')) {
             terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen;
-            setTerminalSmartbarOpen(true, terminalSmartbarSide);
+            setTerminalSmartbarOpen(true);
             requestAnimationFrame(positionSmartbarPicker);
             return;
         }
@@ -1858,17 +1920,21 @@ function bindEvents() {
         const tab = e.target.closest('[data-smartbar-tab]')?.dataset.smartbarTab;
         if (tab) {
             const t = getTerminalSession(tab);
-            if (t && !t.minimized && activeTerminalTab === tab) {
-                minimizeTerminalSession(tab);
-            } else {
-                restoreTerminalSession(tab);
-                activeTerminalTab = tab;
-                touchTerminalSession(tab);
-            }
+            if (t && !t.minimized && activeTerminalTab === tab) minimizeTerminalSession(tab);
+            else { restoreTerminalSession(tab); activeTerminalTab = tab; touchTerminalSession(tab); }
             setTerminalSmartbarOpen(false);
             renderTerminalTabs();
         }
     });
+    $('#sessionTabs').addEventListener('pointerdown', (e) => {
+        const tabBtn = e.target.closest('[data-smartbar-tab]');
+        if (tabBtn) startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+    });
+    document.addEventListener('pointerdown', (e) => {
+        if (!terminalSmartbarOpen) return;
+        if (e.target.closest?.('#sessionTabs')) return;
+        setTerminalSmartbarOpen(false);
+    }, true);
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
         const menuBtn = e.target.closest('[data-window-control]');
