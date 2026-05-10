@@ -859,6 +859,10 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     const explicitRows = Math.floor(Number(rows));
 
     if (reason === 'wterm-onResize') {
+        if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) {
+            logTerminalLayoutDiagnostics('resize:ignored-mobile-keyboard-settling', { reason, explicitCols, explicitRows });
+            return;
+        }
         // WTerm 的 ResizeObserver 在 iframe 被隐藏/最小化/父标签切换时会收到 0/1px 的瞬时尺寸。
         // ssh2 的 Channel#setWindow(rows, cols, height, width) 会立刻改变远端 PTY；
         // 如果把这些瞬时小尺寸发给后端，远端程序会按 1~几列重排，回来后就出现截图里的竖向破损。
@@ -956,7 +960,7 @@ function isMobileKeyboardActiveOrSettling() {
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
-    if (isTouchKeyboardDevice() && /keyboard|viewport|visual/.test(String(reason)) && Date.now() < mobileKeyboardResizeFreezeUntil) {
+    if (isTouchKeyboardDevice() && (isMobileKeyboardActiveOrSettling() || /keyboard|viewport|visual/.test(String(reason)))) {
         scheduleTerminalScrollbarUpdate();
         return;
     }
@@ -977,7 +981,13 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
         const rows = Math.max(2, measured.rows);
         const changed = lastSentTerminalSize.cols !== cols || lastSentTerminalSize.rows !== rows;
         resizeWTermSafely(cols, rows, reason);
-        if (changed) sendTerminalResize(cols, rows, { reason: 'stable-visible-resize', force: true });
+    if (changed) {
+        if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) {
+            logTerminalLayoutDiagnostics('resize:blocked-mobile-keyboard-settling', { reason, cols, rows });
+            return;
+        }
+        sendTerminalResize(cols, rows, { reason: 'stable-visible-resize', force: true });
+    }
     }, delay);
     logTerminalLayoutDiagnostics('resize:scheduled-stable-refresh', { reason, delay });
     scheduleTerminalScrollbarUpdate();
@@ -3603,7 +3613,8 @@ function finalizeKeyboardClose({ force = false } = {}) {
         offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
     });
     scheduleTerminalScrollbarUpdate();
-    scheduleTerminalResize('keyboard-close-final', 500);
+    // 移动端键盘关闭不能 resize WTerm/远端 PTY；只同步滚动条，避免远端内容重排出空行/截断。
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize('keyboard-close-final', 500);
 }
 
 function restoreMobileWTermNativeInput() {
@@ -3852,8 +3863,8 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
         window.setTimeout(() => {
             if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
             if (!keyboardRelated) {
-                requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: true, focus: false });
-                scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
+                requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: false, focus: false });
+                if (!isTouchKeyboardDevice()) scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
             }
             try { term._scheduleRender?.(); } catch (_) {}
             try { term.renderer?.render?.(term.bridge); } catch (_) {}
