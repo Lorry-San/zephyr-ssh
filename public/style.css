@@ -5826,3 +5826,16 @@ body.smartbar-trash-hover .smartbar-trash-target {
         display: grid !important;
     }
 }
+
+/* 删除旧版被搬运到窗口主体里的小圆点，只保留标题栏右上角那个 */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-window > .mobile-fullscreen-dock-toggle {
+        display: none !important;
+    }
+    .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        display: none !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        display: grid !important;
+    }
+}
