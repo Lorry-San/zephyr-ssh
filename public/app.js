@@ -1207,9 +1207,10 @@ function createTerminalWindowElement(t) {
 }
 function mountMobileDockToggle(workspace) {
     const toggle = document.getElementById('mobileFullscreenDockToggle');
-    const activeWindow = workspace?.querySelector('.terminal-window.active') || workspace?.querySelector('.terminal-window:not(.minimized-keepalive)');
-    if (!toggle || !activeWindow) return;
-    if (toggle.parentElement !== activeWindow) activeWindow.appendChild(toggle);
+    const activeWindow = workspace?.querySelector('.terminal-window.active') || workspace?.querySelector('.terminal-window:not(.minimized-keepalive)') || workspace?.querySelector('.terminal-window.minimized-keepalive');
+    const titlebar = activeWindow?.querySelector('.terminal-window-titlebar');
+    if (!toggle || !titlebar) return;
+    if (toggle.parentElement !== titlebar) titlebar.appendChild(toggle);
 }
 function renderTerminalWorkspace() {
     const visibleSessions = terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));

@@ -5763,3 +5763,33 @@ body.smartbar-trash-hover .smartbar-trash-target {
         right: max(8px, env(safe-area-inset-right)) !important;
     }
 }
+
+/* ===== 最终对齐：小圆点挂在标题栏内，和三点同一水平线一起出现 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        position: absolute !important;
+        top: 50% !important;
+        right: 10px !important;
+        left: auto !important;
+        transform: translateY(-50%) !important;
+        z-index: 72 !important;
+        display: grid !important;
+        place-items: center !important;
+        width: 34px !important;
+        height: 34px !important;
+        border-radius: 999px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-window-titlebar > .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        position: absolute !important;
+        top: 50% !important;
+        right: 10px !important;
+        left: auto !important;
+        transform: translateY(-50%) !important;
+        display: grid !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(40px, calc(env(safe-area-inset-top) + 40px)) !important;
+        right: max(8px, env(safe-area-inset-right)) !important;
+    }
+}
