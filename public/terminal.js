@@ -178,6 +178,7 @@ let terminalScrollbarRaf = 0;
 let isProgrammaticTerminalScroll = false;
 let terminalScrollCleanup = null;
 let terminalResizeCleanup = null;
+let suppressWTermResizeEvent = false;
 let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
@@ -768,7 +769,12 @@ function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
     const currentRows = Number(term.rows ?? term._rows ?? term.options?.rows ?? 0);
     try {
         if ((currentCols !== nextCols || currentRows !== nextRows) && typeof term.resize === 'function') {
-            term.resize(nextCols, nextRows);
+            suppressWTermResizeEvent = true;
+            try {
+                term.resize(nextCols, nextRows);
+            } finally {
+                suppressWTermResizeEvent = false;
+            }
         } else if (term.options) {
             term.options.cols = nextCols;
             term.options.rows = nextRows;
@@ -895,6 +901,15 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
         return;
     }
 
+    if (reason === 'stable-visible-resize') {
+        if (!Number.isFinite(explicitCols) || !Number.isFinite(explicitRows) || explicitCols < 20 || explicitRows < 2) return;
+        if (lastSentTerminalSize.cols === explicitCols && lastSentTerminalSize.rows === explicitRows && !force) return;
+        lastSentTerminalSize = { cols: explicitCols, rows: explicitRows };
+        wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
+        logTerminalLayoutDiagnostics('resize:sent', { reason, force, cols: explicitCols, rows: explicitRows });
+        return;
+    }
+
     const measured = getMeasuredTerminalSize();
     if (!force && (measured.width < TERMINAL_MIN_RESIZE_WIDTH || measured.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
         logTerminalLayoutDiagnostics('resize:skipped-unstable-rect', {
@@ -936,16 +951,33 @@ function isMobileKeyboardActiveOrSettling() {
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
     window.clearTimeout(scheduleTerminalResize._timer);
-    // 以官方 @wterm/dom 行为为准：尺寸变化由 WTerm 内置 autoResize 处理；
-    // 但在页面重新可见/父布局稳定后，主动做一次安全校正，避免隐藏期间的尺寸被跳过。
     scheduleTerminalResize._timer = window.setTimeout(() => {
-        invokeWTermLayoutRefresh(reason);
-        const cols = Math.floor(Number(term?.cols ?? term?._cols ?? term?.options?.cols ?? 0));
-        const rows = Math.floor(Number(term?.rows ?? term?._rows ?? term?.options?.rows ?? 0));
-        if (cols >= 20 && rows >= 2) sendTerminalResize(cols, rows, { reason: 'wterm-onResize', force: true });
+        if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
+        const rect = wtermWrapper.getBoundingClientRect();
+        if (rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT || wtermWrapper.offsetParent === null) {
+            logTerminalLayoutDiagnostics('resize:skipped-hidden-or-tiny-refresh', {
+                reason,
+                width: Math.round(rect.width || 0),
+                height: Math.round(rect.height || 0),
+            });
+            return;
+        }
+        const measured = getMeasuredTerminalSize();
+        const cols = Math.max(20, measured.cols);
+        const rows = Math.max(2, measured.rows);
+        const changed = lastSentTerminalSize.cols !== cols || lastSentTerminalSize.rows !== rows;
+        resizeWTermSafely(cols, rows, reason);
+        if (changed) sendTerminalResize(cols, rows, { reason: 'stable-visible-resize', force: true });
     }, delay);
-    logTerminalLayoutDiagnostics('resize:scheduled-safe-refresh', { reason, delay });
+    logTerminalLayoutDiagnostics('resize:scheduled-stable-refresh', { reason, delay });
     scheduleTerminalScrollbarUpdate();
+}
+
+function setupStableTerminalResizeObserver() {
+    if (!window.ResizeObserver || !wtermWrapper) return () => {};
+    const observer = new ResizeObserver(() => scheduleTerminalResize('resize-observer-stable', 160));
+    observer.observe(wtermWrapper);
+    return () => observer.disconnect();
 }
 
 function applyTerminalFontSize(size, { persist = true } = {}) {
@@ -3714,23 +3746,31 @@ function showInfoModal() {
 
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
-    // 保持官方语义：WTerm.write() 仍然只在“写入前位于底部”时自动跟随。
-    // 但 @wterm/dom 0.1.x 的默认 _scrollToBottom() 会按行高向下取整，
-    // 在本页面 padding/滚动条布局下可能离真实底部差半行以上，随后官方 5px
-    // _isScrolledToBottom() 判定失败，自动滚动链路就断掉。
-    // 这里仅修正“贴底精度”和“底部判定容差”，不引入外层强制滚动。
-    if (typeof term._scrollToBottom === 'function') {
-        term._scrollToBottom = () => {
-            const el = term.element || wtermWrapper;
-            if (!el) return;
-            el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-        };
-    }
+    // @wterm/dom 官方 InputHandler 在每次键盘输入前会调用 _scrollToBottom()，
+    // 这是官方 demo 在终端本身作为唯一滚动容器时可接受的行为；但本项目有历史输出浏览场景，
+    // 用户滚到上方后输入普通字符不应被外层强制拉到底。这里按官方 write() 的语义改为：
+    // 只有输入发生前已经在底部，才继续保持底部；否则保持用户当前 scrollTop。
+    const originalScrollToBottom = typeof term._scrollToBottom === 'function' ? term._scrollToBottom.bind(term) : null;
+    term._scrollToBottom = () => {
+        const el = term.element || wtermWrapper;
+        if (!el) return;
+        if (!isTerminalAtBottom(el)) {
+            shouldFollowTerminalOutput = false;
+            terminalAutoScrollLockedByUser = true;
+            scheduleTerminalScrollbarUpdate();
+            return;
+        }
+        const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = maxScroll;
+        shouldFollowTerminalOutput = true;
+        terminalAutoScrollLockedByUser = false;
+    };
+    term._zephyrOriginalScrollToBottom = originalScrollToBottom;
     if (typeof term._isScrolledToBottom === 'function') {
         term._isScrolledToBottom = () => {
             const el = term.element || wtermWrapper;
             if (!el) return true;
-            return el.scrollHeight - el.scrollTop - el.clientHeight <= TERMINAL_BOTTOM_THRESHOLD;
+            return isTerminalAtBottom(el);
         };
     }
     term._zephyrScrollPatched = true;
@@ -4661,13 +4701,17 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
         term = new WTermClass(wtermWrapper, {
             cols: 80,
             rows: 24,
-            // 以官方 @wterm/dom 行为为准：使用 WTerm 内置 autoResize。
-            autoResize: true,
+            // 使用手动稳定 resize：官方 autoResize 直接监听 DOM ResizeObserver，
+            // iframe/标签页隐藏或 Dock 拖拽时会量到瞬时极窄尺寸，随后通过 ssh2 setWindow
+            // 改变远端 PTY，导致历史内容按几列真实重排。这里只在可见且尺寸稳定时发送 resize。
+            autoResize: false,
             cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
             fontSize: terminalFontSize,
             onData: (data) => sendData(data, { source: 'wterm-onData' }),
-            onResize: (cols, rows) => sendTerminalResize(cols, rows, { reason: 'wterm-onResize' }),
+            onResize: (cols, rows) => {
+                if (!suppressWTermResizeEvent) sendTerminalResize(cols, rows, { reason: 'wterm-onResize' });
+            },
         });
     } catch {
         term = new WTermClass(wtermWrapper);
@@ -4681,9 +4725,12 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
 
-    // 官方 @wterm/dom 已在内部使用 ResizeObserver 处理 autoResize；
-    // 外层不再观察 wrapper 或手动触发布局/resize，避免与官方测量竞争。
-    terminalResizeCleanup = () => {};
+    // 本项目不能直接启用 @wterm/dom autoResize：官方实现会把每一次 ResizeObserver
+    // contentRect 转成 cols/rows 并立刻触发 onResize；而 ssh2 官方的 setWindow(rows, cols,...)
+    // 会真实改变远端 PTY。隐藏 iframe / 切页 / Dock 动画中的瞬时宽度会破坏远端输出。
+    // 因此外层只在可见、稳定尺寸下调用 term.resize + ssh2 resize。
+    terminalResizeCleanup = setupStableTerminalResizeObserver();
+    scheduleTerminalResize('initial-visible-resize', 80);
     setupTerminalScrollHooks({ followOnConnect });
 }
 
