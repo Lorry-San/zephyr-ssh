@@ -2278,7 +2278,34 @@ function bindEvents() {
         const isDesktopLike = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
         if (isDesktopLike && e.pointerType !== 'touch') {
             startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+            return;
         }
+        const tabId = tabBtn.dataset.smartbarTab;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        let dragStarted = false;
+        const cleanup = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onCancel);
+        };
+        const onMove = (ev) => {
+            if (dragStarted) return;
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 12) return;
+            dragStarted = true;
+            cleanup();
+            startSmartbarIconDrag(e, tabId);
+        };
+        const onUp = (ev) => {
+            cleanup();
+            if (dragStarted) return;
+            suppressSmartbarClick = true;
+            activateTerminalFromDock(tabId, tabBtn);
+        };
+        const onCancel = () => cleanup();
+        window.addEventListener('pointermove', onMove, { passive: true });
+        window.addEventListener('pointerup', onUp, { once: true });
+        window.addEventListener('pointercancel', onCancel, { once: true });
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');
