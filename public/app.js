@@ -2248,6 +2248,12 @@ function bindEvents() {
         if (tab) activateTerminalFromDock(tab, tabButton);
     });
     document.addEventListener('click', (e) => {
+        if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
+            e.preventDefault();
+            e.stopPropagation();
+            setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            return;
+        }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
         const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
         if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); }
