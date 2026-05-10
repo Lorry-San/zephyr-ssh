@@ -2037,6 +2037,63 @@ async function saveTerminalLayout(e) {
     const keepAliveText = minimizedKeepAlive === -1 ? '最小化无限保活' : `最小化保活 ${minimizedKeepAlive} 个`;
     toast(`终端布局已保存：最多 ${maxWindows} 窗，${keepAliveText}`);
 }
+
+const SNIPPET_STORAGE_KEY = 'zephyr-ssh-snippets';
+function getSnippets() {
+    try { const data = JSON.parse(localStorage.getItem(SNIPPET_STORAGE_KEY) || '[]'); return Array.isArray(data) ? data : []; }
+    catch { return []; }
+}
+function saveSnippets(list) {
+    localStorage.setItem(SNIPPET_STORAGE_KEY, JSON.stringify(list));
+}
+function resetSnippetForm() {
+    $('#snippetId').value = '';
+    $('#snippetName').value = '';
+    $('#snippetCommand').value = '';
+    $('#snippetGroup').value = '';
+    $('#snippetAutoRun').checked = false;
+}
+function renderSnippetSettings() {
+    const list = $('#snippetSettingsList');
+    if (!list) return;
+    const snippets = getSnippets();
+    list.innerHTML = snippets.length ? snippets.map((item) => `<div class="snippet-settings-item" data-id="${escapeHtml(item.id)}"><div><strong>${escapeHtml(item.name || '未命名片段')}</strong><em>${escapeHtml(item.group || '未分组')} · ${item.autoRun ? '直接执行' : '填入输入框'}</em><code>${escapeHtml(item.command || '')}</code></div><button class="tool-btn" data-edit-snippet="${escapeHtml(item.id)}">编辑</button><button class="tool-btn danger" data-delete-snippet="${escapeHtml(item.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无代码片段。</p>';
+}
+function saveSnippet(e) {
+    e.preventDefault();
+    const name = $('#snippetName').value.trim();
+    const command = $('#snippetCommand').value;
+    if (!name || !command.trim()) return toast('请填写片段名称和命令');
+    const id = $('#snippetId').value || `snippet-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const item = { id, name, command, group: $('#snippetGroup').value.trim(), autoRun: $('#snippetAutoRun').checked, updatedAt: Date.now() };
+    const snippets = getSnippets();
+    const idx = snippets.findIndex((x) => x.id === id);
+    if (idx >= 0) snippets[idx] = item; else snippets.unshift(item);
+    saveSnippets(snippets);
+    resetSnippetForm();
+    renderSnippetSettings();
+    toast('代码片段已保存');
+}
+function setupSnippetSettings() {
+    $('#snippetForm')?.addEventListener('submit', saveSnippet);
+    $('#addSnippetBtn')?.addEventListener('click', resetSnippetForm);
+    $('#cancelSnippetEditBtn')?.addEventListener('click', resetSnippetForm);
+    $('#snippetSettingsList')?.addEventListener('click', (e) => {
+        const editId = e.target.closest('[data-edit-snippet]')?.dataset.editSnippet;
+        const deleteId = e.target.closest('[data-delete-snippet]')?.dataset.deleteSnippet;
+        const snippets = getSnippets();
+        if (editId) {
+            const item = snippets.find((x) => x.id === editId); if (!item) return;
+            $('#snippetId').value = item.id; $('#snippetName').value = item.name || ''; $('#snippetCommand').value = item.command || ''; $('#snippetGroup').value = item.group || ''; $('#snippetAutoRun').checked = !!item.autoRun;
+        }
+        if (deleteId) {
+            saveSnippets(snippets.filter((x) => x.id !== deleteId));
+            renderSnippetSettings();
+            toast('代码片段已删除');
+        }
+    });
+    renderSnippetSettings();
+}
 async function setupTotp() { const r = await api('/api/security/totp/setup', { method: 'POST', body: '{}' }); $('#totpEnableForm').classList.remove('force-hidden'); $('#totpQrBox').innerHTML = `<img class="qr-img" src="${r.qr}"><p class="muted">密钥：${escapeHtml(r.secret)}</p>`; }
 async function registerPasskey() { try { if (!window.PublicKeyCredential) return toast('当前浏览器不支持 Passkey'); const options = await api('/api/passkeys/register/options', { method: 'POST', body: '{}' }); options.challenge = base64urlToBuffer(options.challenge); options.user.id = base64urlToBuffer(options.user.id); (options.excludeCredentials || []).forEach((c) => { c.id = base64urlToBuffer(c.id); }); const cred = await navigator.credentials.create({ publicKey: options }); if (!cred) return toast('Passkey 创建被取消'); const payload = { id: cred.id, rawId: bufferToBase64url(cred.rawId), type: cred.type, response: { clientDataJSON: bufferToBase64url(cred.response.clientDataJSON), attestationObject: bufferToBase64url(cred.response.attestationObject), transports: cred.response.getTransports ? cred.response.getTransports() : [] } }; await api('/api/passkeys/register/verify', { method: 'POST', body: JSON.stringify(payload) }); toast('Passkey 已绑定'); await loadSecurityStatus(); } catch (err) { toast('Passkey 注册失败：' + err.message); } }
 async function loadNetwork() {
@@ -2316,7 +2373,7 @@ function bindEvents() {
     $('#sshKeyList').addEventListener('click', async (e) => { const editId = e.target.dataset.editSshKey, openId = e.target.dataset.openSshKey, delId = e.target.dataset.delSshKey; if (editId) { const k = sshKeys.find((x) => x.id === editId); if (!k) return; $('#sshKeyId').value = k.id; $('#sshKeyName').value = k.name || ''; $('#sshKeyPrivateKey').value = k.hasPrivateKey ? '******' : ''; $('#sshKeyPassphrase').value = k.hasPassphrase ? '******' : ''; $('#sshKeyRemark').value = k.remark || ''; return; } if (openId) { await openSshKeySecret(openId); return; } if (delId && confirm('删除该 SSH 密钥？已选择它的连接将无法再使用该密钥。')) { await api(`/api/ssh-keys/${delId}`, { method: 'DELETE' }); await loadNetwork(); toast('SSH 密钥已删除'); } });
     $('#passwordForm').addEventListener('submit', async (e) => { e.preventDefault(); const currentPassword = $('#settingsCurrentPassword').value, newPassword = $('#settingsNewPassword').value, confirmPassword = $('#settingsConfirmPassword').value; if (newPassword !== confirmPassword) return toast('两次输入的新密码不一致'); await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }); e.target.reset(); toast('密码已更新'); });
     $('#profileForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/profile', { method: 'PUT', body: JSON.stringify({ username: $('#profileUsername').value.trim(), email: $('#profileEmail').value }) }); toast('资料已保存'); await loadSecurityStatus(); });
-    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#appearanceForm').addEventListener('submit', saveAppearance); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout);
+    $('#securityPolicyForm').addEventListener('submit', saveSecurityPolicy); $('#captchaForm').addEventListener('submit', saveCaptcha); $('#mailForm').addEventListener('submit', saveMail); $('#appearanceForm').addEventListener('submit', saveAppearance); $('#terminalLayoutForm').addEventListener('submit', saveTerminalLayout); setupSnippetSettings();
     $('#totpBox').addEventListener('click', (e) => { if (e.target.id === 'setupTotpBtn') setupTotp().catch((err) => toast(err.message)); });
     $('#totpEnableForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/security/totp/enable', { method: 'POST', body: JSON.stringify({ code: $('#totpEnableCode').value }) }); toast('TOTP 已开启'); $('#totpEnableForm').classList.add('force-hidden'); await loadSecurityStatus(); });
     $('#totpDisableForm').addEventListener('submit', async (e) => { e.preventDefault(); if (!confirm('确定关闭 TOTP？')) return; await api('/api/security/totp/disable', { method: 'POST', body: JSON.stringify({ currentPassword: $('#totpDisablePassword').value, code: $('#totpDisableCode').value }) }); e.target.reset(); toast('TOTP 已关闭'); await loadSecurityStatus(); });

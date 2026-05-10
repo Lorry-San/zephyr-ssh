@@ -2853,10 +2853,14 @@ html.keyboard-open .terminal-page {
 }
 .file-manager.front,
 .docker-panel.front,
-.info-modal.front { z-index: 47; }
+.info-modal.front,
+.snippet-panel.front,
+.shortcut-panel.front { z-index: 47; }
 .file-manager.front-switching,
 .info-modal.front-switching,
-.docker-panel.front-switching {
+.docker-panel.front-switching,
+.snippet-panel.front-switching,
+.shortcut-panel.front-switching {
     animation: panelFrontSwitch 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .file-manager.dragging,
@@ -2864,10 +2868,16 @@ html.keyboard-open .terminal-page {
 .info-modal.dragging,
 .info-modal.resizing,
 .docker-panel.dragging,
-.docker-panel.resizing { transition: none; user-select: none; touch-action: none; }
+.docker-panel.resizing,
+.snippet-panel.dragging,
+.snippet-panel.resizing,
+.shortcut-panel.dragging,
+.shortcut-panel.resizing { transition: none; user-select: none; touch-action: none; }
 .file-manager.layout-animating,
 .info-modal.layout-animating,
-.docker-panel.layout-animating {
+.docker-panel.layout-animating,
+.snippet-panel.layout-animating,
+.shortcut-panel.layout-animating {
     transition:
         left .62s var(--ios-open),
         top .62s var(--ios-open),
@@ -4664,7 +4674,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .file-manager,
 .docker-panel,
 .info-modal,
-.guac-floating-panel {
+.guac-floating-panel,
+.snippet-panel,
+.shortcut-panel {
     --panel-origin-x: 50%;
     --panel-origin-y: 0%;
     transform-origin: var(--panel-origin-x) var(--panel-origin-y);
@@ -4672,13 +4684,17 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .file-manager.panel-opening,
 .docker-panel.panel-opening,
 .info-modal.panel-opening,
-.guac-floating-panel.panel-opening {
+.guac-floating-panel.panel-opening,
+.snippet-panel.panel-opening,
+.shortcut-panel.panel-opening {
     animation: floatingPanelOpenFromButton .36s cubic-bezier(.16, 1, .3, 1) both;
 }
 .file-manager.panel-closing,
 .docker-panel.panel-closing,
 .info-modal.panel-closing,
-.guac-floating-panel.panel-closing {
+.guac-floating-panel.panel-closing,
+.snippet-panel.panel-closing,
+.shortcut-panel.panel-closing {
     animation: floatingPanelCloseToButton .28s cubic-bezier(.4, 0, .2, 1) both;
 }
 @keyframes floatingPanelOpenFromButton {
@@ -4727,4 +4743,68 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 .terminal-window.layout-morphing .terminal-window-body {
     filter: saturate(.96) brightness(.98);
+}
+
+/* SSH snippets and shortcut floating panels */
+.snippet-panel,
+.shortcut-panel {
+    position: absolute;
+    top: 64px;
+    left: 42px;
+    width: min(460px, calc(100vw - 24px));
+    height: min(520px, 62vh);
+    min-width: 300px;
+    min-height: 240px;
+    display: none;
+    flex-direction: column;
+    z-index: 30;
+    border: 1px solid rgba(139,148,158,.34);
+    border-radius: 22px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, rgba(255,255,255,.1)), color-mix(in srgb, var(--surface) 84%, transparent));
+    box-shadow: 0 28px 90px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.11);
+    backdrop-filter: blur(28px) saturate(1.55);
+    -webkit-backdrop-filter: blur(28px) saturate(1.55);
+    overflow: hidden;
+    opacity: 0;
+    transform: perspective(1200px) scale(.78) translate3d(0, 32px, 0);
+    transform-origin: top center;
+    filter: blur(8px);
+    transition: transform .42s cubic-bezier(.16,1,.3,1), opacity .28s ease, filter .32s ease;
+    will-change: transform, opacity, filter;
+}
+.shortcut-panel { width: min(420px, calc(100vw - 24px)); height: min(360px, 46vh); }
+.snippet-panel.open,
+.shortcut-panel.open {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+}
+.snippet-panel.front,
+.shortcut-panel.front { z-index: 47; }
+.snippet-panel.dragging,
+.snippet-panel.resizing,
+.shortcut-panel.dragging,
+.shortcut-panel.resizing { transition: none; user-select: none; touch-action: none; }
+.snippet-panel.layout-animating,
+.shortcut-panel.layout-animating {
+    transition: left .62s var(--ios-open), top .62s var(--ios-open), width .62s var(--ios-open), height .62s var(--ios-open), transform .72s var(--ios-bounce), opacity .28s ease, filter .32s ease;
+}
+.snippet-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 68%, transparent); }
+.snippet-panel-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; padding: 12px; overflow: hidden; }
+.snippet-search { width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); outline: none; }
+.snippet-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.12); }
+.snippet-list { display: grid; gap: 8px; overflow: auto; min-height: 0; }
+.snippet-item { display: grid; gap: 4px; text-align: left; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: color-mix(in srgb, var(--bg) 86%, transparent); color: var(--text); cursor: pointer; }
+.snippet-item:hover { border-color: rgba(88,166,255,.42); background: rgba(88,166,255,.12); transform: translateY(-1px); }
+.snippet-item em, .snippet-settings-item em { color: var(--text-secondary); font-size: 11px; font-style: normal; }
+.snippet-item code, .snippet-settings-item code { display: block; max-height: 72px; overflow: hidden; white-space: pre-wrap; color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
+.snippet-empty { color: var(--text-secondary); font-size: 12px; }
+.shortcut-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 12px; overflow: auto; }
+.shortcut-grid .tool-btn { min-width: 0; width: 100%; min-height: 36px; }
+.snippet-form { max-width: min(720px, 100%); }
+.snippet-settings-list { display: grid; gap: 10px; margin-top: 12px; }
+.snippet-settings-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+@media (max-width: 480px) and (pointer: coarse) {
+    .snippet-settings-item { grid-template-columns: 1fr; }
+    .shortcut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

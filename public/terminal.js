@@ -64,6 +64,15 @@ const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
 const infoBtn = $('#infoBtn');
 const dockerBtn = $('#dockerBtn');
+const snippetBtn = $('#snippetBtn');
+const shortcutBtn = $('#shortcutBtn');
+const snippetPanel = $('#snippetPanel');
+const snippetCloseBtn = $('#snippetCloseBtn');
+const snippetSearch = $('#snippetSearch');
+const snippetList = $('#snippetList');
+const snippetEmpty = $('#snippetEmpty');
+const shortcutPanel = $('#shortcutPanel');
+const shortcutCloseBtn = $('#shortcutCloseBtn');
 const fontDecreaseBtn = $('#fontDecreaseBtn');
 const fontIncreaseBtn = $('#fontIncreaseBtn');
 
@@ -1403,6 +1412,81 @@ fileBtn.addEventListener('click', () => {
     else showFileManager();
 });
 fmCloseBtn.addEventListener('click', hideFileManager);
+
+const SNIPPET_STORAGE_KEY = 'zephyr-ssh-snippets';
+function loadTerminalSnippets() {
+    try {
+        const data = JSON.parse(localStorage.getItem(SNIPPET_STORAGE_KEY) || '[]');
+        return Array.isArray(data) ? data.filter((item) => item && item.command) : [];
+    } catch { return []; }
+}
+function renderSnippetPanel() {
+    if (!snippetList) return;
+    const query = String(snippetSearch?.value || '').trim().toLowerCase();
+    const snippets = loadTerminalSnippets().filter((item) => !query
+        || String(item.name || '').toLowerCase().includes(query)
+        || String(item.group || '').toLowerCase().includes(query)
+        || String(item.command || '').toLowerCase().includes(query));
+    snippetList.innerHTML = '';
+    snippets.forEach((item) => {
+        const btn = document.createElement('button');
+        btn.className = 'snippet-item';
+        btn.type = 'button';
+        btn.innerHTML = `<strong>${escapeHtml(item.name || '未命名片段')}</strong><em>${escapeHtml(item.group || '未分组')} · ${item.autoRun ? '直接执行' : '填入输入框'}</em><code>${escapeHtml(item.command || '')}</code>`;
+        btn.addEventListener('click', () => {
+            const command = String(item.command || '');
+            if (item.autoRun) sendData(command.endsWith('\n') || command.endsWith('\r') ? command : command + '\r', { normalizeNewlines: true, source: 'snippet-run', forceFollow: true });
+            else {
+                cmdInput.value = command;
+                resizeCommandInput();
+                cmdInput.focus();
+            }
+        });
+        snippetList.appendChild(btn);
+    });
+    if (snippetEmpty) snippetEmpty.style.display = snippets.length ? 'none' : 'block';
+}
+function showSnippetPanel() {
+    ensureFloatingPanel(snippetPanel, getDefaultPanelOptions(snippetPanel));
+    snippetPanel.style.display = 'flex';
+    renderSnippetPanel();
+    requestAnimationFrame(() => {
+        snippetPanel.classList.add('open');
+        snippetBtn?.classList.add('active');
+        bringPanelToFront(snippetPanel);
+        animatePanelFromButton(snippetPanel, snippetBtn, true);
+    });
+}
+function hideSnippetPanel() {
+    if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+    animatePanelFromButton(snippetPanel, snippetBtn, false);
+    snippetPanel.classList.remove('open');
+    snippetBtn?.classList.remove('active');
+    window.setTimeout(() => { clearPanelMotion(snippetPanel); if (!snippetPanel.classList.contains('open')) snippetPanel.style.display = 'none'; }, 320);
+}
+function showShortcutPanel() {
+    ensureFloatingPanel(shortcutPanel, getDefaultPanelOptions(shortcutPanel));
+    shortcutPanel.style.display = 'flex';
+    requestAnimationFrame(() => {
+        shortcutPanel.classList.add('open');
+        shortcutBtn?.classList.add('active');
+        bringPanelToFront(shortcutPanel);
+        animatePanelFromButton(shortcutPanel, shortcutBtn, true);
+    });
+}
+function hideShortcutPanel() {
+    if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+    animatePanelFromButton(shortcutPanel, shortcutBtn, false);
+    shortcutPanel.classList.remove('open');
+    shortcutBtn?.classList.remove('active');
+    window.setTimeout(() => { clearPanelMotion(shortcutPanel); if (!shortcutPanel.classList.contains('open')) shortcutPanel.style.display = 'none'; }, 320);
+}
+snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? hideSnippetPanel() : showSnippetPanel());
+snippetCloseBtn?.addEventListener('click', hideSnippetPanel);
+snippetSearch?.addEventListener('input', renderSnippetPanel);
+shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? hideShortcutPanel() : showShortcutPanel());
+shortcutCloseBtn?.addEventListener('click', hideShortcutPanel);
+window.addEventListener('storage', (event) => { if (event.key === SNIPPET_STORAGE_KEY && snippetPanel?.classList.contains('open')) renderSnippetPanel(); });
 
 function initSFTP() {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
@@ -3770,6 +3854,12 @@ function getDefaultPanelOptions(panel) {
     if (panel === dockerPanel) {
         return { width: Math.min(parentRect.width * 0.8, 980), height: Math.min(parentRect.height * 0.72, 660), left: 28, top: 52 };
     }
+    if (panel === snippetPanel) {
+        return { width: Math.min(460, parentRect.width - 24), height: Math.min(parentRect.height * 0.62, 520), left: 42, top: 64 };
+    }
+    if (panel === shortcutPanel) {
+        return { width: Math.min(420, parentRect.width - 24), height: Math.min(parentRect.height * 0.46, 360), left: 72, top: 74 };
+    }
     return { width: Math.min(480, parentRect.width - 24), height: Math.min(parentRect.height * 0.72, 620), top: 52 };
 }
 
@@ -4133,6 +4223,8 @@ function setupPanelResize() {
 setupFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
 setupFloatingPanel(infoModal, getDefaultPanelOptions(infoModal));
 setupFloatingPanel(dockerPanel, getDefaultPanelOptions(dockerPanel));
+setupFloatingPanel(snippetPanel, getDefaultPanelOptions(snippetPanel));
+setupFloatingPanel(shortcutPanel, getDefaultPanelOptions(shortcutPanel));
 setupPanelLayoutMenu();
 setupPanelDrag();
 setupPanelResize();
@@ -4141,7 +4233,7 @@ setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
-    [fileManager, infoModal, dockerPanel].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
     requestStableTerminalLayout('window-resize', { includeResize: true });
