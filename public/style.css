@@ -5582,3 +5582,50 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform-origin: calc(100% - 22px) -16px !important;
     }
 }
+
+/* ===== 移动端 Dock 最终交互修正：小圆点等大、去椭圆框、Picker 在 Dock 左侧 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        top: max(7px, env(safe-area-inset-top)) !important;
+        right: max(10px, env(safe-area-inset-right)) !important;
+        width: 42px !important;
+        height: 22px !important;
+        border: 1px solid rgba(139,148,158,.20) !important;
+        border-radius: 999px !important;
+        background: color-mix(in srgb, var(--surface) 72%, rgba(0,0,0,.10)) !important;
+        box-shadow: 0 3px 10px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.08) !important;
+        backdrop-filter: blur(18px) saturate(1.22) !important;
+        -webkit-backdrop-filter: blur(18px) saturate(1.22) !important;
+    }
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle span,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle span,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle span {
+        width: 5px !important;
+        height: 5px !important;
+        border-radius: 50% !important;
+        background: color-mix(in srgb, var(--text-secondary) 72%, transparent) !important;
+        box-shadow: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(34px, calc(env(safe-area-inset-top) + 34px)) !important;
+        right: max(6px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        width: 92px !important;
+        transform: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        transform-origin: calc(100% - 27px) -11px !important;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-picker {
+        left: max(12px, calc(100vw - 390px)) !important;
+        right: auto !important;
+        top: max(64px, calc(env(safe-area-inset-top) + 64px)) !important;
+        width: min(340px, calc(100vw - 112px)) !important;
+        min-height: 260px !important;
+        max-height: calc(100dvh - 88px) !important;
+        z-index: 1010 !important;
+        pointer-events: auto !important;
+    }
+}

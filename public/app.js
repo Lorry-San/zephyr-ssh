@@ -2281,6 +2281,7 @@ function bindEvents() {
         if (e.target.closest?.('.smartbar-picker')) return;
         if (e.target.closest?.('[data-smartbar-add]')) return;
         if (e.target.closest?.('.smartbar-dock')) {
+            if (isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open')) return;
             terminalSmartbarPickerOpen = false;
             renderTerminalSmartbar();
             setTerminalSmartbarOpen(false);
