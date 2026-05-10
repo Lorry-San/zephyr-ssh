@@ -5487,22 +5487,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
-/* ===== 最终覆盖：移动端工具栏图标重新可见，小圆点回右上角 ===== */
+/* 仅保留：移动端全屏小白点放回右上角，不改 SSH 输入/复制逻辑 */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    .terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
-        content: '' !important;
-        display: block !important;
-        width: 21px !important;
-        height: 21px !important;
-        flex: 0 0 21px !important;
-        background: currentColor !important;
-        -webkit-mask: var(--mobile-icon-mask, var(--terminal-toolbar-icon)) center / contain no-repeat !important;
-        mask: var(--mobile-icon-mask, var(--terminal-toolbar-icon)) center / contain no-repeat !important;
-        position: static !important;
-        transform: none !important;
-        color: inherit !important;
-        -webkit-text-fill-color: currentColor !important;
-    }
     body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
     .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
     .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
@@ -5521,12 +5507,5 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
     body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
         transform-origin: 100% -18px !important;
-    }
-}
-
-@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    .terminal-page {
-        height: var(--mobile-terminal-vh, 100dvh);
-        max-height: var(--mobile-terminal-vh, 100dvh);
     }
 }
