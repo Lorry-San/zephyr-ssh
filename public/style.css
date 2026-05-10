@@ -5541,3 +5541,19 @@ body.smartbar-trash-hover .smartbar-trash-target {
     .terminal-page .topbar-actions .btn-sm[data-mobile-icon="reconnect"] { --mobile-icon-color: #2f81f7; }
     .terminal-page .topbar-actions .btn-sm[data-mobile-icon="disconnect"] { --mobile-icon-color: #f85149; }
 }
+
+/* ===== 桌面端工具栏图标也使用与移动端一致的彩色图标 ===== */
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
+    background: var(--toolbar-icon-color, currentColor);
+}
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="file"] { --toolbar-icon-color: #d7a21f; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="stats"] { --toolbar-icon-color: #4aa3df; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="docker"] { --toolbar-icon-color: #2aa9c9; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="snippet"] { --toolbar-icon-color: #d9aa18; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="keyboard"] { --toolbar-icon-color: #6b7684; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="copy"] { --toolbar-icon-color: #7a6042; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="paste"] { --toolbar-icon-color: #9a6a3a; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="term-theme"] { --toolbar-icon-color: #5b6672; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="theme"] { --toolbar-icon-color: #246f88; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="reconnect"] { --toolbar-icon-color: #2f81f7; }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="disconnect"] { --toolbar-icon-color: #f85149; }
