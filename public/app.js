@@ -922,7 +922,7 @@ function enforceTerminalWorkspaceLimit(newId) {
 function terminalProtocolClass(protocol) { return String(protocol || 'SSH').toLowerCase(); }
 function positionSmartbarPicker() {
     const smartbar = $('#sessionTabs');
-    const picker = smartbar?.querySelector('.smartbar-picker');
+    const picker = document.querySelector('#smartbarPickerLayer .smartbar-picker');
     const addButton = smartbar?.querySelector('[data-smartbar-add]');
     if (!smartbar || !picker || !addButton) return;
     const viewport = window.visualViewport;
@@ -963,6 +963,13 @@ function renderTerminalSmartbar() {
                 ${launchableConnections.length ? launchableConnections.map((c) => `<button data-smartbar-connect="${c.id}"><span class="proto-dot ${terminalProtocolClass(c.protocol)}"></span><strong>${escapeHtml(c.name)}</strong><em>${escapeHtml(c.protocol)} · ${escapeHtml(c.host)}:${escapeHtml(c.port)}</em></button>`).join('') : '<div class="smartbar-empty">暂无 SSH/RDP/VNC 服务器</div>'}
             </div>
         </div>` : '';
+    const pickerMount = document.getElementById('smartbarPickerLayer') || (() => {
+        const el = document.createElement('div');
+        el.id = 'smartbarPickerLayer';
+        document.body.appendChild(el);
+        return el;
+    })();
+    pickerMount.innerHTML = picker;
     const smartbarRoot = $('#sessionTabs');
     const navRectNow = $('.main-nav')?.getBoundingClientRect();
     if (navRectNow) {
@@ -978,8 +985,7 @@ function renderTerminalSmartbar() {
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
                 <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
             </div>
-        </div>
-        ${picker}`;
+        </div>`;
     requestAnimationFrame(() => {
         const nav = $('.main-nav');
         const smartbar = $('#sessionTabs');
@@ -1635,7 +1641,6 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     const target = getTerminalSession(targetWindowId);
     const dragged = getTerminalSession(draggedTabId);
     if (!target || !dragged) return false;
-    const beforeRects = captureTerminalWindowRects();
     dockSwapAnimatingWindows.add(targetWindowId);
     dockSwapAnimatingWindows.add(draggedTabId);
     target.minimized = true;
@@ -1647,12 +1652,11 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     touchTerminalSession(draggedTabId);
     syncVisualLayout({ preserve: true });
     renderTerminalTabs();
-    animateTerminalLayoutFromRects(beforeRects, { duration: 680 });
     window.setTimeout(() => {
         dockSwapAnimatingWindows.delete(targetWindowId);
         dockSwapAnimatingWindows.delete(draggedTabId);
         renderTerminalTabs({ rebuildWorkspace: false });
-    }, 520);
+    }, 560);
     return true;
 }
 function startSmartbarIconDrag(e, tabId) {
@@ -1676,7 +1680,7 @@ function startSmartbarIconDrag(e, tabId) {
         if (Math.hypot(dx, dy) > 6) smartbarDragState.moved = true;
         moveGhost(ev);
         ghost.style.pointerEvents = 'none';
-        const hoverWin = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-window]')?.dataset.window || null;
+        const hoverWin = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window || null;
         if (hoverWin !== smartbarHoverWindowId) {
             smartbarHoverWindowId = hoverWin;
             document.querySelectorAll('.terminal-window').forEach((el) => el.classList.toggle('dock-drop-target', !!hoverWin && el.dataset.window === hoverWin && hoverWin !== tabId));
@@ -1691,14 +1695,12 @@ function startSmartbarIconDrag(e, tabId) {
         ghost.remove();
         if (smartbarDragState?.moved) {
             suppressSmartbarClick = true;
-            const el = document.elementFromPoint(ev.clientX, ev.clientY);
-            const targetDock = el?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
-            const targetWin = el?.closest?.('[data-window]')?.dataset.window;
+            const targetWin = smartbarHoverWindowId || document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.terminal-window[data-window]')?.dataset.window;
+            const targetDock = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
             if (targetWin && targetWin !== tabId) {
                 const sourceRect = ghost.getBoundingClientRect();
                 replaceWindowWithDockTab(targetWin, tabId);
                 setTerminalSmartbarOpen(false);
-                renderTerminalTabs();
                 animateWindowFromDock(tabId, sourceRect, { swap: true });
             } else if (targetDock && targetDock !== tabId) {
                 reorderTerminalOrder(tabId, targetDock);
@@ -2001,12 +2003,14 @@ function bindEvents() {
             requestAnimationFrame(positionSmartbarPicker);
             return;
         }
-        if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
-        const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
-        if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); return; }
         const tabButton = e.target.closest('[data-smartbar-tab]');
         const tab = tabButton?.dataset.smartbarTab;
         if (tab) activateTerminalFromDock(tab, tabButton);
+    });
+    document.addEventListener('click', (e) => {
+        if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
+        const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
+        if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); }
     });
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
@@ -2021,7 +2025,15 @@ function bindEvents() {
     });
     document.addEventListener('pointerdown', (e) => {
         if (!terminalSmartbarOpen) return;
-        if (e.target.closest?.('#sessionTabs')) return;
+        if (e.target.closest?.('[data-smartbar-toggle]')) return;
+        if (e.target.closest?.('.smartbar-picker')) return;
+        if (e.target.closest?.('[data-smartbar-add]')) return;
+        if (e.target.closest?.('.smartbar-dock')) {
+            terminalSmartbarPickerOpen = false;
+            renderTerminalSmartbar();
+            setTerminalSmartbarOpen(false);
+            return;
+        }
         setTerminalSmartbarOpen(false);
     }, true);
     $('#terminalWorkspace').addEventListener('click', (e) => {

@@ -658,17 +658,14 @@ body.terminal-mode-entering .terminal-smartbar .smartbar-handle {
 }
 @keyframes smartbarPanelMacClose {
     0% { border-radius: 30px; transform: translate3d(-50%, 0, 0) scale3d(1, 1, 1); opacity: 1; filter: blur(0) saturate(1); }
-    28% { transform: translate3d(-50%, 1px, 0) scale3d(1.018, 1.03, 1); opacity: 1; filter: blur(0) saturate(1.04); }
-    100% { border-radius: 999px; transform: translate3d(-50%, -18px, 0) scale3d(.46, .20, 1); opacity: 0; filter: blur(14px) saturate(.9); }
+    100% { border-radius: 30px; transform: translate3d(-50%, -18px, 0) scale3d(.46, .20, 1); opacity: 0; filter: blur(14px) saturate(.9); }
 }
-.smartbar-panel .smartbar-dock,
-.smartbar-panel .smartbar-picker {
+.smartbar-panel .smartbar-dock {
     opacity: 0;
     transform: translateY(10px) scale(.94);
     transition: opacity .24s ease, transform .48s cubic-bezier(.18,1.18,.2,1);
 }
-.terminal-smartbar.open .smartbar-panel .smartbar-dock,
-.terminal-smartbar.open .smartbar-panel .smartbar-picker {
+.terminal-smartbar.open .smartbar-panel .smartbar-dock {
     opacity: 1;
     transform: translateY(0) scale(1);
     transition-delay: .10s;
