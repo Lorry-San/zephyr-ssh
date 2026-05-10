@@ -5743,3 +5743,23 @@ body.smartbar-trash-hover .smartbar-trash-target {
             opacity .18s ease .16s !important;
     }
 }
+
+/* ===== 最终：小圆点与标题栏三点同线，Dock 打开时 iframe 不抢触摸 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        top: max(10px, env(safe-area-inset-top)) !important;
+        right: max(24px, env(safe-area-inset-right)) !important;
+        width: 34px !important;
+        height: 34px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open ~ .terminal-workspace .terminal-frame,
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open + .terminal-frame {
+        pointer-events: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(50px, calc(env(safe-area-inset-top) + 50px)) !important;
+        right: max(8px, env(safe-area-inset-right)) !important;
+    }
+}

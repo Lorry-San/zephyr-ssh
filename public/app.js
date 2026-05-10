@@ -1251,6 +1251,7 @@ function renderTerminalWorkspace() {
             }
             win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
         });
+        mountMobileDockToggle(workspace);
         return;
     }
     mountMobileDockToggle(workspace);
@@ -1629,6 +1630,7 @@ function setTerminalSmartbarOpen(open) {
     window.clearTimeout(terminalSmartbarTimer);
     window.clearTimeout(setTerminalSmartbarOpen._closeTimer);
     if (!open) {
+        document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
         if (!terminalSmartbarOpen) return;
         terminalSmartbarOpen = false;
         terminalSmartbarPickerOpen = false;
@@ -2252,6 +2254,7 @@ function bindEvents() {
             e.preventDefault();
             e.stopPropagation();
             setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = terminalSmartbarOpen ? 'none' : '');
             return;
         }
     }, true);
@@ -2289,6 +2292,7 @@ function bindEvents() {
             return;
         }
         setTerminalSmartbarOpen(false);
+        document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
     $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
