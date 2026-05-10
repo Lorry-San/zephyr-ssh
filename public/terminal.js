@@ -185,6 +185,7 @@ let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
+let mobileWTermInputGuard = null;
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
@@ -477,7 +478,7 @@ function isViewportVisuallyRestored(metrics, tolerance = 8) {
 
 function isKeyboardAvoidanceTarget(element = document.activeElement) {
     if (!element) return false;
-    if (element === cmdInput) return true;
+    if (element === cmdInput) return mobileKeyboardUserControlled || !isTouchKeyboardDevice();
     const tag = element.tagName?.toLowerCase();
     const editable = tag === 'textarea'
         || (tag === 'input' && !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'range', 'color'].includes((element.type || '').toLowerCase()))
@@ -3564,9 +3565,75 @@ function finalizeKeyboardClose({ force = false } = {}) {
     scheduleTerminalResize('keyboard-close-final', 500);
 }
 
+function installMobileWTermInputGuard() {
+    if (!isTouchKeyboardDevice() || !term?.input?.textarea || mobileWTermInputGuard) return;
+    const textarea = term.input.textarea;
+    const guard = (event) => {
+        if (mobileKeyboardUserControlled) return;
+        event.preventDefault?.();
+        event.stopImmediatePropagation?.();
+        textarea.blur?.();
+        cmdInput?.blur?.();
+        keyboardFocusLikely = false;
+        mobileKeyboardOpen = false;
+        document.documentElement.style.setProperty('--keyboard-inset', '0px');
+        document.documentElement.classList.remove('keyboard-open');
+        notifyParentKeyboardMetrics({
+            keyboardOpen: false,
+            keyboardInset: 0,
+            viewportHeight: Math.round(window.visualViewport?.height || window.innerHeight || 0),
+            layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
+            offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
+        });
+    };
+    const stopPointer = (event) => {
+        if (mobileKeyboardUserControlled) return;
+        event.preventDefault?.();
+        event.stopImmediatePropagation?.();
+    };
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.setAttribute('tabindex', '-1');
+    textarea.setAttribute('inputmode', 'none');
+    textarea.style.pointerEvents = 'none';
+    textarea.addEventListener('focus', guard, true);
+    textarea.addEventListener('beforeinput', guard, true);
+    textarea.addEventListener('input', guard, true);
+    wtermWrapper.addEventListener('click', stopPointer, true);
+    wtermWrapper.addEventListener('pointerdown', stopPointer, true);
+    wtermWrapper.addEventListener('touchstart', stopPointer, true);
+    const originalFocus = term.focus?.bind(term);
+    const originalInputFocus = term.input.focus?.bind(term.input);
+    term.focus = () => {
+        if (!isTouchKeyboardDevice() || mobileKeyboardUserControlled) originalFocus?.();
+    };
+    term.input.focus = () => {
+        if (!isTouchKeyboardDevice() || mobileKeyboardUserControlled) originalInputFocus?.();
+    };
+    mobileWTermInputGuard = { textarea, guard, stopPointer, originalFocus, originalInputFocus };
+}
+
+function setMobileWTermInputEnabled(enabled) {
+    if (!isTouchKeyboardDevice() || !term?.input?.textarea) return;
+    installMobileWTermInputGuard();
+    const textarea = term.input.textarea;
+    if (enabled) {
+        textarea.removeAttribute('readonly');
+        textarea.setAttribute('tabindex', '0');
+        textarea.removeAttribute('inputmode');
+        textarea.style.pointerEvents = 'auto';
+    } else {
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.setAttribute('tabindex', '-1');
+        textarea.setAttribute('inputmode', 'none');
+        textarea.style.pointerEvents = 'none';
+        textarea.blur?.();
+    }
+}
+
 function closeMobileCommandKeyboard() {
     if (!isTouchKeyboardDevice()) return;
     mobileKeyboardUserControlled = false;
+    setMobileWTermInputEnabled(false);
     cmdInput?.setAttribute('readonly', 'readonly');
     cmdKeyboardBtn?.classList.remove('keyboard-visible');
     if (cmdKeyboardBtn) {
@@ -3586,6 +3653,7 @@ function openMobileCommandKeyboard() {
         return;
     }
     mobileKeyboardUserControlled = true;
+    setMobileWTermInputEnabled(true);
     cmdInput?.removeAttribute('readonly');
     cmdKeyboardBtn?.classList.add('keyboard-visible');
     if (cmdKeyboardBtn) {
@@ -4556,6 +4624,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
                 notifyParentActivity();
                 return;
             }
+            if (isTouchKeyboardDevice() && !mobileKeyboardUserControlled) {
+                notifyParentActivity();
+                return;
+            }
             if (isTouchKeyboardDevice()) {
                 notifyParentActivity();
                 return;
@@ -4745,6 +4817,7 @@ async function startAutoReconnect(reason = '连接已断开') {
 
 // ---------- WTerm 初始化 ----------
 async function initWTerm(connectionToken = activeConnectionToken, { followOnConnect = true } = {}) {
+    mobileWTermInputGuard = null;
     let WTermClass;
     try {
         const module = await import('/vendor/@wterm/dom/dist/index.js');
@@ -4782,6 +4855,8 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
+    installMobileWTermInputGuard();
+    setMobileWTermInputEnabled(false);
 
     // 本项目不能直接启用 @wterm/dom autoResize：官方实现会把每一次 ResizeObserver
     // contentRect 转成 cols/rows 并立刻触发 onResize；而 ssh2 官方的 setWindow(rows, cols,...)
