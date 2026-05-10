@@ -932,14 +932,12 @@ function positionSmartbarPicker() {
     const vvHeight = viewport?.height || window.innerHeight;
     const margin = 14;
     const addRect = addButton.getBoundingClientRect();
-    const dockRect = smartbar.querySelector('.smartbar-panel')?.getBoundingClientRect?.();
     const targetWidth = Math.min(360, Math.max(300, vvWidth - margin * 2));
     const anchorX = addRect.left + addRect.width / 2;
     const left = Math.min(Math.max(anchorX - targetWidth / 2, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin);
-    const preferredTop = Math.round((dockRect?.bottom || addRect.bottom) + 10);
-    const minTop = vvTop + margin;
+    const preferredTop = Math.round(addRect.bottom + 14);
     const maxTop = vvTop + Math.max(margin, vvHeight - 280 - margin);
-    const top = Math.min(Math.max(preferredTop, minTop), maxTop);
+    const top = Math.min(Math.max(preferredTop, vvTop + margin), maxTop);
     const arrowLeft = Math.min(targetWidth - 20, Math.max(20, anchorX - left));
     picker.style.width = `${targetWidth}px`;
     picker.style.setProperty('--smartbar-picker-left', `${left}px`);
@@ -1374,7 +1372,6 @@ function applyTerminalWindowPreset(tabId, action) {
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
-    const beforeRects = captureTerminalWindowRects();
     restoreTerminalSession(tabId);
     const workspace = $('#terminalWorkspace');
     const others = visualLayout.filter((id) => id !== tabId);
@@ -1390,7 +1387,6 @@ function applyTerminalWindowPreset(tabId, action) {
         if (action === 'right-bottom') workspace.style.setProperty('--workspace-split-y', '50%');
     }
     activeTerminalTab = tabId; touchTerminalSession(tabId); renderTerminalTabs();
-    animateTerminalLayoutFromRects(beforeRects, { duration: 660 });
 }
 
 function resetTerminalWorkspaceKeyboard() {
@@ -1565,7 +1561,7 @@ function setTerminalSmartbarOpen(open) {
         setTerminalSmartbarOpen._closeTimer = window.setTimeout(() => {
             terminalSmartbarClosing = false;
             renderTerminalSmartbar();
-        }, 460);
+        }, 760);
         return;
     }
     terminalSmartbarClosing = false;
