@@ -426,8 +426,10 @@ body.app-body.terminal-mode {
 body.terminal-mode .main-nav {
     position: sticky;
     top: 0;
+    padding-bottom: 27px;
     transform: none;
     opacity: 1;
+    transition: padding-bottom .58s cubic-bezier(.16,1,.3,1), background .3s ease;
 }
 .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--text); text-decoration: none; font-size: 18px; }
 .brand span { display: inline-grid; place-items: center; min-width: 24px; }
@@ -536,7 +538,7 @@ body.terminal-mode .app-shell {
     --smartbar-nav-bg: color-mix(in srgb, var(--surface) 88%, transparent);
     --smartbar-nav-border: var(--border);
     position: fixed;
-    top: var(--smartbar-top);
+    top: calc(var(--smartbar-top) - 25px);
     left: 0;
     right: 0;
     z-index: 80;
@@ -553,7 +555,7 @@ body.terminal-mode .app-shell {
     left: 50%;
     width: 112px;
     height: 25px;
-    transform: translate3d(-50%, -22px, 0) scaleX(.72);
+    transform: translate3d(-50%, 0, 0) scaleX(.72);
     transform-origin: top center;
     border: 1px solid var(--smartbar-nav-border);
     border-top: 0;
