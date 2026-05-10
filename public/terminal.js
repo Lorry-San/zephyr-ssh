@@ -3670,7 +3670,11 @@ function detectInteractionEnvironment() {
     return { type, category, width, height, touch, coarse, hover, platform, ua, mobileScore, desktopScore };
 }
 function isPhoneLikeEnvironment() {
-    return detectInteractionEnvironment().category === 'phone';
+    const env = detectInteractionEnvironment();
+    const explicitPhoneUA = /android.*mobile|iphone|ipod|blackberry|iemobile|opera mini/i.test(env.ua);
+    const desktopClassInput = env.hover && !env.coarse;
+    if (desktopClassInput) return false;
+    return explicitPhoneUA && env.coarse && Math.min(env.width, env.height) <= 700;
 }
 function isCompactScreen() {
     return isPhoneLikeEnvironment();
@@ -4242,6 +4246,26 @@ wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
     if (mobileTerminalSelectionMode || selection?.toString?.().length > 0) return;
     term?.focus?.();
+});
+async function pasteClipboardIntoTerminal(source = 'terminal-contextmenu') {
+    let text = '';
+    try {
+        text = await navigator.clipboard?.readText?.() || '';
+    } catch (err) {
+        console.warn('[terminal-paste]', 'clipboard read failed', err);
+    }
+    if (!text) return false;
+    logTerminalPasteDiagnostics(source, text);
+    sendData(text, { source, forceFollow: true });
+    try { term?.focus?.(); } catch (_) {}
+    return true;
+}
+wtermWrapper.addEventListener('contextmenu', async (e) => {
+    const selection = window.getSelection();
+    if (selection?.toString?.().length > 0) return;
+    e.preventDefault();
+    const ok = await pasteClipboardIntoTerminal('terminal-right-click-paste');
+    if (!ok) console.info('[terminal-paste]', '右键粘贴需要浏览器剪贴板权限或非空文本剪贴板');
 });
  // 粘贴交给 @wterm/dom 官方 InputHandler 处理：
  // - 支持 bracketed paste；

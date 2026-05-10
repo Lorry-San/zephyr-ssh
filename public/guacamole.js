@@ -566,7 +566,11 @@ function detectInteractionEnvironment() {
     return { type, category, width, height, touch, coarse, hover, platform, ua, mobileScore, desktopScore };
 }
 function isPhoneLikeEnvironment() {
-    return detectInteractionEnvironment().category === 'phone';
+    const env = detectInteractionEnvironment();
+    const explicitPhoneUA = /android.*mobile|iphone|ipod|blackberry|iemobile|opera mini/i.test(env.ua);
+    const desktopClassInput = env.hover && !env.coarse;
+    if (desktopClassInput) return false;
+    return explicitPhoneUA && env.coarse && Math.min(env.width, env.height) <= 700;
 }
 function isCompactScreen() {
     return isPhoneLikeEnvironment();

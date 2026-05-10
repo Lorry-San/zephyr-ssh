@@ -835,7 +835,11 @@ function detectInteractionEnvironment() {
     return { type, category, width, height, touch, coarse, hover, platform, ua, mobileScore, desktopScore };
 }
 function isPhoneLikeEnvironment() {
-    return detectInteractionEnvironment().category === 'phone';
+    const env = detectInteractionEnvironment();
+    const explicitPhoneUA = /android.*mobile|iphone|ipod|blackberry|iemobile|opera mini/i.test(env.ua);
+    const desktopClassInput = env.hover && !env.coarse;
+    if (desktopClassInput) return false;
+    return explicitPhoneUA && env.coarse && Math.min(env.width, env.height) <= 700;
 }
 
 function isCompactTerminalWorkspace() { return isPhoneLikeEnvironment(); }
@@ -1324,6 +1328,34 @@ function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
     }, 260);
 }
 
+function captureTerminalWindowRects() {
+    const map = new Map();
+    document.querySelectorAll('#terminalWorkspace .terminal-window[data-window]').forEach((el) => {
+        map.set(el.dataset.window, el.getBoundingClientRect());
+    });
+    return map;
+}
+function animateTerminalLayoutFromRects(beforeRects = new Map(), { duration = 620 } = {}) {
+    requestAnimationFrame(() => {
+        document.querySelectorAll('#terminalWorkspace .terminal-window[data-window]').forEach((el) => {
+            const before = beforeRects.get(el.dataset.window);
+            if (!before) return;
+            const after = el.getBoundingClientRect();
+            if (!after.width || !after.height) return;
+            const dx = before.left - after.left;
+            const dy = before.top - after.top;
+            const sx = before.width / after.width;
+            const sy = before.height / after.height;
+            if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return;
+            el.animate([
+                { transform: `translate3d(${dx}px, ${dy}px, 0) scale3d(${sx}, ${sy}, 1)`, filter: 'saturate(.98)', borderRadius: '18px' },
+                { transform: `translate3d(${dx * -0.018}px, ${dy * -0.018}px, 0) scale3d(${1 + (1 - sx) * .025}, ${1 + (1 - sy) * .025}, 1)`, filter: 'saturate(1.06)', borderRadius: '12px', offset: .78 },
+                { transform: 'translate3d(0, 0, 0) scale3d(1, 1, 1)', filter: 'saturate(1)', borderRadius: '0px' }
+            ], { duration, easing: 'cubic-bezier(.16,1,.3,1)' });
+        });
+    });
+}
+
 function applyTerminalWindowPreset(tabId, action) {
     const t = getTerminalSession(tabId); if (!t) return;
     console.debug('[terminal-layout]', 'window action', {
@@ -1342,6 +1374,7 @@ function applyTerminalWindowPreset(tabId, action) {
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
+    const beforeRects = captureTerminalWindowRects();
     restoreTerminalSession(tabId);
     const workspace = $('#terminalWorkspace');
     const others = visualLayout.filter((id) => id !== tabId);
@@ -1357,6 +1390,7 @@ function applyTerminalWindowPreset(tabId, action) {
         if (action === 'right-bottom') workspace.style.setProperty('--workspace-split-y', '50%');
     }
     activeTerminalTab = tabId; touchTerminalSession(tabId); renderTerminalTabs();
+    animateTerminalLayoutFromRects(beforeRects, { duration: 660 });
 }
 
 function resetTerminalWorkspaceKeyboard() {
@@ -1633,6 +1667,7 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     const target = getTerminalSession(targetWindowId);
     const dragged = getTerminalSession(draggedTabId);
     if (!target || !dragged) return false;
+    const beforeRects = captureTerminalWindowRects();
     dockSwapAnimatingWindows.add(targetWindowId);
     dockSwapAnimatingWindows.add(draggedTabId);
     target.minimized = true;
@@ -1643,6 +1678,8 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     activeTerminalTab = draggedTabId;
     touchTerminalSession(draggedTabId);
     syncVisualLayout({ preserve: true });
+    renderTerminalTabs();
+    animateTerminalLayoutFromRects(beforeRects, { duration: 680 });
     window.setTimeout(() => {
         dockSwapAnimatingWindows.delete(targetWindowId);
         dockSwapAnimatingWindows.delete(draggedTabId);
