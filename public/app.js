@@ -791,7 +791,40 @@ function openPlaceholderTab(c) {
     switchView('terminal');
 }
 
-function isCompactTerminalWorkspace() { return matchMedia('(hover: none) and (pointer: coarse)').matches || innerWidth <= 760; }
+function detectInteractionEnvironment() {
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    const mobileUA = /android|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
+    const iPadOS = navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1;
+    const width = window.innerWidth || document.documentElement.clientWidth || 0;
+    const height = window.innerHeight || document.documentElement.clientHeight || 0;
+    const smallScreen = Math.min(width, height) <= 820;
+    const touch = 'ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0;
+    const coarse = window.matchMedia?.('(pointer: coarse)')?.matches || false;
+    const hover = window.matchMedia?.('(hover: hover)')?.matches || false;
+    const platform = String(navigator.platform || '').toLowerCase();
+    const desktopPlatform = /win|mac|linux/.test(platform);
+    let mobileScore = 0;
+    if (mobileUA) mobileScore += 3;
+    if (iPadOS) mobileScore += 3;
+    if (smallScreen) mobileScore += 2;
+    if (touch) mobileScore += 1;
+    if (coarse) mobileScore += 2;
+    if (!hover) mobileScore += 1;
+    let desktopScore = 0;
+    if (desktopPlatform) desktopScore += 2;
+    if (hover) desktopScore += 2;
+    if (!coarse) desktopScore += 1;
+    if (!smallScreen) desktopScore += 2;
+    let type = mobileScore >= desktopScore ? 'mobile' : 'desktop';
+    let category = type === 'mobile' ? (width >= 768 ? 'tablet' : 'phone') : 'desktop';
+    if (category === 'tablet') type = 'desktop';
+    return { type, category, width, height, touch, coarse, hover, platform, ua, mobileScore, desktopScore };
+}
+function isPhoneLikeEnvironment() {
+    return detectInteractionEnvironment().category === 'phone';
+}
+
+function isCompactTerminalWorkspace() { return isPhoneLikeEnvironment(); }
 function getConfiguredTerminalMaxWindows() {
     const value = Number(settings?.terminal?.maxWindows || localStorage.getItem('zephyr-terminal-max-windows') || 3);
     return Math.min(3, Math.max(1, Number.isFinite(value) ? value : 3));
