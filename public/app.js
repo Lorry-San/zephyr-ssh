@@ -1049,7 +1049,7 @@ function terminalWindowMenu(t) {
     return `<div class="terminal-window-menu" role="menu" style="--island-action-count:${items.length}">${items.map(([action, label]) => `<button data-window-action="${action}" data-window="${t.id}" title="${label}" aria-label="${label}">${label}</button>`).join('')}</div>`;
 }
 function terminalWindowTitlebarHtml(t) {
-    return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
+    return `<button class="terminal-grip terminal-window-center-dots" data-window-control="${t.id}" title="短按打开窗口操作，长按拖动交换位置" aria-label="窗口操作与拖动"><span></span></button><button class="mobile-fullscreen-dock-toggle" data-mobile-dock-toggle data-smartbar-toggle title="展开/收回移动端 Dock" aria-label="展开/收回移动端 Dock"><span></span></button><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><strong>${escapeHtml(terminalShortName(t.name))}</strong>${terminalWindowMenu(t)}`;
 }
 function positionTerminalWindowMenu(titlebar, { collapsed = false, force = false } = {}) {
     if (!force && !titlebar?.classList.contains('menu-open')) return;
@@ -1210,21 +1210,10 @@ function createTerminalWindowElement(t) {
     return article;
 }
 function mountMobileDockToggle(workspace) {
-    let toggle = document.getElementById('mobileFullscreenDockToggle');
-    if (!toggle) {
-        toggle = document.createElement('button');
-        toggle.className = 'mobile-fullscreen-dock-toggle';
-        toggle.id = 'mobileFullscreenDockToggle';
-        toggle.dataset.smartbarToggle = '';
-        toggle.title = '展开/收回移动端 Dock';
-        toggle.setAttribute('aria-label', '展开/收回移动端 Dock');
-        toggle.innerHTML = '<span></span>';
-    }
-    const activeWindow = workspace?.querySelector('.terminal-window.active') || workspace?.querySelector('.terminal-window:not(.minimized-keepalive)') || workspace?.querySelector('.terminal-window.minimized-keepalive');
-    const titlebar = activeWindow?.querySelector('.terminal-window-titlebar');
-    if (!toggle || !titlebar) return;
-    if (toggle.parentElement !== titlebar) titlebar.appendChild(toggle);
-    toggle.style.display = isCompactTerminalWorkspace() && workspace?.classList.contains('custom-fullscreen') ? 'grid' : '';
+    // 小圆点现在直接由 terminalWindowTitlebarHtml 渲染进每个标题栏，避免 titlebar.innerHTML 重绘后丢失。
+    workspace?.querySelectorAll('.terminal-window-titlebar > .mobile-fullscreen-dock-toggle').forEach((toggle) => {
+        toggle.style.display = isCompactTerminalWorkspace() && workspace?.classList.contains('custom-fullscreen') ? 'grid' : '';
+    });
 }
 function renderTerminalWorkspace() {
     const visibleSessions = terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));

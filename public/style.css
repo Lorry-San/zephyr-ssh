@@ -5816,3 +5816,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
         height: 6px !important;
     }
 }
+
+/* 稳健版：每个标题栏自带小圆点，只显示 active 全屏窗口那一个 */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        display: none !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        display: grid !important;
+    }
+}
