@@ -59,7 +59,6 @@ const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const wtermThemeToggle = $('#wtermThemeToggle');
 const cmdInput = $('#cmdInput');
-const cmdKeyboardBtn = $('#cmdKeyboardBtn');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const pasteBtn = $('#pasteBtn');
@@ -187,8 +186,7 @@ let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
 let mobileWTermInputGuard = null;
-let mobileKeyboardProxy = null;
-let mobileKeyboardProxyValue = '';
+let mobileClipboardActionInProgress = false;
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
@@ -1039,13 +1037,12 @@ setupTerminalPinchZoom();
 
 // ---------- 复制功能 ----------
 copyBtn.addEventListener('click', async () => {
-    const wasKeyboardUserControlled = mobileKeyboardUserControlled;
     const text = getCopyableSelectionText();
     if (!text) {
         toast?.('请先选择要复制的终端内容');
-        if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
         return;
     }
+    mobileClipboardActionInProgress = true;
     enterMobileTerminalSelectionMode('copy-button');
     const originalText = copyBtn.textContent;
     try {
@@ -1054,23 +1051,32 @@ copyBtn.addEventListener('click', async () => {
     } catch {
         const ta = document.createElement('textarea');
         ta.value = text;
+        ta.setAttribute('readonly', 'readonly');
         ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        ta.style.top = '0';
         ta.style.opacity = '0';
         document.body.appendChild(ta);
+        const active = document.activeElement;
         ta.select();
         try { document.execCommand('copy'); copyBtn.textContent = '已复制'; } catch (_) { copyBtn.textContent = '失败'; }
         document.body.removeChild(ta);
+        try { active?.focus?.({ preventScroll: true }); } catch (_) {}
+    } finally {
+        window.setTimeout(() => { mobileClipboardActionInProgress = false; }, 220);
     }
-    if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
     scheduleExitMobileTerminalSelectionMode(1200);
     setTimeout(() => { copyBtn.textContent = originalText; }, 1500);
 });
 
 pasteBtn?.addEventListener('click', async () => {
-    const wasKeyboardUserControlled = mobileKeyboardUserControlled;
-    const pasted = await pasteClipboardIntoTerminal('mobile-paste-button');
-    if (wasKeyboardUserControlled && isTouchKeyboardDevice()) openMobileCommandKeyboard();
-    if (!pasted) toast?.('剪贴板为空或浏览器未授权');
+    mobileClipboardActionInProgress = true;
+    try {
+        const pasted = await pasteClipboardIntoTerminal('mobile-paste-button');
+        if (!pasted) toast?.('剪贴板为空或浏览器未授权');
+    } finally {
+        window.setTimeout(() => { mobileClipboardActionInProgress = false; }, 220);
+    }
 });
 
 copyBtn.addEventListener('pointerdown', (e) => e.preventDefault(), { passive: false });
@@ -3481,11 +3487,7 @@ function markKeyboardFocusActive() {
 }
 
 function markKeyboardFocusInactive() {
-    if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) {
-        keyboardFocusLikely = true;
-        window.setTimeout(focusMobileSecureKeyboardProxy, 30);
-        return;
-    }
+    if (mobileClipboardActionInProgress) return;
     keyboardFocusLikely = false;
     window.clearTimeout(keyboardFallbackTimer);
     if (keyboardFallbackActive) {
@@ -3498,7 +3500,8 @@ function markKeyboardFocusInactive() {
 
 function updateViewportInsets() {
     if (embeddedMode) return;
-    if (mobileTerminalSelectionMode) return;
+    if (mobileTerminalSelectionMode && !mobileClipboardActionInProgress) return;
+    if (mobileClipboardActionInProgress) return;
     if (!isTouchKeyboardDevice()) return;
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
@@ -3507,7 +3510,7 @@ function updateViewportInsets() {
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
         // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
         // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
-        closeMobileCommandKeyboard();
+        finalizeKeyboardClose({ force: true });
         return;
     }
     const inset = keyboardOpen ? metrics.keyboardInset : 0;
@@ -3515,12 +3518,6 @@ function updateViewportInsets() {
     if (updateViewportInsets._lastSignature === signature) return;
     updateViewportInsets._lastSignature = signature;
     mobileKeyboardOpen = keyboardOpen;
-    cmdKeyboardBtn?.classList.toggle('keyboard-visible', keyboardOpen && mobileKeyboardUserControlled);
-    if (cmdKeyboardBtn && mobileKeyboardUserControlled) {
-        cmdKeyboardBtn.textContent = '';
-        cmdKeyboardBtn.title = '关闭键盘';
-        cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
-    }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
@@ -3601,181 +3598,26 @@ function finalizeKeyboardClose({ force = false } = {}) {
     scheduleTerminalResize('keyboard-close-final', 500);
 }
 
-function ensureMobileKeyboardProxy() {
-    if (mobileKeyboardProxy) return mobileKeyboardProxy;
-    const input = document.createElement('input');
-    input.type = 'password';
-    input.inputMode = 'text';
-    input.autocomplete = 'new-password';
-    input.autocorrect = 'off';
-    input.autocapitalize = 'off';
-    input.spellcheck = false;
-    input.setAttribute('aria-label', '终端安全键盘输入代理');
-    input.className = 'mobile-secure-keyboard-proxy';
-    input.value = mobileKeyboardProxyValue = '';
-    input.addEventListener('input', () => {
-        if (!mobileKeyboardUserControlled) return;
-        const value = input.value || '';
-        let prefix = 0;
-        while (prefix < value.length && prefix < mobileKeyboardProxyValue.length && value[prefix] === mobileKeyboardProxyValue[prefix]) prefix += 1;
-        const removed = mobileKeyboardProxyValue.length - prefix;
-        const added = value.slice(prefix);
-        for (let i = 0; i < removed; i += 1) sendData('\x7f', { source: 'mobile-secure-keyboard' });
-        if (added) sendData(added, { source: 'mobile-secure-keyboard' });
-        mobileKeyboardProxyValue = value;
-        if (input.value.length > 80) {
-            input.value = mobileKeyboardProxyValue = '';
-        }
-    });
-    input.addEventListener('keydown', (e) => {
-        if (!mobileKeyboardUserControlled) return;
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            sendData('\r', { source: 'mobile-secure-keyboard', forceFollow: true });
-            input.value = mobileKeyboardProxyValue = '';
-        } else if (e.key === 'Tab') {
-            e.preventDefault();
-            sendData('\t', { source: 'mobile-secure-keyboard', forceFollow: true });
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            sendData('\x1b', { source: 'mobile-secure-keyboard', forceFollow: true });
-        }
-    });
-    document.body.appendChild(input);
-    mobileKeyboardProxy = input;
-    return input;
-}
-
-function focusMobileSecureKeyboardProxy() {
-    if (!isTouchKeyboardDevice() || !mobileKeyboardUserControlled) return;
-    const input = ensureMobileKeyboardProxy();
-    input.value = mobileKeyboardProxyValue = '';
-    input.focus({ preventScroll: true });
-}
-
-function installMobileWTermInputGuard() {
-    if (!isTouchKeyboardDevice() || !term?.input?.textarea || mobileWTermInputGuard) return;
-    const textarea = term.input.textarea;
-    const guard = (event) => {
-        if (mobileKeyboardUserControlled) return;
-        event.preventDefault?.();
-        event.stopImmediatePropagation?.();
-        textarea.blur?.();
-        cmdInput?.blur?.();
-        keyboardFocusLikely = false;
-        mobileKeyboardOpen = false;
-        document.documentElement.style.setProperty('--keyboard-inset', '0px');
-        document.documentElement.classList.remove('keyboard-open');
-        notifyParentKeyboardMetrics({
-            keyboardOpen: false,
-            keyboardInset: 0,
-            viewportHeight: Math.round(window.visualViewport?.height || window.innerHeight || 0),
-            layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
-            offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
-        });
-    };
-    const stopPointer = (event) => {
-        if (mobileKeyboardUserControlled) return;
-        event.preventDefault?.();
-        event.stopImmediatePropagation?.();
-    };
-    textarea.setAttribute('readonly', 'readonly');
-    textarea.setAttribute('tabindex', '-1');
-    textarea.setAttribute('inputmode', 'none');
-    textarea.style.pointerEvents = 'none';
-    textarea.addEventListener('focus', guard, true);
-    textarea.addEventListener('beforeinput', guard, true);
-    textarea.addEventListener('input', guard, true);
-    wtermWrapper.addEventListener('click', stopPointer, true);
-    wtermWrapper.addEventListener('pointerdown', stopPointer, true);
-    wtermWrapper.addEventListener('touchstart', stopPointer, true);
-    const originalFocus = term.focus?.bind(term);
-    const originalInputFocus = term.input.focus?.bind(term.input);
-    term.focus = () => {
-        if (!isTouchKeyboardDevice() || mobileKeyboardUserControlled) originalFocus?.();
-    };
-    term.input.focus = () => {
-        if (!isTouchKeyboardDevice() || mobileKeyboardUserControlled) originalInputFocus?.();
-    };
-    mobileWTermInputGuard = { textarea, guard, stopPointer, originalFocus, originalInputFocus };
-}
-
-function setMobileWTermInputEnabled(enabled) {
+function restoreMobileWTermNativeInput() {
     if (!isTouchKeyboardDevice() || !term?.input?.textarea) return;
-    installMobileWTermInputGuard();
     const textarea = term.input.textarea;
-    if (enabled) {
-        textarea.removeAttribute('readonly');
-        textarea.setAttribute('tabindex', '0');
-        textarea.setAttribute('inputmode', 'none');
-        textarea.autocomplete = 'off';
-        textarea.autocorrect = 'off';
-        textarea.autocapitalize = 'off';
-        textarea.style.webkitTextSecurity = 'disc';
-        textarea.style.pointerEvents = 'auto';
-    } else {
-        textarea.setAttribute('readonly', 'readonly');
-        textarea.setAttribute('tabindex', '-1');
-        textarea.setAttribute('inputmode', 'none');
-        textarea.style.webkitTextSecurity = '';
-        textarea.style.pointerEvents = 'none';
-        textarea.blur?.();
+    textarea.removeAttribute('readonly');
+    textarea.setAttribute('tabindex', '0');
+    textarea.removeAttribute('inputmode');
+    textarea.style.pointerEvents = 'auto';
+    textarea.style.webkitTextSecurity = '';
+    if (mobileWTermInputGuard) {
+        try { textarea.removeEventListener('focus', mobileWTermInputGuard.guard, true); } catch (_) {}
+        try { textarea.removeEventListener('beforeinput', mobileWTermInputGuard.guard, true); } catch (_) {}
+        try { textarea.removeEventListener('input', mobileWTermInputGuard.guard, true); } catch (_) {}
+        try { wtermWrapper.removeEventListener('click', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
+        try { wtermWrapper.removeEventListener('pointerdown', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
+        try { wtermWrapper.removeEventListener('touchstart', mobileWTermInputGuard.stopPointer, true); } catch (_) {}
+        if (mobileWTermInputGuard.originalFocus) term.focus = mobileWTermInputGuard.originalFocus;
+        if (mobileWTermInputGuard.originalInputFocus) term.input.focus = mobileWTermInputGuard.originalInputFocus;
+        mobileWTermInputGuard = null;
     }
 }
-
-function closeMobileCommandKeyboard() {
-    if (!isTouchKeyboardDevice()) return;
-    mobileKeyboardUserControlled = false;
-    setMobileWTermInputEnabled(false);
-    mobileKeyboardProxy?.blur?.();
-    if (mobileKeyboardProxy) mobileKeyboardProxy.value = mobileKeyboardProxyValue = '';
-    cmdInput?.setAttribute('readonly', 'readonly');
-    cmdKeyboardBtn?.classList.remove('keyboard-visible');
-    if (cmdKeyboardBtn) {
-        cmdKeyboardBtn.textContent = '';
-        cmdKeyboardBtn.title = '打开键盘';
-        cmdKeyboardBtn.setAttribute('aria-label', '打开键盘');
-    }
-    cmdInput?.blur?.();
-    markKeyboardFocusInactive();
-    window.setTimeout(updateViewportInsets, 80);
-    window.setTimeout(updateViewportInsets, 240);
-}
-
-function openMobileCommandKeyboard() {
-    if (!isTouchKeyboardDevice()) {
-        cmdInput?.focus?.({ preventScroll: true });
-        return;
-    }
-    mobileKeyboardUserControlled = true;
-    setMobileWTermInputEnabled(false);
-    cmdInput?.removeAttribute('readonly');
-    cmdKeyboardBtn?.classList.add('keyboard-visible');
-    if (cmdKeyboardBtn) {
-        cmdKeyboardBtn.textContent = '';
-        cmdKeyboardBtn.title = '关闭键盘';
-        cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
-    }
-    focusMobileSecureKeyboardProxy();
-    markKeyboardFocusActive();
-    updateViewportInsets();
-    [40, 120, 260, 520].forEach((delay) => window.setTimeout(() => {
-        focusMobileSecureKeyboardProxy();
-        updateViewportInsets();
-    }, delay));
-}
-
-function toggleMobileCommandKeyboard() {
-    if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) closeMobileCommandKeyboard();
-    else openMobileCommandKeyboard();
-}
-
-cmdKeyboardBtn?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleMobileCommandKeyboard();
-});
-if (isTouchKeyboardDevice()) cmdInput?.setAttribute('readonly', 'readonly');
 
 function setupHorizontalScrollbarVisibility(...elements) {
     elements.filter(Boolean).forEach((el) => {
@@ -3814,10 +3656,7 @@ function setupMobileKeyboardAvoidance() {
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusActive();
     }, true);
     document.addEventListener('focusout', (e) => {
-        if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) {
-            window.setTimeout(focusMobileSecureKeyboardProxy, 30);
-            return;
-        }
+        if (mobileClipboardActionInProgress) return;
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusInactive();
     }, true);
     cmdInput?.addEventListener('focus', () => {
@@ -4975,8 +4814,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
-    installMobileWTermInputGuard();
-    setMobileWTermInputEnabled(false);
+    restoreMobileWTermNativeInput();
 
     // 本项目不能直接启用 @wterm/dom autoResize：官方实现会把每一次 ResizeObserver
     // contentRect 转成 cols/rows 并立刻触发 onResize；而 ssh2 官方的 setWindow(rows, cols,...)

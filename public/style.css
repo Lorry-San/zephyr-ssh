@@ -5285,3 +5285,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         pointer-events: auto;
     }
 }
+
+/* 移除移动端手动键盘按钮/安全键盘代理后的最终覆盖 */
+.cmd-keyboard-btn,
+.mobile-secure-keyboard-proxy { display: none !important; }
