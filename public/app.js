@@ -2274,7 +2274,11 @@ function bindEvents() {
     });
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
-        if (tabBtn) startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+        if (!tabBtn) return;
+        const isDesktopLike = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
+        if (isDesktopLike && e.pointerType !== 'touch') {
+            startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+        }
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');
