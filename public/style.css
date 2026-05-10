@@ -3310,7 +3310,9 @@ html.keyboard-open .terminal-page {
 .panel-resize-handle:hover,
 .file-manager.resizing .panel-resize-handle,
 .info-modal.resizing .panel-resize-handle,
-.docker-panel.resizing .panel-resize-handle {
+.docker-panel.resizing .panel-resize-handle,
+.snippet-panel.resizing .panel-resize-handle,
+.shortcut-panel.resizing .panel-resize-handle {
     opacity: 0.95;
 }
 .panel-resize-handle::before {

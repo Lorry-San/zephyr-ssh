@@ -67,12 +67,10 @@ const dockerBtn = $('#dockerBtn');
 const snippetBtn = $('#snippetBtn');
 const shortcutBtn = $('#shortcutBtn');
 const snippetPanel = $('#snippetPanel');
-const snippetCloseBtn = $('#snippetCloseBtn');
 const snippetSearch = $('#snippetSearch');
 const snippetList = $('#snippetList');
 const snippetEmpty = $('#snippetEmpty');
 const shortcutPanel = $('#shortcutPanel');
-const shortcutCloseBtn = $('#shortcutCloseBtn');
 const fontDecreaseBtn = $('#fontDecreaseBtn');
 const fontIncreaseBtn = $('#fontIncreaseBtn');
 
@@ -1483,10 +1481,8 @@ function hideShortcutPanel() {
     window.setTimeout(() => { clearPanelMotion(shortcutPanel); if (!shortcutPanel.classList.contains('open')) shortcutPanel.style.display = 'none'; }, 320);
 }
 snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? hideSnippetPanel() : showSnippetPanel());
-snippetCloseBtn?.addEventListener('click', hideSnippetPanel);
 snippetSearch?.addEventListener('input', renderSnippetPanel);
 shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? hideShortcutPanel() : showShortcutPanel());
-shortcutCloseBtn?.addEventListener('click', hideShortcutPanel);
 window.addEventListener('storage', (event) => { if (event.key === SNIPPET_STORAGE_KEY && snippetPanel?.classList.contains('open')) renderSnippetPanel(); });
 
 function initSFTP() {
@@ -3918,6 +3914,14 @@ function applyPanelLayout(panel, layout) {
     }, 480);
 }
 
+function hidePanelByElement(panel) {
+    if (panel === fileManager) hideFileManager();
+    else if (panel === infoModal) hideInfoModal();
+    else if (panel === dockerPanel) hideDockerPanel();
+    else if (panel === snippetPanel) hideSnippetPanel();
+    else if (panel === shortcutPanel) hideShortcutPanel();
+}
+
 let panelLayoutMenu = null;
 let panelLayoutButton = null;
 function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
@@ -4015,9 +4019,8 @@ function openPanelLayoutMenu(button, panel) {
         const item = event.target.closest('[data-layout]');
         if (!item) return;
         if (item.dataset.layout === 'close') {
-            if (panel === fileManager) hideFileManager();
-            else if (panel === infoModal) hideInfoModal();
-            else if (panel === dockerPanel) hideDockerPanel();
+            hidePanelByElement(panel);
+            closePanelLayoutMenu({ instant: true });
             return;
         }
         applyPanelLayout(panel, item.dataset.layout);
@@ -4104,7 +4107,7 @@ function setupPanelLayoutMenu() {
 function bringPanelToFront(panel) {
     if (!panel) return;
     const wasFront = panel.classList.contains('front');
-    document.querySelectorAll('.file-manager, .info-modal, .docker-panel').forEach((p) => {
+    document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel').forEach((p) => {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });

@@ -216,13 +216,14 @@
             </div>
             <div class="snippet-panel-header panel-titlebar">
                 <strong>⚡ 代码片段</strong>
-                <button class="tool-btn" id="snippetCloseBtn" title="关闭">✕</button>
             </div>
             <div class="snippet-panel-body">
                 <input class="snippet-search" id="snippetSearch" placeholder="搜索片段...">
                 <div class="snippet-list" id="snippetList"></div>
                 <p class="snippet-empty" id="snippetEmpty">暂无代码片段，请到首页 设置 → 代码片段 添加。</p>
             </div>
+            <div class="panel-resize-handle left" data-resize-panel="snippetPanel" data-resize-edge="left" title="拖动调整大小"></div>
+            <div class="panel-resize-handle right" data-resize-panel="snippetPanel" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
         <div class="shortcut-panel" id="shortcutPanel">
@@ -231,7 +232,6 @@
             </div>
             <div class="snippet-panel-header panel-titlebar">
                 <strong>⌨️ 快捷键</strong>
-                <button class="tool-btn" id="shortcutCloseBtn" title="关闭">✕</button>
             </div>
             <div class="shortcut-grid" id="shortcutGrid">
                 <button class="tool-btn modifier" data-key="ctrl">Ctrl</button>
@@ -252,6 +252,8 @@
                 <button class="tool-btn font-size-btn" id="fontDecreaseBtn" title="缩小终端字体">A−</button>
                 <button class="tool-btn font-size-btn" id="fontIncreaseBtn" title="放大终端字体">A+</button>
             </div>
+            <div class="panel-resize-handle left" data-resize-panel="shortcutPanel" data-resize-edge="left" title="拖动调整大小"></div>
+            <div class="panel-resize-handle right" data-resize-panel="shortcutPanel" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
         <!-- 终端容器 -->
