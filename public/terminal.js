@@ -187,6 +187,8 @@ let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
 let mobileWTermInputGuard = null;
+let mobileKeyboardProxy = null;
+let mobileKeyboardProxyValue = '';
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
@@ -3594,6 +3596,58 @@ function finalizeKeyboardClose({ force = false } = {}) {
     scheduleTerminalResize('keyboard-close-final', 500);
 }
 
+function ensureMobileKeyboardProxy() {
+    if (mobileKeyboardProxy) return mobileKeyboardProxy;
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.inputMode = 'text';
+    input.autocomplete = 'new-password';
+    input.autocorrect = 'off';
+    input.autocapitalize = 'off';
+    input.spellcheck = false;
+    input.setAttribute('aria-label', '终端安全键盘输入代理');
+    input.className = 'mobile-secure-keyboard-proxy';
+    input.value = mobileKeyboardProxyValue = '';
+    input.addEventListener('input', () => {
+        if (!mobileKeyboardUserControlled) return;
+        const value = input.value || '';
+        let prefix = 0;
+        while (prefix < value.length && prefix < mobileKeyboardProxyValue.length && value[prefix] === mobileKeyboardProxyValue[prefix]) prefix += 1;
+        const removed = mobileKeyboardProxyValue.length - prefix;
+        const added = value.slice(prefix);
+        for (let i = 0; i < removed; i += 1) sendData('\x7f', { source: 'mobile-secure-keyboard' });
+        if (added) sendData(added, { source: 'mobile-secure-keyboard' });
+        mobileKeyboardProxyValue = value;
+        if (input.value.length > 80) {
+            input.value = mobileKeyboardProxyValue = '';
+        }
+    });
+    input.addEventListener('keydown', (e) => {
+        if (!mobileKeyboardUserControlled) return;
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendData('\r', { source: 'mobile-secure-keyboard', forceFollow: true });
+            input.value = mobileKeyboardProxyValue = '';
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            sendData('\t', { source: 'mobile-secure-keyboard', forceFollow: true });
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            sendData('\x1b', { source: 'mobile-secure-keyboard', forceFollow: true });
+        }
+    });
+    document.body.appendChild(input);
+    mobileKeyboardProxy = input;
+    return input;
+}
+
+function focusMobileSecureKeyboardProxy() {
+    if (!isTouchKeyboardDevice() || !mobileKeyboardUserControlled) return;
+    const input = ensureMobileKeyboardProxy();
+    input.value = mobileKeyboardProxyValue = '';
+    input.focus({ preventScroll: true });
+}
+
 function installMobileWTermInputGuard() {
     if (!isTouchKeyboardDevice() || !term?.input?.textarea || mobileWTermInputGuard) return;
     const textarea = term.input.textarea;
@@ -3668,6 +3722,8 @@ function closeMobileCommandKeyboard() {
     if (!isTouchKeyboardDevice()) return;
     mobileKeyboardUserControlled = false;
     setMobileWTermInputEnabled(false);
+    mobileKeyboardProxy?.blur?.();
+    if (mobileKeyboardProxy) mobileKeyboardProxy.value = mobileKeyboardProxyValue = '';
     cmdInput?.setAttribute('readonly', 'readonly');
     cmdKeyboardBtn?.classList.remove('keyboard-visible');
     if (cmdKeyboardBtn) {
@@ -3687,7 +3743,7 @@ function openMobileCommandKeyboard() {
         return;
     }
     mobileKeyboardUserControlled = true;
-    setMobileWTermInputEnabled(true);
+    setMobileWTermInputEnabled(false);
     cmdInput?.removeAttribute('readonly');
     cmdKeyboardBtn?.classList.add('keyboard-visible');
     if (cmdKeyboardBtn) {
@@ -3695,14 +3751,11 @@ function openMobileCommandKeyboard() {
         cmdKeyboardBtn.title = '关闭键盘';
         cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
     }
-    const target = term?.input?.textarea || cmdInput;
-    target?.focus?.({ preventScroll: true });
+    focusMobileSecureKeyboardProxy();
     markKeyboardFocusActive();
     updateViewportInsets();
     [40, 120, 260, 520].forEach((delay) => window.setTimeout(() => {
-        if (term?.input?.textarea && mobileKeyboardUserControlled) {
-            try { term.input.textarea.focus({ preventScroll: true }); } catch (_) {}
-        }
+        focusMobileSecureKeyboardProxy();
         updateViewportInsets();
     }, delay));
 }

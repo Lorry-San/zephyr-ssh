@@ -5233,3 +5233,20 @@ body.smartbar-trash-hover .smartbar-trash-target {
     .terminal-page .topbar-actions .btn-sm[data-mobile-icon="term-theme"]::before { background: #5b6672; }
     .terminal-page .topbar-actions .btn-sm[data-mobile-icon="theme"]::before { background: #246f88; }
 }
+
+.mobile-secure-keyboard-proxy {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0.01;
+    color: transparent;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    outline: none;
+    caret-color: transparent;
+    z-index: -1;
+}
