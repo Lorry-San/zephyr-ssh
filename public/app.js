@@ -787,6 +787,10 @@ async function openConnection(id) {
     enforceTerminalWorkspaceLimit(tabId);
     renderTerminalTabs();
     switchView('terminal');
+    renderTerminalTabs({ rebuildWorkspace: true });
+    if (isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open')) {
+        window.setTimeout(() => renderTerminalTabs({ rebuildWorkspace: true }), 80);
+    }
     await loadConnections();
 }
 function openPlaceholderTab(c) {

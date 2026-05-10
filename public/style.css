@@ -5793,3 +5793,26 @@ body.smartbar-trash-hover .smartbar-trash-target {
         right: max(8px, env(safe-area-inset-right)) !important;
     }
 }
+
+/* ===== 缩小移动全屏小圆点一圈，并继续对齐标题栏 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-window-titlebar > .mobile-fullscreen-dock-toggle,
+    body.terminal-custom-fullscreen-open .terminal-window-titlebar > .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window-titlebar > .mobile-fullscreen-dock-toggle,
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        width: 28px !important;
+        height: 28px !important;
+        top: 50% !important;
+        right: 12px !important;
+        left: auto !important;
+        transform: translateY(-50%) !important;
+        border-radius: 999px !important;
+    }
+    .terminal-window-titlebar > .mobile-fullscreen-dock-toggle span,
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle span {
+        width: 6px !important;
+        height: 6px !important;
+    }
+}
