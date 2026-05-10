@@ -2258,7 +2258,6 @@ function bindEvents() {
         if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
             e.preventDefault();
             e.stopPropagation();
-            setTerminalSmartbarOpen(!terminalSmartbarOpen);
             return;
         }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
@@ -2267,7 +2266,7 @@ function bindEvents() {
     });
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
-        if (tabBtn) startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
+        if (tabBtn && e.pointerType !== 'touch') startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');

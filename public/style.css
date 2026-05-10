@@ -5557,3 +5557,28 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .terminal-page .topbar-actions .btn-sm[data-mobile-icon="theme"] { --toolbar-icon-color: #246f88; }
 .terminal-page .topbar-actions .btn-sm[data-mobile-icon="reconnect"] { --toolbar-icon-color: #2f81f7; }
 .terminal-page .topbar-actions .btn-sm[data-mobile-icon="disconnect"] { --toolbar-icon-color: #f85149; }
+
+/* ===== 移动端全屏小圆点：移进顶部分界线区域，并保持右上角展开 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        top: max(2px, env(safe-area-inset-top)) !important;
+        right: max(10px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        width: 40px !important;
+        height: 28px !important;
+        transform: none !important;
+        position: fixed !important;
+        z-index: 1006 !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(34px, calc(env(safe-area-inset-top) + 34px)) !important;
+        right: max(8px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        transform: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        transform-origin: calc(100% - 22px) -16px !important;
+    }
+}
