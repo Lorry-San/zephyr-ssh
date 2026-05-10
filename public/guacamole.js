@@ -67,6 +67,18 @@ const KEY = {
     SHIFT: 0xffe1,
     ALT: 0xffe9,
     SUPER: 0xffeb,
+    F1: 0xffbe,
+    F2: 0xffbf,
+    F3: 0xffc0,
+    F4: 0xffc1,
+    F5: 0xffc2,
+    F6: 0xffc3,
+    F7: 0xffc4,
+    F8: 0xffc5,
+    F9: 0xffc6,
+    F10: 0xffc7,
+    F11: 0xffc8,
+    F12: 0xffc9,
 };
 
 function loadParams() {
@@ -1265,10 +1277,6 @@ async function runShortcut(name) {
         backspace: () => sendKeyDownUp(KEY.BACKSPACE, 'Backspace'),
         win: () => sendKeyDownUp(KEY.SUPER, 'Win'),
         'alt-tab': () => sendKeyCombo([KEY.ALT, KEY.TAB], 'Alt+Tab'),
-        'ctrl-c': () => sendKeyCombo([KEY.CTRL, ctrlChar('c')], 'Ctrl+C'),
-        'ctrl-v': () => sendKeyCombo([KEY.CTRL, ctrlChar('v')], 'Ctrl+V'),
-        'ctrl-a': () => sendKeyCombo([KEY.CTRL, ctrlChar('a')], 'Ctrl+A'),
-        'ctrl-z': () => sendKeyCombo([KEY.CTRL, ctrlChar('z')], 'Ctrl+Z'),
         up: () => sendKeyDownUp(KEY.UP, '↑'),
         down: () => sendKeyDownUp(KEY.DOWN, '↓'),
         left: () => sendKeyDownUp(KEY.LEFT, '←'),
@@ -1278,6 +1286,15 @@ async function runShortcut(name) {
         pageup: () => sendKeyDownUp(KEY.PAGE_UP, 'PageUp'),
         pagedown: () => sendKeyDownUp(KEY.PAGE_DOWN, 'PageDown'),
     };
+
+    if (/^ctrl-[a-z]$/.test(lower)) {
+        const char = lower.slice(-1);
+        return sendKeyCombo([KEY.CTRL, ctrlChar(char)], `Ctrl+${char.toUpperCase()}`);
+    }
+    if (/^f(?:[1-9]|1[0-2])$/.test(lower)) {
+        const label = lower.toUpperCase();
+        return sendKeyDownUp(KEY[label], label);
+    }
 
     const action = actions[lower];
     if (!action) {

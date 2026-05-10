@@ -4441,8 +4441,11 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
 const keySequences = {
     esc: '\x1b', tab: '\t', home: '\x1b[1~', end: '\x1b[4~',
     up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+    f1: '\x1bOP', f2: '\x1bOQ', f3: '\x1bOR', f4: '\x1bOS',
+    f5: '\x1b[15~', f6: '\x1b[17~', f7: '\x1b[18~', f8: '\x1b[19~',
+    f9: '\x1b[20~', f10: '\x1b[21~', f11: '\x1b[23~', f12: '\x1b[24~',
 };
-const comboSequences = { 'ctrl-c': '\x03', 'ctrl-d': '\x04', 'ctrl-l': '\x0c', 'ctrl-u': '\x15' };
+const comboSequences = Object.fromEntries('abcdefghijklmnopqrstuvwxyz'.split('').map((ch) => [`ctrl-${ch}`, String.fromCharCode(ch.charCodeAt(0) - 96)]));
 
 // 保留选区
 wtermWrapper.addEventListener('mouseup', () => {

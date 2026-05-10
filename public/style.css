@@ -4804,7 +4804,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .snippet-item code, .snippet-settings-item code { display: block; max-height: 72px; overflow: hidden; white-space: pre-wrap; color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
 .snippet-empty { color: var(--text-secondary); font-size: 12px; }
 .shortcut-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 12px; overflow: auto; }
-.shortcut-grid .tool-btn { min-width: 0; width: 100%; min-height: 36px; }
+.shortcut-grid .tool-btn { min-width: 0; width: 100%; min-height: 36px; padding-inline: 6px; font-size: 11px; }
+.shortcut-grid .fn-key,
+.guac-shortcut-grid .tool-btn[data-keyseq^="f"] { order: 20; }
 .snippet-form { max-width: min(720px, 100%); }
 .snippet-settings-list { display: grid; gap: 10px; margin-top: 12px; }
 .snippet-settings-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
