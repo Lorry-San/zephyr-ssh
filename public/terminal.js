@@ -3509,6 +3509,7 @@ function updateViewportInsets() {
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
         document.documentElement.classList.toggle('keyboard-open', keyboardOpen);
+        if (isTouchKeyboardDevice()) requestInitialMobileRenderFlush(keyboardOpen ? 'keyboard-open' : 'keyboard-close');
         notifyParentKeyboardMetrics({
             keyboardOpen,
             keyboardInset: inset,
@@ -3920,6 +3921,24 @@ function patchWTermScrollBehavior() {
     }
     term._zephyrOriginalScrollToBottom = originalScrollToBottom;
     term._zephyrScrollPatched = true;
+}
+
+function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
+    if (!isTouchKeyboardDevice()) return;
+    terminalAutoScrollLockedByUser = false;
+    shouldFollowTerminalOutput = true;
+    const delays = [0, 40, 120, 260, 520, 900];
+    delays.forEach((delay) => {
+        window.setTimeout(() => {
+            if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
+            requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: true, focus: false });
+            scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
+            try { term._scheduleRender?.(); } catch (_) {}
+            try { term.renderer?.render?.(term.bridge); } catch (_) {}
+            try { term._scrollToBottom?.(); } catch (_) {}
+            scheduleTerminalScrollbarUpdate();
+        }, delay);
+    });
 }
 
 function writeTerminalData(data = '') {
@@ -4898,6 +4917,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
 
 // ---------- WebSocket 连接 ----------
 function connectWebSocket(connectionToken = activeConnectionToken, { followOnConnect = true } = {}) {
+    writeTerminalData._mobileFirstDataFlushed = false;
     return new Promise((resolve, reject) => {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/ssh`);
@@ -4954,10 +4974,15 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                         shouldFollowTerminalOutput = !!followOnConnect;
                         if (followOnConnect) scheduleTerminalScrollToBottom('connect-ready');
                         else scheduleTerminalScrollbarUpdate();
+                        requestInitialMobileRenderFlush('connect-ready');
                         resolve(ws);
                         break;
                     case 'data':
                         writeTerminalData(msg.data);
+                        if (isTouchKeyboardDevice() && !writeTerminalData._mobileFirstDataFlushed) {
+                            writeTerminalData._mobileFirstDataFlushed = true;
+                            requestInitialMobileRenderFlush('first-data');
+                        }
                         break;
                     case 'error':
                         setStatus('error', msg.message);

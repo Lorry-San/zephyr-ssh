@@ -5163,3 +5163,16 @@ body.smartbar-trash-hover .smartbar-trash-target {
         display: block !important;
     }
 }
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .terminal-container .wterm-wrapper.wterm {
+        height: 100% !important;
+        min-height: 100% !important;
+        contain: layout paint style;
+    }
+    .terminal-page .terminal-container .wterm-wrapper .term-grid {
+        min-height: 100%;
+        transform: translateZ(0);
+        backface-visibility: hidden;
+    }
+}
