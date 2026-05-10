@@ -4824,8 +4824,10 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
     body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle {
         position: fixed;
-        top: max(12px, env(safe-area-inset-top));
-        right: max(12px, env(safe-area-inset-right));
+        top: max(7px, env(safe-area-inset-top));
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
         z-index: 96;
         display: grid;
         place-items: center;
@@ -5118,8 +5120,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle {
         position: fixed;
-        top: max(10px, env(safe-area-inset-top));
-        right: max(10px, env(safe-area-inset-right));
+        top: max(7px, env(safe-area-inset-top));
+        right: 50%;
+        transform: translateX(50%);
         z-index: 1004;
         display: grid;
         place-items: center;
@@ -5176,7 +5179,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
     .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
         top: 4px;
-        right: 10px;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
         position: absolute;
         z-index: 70;
     }
@@ -5344,5 +5349,101 @@ body.smartbar-trash-hover .smartbar-trash-target {
         overscroll-behavior: contain !important;
         -webkit-overflow-scrolling: touch;
         overflow-anchor: none;
+    }
+}
+
+/* ===== 修正：桌面端保留文字，移动端才隐藏为图标 ===== */
+.terminal-page .topbar-actions .btn-sm {
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--text);
+    -webkit-text-fill-color: currentColor;
+    text-indent: 0;
+}
+.terminal-page .topbar-actions .btn-sm::before {
+    content: none;
+}
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .topbar-actions .btn-sm {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+        font-size: 0 !important;
+        line-height: 0 !important;
+    }
+    .terminal-page .topbar-actions .btn-sm::before {
+        content: '';
+        display: block;
+    }
+}
+
+/* ===== 独立移动端竖排 Dock：从小圆点中心展开，不污染桌面 Dock ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        position: fixed;
+        top: max(42px, calc(env(safe-area-inset-top) + 42px));
+        left: 50%;
+        right: auto;
+        width: 86px;
+        transform: translateX(-50%);
+        z-index: 1002;
+        pointer-events: none;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        position: static;
+        width: 86px;
+        max-width: 86px;
+        min-height: 0;
+        max-height: calc(100dvh - 76px - env(safe-area-inset-bottom));
+        padding: 9px 7px;
+        border-radius: 28px;
+        transform-origin: 50% -22px;
+        transform: translate3d(0, -16px, 0) scale3d(.22, .08, 1);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+            transform .46s cubic-bezier(.16, 1, .3, 1),
+            opacity .24s ease,
+            filter .38s ease;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+        opacity: 1;
+        pointer-events: auto;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-dock {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        width: 100%;
+        max-height: calc(100dvh - 98px - env(safe-area-inset-bottom));
+        overflow-y: auto;
+        overflow-x: hidden;
+        gap: 10px;
+        padding: 6px 2px;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-session,
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-add {
+        width: 64px;
+        min-width: 64px;
+        height: auto;
+        min-height: 66px;
+        flex: 0 0 auto;
+        padding: 0;
+        flex-direction: column;
+        gap: 5px;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-session-icon,
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-add::before {
+        width: 50px;
+        height: 50px;
+        border-radius: 18px;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-session strong {
+        display: block;
+        max-width: 66px;
+        font-size: 10px;
+        line-height: 1.1;
+        text-align: center;
     }
 }

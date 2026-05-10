@@ -1011,7 +1011,6 @@ function renderTerminalSmartbar() {
             <div class="smartbar-dock" aria-label="终端 Dock">
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
                 <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
-                <button class="smartbar-exit-fullscreen" style="--dock-index:${sessions.length + 1}" data-mobile-exit-fullscreen title="退出全屏" aria-label="退出全屏"><span>↧</span><strong>退出全屏</strong></button>
             </div>
         </div>`;
     requestAnimationFrame(() => {
