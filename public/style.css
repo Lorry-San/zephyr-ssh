@@ -2682,7 +2682,8 @@ html.keyboard-open .terminal-page {
     height: 100%;
     flex: 1 1 auto;
     min-height: 0;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     overscroll-behavior: none;
     touch-action: pan-x pan-y;
     font-family: var(--font-mono);
@@ -2725,7 +2726,8 @@ html.keyboard-open .terminal-page {
     box-shadow: none;
     padding: 12px;
     outline: none;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 .terminal-container .wterm-wrapper.wterm.has-scrollback {
     overflow-y: auto;

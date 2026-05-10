@@ -3753,8 +3753,8 @@ function patchWTermScrollBehavior() {
     };
     const isOfficialBottom = () => bottomDistance() <= 8;
 
-    // 保留 WTerm 官方 write() 的核心语义：写入前在底部，渲染后才自动跟随。
-    // 只把官方 _scrollToBottom 的“按行高取整”改成精确贴底，避免贴底后仍差半行导致自动跟随断链。
+    // WTerm 官方 write() 依赖 _isScrolledToBottom() 决定输出后是否自动跟随。
+    // 保留该语义，只把官方 _scrollToBottom 的“按行高取整”改为精确贴底，避免底部差半行。
     const originalScrollToBottom = typeof term._scrollToBottom === 'function' ? term._scrollToBottom.bind(term) : null;
     term._scrollToBottom = () => {
         const el = getEl();
@@ -3765,28 +3765,6 @@ function patchWTermScrollBehavior() {
         term._isScrolledToBottom = isOfficialBottom;
     }
     term._zephyrOriginalScrollToBottom = originalScrollToBottom;
-
-    // WTerm 官方 InputHandler 在每次输入前都会调用 _scrollToBottom()。
-    // 这会造成用户滚到历史区后按任意键“飞到底”。不能改 write()，否则自动滚动会坏；
-    // 正确处理是在 InputHandler 入口记录输入前位置：
-    // - 输入前已在底部：完全按官方行为，保持自动跟随；
-    // - 输入前不在底部：允许官方 onData 正常发给 ssh2，但立即还原 scrollTop，不破坏历史浏览。
-    if (term.input && typeof term.input.onData === 'function' && !term.input._zephyrOnDataPatched) {
-        const originalOnData = term.input.onData.bind(term.input);
-        term.input.onData = (data) => {
-            const el = getEl();
-            const wasAtBottom = isOfficialBottom();
-            const previousTop = el ? el.scrollTop : 0;
-            originalOnData(data);
-            if (el && !wasAtBottom) {
-                el.scrollTop = previousTop;
-                shouldFollowTerminalOutput = false;
-                terminalAutoScrollLockedByUser = true;
-                scheduleTerminalScrollbarUpdate();
-            }
-        };
-        term.input._zephyrOnDataPatched = true;
-    }
     term._zephyrScrollPatched = true;
 }
 
