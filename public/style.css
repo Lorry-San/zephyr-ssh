@@ -4712,3 +4712,19 @@ body.smartbar-trash-hover .smartbar-trash-target {
         border-radius: 30px;
     }
 }
+
+/* macOS-like terminal window layout morph */
+.terminal-workspace.terminal-layout-morphing {
+    contain: layout paint;
+}
+.terminal-workspace.terminal-layout-morphing .terminal-window {
+    will-change: transform, filter, box-shadow;
+    transform-origin: top left;
+}
+.terminal-window.layout-morphing .terminal-frame,
+.terminal-window.layout-morphing .terminal-placeholder {
+    pointer-events: none;
+}
+.terminal-window.layout-morphing .terminal-window-body {
+    filter: saturate(.96) brightness(.98);
+}

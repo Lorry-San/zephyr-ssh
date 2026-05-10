@@ -1379,6 +1379,7 @@ function applyTerminalWindowPreset(tabId, action) {
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
     restoreTerminalSession(tabId);
+    const beforeRects = captureTerminalWindowRects();
     const workspace = $('#terminalWorkspace');
     const others = visualLayout.filter((id) => id !== tabId);
     if (action === 'left-half' || action === 'left-two-thirds') visualLayout = [tabId, ...others].slice(0, 3);
@@ -1393,6 +1394,63 @@ function applyTerminalWindowPreset(tabId, action) {
         if (action === 'right-bottom') workspace.style.setProperty('--workspace-split-y', '50%');
     }
     activeTerminalTab = tabId; touchTerminalSession(tabId); renderTerminalTabs();
+    animateTerminalWindowLayoutFrom(beforeRects, { reason: action });
+}
+
+function captureTerminalWindowRects() {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return new Map();
+    return new Map(Array.from(workspace.querySelectorAll(':scope > .terminal-window:not(.minimized-keepalive)')).map((el) => [el.dataset.window, el.getBoundingClientRect()]));
+}
+function animateTerminalWindowLayoutFrom(beforeRects, { reason = 'layout-change' } = {}) {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace || !beforeRects?.size) return;
+    window.cancelAnimationFrame(animateTerminalWindowLayoutFrom._raf);
+    animateTerminalWindowLayoutFrom._raf = window.requestAnimationFrame(() => {
+        const animations = [];
+        workspace.classList.add('terminal-layout-morphing');
+        workspace.querySelectorAll(':scope > .terminal-window:not(.minimized-keepalive)').forEach((el) => {
+            const before = beforeRects.get(el.dataset.window);
+            const after = el.getBoundingClientRect();
+            if (!before || after.width <= 1 || after.height <= 1) return;
+            const dx = before.left - after.left;
+            const dy = before.top - after.top;
+            const sx = before.width / after.width;
+            const sy = before.height / after.height;
+            const moved = Math.abs(dx) + Math.abs(dy) > 1;
+            const resized = Math.abs(1 - sx) + Math.abs(1 - sy) > 0.01;
+            if (!moved && !resized) return;
+            el.classList.add('layout-morphing');
+            const anim = el.animate([
+                {
+                    transform: `translate3d(${dx}px, ${dy}px, 0) scale3d(${sx}, ${sy}, 1)`,
+                    filter: 'blur(.6px) saturate(.98)',
+                    boxShadow: '0 18px 52px rgba(0,0,0,.30), inset 0 0 0 1px rgba(255,255,255,.03)'
+                },
+                {
+                    transform: 'translate3d(0, 0, 0) scale3d(1, 1, 1)',
+                    filter: 'blur(0) saturate(1)',
+                    boxShadow: el.classList.contains('active')
+                        ? '0 24px 70px rgba(0,0,0,.38), 0 0 0 3px rgba(88,166,255,.08)'
+                        : '0 18px 52px rgba(0,0,0,.32), inset 0 0 0 1px rgba(255,255,255,.03)'
+                }
+            ], {
+                duration: 560,
+                easing: 'cubic-bezier(.16, 1, .3, 1)',
+                fill: 'both'
+            });
+            animations.push(anim.finished.catch(() => {}).finally(() => el.classList.remove('layout-morphing')));
+        });
+        window.clearTimeout(animateTerminalWindowLayoutFrom._timer);
+        Promise.all(animations).finally(() => {
+            workspace.classList.remove('terminal-layout-morphing');
+            scheduleTerminalLayoutStabilize(`terminal-window-morph:${reason}`, { focus: true });
+        });
+        animateTerminalWindowLayoutFrom._timer = window.setTimeout(() => {
+            workspace.classList.remove('terminal-layout-morphing');
+            workspace.querySelectorAll('.terminal-window.layout-morphing').forEach((el) => el.classList.remove('layout-morphing'));
+        }, 720);
+    });
 }
 
 function resetTerminalWorkspaceKeyboard() {
