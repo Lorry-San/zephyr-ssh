@@ -5289,3 +5289,25 @@ body.smartbar-trash-hover .smartbar-trash-target {
 /* 移除移动端手动键盘按钮/安全键盘代理后的最终覆盖 */
 .cmd-keyboard-btn,
 .mobile-secure-keyboard-proxy { display: none !important; }
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    html.keyboard-open .terminal-page {
+        height: 100dvh;
+        max-height: 100dvh;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    html.keyboard-open .terminal-page .terminal-topbar {
+        display: flex;
+    }
+    html.keyboard-open .terminal-page .terminal-input-panel {
+        transform: none !important;
+    }
+    html.keyboard-open .terminal-page .terminal-container {
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0;
+    }
+    html.keyboard-open .terminal-page .wterm-wrapper {
+        max-height: none !important;
+    }
+}

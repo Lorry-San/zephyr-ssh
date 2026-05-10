@@ -187,6 +187,7 @@ let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
 let mobileWTermInputGuard = null;
 let mobileClipboardActionInProgress = false;
+let mobileKeyboardResizeFreezeUntil = 0;
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
@@ -740,13 +741,6 @@ function getMeasuredTerminalSize() {
     const paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
     const { lineHeight, charWidth } = getTerminalCharMetrics();
     let effectiveHeight = Math.max(0, rect.height - paddingY);
-    if (isTouchKeyboardDevice()) {
-        const viewportBottom = mobileKeyboardUserControlled && mobileKeyboardOpen && window.visualViewport
-            ? window.visualViewport.offsetTop + window.visualViewport.height
-            : (window.innerHeight || document.documentElement.clientHeight || rect.bottom);
-        const visualLimit = Math.min(rect.height, Math.max(lineHeight * 2, viewportBottom - rect.top - paddingY));
-        effectiveHeight = Math.min(effectiveHeight, visualLimit);
-    }
     const effectiveWidth = Math.max(0, rect.width - paddingX);
     return {
         cols: Math.max(20, Math.floor(effectiveWidth / Math.max(1, charWidth))),
@@ -833,6 +827,10 @@ function invokeWTermLayoutRefresh(reason = 'layout-refresh') {
 }
 
 function requestStableTerminalLayout(reason = 'stable-layout', { includeResize = true, focus = false } = {}) {
+    if (isTouchKeyboardDevice() && /keyboard|viewport|visual/.test(String(reason))) {
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     window.clearTimeout(requestStableTerminalLayout._coalesceTimer);
     requestStableTerminalLayout._pendingReason = reason;
     requestStableTerminalLayout._focus = requestStableTerminalLayout._focus || focus;
@@ -958,6 +956,10 @@ function isMobileKeyboardActiveOrSettling() {
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
+    if (isTouchKeyboardDevice() && /keyboard|viewport|visual/.test(String(reason)) && Date.now() < mobileKeyboardResizeFreezeUntil) {
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     window.clearTimeout(scheduleTerminalResize._timer);
     scheduleTerminalResize._timer = window.setTimeout(() => {
         if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
@@ -3503,6 +3505,7 @@ function updateViewportInsets() {
     if (mobileTerminalSelectionMode && !mobileClipboardActionInProgress) return;
     if (mobileClipboardActionInProgress) return;
     if (!isTouchKeyboardDevice()) return;
+    const wasKeyboardOpen = mobileKeyboardOpen;
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
@@ -3518,6 +3521,11 @@ function updateViewportInsets() {
     if (updateViewportInsets._lastSignature === signature) return;
     updateViewportInsets._lastSignature = signature;
     mobileKeyboardOpen = keyboardOpen;
+    if (keyboardOpen !== wasKeyboardOpen) {
+        mobileKeyboardResizeFreezeUntil = Date.now() + 1200;
+        shouldFollowTerminalOutput = true;
+        terminalAutoScrollLockedByUser = false;
+    }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
@@ -3532,14 +3540,14 @@ function updateViewportInsets() {
         });
         requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
         scheduleTerminalScrollbarUpdate();
-        // 键盘稳定后再 resize 一次，不在动画每帧 resize。
-        scheduleTerminalResize(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 650);
+        // 移动端键盘开关只改变 CSS 可视区域，不能 resize WTerm/远端 PTY；否则会把远端输出重排成空行/截断。
+        if (!isTouchKeyboardDevice()) scheduleTerminalResize(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 650);
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
         requestTerminalAutoFollow('keyboard-final-settled');
         scheduleTerminalScrollbarUpdate();
-        scheduleTerminalResize('keyboard-final-settled', 120);
+        if (!isTouchKeyboardDevice()) scheduleTerminalResize('keyboard-final-settled', 120);
     }, keyboardOpen ? 720 : 360);
 }
 
@@ -3838,12 +3846,15 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
     if (!isTouchKeyboardDevice()) return;
     terminalAutoScrollLockedByUser = false;
     shouldFollowTerminalOutput = true;
-    const delays = [0, 40, 120, 260, 520, 900];
+    const keyboardRelated = /keyboard|viewport|visual/.test(String(reason));
+    const delays = keyboardRelated ? [0, 80, 220] : [0, 40, 120, 260, 520, 900];
     delays.forEach((delay) => {
         window.setTimeout(() => {
             if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
-            requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: true, focus: false });
-            scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
+            if (!keyboardRelated) {
+                requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: true, focus: false });
+                scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
+            }
             try { term._scheduleRender?.(); } catch (_) {}
             try { term.renderer?.render?.(term.bridge); } catch (_) {}
             try { term._scrollToBottom?.(); } catch (_) {}
