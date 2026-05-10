@@ -754,6 +754,19 @@ function getMeasuredTerminalSize() {
     };
 }
 
+function getInitialTerminalSize() {
+    if (isTouchKeyboardDevice()) {
+        // ServerBox 的思路是初始 PTY 尺寸来自稳定终端视图，不跟随键盘/滚动过程动态改变。
+        // WebView 里移动端 viewport 不稳定，固定初始 rows 可避免首屏/滑动/键盘触发远端重排。
+        return { cols: 80, rows: 24 };
+    }
+    const measured = getMeasuredTerminalSize();
+    return {
+        cols: Math.max(20, Math.floor(measured.cols || Number(term?.cols || 80))),
+        rows: Math.max(2, Math.floor(measured.rows || Number(term?.rows || 24))),
+    };
+}
+
 function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
     if (!term || !wtermWrapper) return false;
     const nextCols = Math.floor(Number(cols));
@@ -858,6 +871,11 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     const explicitCols = Math.floor(Number(cols));
     const explicitRows = Math.floor(Number(rows));
 
+    if (isTouchKeyboardDevice()) {
+        logTerminalLayoutDiagnostics('resize:ignored-mobile-fixed-pty', { reason, explicitCols, explicitRows });
+        return;
+    }
+
     if (reason === 'wterm-onResize') {
         if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) {
             logTerminalLayoutDiagnostics('resize:ignored-mobile-keyboard-settling', { reason, explicitCols, explicitRows });
@@ -960,7 +978,8 @@ function isMobileKeyboardActiveOrSettling() {
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
-    if (isTouchKeyboardDevice() && (isMobileKeyboardActiveOrSettling() || /keyboard|viewport|visual/.test(String(reason)))) {
+    if (isTouchKeyboardDevice()) {
+        logTerminalLayoutDiagnostics('resize:blocked-mobile-fixed-pty', { reason });
         scheduleTerminalScrollbarUpdate();
         return;
     }
@@ -995,6 +1014,11 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
 
 function setupStableTerminalResizeObserver() {
     if (!window.ResizeObserver || !wtermWrapper) return () => {};
+    if (isTouchKeyboardDevice()) {
+        // 移动端地址栏/键盘/页面滑动会反复改变 visual viewport 和 DOM 容器高度。
+        // 这些不是用户想改变远端 PTY 行列；一旦传给 WTerm/ssh2，会造成空行、截断和远端重排。
+        return () => {};
+    }
     const observer = new ResizeObserver(() => scheduleTerminalResize('resize-observer-stable', 160));
     observer.observe(wtermWrapper);
     return () => observer.disconnect();
@@ -1008,7 +1032,7 @@ function applyTerminalFontSize(size, { persist = true } = {}) {
     try { term?.options && (term.options.fontSize = terminalFontSize); } catch (_) {}
     if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
     updateFontSizeButtons();
-    scheduleTerminalResize();
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize();
     scheduleTerminalScrollbarUpdate();
 }
 
@@ -3859,6 +3883,7 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
     shouldFollowTerminalOutput = true;
     const keyboardRelated = /keyboard|viewport|visual/.test(String(reason));
     const delays = keyboardRelated ? [0, 80, 220] : [0, 40, 120, 260, 520, 900];
+    if (isTouchKeyboardDevice()) return;
     delays.forEach((delay) => {
         window.setTimeout(() => {
             if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
@@ -4378,7 +4403,7 @@ window.addEventListener('resize', () => {
     [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
-    requestStableTerminalLayout('window-resize', { includeResize: true });
+    if (!isTouchKeyboardDevice()) requestStableTerminalLayout('window-resize', { includeResize: true });
 });
 window.visualViewport?.addEventListener('resize', () => {
     logTerminalLayoutDiagnostics('visual-viewport-resize');
@@ -4392,11 +4417,11 @@ window.visualViewport?.addEventListener('scroll', () => {
 }, { passive: true });
 window.addEventListener('pageshow', (e) => {
     logTerminalLayoutDiagnostics('pageshow', { persisted: !!e.persisted });
-    requestStableTerminalLayout('pageshow', { includeResize: true, focus: true });
+    if (!isTouchKeyboardDevice()) requestStableTerminalLayout('pageshow', { includeResize: true, focus: true });
 });
 document.addEventListener('visibilitychange', () => {
     logTerminalLayoutDiagnostics('visibilitychange');
-    if (document.visibilityState === 'visible') {
+    if (document.visibilityState === 'visible' && !isTouchKeyboardDevice()) {
         scheduleTerminalResize('visibility-visible', 160);
         requestStableTerminalLayout('visibility-visible', { includeResize: true, focus: true });
     }
@@ -4763,7 +4788,7 @@ async function startFreshConnection({ message = '正在建立 SSH 连接...', re
     await connectWebSocket(token, { followOnConnect });
     if (token !== activeConnectionToken) throw new Error('连接已被新的会话替换');
     syncFeaturePanelsAfterConnection();
-    scheduleTerminalResize();
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize();
 }
 
 async function startAutoReconnect(reason = '连接已断开') {
@@ -4833,6 +4858,10 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
     lastSentTerminalSize = { cols: Number(term.cols || 80), rows: Number(term.rows || 24) };
+    if (isTouchKeyboardDevice()) {
+        resizeWTermSafely(80, 24, 'mobile-fixed-initial-size');
+        lastSentTerminalSize = { cols: 80, rows: 24 };
+    }
     applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
@@ -4843,7 +4872,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     // 会真实改变远端 PTY。隐藏 iframe / 切页 / Dock 动画中的瞬时宽度会破坏远端输出。
     // 因此外层只在可见、稳定尺寸下调用 term.resize + ssh2 resize。
     terminalResizeCleanup = setupStableTerminalResizeObserver();
-    scheduleTerminalResize('initial-visible-resize', 80);
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize('initial-visible-resize', 80);
     setupTerminalScrollHooks({ followOnConnect });
 }
 
@@ -4868,6 +4897,7 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
         ws.addEventListener('open', () => {
             if (connectionToken !== activeConnectionToken) { try { ws.close(); } catch (_) {} return; }
             clearTimeout(timeout);
+            const initialSize = getInitialTerminalSize();
             ws.send(JSON.stringify({
                 type: 'connect',
                 sessionId: params.tabId || params.sessionId || params.connectionId || '',
@@ -4878,8 +4908,8 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                 password: params.password || '',
                 privateKey: params.privateKey || '',
                 init: params.init || '',
-                cols: Math.max(20, Math.floor(Number(term?.cols || 80))),
-                rows: Math.max(2, Math.floor(Number(term?.rows || 24)))
+                cols: initialSize.cols,
+                rows: initialSize.rows
             }));
         });
 
@@ -5003,7 +5033,7 @@ window.addEventListener('orientationchange', () => {
     setTimeout(() => {
         setStableViewportHeight({ force: true });
         handleKeyboardHide();
-        scheduleTerminalResize();
+        if (!isTouchKeyboardDevice()) scheduleTerminalResize();
     }, 300);
 });
 disconnectBtn.addEventListener('click', () => {

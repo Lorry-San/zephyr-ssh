@@ -4209,7 +4209,6 @@ html.keyboard-open .terminal-page {
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     body:has(.terminal-page),
     body:has(.guac-page) {
-        height: 100dvh;
         min-height: 100dvh;
     }
 
@@ -5012,6 +5011,21 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body:has(.terminal-page),
+    body:has(.guac-page) {
+        position: static;
+        inset: auto;
+        width: auto;
+        height: auto;
+        min-height: 100dvh;
+        overflow: auto;
+    }
+    body.app-body.terminal-mode {
+        overflow: hidden;
+    }
+}
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     .terminal-page {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr) auto;
@@ -5022,6 +5036,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
         height: 100dvh;
         max-height: 100dvh;
         overflow: hidden;
+        position: fixed;
+        inset: 0;
     }
     .terminal-page .terminal-input-panel {
         position: relative;
@@ -5322,14 +5338,11 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    html, body:has(.terminal-page) {
-        overflow: hidden !important;
-        overscroll-behavior: none !important;
-    }
-    html.keyboard-open .terminal-page .terminal-container .wterm-wrapper.wterm,
-    html.keyboard-open .terminal-page .terminal-container .wterm-wrapper {
-        height: 100% !important;
-        max-height: 100% !important;
+    .terminal-page .terminal-container .wterm-wrapper.wterm,
+    .terminal-page .terminal-container .wterm-wrapper {
         overflow-y: auto !important;
+        overscroll-behavior: contain !important;
+        -webkit-overflow-scrolling: touch;
+        overflow-anchor: none;
     }
 }
