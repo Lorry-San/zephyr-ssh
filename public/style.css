@@ -5250,3 +5250,38 @@ body.smartbar-trash-hover .smartbar-trash-target {
     caret-color: transparent;
     z-index: -1;
 }
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .topbar-actions .btn-sm {
+        position: relative;
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+        font-size: 0 !important;
+        line-height: 0 !important;
+        letter-spacing: 0 !important;
+        overflow: hidden !important;
+        text-indent: 0 !important;
+        white-space: nowrap;
+    }
+    .terminal-page .topbar-actions .btn-sm::before {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        margin: 0;
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+    }
+}
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .terminal-smartbar,
+    .terminal-workspace.compact.custom-fullscreen ~ .terminal-smartbar,
+    .terminal-smartbar.open {
+        display: block !important;
+        pointer-events: none;
+    }
+    .terminal-smartbar.open .smartbar-panel {
+        pointer-events: auto;
+    }
+}

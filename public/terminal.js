@@ -3481,6 +3481,11 @@ function markKeyboardFocusActive() {
 }
 
 function markKeyboardFocusInactive() {
+    if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) {
+        keyboardFocusLikely = true;
+        window.setTimeout(focusMobileSecureKeyboardProxy, 30);
+        return;
+    }
     keyboardFocusLikely = false;
     window.clearTimeout(keyboardFallbackTimer);
     if (keyboardFallbackActive) {
@@ -3498,7 +3503,7 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
-    const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled && (keyboardFocusLikely || mobileKeyboardOpen || isKeyboardAvoidanceTarget());
+    const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled;
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
         // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
         // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
@@ -3809,6 +3814,10 @@ function setupMobileKeyboardAvoidance() {
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusActive();
     }, true);
     document.addEventListener('focusout', (e) => {
+        if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) {
+            window.setTimeout(focusMobileSecureKeyboardProxy, 30);
+            return;
+        }
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusInactive();
     }, true);
     cmdInput?.addEventListener('focus', () => {

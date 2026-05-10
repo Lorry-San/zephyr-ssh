@@ -2247,6 +2247,14 @@ function bindEvents() {
         const tab = tabButton?.dataset.smartbarTab;
         if (tab) activateTerminalFromDock(tab, tabButton);
     });
+    document.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
+            e.preventDefault();
+            e.stopPropagation();
+            setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            return;
+        }
+    }, true);
     document.addEventListener('click', (e) => {
         if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
             e.preventDefault();
