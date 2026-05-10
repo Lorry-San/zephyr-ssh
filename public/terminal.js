@@ -1360,12 +1360,31 @@ function sendJsonMessage(payload) {
     return true;
 }
 
+function animatePanelFromButton(panel, button, opening = true) {
+    if (!panel || !button) return;
+    const panelRect = panel.getBoundingClientRect?.();
+    const buttonRect = button.getBoundingClientRect?.();
+    if (!panelRect || !buttonRect || panelRect.width <= 1 || panelRect.height <= 1) return;
+    const originX = ((buttonRect.left + buttonRect.width / 2 - panelRect.left) / panelRect.width) * 100;
+    const originY = ((buttonRect.top + buttonRect.height / 2 - panelRect.top) / panelRect.height) * 100;
+    panel.style.setProperty('--panel-origin-x', `${Math.max(8, Math.min(92, originX))}%`);
+    panel.style.setProperty('--panel-origin-y', `${Math.max(8, Math.min(92, originY))}%`);
+    panel.classList.remove('panel-opening', 'panel-closing');
+    void panel.offsetWidth;
+    panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
+}
+function clearPanelMotion(panel) {
+    if (!panel) return;
+    panel.classList.remove('panel-opening', 'panel-closing');
+}
+
 // ---------- 文件管理器 ----------
 function showFileManager() {
     ensureFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
     fileManager.classList.add('open');
     fileBtn.classList.add('active');
     bringPanelToFront(fileManager);
+    requestAnimationFrame(() => animatePanelFromButton(fileManager, fileBtn, true));
     if (!sftpReady) {
         initSFTP();
     } else {
@@ -1374,8 +1393,10 @@ function showFileManager() {
 }
 function hideFileManager() {
     if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+    animatePanelFromButton(fileManager, fileBtn, false);
     fileManager.classList.remove('open');
     fileBtn.classList.remove('active');
+    window.setTimeout(() => clearPanelMotion(fileManager), 320);
 }
 fileBtn.addEventListener('click', () => {
     if (fileManager.classList.contains('open')) hideFileManager();
@@ -2550,17 +2571,20 @@ function showDockerPanel() {
         dockerPanel.classList.add('open');
         dockerBtn.classList.add('active');
         bringPanelToFront(dockerPanel);
+        animatePanelFromButton(dockerPanel, dockerBtn, true);
     });
     checkDockerStatus();
 }
 
 function hideDockerPanel() {
     if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+    animatePanelFromButton(dockerPanel, dockerBtn, false);
     dockerPanel.classList.remove('open');
     dockerBtn.classList.remove('active');
     window.setTimeout(() => {
+        clearPanelMotion(dockerPanel);
         if (!dockerPanel.classList.contains('open')) dockerPanel.style.display = 'none';
-    }, 280);
+    }, 320);
 }
 
 function normalizeContainer(row = {}) {
@@ -3602,6 +3626,8 @@ function showInfoModal() {
     requestAnimationFrame(() => {
         infoModal.classList.add('open');
         infoBtn.classList.add('active');
+        bringPanelToFront(infoModal);
+        animatePanelFromButton(infoModal, infoBtn, true);
     });
 }
 
@@ -3646,13 +3672,15 @@ function writeTerminalData(data = '') {
 
 function hideInfoModal() {
     if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+    animatePanelFromButton(infoModal, infoBtn, false);
     infoModal.classList.remove('open');
     infoBtn.classList.remove('active');
     window.setTimeout(() => {
+        clearPanelMotion(infoModal);
         if (!infoModal.classList.contains('open')) {
             infoModal.style.display = 'none';
         }
-    }, 280);
+    }, 320);
 }
 
 function toggleInfoModal() {

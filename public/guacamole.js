@@ -966,7 +966,24 @@ function setupFloatingPanels() {
     setupPanelResize();
 }
 
-function togglePanel(panel, force) {
+function animateGuacPanelFromButton(panel, button, opening = true) {
+    if (!panel || !button) return;
+    const panelRect = panel.getBoundingClientRect?.();
+    const buttonRect = button.getBoundingClientRect?.();
+    if (!panelRect || !buttonRect || panelRect.width <= 1 || panelRect.height <= 1) return;
+    const originX = ((buttonRect.left + buttonRect.width / 2 - panelRect.left) / panelRect.width) * 100;
+    const originY = ((buttonRect.top + buttonRect.height / 2 - panelRect.top) / panelRect.height) * 100;
+    panel.style.setProperty('--panel-origin-x', `${Math.max(8, Math.min(92, originX))}%`);
+    panel.style.setProperty('--panel-origin-y', `${Math.max(8, Math.min(92, originY))}%`);
+    panel.classList.remove('panel-opening', 'panel-closing');
+    void panel.offsetWidth;
+    panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
+}
+function clearGuacPanelMotion(panel) {
+    panel?.classList.remove('panel-opening', 'panel-closing');
+}
+
+function togglePanel(panel, force, sourceButton = null) {
     if (!panel) return;
     ensureFloatingPanel(panel, getDefaultPanelOptions(panel));
     const shouldShow = force ?? panel.hidden;
@@ -974,8 +991,13 @@ function togglePanel(panel, force) {
     panel.classList.toggle('open', shouldShow);
     if (panel === clipboardPanel) clipboardBtn?.classList.toggle('active', shouldShow);
     if (panel === shortcutsPanel) shortcutsBtn?.classList.toggle('active', shouldShow);
+    const button = sourceButton || (panel === clipboardPanel ? clipboardBtn : panel === shortcutsPanel ? shortcutsBtn : null);
+    requestAnimationFrame(() => animateGuacPanelFromButton(panel, button, shouldShow));
     if (shouldShow) bringPanelToFront(panel);
-    else closePanelLayoutMenu({ instant: true });
+    else {
+        closePanelLayoutMenu({ instant: true });
+        window.setTimeout(() => clearGuacPanelMotion(panel), 320);
+    }
     console.info('[guac-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
 }
 
