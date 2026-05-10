@@ -5669,3 +5669,77 @@ body.smartbar-trash-hover .smartbar-trash-target {
         pointer-events: none !important;
     }
 }
+
+/* ===== 移动全屏小圆点：圆形外层 + 与标题栏三点同源岛动画 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
+        width: 34px !important;
+        height: 34px !important;
+        border-radius: 999px !important;
+        border: 1px solid rgba(139,148,158,.20) !important;
+        background:
+            radial-gradient(circle at 50% 12%, rgba(255,255,255,.16), transparent 42%),
+            linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.015)),
+            color-mix(in srgb, var(--surface) 72%, rgba(0,0,0,.20)) !important;
+        box-shadow:
+            0 3px 10px rgba(0,0,0,.18),
+            inset 0 1px 0 rgba(255,255,255,.08) !important;
+        backdrop-filter: blur(18px) saturate(1.22) !important;
+        -webkit-backdrop-filter: blur(18px) saturate(1.22) !important;
+        transition:
+            transform .24s cubic-bezier(.34,1.56,.64,1),
+            border-color .24s ease,
+            background .24s ease,
+            box-shadow .36s ease,
+            opacity .12s ease,
+            backdrop-filter .24s ease,
+            -webkit-backdrop-filter .24s ease !important;
+        touch-action: none !important;
+    }
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle:active,
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open ~ .mobile-fullscreen-dock-toggle {
+        transform: scale(.94) !important;
+        border-color: rgba(88,166,255,.36) !important;
+        box-shadow:
+            0 6px 16px rgba(0,0,0,.20),
+            0 0 0 3px rgba(88,166,255,.07) !important;
+    }
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle span,
+    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle span,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle span {
+        width: 7px !important;
+        height: 7px !important;
+        border-radius: 50% !important;
+        background: color-mix(in srgb, var(--text-secondary) 72%, transparent) !important;
+        box-shadow: 0 0 9px rgba(255,255,255,.08) !important;
+        transition: transform .28s cubic-bezier(.34,1.56,.64,1), opacity .18s ease, background-color .18s ease !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        border-radius: 22px !important;
+        transform-origin: calc(100% - 25px) -18px !important;
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+        opacity: 0;
+        transition:
+            transform .52s cubic-bezier(0.32, 0.72, 0, 1),
+            width .52s cubic-bezier(0.32, 0.72, 0, 1),
+            height .52s cubic-bezier(0.32, 0.72, 0, 1),
+            border-radius .52s cubic-bezier(0.32, 0.72, 0, 1),
+            opacity .12s ease !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        transform: translate3d(0, 0, 0) scale3d(1, 1, 1) !important;
+        opacity: 1 !important;
+        border-radius: 28px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.closing .smartbar-panel {
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+        opacity: 0 !important;
+        border-radius: 999px !important;
+        transition:
+            transform .42s cubic-bezier(0.4, 0, 0.6, 1),
+            border-radius .42s cubic-bezier(0.4, 0, 0.6, 1),
+            opacity .18s ease .16s !important;
+    }
+}
