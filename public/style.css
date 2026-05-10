@@ -1750,8 +1750,7 @@ body.terminal-custom-fullscreen-open {
     height: 100dvh;
     overflow: hidden;
 }
-body.terminal-custom-fullscreen-open .main-nav,
-body.terminal-custom-fullscreen-open .terminal-smartbar {
+body.terminal-custom-fullscreen-open .main-nav {
     display: none !important;
 }
 .terminal-workspace-grid.compact .workspace-splitter { display: none; }
@@ -4813,4 +4812,171 @@ body.smartbar-trash-hover .smartbar-trash-target {
 @media (max-width: 480px) and (pointer: coarse) {
     .snippet-settings-item { grid-template-columns: 1fr; }
     .shortcut-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ===== 移动端终端全屏 Dock 与键盘控制：仅触控窄屏生效 ===== */
+.mobile-fullscreen-dock-toggle { display: none; }
+.smartbar-exit-fullscreen { display: none; }
+.cmd-keyboard-btn { display: none; }
+
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-handle {
+        display: none;
+    }
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle {
+        position: fixed;
+        top: max(12px, env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
+        z-index: 96;
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border: 0;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--surface) 72%, transparent);
+        box-shadow: 0 14px 34px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.22);
+        backdrop-filter: blur(18px) saturate(1.55);
+        -webkit-backdrop-filter: blur(18px) saturate(1.55);
+        pointer-events: auto;
+    }
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle span {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--text-secondary) 76%, transparent);
+        box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 14px rgba(88,166,255,.22);
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: max(54px, calc(env(safe-area-inset-top) + 54px));
+        right: max(8px, env(safe-area-inset-right));
+        left: auto;
+        width: 92px;
+        height: auto;
+        z-index: 94;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        top: 0;
+        right: 0;
+        left: auto;
+        width: 84px;
+        max-width: 84px;
+        max-height: calc(100dvh - 120px);
+        padding: 10px 8px;
+        border-radius: 28px;
+        transform-origin: top right;
+        transform: translate3d(18px, -12px, 0) scale3d(.34, .18, 1);
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+    }
+    body.terminal-custom-fullscreen-open .smartbar-panel .smartbar-dock,
+    body.terminal-custom-fullscreen-open .smartbar-dock {
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 0;
+        max-height: calc(100dvh - 142px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 6px 4px;
+        gap: 10px;
+        scroll-padding-block: 18px;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-session,
+    body.terminal-custom-fullscreen-open .smartbar-add,
+    body.terminal-custom-fullscreen-open .smartbar-exit-fullscreen {
+        width: 60px;
+        min-width: 60px;
+        min-height: 64px;
+        padding: 0;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-session-icon,
+    body.terminal-custom-fullscreen-open .smartbar-add::before,
+    body.terminal-custom-fullscreen-open .smartbar-exit-fullscreen span {
+        width: 48px;
+        height: 48px;
+        border-radius: 17px;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-session strong,
+    body.terminal-custom-fullscreen-open .smartbar-exit-fullscreen strong {
+        max-width: 62px;
+        font-size: 10px;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-session.active::after {
+        left: 3px;
+        top: 24px;
+        bottom: auto;
+        transform: translateY(-50%);
+    }
+    body.terminal-custom-fullscreen-open .smartbar-exit-fullscreen {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-start;
+        flex-direction: column;
+        gap: 5px;
+        border: 0;
+        background: transparent;
+        color: var(--text-secondary);
+        font: inherit;
+    }
+    body.terminal-custom-fullscreen-open .smartbar-exit-fullscreen span {
+        display: grid;
+        place-items: center;
+        background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+        border: 1px solid rgba(139,148,158,.24);
+        color: var(--accent-hover);
+        font-size: 24px;
+        font-weight: 900;
+        box-shadow: 0 16px 38px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.16);
+    }
+    body.terminal-custom-fullscreen-open .smartbar-picker {
+        right: max(100px, calc(env(safe-area-inset-right) + 100px));
+        left: auto !important;
+        top: max(72px, env(safe-area-inset-top)) !important;
+        width: min(360px, calc(100vw - 126px));
+        min-height: 260px;
+        max-height: calc(100dvh - 96px);
+        transform-origin: 100% 20px;
+    }
+
+    .terminal-page .cmd-keyboard-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        min-width: 38px;
+        height: 34px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 800;
+    }
+    .terminal-page .cmd-keyboard-btn.keyboard-visible {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+        font-size: 22px;
+        line-height: 1;
+    }
+    .terminal-page .cmd-input[readonly] {
+        caret-color: transparent;
+        user-select: none;
+        -webkit-user-select: none;
+    }
+    .terminal-page .terminal-container {
+        flex-basis: 0;
+        height: auto;
+        max-height: none;
+        margin-bottom: 4px;
+    }
+    html.keyboard-open .terminal-page .terminal-container {
+        flex: 0 1 calc(100dvh - var(--keyboard-inset, 0px) - 116px - env(safe-area-inset-top));
+        max-height: calc(100dvh - var(--keyboard-inset, 0px) - 116px - env(safe-area-inset-top));
+    }
+    html.keyboard-open .terminal-page .wterm-wrapper {
+        max-height: 100%;
+    }
 }

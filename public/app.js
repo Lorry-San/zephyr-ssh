@@ -779,12 +779,6 @@ async function openConnection(id) {
     } else {
         const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
-        // 移动端直接进入独立终端页，不走 iframe 工作区。
-        // 这样键盘只影响 terminal.html 自己，避免父页面 + iframe 双重 visualViewport 抖动。
-        if (isCompactTerminalWorkspace()) {
-            window.location.href = `/terminal.html?tabId=${encodeURIComponent(tabId)}`;
-            return;
-        }
         terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
     }
     openOrderStack.push(tabId);
@@ -960,10 +954,15 @@ function positionSmartbarPicker() {
     const vvHeight = viewport?.height || window.innerHeight;
     const margin = 14;
     const addRect = addButton.getBoundingClientRect();
-    const targetWidth = Math.min(360, Math.max(300, vvWidth - margin * 2));
+    const mobileFullscreen = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
+    const targetWidth = mobileFullscreen
+        ? Math.min(360, Math.max(240, vvWidth - 126))
+        : Math.min(360, Math.max(300, vvWidth - margin * 2));
     const anchorX = addRect.left + addRect.width / 2;
-    const left = Math.min(Math.max(anchorX - targetWidth / 2, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin);
-    const preferredTop = Math.round(addRect.bottom + 14);
+    const left = mobileFullscreen
+        ? Math.min(Math.max(addRect.left - targetWidth - 18, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin)
+        : Math.min(Math.max(anchorX - targetWidth / 2, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin);
+    const preferredTop = mobileFullscreen ? Math.round(addRect.top) : Math.round(addRect.bottom + 14);
     const maxTop = vvTop + Math.max(margin, vvHeight - 280 - margin);
     const top = Math.min(Math.max(preferredTop, vvTop + margin), maxTop);
     const arrowLeft = Math.min(targetWidth - 20, Math.max(20, anchorX - left));
@@ -1012,6 +1011,7 @@ function renderTerminalSmartbar() {
             <div class="smartbar-dock" aria-label="终端 Dock">
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
                 <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
+                <button class="smartbar-exit-fullscreen" style="--dock-index:${sessions.length + 1}" data-mobile-exit-fullscreen title="退出全屏" aria-label="退出全屏"><span>↧</span><strong>退出全屏</strong></button>
             </div>
         </div>`;
     requestAnimationFrame(() => {
@@ -2223,6 +2223,7 @@ function bindEvents() {
         if (suppressSmartbarClick) { suppressSmartbarClick = false; return; }
         const toggle = e.target.closest('[data-smartbar-toggle]');
         if (toggle) { setTerminalSmartbarOpen(!terminalSmartbarOpen); return; }
+        if (e.target.closest('[data-mobile-exit-fullscreen]')) { exitTerminalFullscreen(); setTerminalSmartbarOpen(false); return; }
         if (e.target.closest('[data-smartbar-add]')) {
             terminalSmartbarPickerOpen = !terminalSmartbarPickerOpen;
             setTerminalSmartbarOpen(true);

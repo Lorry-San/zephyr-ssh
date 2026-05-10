@@ -59,6 +59,7 @@ const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const wtermThemeToggle = $('#wtermThemeToggle');
 const cmdInput = $('#cmdInput');
+const cmdKeyboardBtn = $('#cmdKeyboardBtn');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const fileBtn = $('#fileBtn');
@@ -183,6 +184,7 @@ let terminalInputEchoSuppressUntil = 0;
 let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
+let mobileKeyboardUserControlled = false;
 let keyboardFocusLikely = false;
 let keyboardViewportBaseline = 0;
 let keyboardFallbackTimer = 0;
@@ -235,8 +237,6 @@ function hasLiveTerminalSelection() {
 }
 
 function blurTerminalInputsForSelection() {
-    // 移动端选择/复制时不要主动 blur。
-    // 否则键盘会收起，visualViewport 回弹，终端跟着 resize，内容就会上下跳。
     if (isTouchKeyboardDevice()) return;
     try { cmdInput?.blur?.(); } catch (_) {}
     try { document.activeElement?.blur?.(); } catch (_) {}
@@ -839,7 +839,7 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
         // 外层布局事件只同步自定义滚动条和可选 focus，避免输入/渲染时重复 resize 导致跳动。
         requestAnimationFrame(() => {
             scheduleTerminalScrollbarUpdate();
-            if (shouldFocus) {
+            if (shouldFocus && !isTouchKeyboardDevice()) {
                 try { term?.focus?.(); } catch (_) {}
                 try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
             }
@@ -3396,7 +3396,7 @@ function setupTerminalCustomScrollbar() {
             terminalScrollbar.classList.remove('dragging');
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
-            term?.focus?.();
+            if (!isTouchKeyboardDevice()) term?.focus?.();
         };
         window.addEventListener('pointermove', onMove, { passive: false });
         window.addEventListener('pointerup', onUp, { once: true });
@@ -3473,12 +3473,18 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
-    const keyboardOpen = metrics.keyboardInset >= 80 && (keyboardFocusLikely || mobileKeyboardOpen || isKeyboardAvoidanceTarget());
+    const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled && (keyboardFocusLikely || mobileKeyboardOpen || isKeyboardAvoidanceTarget());
     const inset = keyboardOpen ? metrics.keyboardInset : 0;
     const signature = `${keyboardOpen}:${Math.round(inset / 4) * 4}`;
     if (updateViewportInsets._lastSignature === signature) return;
     updateViewportInsets._lastSignature = signature;
     mobileKeyboardOpen = keyboardOpen;
+    cmdKeyboardBtn?.classList.toggle('keyboard-visible', keyboardOpen && mobileKeyboardUserControlled);
+    if (cmdKeyboardBtn && mobileKeyboardUserControlled) {
+        cmdKeyboardBtn.textContent = keyboardOpen ? '⌄' : '⌄';
+        cmdKeyboardBtn.title = '关闭键盘';
+        cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
+    }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
@@ -3558,6 +3564,53 @@ function finalizeKeyboardClose({ force = false } = {}) {
     scheduleTerminalResize('keyboard-close-final', 500);
 }
 
+function closeMobileCommandKeyboard() {
+    if (!isTouchKeyboardDevice()) return;
+    mobileKeyboardUserControlled = false;
+    cmdInput?.setAttribute('readonly', 'readonly');
+    cmdKeyboardBtn?.classList.remove('keyboard-visible');
+    if (cmdKeyboardBtn) {
+        cmdKeyboardBtn.textContent = '⌨';
+        cmdKeyboardBtn.title = '打开键盘';
+        cmdKeyboardBtn.setAttribute('aria-label', '打开键盘');
+    }
+    cmdInput?.blur?.();
+    markKeyboardFocusInactive();
+    window.setTimeout(updateViewportInsets, 80);
+    window.setTimeout(updateViewportInsets, 240);
+}
+
+function openMobileCommandKeyboard() {
+    if (!isTouchKeyboardDevice()) {
+        cmdInput?.focus?.({ preventScroll: true });
+        return;
+    }
+    mobileKeyboardUserControlled = true;
+    cmdInput?.removeAttribute('readonly');
+    cmdKeyboardBtn?.classList.add('keyboard-visible');
+    if (cmdKeyboardBtn) {
+        cmdKeyboardBtn.textContent = '⌄';
+        cmdKeyboardBtn.title = '关闭键盘';
+        cmdKeyboardBtn.setAttribute('aria-label', '关闭键盘');
+    }
+    cmdInput?.focus?.({ preventScroll: true });
+    markKeyboardFocusActive();
+    updateViewportInsets();
+    [80, 260, 520].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
+}
+
+function toggleMobileCommandKeyboard() {
+    if (isTouchKeyboardDevice() && mobileKeyboardUserControlled) closeMobileCommandKeyboard();
+    else openMobileCommandKeyboard();
+}
+
+cmdKeyboardBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleMobileCommandKeyboard();
+});
+if (isTouchKeyboardDevice()) cmdInput?.setAttribute('readonly', 'readonly');
+
 function setupHorizontalScrollbarVisibility(...elements) {
     elements.filter(Boolean).forEach((el) => {
         let timer = 0;
@@ -3588,6 +3641,10 @@ function setupMobileKeyboardAvoidance() {
     window.visualViewport?.addEventListener('scroll', updateViewportInsets, { passive: true });
     navigator.virtualKeyboard?.addEventListener?.('geometrychange', updateViewportInsets);
     document.addEventListener('focusin', (e) => {
+        if (isTouchKeyboardDevice() && e.target === cmdInput && !mobileKeyboardUserControlled) {
+            cmdInput.blur();
+            return;
+        }
         if (isKeyboardAvoidanceTarget(e.target)) markKeyboardFocusActive();
     }, true);
     document.addEventListener('focusout', (e) => {
@@ -4450,7 +4507,7 @@ const comboSequences = Object.fromEntries('abcdefghijklmnopqrstuvwxyz'.split('')
 // 保留选区
 wtermWrapper.addEventListener('mouseup', () => {
     const selection = window.getSelection();
-    if (mobileTerminalSelectionMode || selection?.toString?.().length > 0) return;
+    if (mobileTerminalSelectionMode || selection?.toString?.().length > 0 || isTouchKeyboardDevice()) return;
     term?.focus?.();
 });
 async function pasteClipboardIntoTerminal(source = 'terminal-contextmenu') {
@@ -4463,7 +4520,9 @@ async function pasteClipboardIntoTerminal(source = 'terminal-contextmenu') {
     if (!text) return false;
     logTerminalPasteDiagnostics(source, text);
     sendData(text, { source, forceFollow: true });
-    try { term?.focus?.(); } catch (_) {}
+    if (!isTouchKeyboardDevice()) {
+        try { term?.focus?.(); } catch (_) {}
+    }
     return true;
 }
 wtermWrapper.addEventListener('contextmenu', async (e) => {
@@ -4494,6 +4553,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             const hasSelection = hasLiveTerminalSelection();
             if (mobileTerminalSelectionMode || terminalTouchMoved || hasSelection) {
                 if (hasSelection) enterMobileTerminalSelectionMode('touch-has-selection');
+                notifyParentActivity();
+                return;
+            }
+            if (isTouchKeyboardDevice()) {
                 notifyParentActivity();
                 return;
             }
@@ -4622,9 +4685,9 @@ function syncFeaturePanelsAfterConnection() {
         checkDockerStatus({ force: true });
     }
     
-    // 确保终端获得焦点并可见
+    // 确保桌面端终端获得焦点并可见；移动端只能通过键盘按钮唤起输入法。
     setTimeout(() => {
-        if (term && typeof term.focus === 'function') {
+        if (!isTouchKeyboardDevice() && term && typeof term.focus === 'function') {
             try { term.focus(); } catch (_) {}
         }
     }, 100);
@@ -4782,7 +4845,7 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                         ready = true;
                         settled = true;
                         setStatus('connected', '已连接');
-                        if (term?.focus) term.focus();
+                        if (!isTouchKeyboardDevice() && term?.focus) term.focus();
                         reconnectAttempts = 0;
                         shouldFollowTerminalOutput = !!followOnConnect;
                         if (followOnConnect) scheduleTerminalScrollToBottom('connect-ready');
