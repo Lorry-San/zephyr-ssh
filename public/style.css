@@ -5509,3 +5509,35 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform-origin: 100% -18px !important;
     }
 }
+
+/* ===== 最终修复：移动端图标不要继承透明文字色，使用明确颜色 ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
+        content: '' !important;
+        display: block !important;
+        width: 21px !important;
+        height: 21px !important;
+        flex: 0 0 21px !important;
+        position: static !important;
+        left: auto !important;
+        top: auto !important;
+        transform: none !important;
+        margin: 0 !important;
+        background: var(--mobile-icon-color, currentColor) !important;
+        color: var(--mobile-icon-color, currentColor) !important;
+        -webkit-text-fill-color: var(--mobile-icon-color, currentColor) !important;
+        -webkit-mask: var(--mobile-icon-mask, var(--terminal-toolbar-icon)) center / contain no-repeat !important;
+        mask: var(--mobile-icon-mask, var(--terminal-toolbar-icon)) center / contain no-repeat !important;
+    }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="file"] { --mobile-icon-color: #d7a21f; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="stats"] { --mobile-icon-color: #4aa3df; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="docker"] { --mobile-icon-color: #2aa9c9; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="snippet"] { --mobile-icon-color: #d9aa18; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="keyboard"] { --mobile-icon-color: #6b7684; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="copy"] { --mobile-icon-color: #7a6042; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="paste"] { --mobile-icon-color: #9a6a3a; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="term-theme"] { --mobile-icon-color: #5b6672; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="theme"] { --mobile-icon-color: #246f88; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="reconnect"] { --mobile-icon-color: #2f81f7; }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon="disconnect"] { --mobile-icon-color: #f85149; }
+}
