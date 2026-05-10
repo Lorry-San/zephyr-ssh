@@ -15,6 +15,8 @@ let terminalSmartbarTimer = 0;
 let terminalSmartbarClosing = false;
 let smartbarDragState = null;
 let suppressSmartbarClick = false;
+let smartbarHoverWindowId = null;
+let dockSwapAnimatingWindows = new Set();
 let terminalDragState = null;
 let terminalControlLongPress = false;
 let fullscreenLoadingTimer = 0;
@@ -1222,7 +1224,7 @@ function renderTerminalWorkspace() {
         if (titlebar) {
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
-        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''}`;
+        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''}`;
     });
     keepAliveMinimized.forEach((t) => {
         let win = workspace.querySelector(`:scope > .terminal-window[data-window="${CSS.escape(t.id)}"]`);
@@ -1568,6 +1570,8 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     const target = getTerminalSession(targetWindowId);
     const dragged = getTerminalSession(draggedTabId);
     if (!target || !dragged) return false;
+    dockSwapAnimatingWindows.add(targetWindowId);
+    dockSwapAnimatingWindows.add(draggedTabId);
     target.minimized = true;
     dragged.minimized = false;
     const idx = visualLayout.indexOf(targetWindowId);
@@ -1576,6 +1580,11 @@ function replaceWindowWithDockTab(targetWindowId, draggedTabId) {
     activeTerminalTab = draggedTabId;
     touchTerminalSession(draggedTabId);
     syncVisualLayout({ preserve: true });
+    window.setTimeout(() => {
+        dockSwapAnimatingWindows.delete(targetWindowId);
+        dockSwapAnimatingWindows.delete(draggedTabId);
+        renderTerminalTabs({ rebuildWorkspace: false });
+    }, 520);
     return true;
 }
 function startSmartbarIconDrag(e, tabId) {
@@ -1598,11 +1607,19 @@ function startSmartbarIconDrag(e, tabId) {
         const dy = ev.clientY - smartbarDragState.startY;
         if (Math.hypot(dx, dy) > 6) smartbarDragState.moved = true;
         moveGhost(ev);
+        ghost.style.pointerEvents = 'none';
+        const hoverWin = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-window]')?.dataset.window || null;
+        if (hoverWin !== smartbarHoverWindowId) {
+            smartbarHoverWindowId = hoverWin;
+            document.querySelectorAll('.terminal-window').forEach((el) => el.classList.toggle('dock-drop-target', !!hoverWin && el.dataset.window === hoverWin && hoverWin !== tabId));
+        }
     };
     const onUp = (ev) => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         btn.classList.remove('dragging');
+        document.querySelectorAll('.terminal-window.dock-drop-target').forEach((el) => el.classList.remove('dock-drop-target'));
+        smartbarHoverWindowId = null;
         ghost.remove();
         if (smartbarDragState?.moved) {
             suppressSmartbarClick = true;
