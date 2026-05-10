@@ -5629,3 +5629,10 @@ body.smartbar-trash-hover .smartbar-trash-target {
         pointer-events: auto !important;
     }
 }
+
+/* 移动端未全屏时不显示右上角 Dock 小点 */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-workspace.compact:not(.custom-fullscreen) .mobile-fullscreen-dock-toggle {
+        display: none !important;
+    }
+}
