@@ -1206,11 +1206,21 @@ function createTerminalWindowElement(t) {
     return article;
 }
 function mountMobileDockToggle(workspace) {
-    const toggle = document.getElementById('mobileFullscreenDockToggle');
+    let toggle = document.getElementById('mobileFullscreenDockToggle');
+    if (!toggle) {
+        toggle = document.createElement('button');
+        toggle.className = 'mobile-fullscreen-dock-toggle';
+        toggle.id = 'mobileFullscreenDockToggle';
+        toggle.dataset.smartbarToggle = '';
+        toggle.title = '展开/收回移动端 Dock';
+        toggle.setAttribute('aria-label', '展开/收回移动端 Dock');
+        toggle.innerHTML = '<span></span>';
+    }
     const activeWindow = workspace?.querySelector('.terminal-window.active') || workspace?.querySelector('.terminal-window:not(.minimized-keepalive)') || workspace?.querySelector('.terminal-window.minimized-keepalive');
     const titlebar = activeWindow?.querySelector('.terminal-window-titlebar');
     if (!toggle || !titlebar) return;
     if (toggle.parentElement !== titlebar) titlebar.appendChild(toggle);
+    toggle.style.display = isCompactTerminalWorkspace() && workspace?.classList.contains('custom-fullscreen') ? 'grid' : '';
 }
 function renderTerminalWorkspace() {
     const visibleSessions = terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id));
