@@ -1687,7 +1687,7 @@ function ensureSmartbarTrashTarget() {
     if (!trash) {
         trash = document.createElement('div');
         trash.className = 'smartbar-trash-target';
-        trash.innerHTML = '<span>⌫</span><strong>关闭</strong>';
+        trash.innerHTML = '<span>×</span>';
         document.body.appendChild(trash);
     }
     return trash;
@@ -1710,6 +1710,7 @@ function startSmartbarIconDrag(e, tabId) {
     document.body.appendChild(ghost);
     const trash = ensureSmartbarTrashTarget();
     document.body.classList.add('smartbar-dragging-dock');
+    document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = 'none');
     const sourceRect = btn.getBoundingClientRect();
     smartbarDragState = { tabId, startX: e.clientX, startY: e.clientY, moved: false, ghost, sourceRect };
     btn.classList.add('dragging');
@@ -1744,6 +1745,7 @@ function startSmartbarIconDrag(e, tabId) {
         window.removeEventListener('pointerup', onUp);
         btn.classList.remove('dragging');
         document.body.classList.remove('smartbar-dragging-dock');
+        document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
         document.querySelectorAll('.terminal-window.dock-drop-target').forEach((el) => el.classList.remove('dock-drop-target'));
         smartbarHoverWindowId = null;
         window.setTimeout(removeSmartbarTrashTarget, 180);
@@ -1766,7 +1768,6 @@ function startSmartbarIconDrag(e, tabId) {
             }
             if (targetWin && targetWin !== tabId) {
                 replaceWindowWithDockTab(targetWin, tabId);
-                setTerminalSmartbarOpen(false);
                 animateWindowFromDock(tabId, source, { swap: true });
                 ghost.remove();
                 return;
