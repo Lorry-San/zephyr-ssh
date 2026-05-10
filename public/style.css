@@ -5447,3 +5447,42 @@ body.smartbar-trash-hover .smartbar-trash-target {
         text-align: center;
     }
 }
+
+/* ===== 桌面端工具栏：文字 + CSS 图标，移动端仍保持纯图标 ===== */
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
+    content: '';
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+    background: currentColor;
+    -webkit-mask: var(--terminal-toolbar-icon) center / contain no-repeat;
+    mask: var(--terminal-toolbar-icon) center / contain no-repeat;
+}
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="file"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1H3V6zm0 4h18l-2 9H5l-2-9z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="stats"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 20V4h16v2H6v12h14v2H4zm3-3V9h3v8H7zm5 0V6h3v11h-3zm5 0v-5h3v5h-3z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="docker"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 13h18c-.6 4-3.8 7-8.8 7C7.5 20 4 17.8 3 13zm2-5h3v3H5V8zm4 0h3v3H9V8zm4 0h3v3h-3V8zM9 4h3v3H9V4zm4 0h3v3h-3V4zm4 4h3v3h-3V8z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="snippet"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="keyboard"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 6h18v12H3V6zm2 2v8h14V8H5zm1 1h2v2H6V9zm3 0h2v2H9V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM6 12h2v2H6v-2zm3 0h6v2H9v-2zm7 0h2v2h-2v-2z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="copy"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 7V3h14v14h-4v4H3V7h4zm2 0h8v8h2V5H9v2zm-4 2v10h10V9H5z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="paste"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3h6l1 2h3v16H5V5h3l1-2zm1 4h4l1-2h-6l1 2zm-3 1v11h10V8h-2v2H9V8H7z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="term-theme"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a10 10 0 1 0 0 20V2z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="theme"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2a9 9 0 1 0 9 9c-1 4-5 7-9 7V2z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="reconnect"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z'/%3E%3C/svg%3E"); }
+.terminal-page .topbar-actions .btn-sm[data-mobile-icon="disconnect"] { --terminal-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 3h10v2H7V3zm4 4h2v7h-2V7zm-5.6 3.2 1.5 1.3A6 6 0 1 0 17.1 11.5l1.5-1.3a8 8 0 1 1-13.2 0z'/%3E%3C/svg%3E"); }
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon] {
+        gap: 0;
+    }
+    .terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
+        width: 21px;
+        height: 21px;
+        flex-basis: 21px;
+    }
+}
