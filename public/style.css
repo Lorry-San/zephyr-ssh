@@ -3165,6 +3165,7 @@ html.keyboard-open .terminal-page {
     opacity: 0;
     pointer-events: none;
     transition:
+        left .52s cubic-bezier(0.32, 0.72, 0, 1),
         width .52s cubic-bezier(0.32, 0.72, 0, 1),
         height .52s cubic-bezier(0.32, 0.72, 0, 1),
         border-radius .52s cubic-bezier(0.32, 0.72, 0, 1),
@@ -3195,6 +3196,7 @@ html.keyboard-open .terminal-page {
     background: color-mix(in srgb, var(--surface) 76%, rgba(0,0,0,.26));
     box-shadow: none;
     transition:
+        left .42s cubic-bezier(0.4, 0, 0.6, 1),
         width .42s cubic-bezier(0.4, 0, 0.6, 1),
         height .42s cubic-bezier(0.4, 0, 0.6, 1),
         border-radius .42s cubic-bezier(0.4, 0, 0.6, 1),
