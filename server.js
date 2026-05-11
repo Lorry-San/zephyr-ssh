@@ -2115,7 +2115,8 @@ wss.on('connection', (ws, req) => {
             attached: session.attachedWs.size,
             replay,
         });
-        sendJSON({ type: 'ready', sessionId: session.id, attached: true });
+        const pty = session.pty || { cols: 80, rows: 24 };
+        sendJSON({ type: 'ready', sessionId: session.id, attached: true, cols: pty.cols, rows: pty.rows });
         if (replay && session.outputBuffer.length) {
             sendJSON({ type: 'data', data: session.outputBuffer.join('') });
         }
@@ -2466,6 +2467,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     sshClients,
                     sshStream,
                     attachedWs: new Set([ws]),
+                    pty: { rows: initialRows, cols: initialCols },
                     outputBuffer: [],
                     createdAt: Date.now(),
                     lastActive: Date.now(),
@@ -2475,7 +2477,8 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 attachedSshSession = session;
                 ws._sshTerminalSession = session;
                 sshTerminalSessions.set(session.id, session);
-                sendJSON({ type: 'ready', sessionId: session.id });
+                const pty = session.pty || { rows: initialRows, cols: initialCols };
+                sendJSON({ type: 'ready', sessionId: session.id, cols: pty.cols, rows: pty.rows });
 
                 // SSH 连接就绪后，启动实时监控推送
                 startStatsPush();
@@ -2517,7 +2520,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 console.warn('[SSH] 忽略异常 PTY resize', { rows: msg.rows, cols: msg.cols });
                 return;
             }
-            if (sshStream && sshStream.setWindow) sshStream.setWindow(rows, cols, 0, 0);
+            if (sshStream && sshStream.setWindow) {
+                sshStream.setWindow(rows, cols, 0, 0);
+                if (attachedSshSession) {
+                    attachedSshSession.pty = { rows, cols };
+                    attachedSshSession.lastActive = Date.now();
+                }
+            }
             return;
         }
 

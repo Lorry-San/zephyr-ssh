@@ -172,16 +172,12 @@ let dockerLogBuffer = '';
 // 图表实例管理
 let chartInstances = {};
 let latestStatsData = null;
-let shouldFollowTerminalOutput = true;
-let terminalAutoScrollLockedByUser = false;
 let terminalScrollRaf = 0;
 let terminalScrollbarRaf = 0;
 let isProgrammaticTerminalScroll = false;
 let terminalScrollCleanup = null;
 let terminalResizeCleanup = null;
 let suppressWTermResizeEvent = false;
-let terminalInputEchoSuppressUntil = 0;
-let terminalInputEchoMaxLength = 0;
 let terminalFontSize = 14;
 let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
@@ -301,7 +297,7 @@ const TERMINAL_FONT_MIN = 10;
 const TERMINAL_FONT_MAX = 28;
 const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
-const TERMINAL_BOTTOM_THRESHOLD = 48;
+const TERMINAL_BOTTOM_THRESHOLD = 8;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
 const TERMINAL_LAYOUT_DIAGNOSTICS = false;
 const TERMINAL_SCROLL_DIAGNOSTICS = false;
@@ -319,7 +315,6 @@ function logTerminalScrollDiagnostics(event, details = {}) {
         const viewport = window.visualViewport;
         console.info('[TerminalScrollDiagnostics]', {
             event,
-            shouldFollowTerminalOutput,
             isProgrammaticTerminalScroll,
             mobileKeyboardOpen,
             keyboardFocusLikely,
@@ -755,16 +750,33 @@ function getMeasuredTerminalSize() {
 }
 
 function getInitialTerminalSize() {
-    if (isTouchKeyboardDevice()) {
-        // ServerBox 的思路是初始 PTY 尺寸来自稳定终端视图，不跟随键盘/滚动过程动态改变。
-        // WebView 里移动端 viewport 不稳定，固定初始 rows 可避免首屏/滑动/键盘触发远端重排。
-        return { cols: 80, rows: 24 };
-    }
     const measured = getMeasuredTerminalSize();
     return {
         cols: Math.max(20, Math.floor(measured.cols || Number(term?.cols || 80))),
         rows: Math.max(2, Math.floor(measured.rows || Number(term?.rows || 24))),
     };
+}
+
+function isEmbeddedTerminalFrameVisible() {
+    if (!embeddedMode) return true;
+    try {
+        const frame = window.frameElement;
+        if (!frame) return true;
+        const rect = frame.getBoundingClientRect();
+        const style = window.parent?.getComputedStyle?.(frame);
+        const parentWidth = window.parent?.innerWidth || rect.right;
+        const parentHeight = window.parent?.innerHeight || rect.bottom;
+        return rect.width >= TERMINAL_MIN_RESIZE_WIDTH
+            && rect.height >= TERMINAL_MIN_RESIZE_HEIGHT
+            && rect.right > 0
+            && rect.bottom > 0
+            && rect.left < parentWidth
+            && rect.top < parentHeight
+            && style?.display !== 'none'
+            && style?.visibility !== 'hidden';
+    } catch (_) {
+        return true;
+    }
 }
 
 function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
@@ -853,14 +865,18 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
         requestStableTerminalLayout._pendingReason = '';
         requestStableTerminalLayout._focus = false;
 
-        logTerminalLayoutDiagnostics('stable-layout:official-noop', { reason: runReason, includeResize, focus: shouldFocus });
-        // 官方 @wterm/dom 使用内置 ResizeObserver/autoResize 处理尺寸变化。
-        // 外层布局事件只同步自定义滚动条和可选 focus，避免输入/渲染时重复 resize 导致跳动。
+        logTerminalLayoutDiagnostics('stable-layout:official-refresh', { reason: runReason, includeResize, focus: shouldFocus });
+        // 仅在可见且尺寸稳定后刷新渲染/可视区；不要因父页面切换或 focus 主动滚到底。
         requestAnimationFrame(() => {
+            if (includeResize) {
+                if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) refreshTerminalAfterVisibilityRestore(runReason, { focus: shouldFocus });
+                else scheduleTerminalResize(runReason, isTouchKeyboardDevice() ? 240 : 160);
+            } else {
+                refreshTerminalAfterVisibilityRestore(runReason, { focus: shouldFocus });
+            }
             scheduleTerminalScrollbarUpdate();
             if (shouldFocus && !isTouchKeyboardDevice()) {
                 try { term?.focus?.(); } catch (_) {}
-                try { wtermWrapper?.focus?.({ preventScroll: true }); } catch (_) {}
             }
         });
     }, 24);
@@ -871,8 +887,8 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     const explicitCols = Math.floor(Number(cols));
     const explicitRows = Math.floor(Number(rows));
 
-    if (isTouchKeyboardDevice()) {
-        logTerminalLayoutDiagnostics('resize:ignored-mobile-fixed-pty', { reason, explicitCols, explicitRows });
+    if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling() && /keyboard|viewport|visual|resize-observer/.test(String(reason))) {
+        logTerminalLayoutDiagnostics('resize:ignored-mobile-keyboard-settling', { reason, explicitCols, explicitRows });
         return;
     }
 
@@ -897,7 +913,8 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
             && rect.width >= TERMINAL_MIN_RESIZE_WIDTH
             && rect.height >= TERMINAL_MIN_RESIZE_HEIGHT
             && wtermWrapper?.offsetParent !== null
-            && document.visibilityState === 'visible';
+            && document.visibilityState === 'visible'
+            && isEmbeddedTerminalFrameVisible();
         if (!visibleSurface) {
             logTerminalLayoutDiagnostics('resize:defer-hidden-wterm-size', {
                 reason,
@@ -914,6 +931,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
         window.clearTimeout(pendingTerminalResize.timer);
         pendingTerminalResize = { cols: explicitCols, rows: explicitRows, reason, timer: window.setTimeout(() => {
             if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+            if (!isEmbeddedTerminalFrameVisible()) return;
             const freshRect = wtermWrapper?.getBoundingClientRect?.();
             if (!freshRect || freshRect.width < TERMINAL_MIN_RESIZE_WIDTH || freshRect.height < TERMINAL_MIN_RESIZE_HEIGHT || document.visibilityState !== 'visible') return;
             const measured = getMeasuredTerminalSize();
@@ -929,8 +947,28 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
         return;
     }
 
-    if (reason === 'stable-visible-resize') {
+    if (reason === 'stable-visible-resize' || reason === 'resize-observer-stable' || reason === 'initial-visible-resize' || reason === 'pageshow-visible' || reason === 'visibility-visible' || reason === 'window-resize' || reason === 'parent-focus-terminal' || String(reason).startsWith('render-terminal-workspace') || String(reason).startsWith('switch-view-terminal') || String(reason).startsWith('terminal-window-morph')) {
         if (!Number.isFinite(explicitCols) || !Number.isFinite(explicitRows) || explicitCols < 20 || explicitRows < 2) return;
+        const rect = wtermWrapper?.getBoundingClientRect?.();
+        const visibleSurface = rect
+            && rect.width >= TERMINAL_MIN_RESIZE_WIDTH
+            && rect.height >= TERMINAL_MIN_RESIZE_HEIGHT
+            && wtermWrapper?.offsetParent !== null
+            && document.visibilityState === 'visible'
+            && isEmbeddedTerminalFrameVisible();
+        if (!visibleSurface) {
+            logTerminalLayoutDiagnostics('resize:ignored-hidden-stable-size', { reason, explicitCols, explicitRows, rectWidth: Math.round(rect?.width || 0), rectHeight: Math.round(rect?.height || 0) });
+            return;
+        }
+        if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling() && /keyboard|viewport|visual|resize-observer/.test(String(reason))) {
+            logTerminalLayoutDiagnostics('resize:ignored-mobile-keyboard-settling', { reason, explicitCols, explicitRows });
+            return;
+        }
+        const measured = getMeasuredTerminalSize();
+        if (Math.abs(measured.cols - explicitCols) > 1 || Math.abs(measured.rows - explicitRows) > 1) {
+            logTerminalLayoutDiagnostics('resize:ignored-stale-stable-size', { reason, explicitCols, explicitRows, measuredCols: measured.cols, measuredRows: measured.rows });
+            return;
+        }
         if (lastSentTerminalSize.cols === explicitCols && lastSentTerminalSize.rows === explicitRows && !force) return;
         lastSentTerminalSize = { cols: explicitCols, rows: explicitRows };
         wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
@@ -939,6 +977,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     }
 
     const measured = getMeasuredTerminalSize();
+    if (!isEmbeddedTerminalFrameVisible()) return;
     if (!force && (measured.width < TERMINAL_MIN_RESIZE_WIDTH || measured.height < TERMINAL_MIN_RESIZE_HEIGHT)) {
         logTerminalLayoutDiagnostics('resize:skipped-unstable-rect', {
             reason,
@@ -978,14 +1017,14 @@ function isMobileKeyboardActiveOrSettling() {
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
-    if (isTouchKeyboardDevice()) {
-        logTerminalLayoutDiagnostics('resize:blocked-mobile-fixed-pty', { reason });
+    if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling() && /keyboard|viewport|visual|resize-observer/.test(String(reason))) {
+        logTerminalLayoutDiagnostics('resize:blocked-mobile-keyboard-settling', { reason });
         scheduleTerminalScrollbarUpdate();
         return;
     }
     window.clearTimeout(scheduleTerminalResize._timer);
     scheduleTerminalResize._timer = window.setTimeout(() => {
-        if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
+        if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return;
         const rect = wtermWrapper.getBoundingClientRect();
         if (rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT || wtermWrapper.offsetParent === null) {
             logTerminalLayoutDiagnostics('resize:skipped-hidden-or-tiny-refresh', {
@@ -1000,13 +1039,9 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
         const rows = Math.max(2, measured.rows);
         const changed = lastSentTerminalSize.cols !== cols || lastSentTerminalSize.rows !== rows;
         resizeWTermSafely(cols, rows, reason);
-    if (changed) {
-        if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) {
-            logTerminalLayoutDiagnostics('resize:blocked-mobile-keyboard-settling', { reason, cols, rows });
-            return;
+        if (changed) {
+            sendTerminalResize(cols, rows, { reason, force: true });
         }
-        sendTerminalResize(cols, rows, { reason: 'stable-visible-resize', force: true });
-    }
     }, delay);
     logTerminalLayoutDiagnostics('resize:scheduled-stable-refresh', { reason, delay });
     scheduleTerminalScrollbarUpdate();
@@ -1014,11 +1049,6 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
 
 function setupStableTerminalResizeObserver() {
     if (!window.ResizeObserver || !wtermWrapper) return () => {};
-    if (isTouchKeyboardDevice()) {
-        // 移动端地址栏/键盘/页面滑动会反复改变 visual viewport 和 DOM 容器高度。
-        // 这些不是用户想改变远端 PTY 行列；一旦传给 WTerm/ssh2，会造成空行、截断和远端重排。
-        return () => {};
-    }
     const observer = new ResizeObserver(() => scheduleTerminalResize('resize-observer-stable', 160));
     observer.observe(wtermWrapper);
     return () => observer.disconnect();
@@ -3206,6 +3236,7 @@ function updateTerminalScrollbarNow() {
     const scrollable = maxScroll > 1;
     terminalContainer.classList.toggle('scrollable', scrollable);
     el.classList.toggle('terminal-scrollable', scrollable);
+    if (terminalScrollbar) terminalScrollbar.style.display = scrollable ? 'block' : 'none';
     if (!scrollable) {
         terminalScrollbar.style.setProperty('--terminal-scroll-thumb-top', '0px');
         terminalScrollbar.style.setProperty('--terminal-scroll-thumb-height', '100%');
@@ -3225,113 +3256,6 @@ function scheduleTerminalScrollbarUpdate() {
     terminalScrollbarRaf = requestAnimationFrame(() => {
         terminalScrollbarRaf = 0;
         updateTerminalScrollbarNow();
-    });
-}
-
-function scrollTerminalToBottom(reason = 'scroll-to-bottom') {
-    const el = getTerminalScrollElement();
-    if (!el) return;
-    const forced = isForcedTerminalScrollReason(reason);
-
-    if (!forced && (terminalAutoScrollLockedByUser || !shouldFollowTerminalOutput) && !isTerminalAtBottom(el)) {
-        shouldFollowTerminalOutput = false;
-        terminalAutoScrollLockedByUser = true;
-        logTerminalScrollDiagnostics('scroll-to-bottom:suppressed-user-lock', {
-            reason,
-            locked: terminalAutoScrollLockedByUser,
-            bottomDistance: Math.round(getTerminalBottomDistance(el)),
-        });
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
-
-    logTerminalScrollDiagnostics('scroll-to-bottom:before', {
-        reason,
-        forced,
-        maxScroll: Math.round(getTerminalMaxScroll(el)),
-    });
-    isProgrammaticTerminalScroll = true;
-    el.scrollTop = getTerminalMaxScroll(el);
-    shouldFollowTerminalOutput = true;
-    terminalAutoScrollLockedByUser = false;
-    scheduleTerminalScrollbarUpdate();
-    requestAnimationFrame(() => {
-        logTerminalScrollDiagnostics('scroll-to-bottom:after', { reason });
-        isProgrammaticTerminalScroll = false;
-    });
-}
-
-function markTerminalUserInput(data = '', { source = 'unknown', forceFollow = false } = {}) {
-    if (!data) return;
-    const wasAtBottom = isTerminalAtBottom();
-    // 普通输入不应继承首次连接/输出阶段遗留的 shouldFollowTerminalOutput=true。
-    // 否则用户在历史输出中输入第一个字符时，会被强制拉到终端底部。
-    // 只有当前已经在底部，或发送命令/辅助键/粘贴等显式 forceFollow 的输入，才继续贴底。
-    const shouldFollowAfterInput = forceFollow || wasAtBottom;
-    logTerminalScrollDiagnostics('user-input:mark-before', {
-        source,
-        forceFollow,
-        wasAtBottom,
-        previousFollow: shouldFollowTerminalOutput,
-        shouldFollowAfterInput,
-        length: data.length,
-        preview: String(data).slice(0, 20).replace(/\r/g, '\\r').replace(/\n/g, '\\n'),
-    });
-    shouldFollowTerminalOutput = shouldFollowAfterInput;
-    terminalAutoScrollLockedByUser = forceFollow ? false : !wasAtBottom;
-    terminalInputEchoSuppressUntil = performance.now() + 350;
-    terminalInputEchoMaxLength = Math.max(terminalInputEchoMaxLength, data.length);
-    // 非 WTerm 的辅助输入/命令框发送也不在外层强制滚动；
-    // 后续远端回显/输出由 WTerm.write() 按官方规则决定是否跟随。
-    scheduleTerminalScrollbarUpdate();
-}
-
-function isLikelyTerminalInputEcho(data = '') {
-    if (!data || !terminalInputEchoMaxLength) return false;
-    if (performance.now() > terminalInputEchoSuppressUntil) {
-        terminalInputEchoMaxLength = 0;
-        return false;
-    }
-    return data.length <= terminalInputEchoMaxLength + 8;
-}
-
-function isCommandInputEditingTerminalHistory() {
-    const el = getTerminalScrollElement();
-    return Boolean(document.activeElement === cmdInput && el && !isTerminalAtBottom(el));
-}
-
-function isForcedTerminalScrollReason(reason = '') {
-    const value = String(reason);
-    return value === 'connect-ready' || /^user-input:(command-box-send|keypad)/.test(value);
-}
-
-function scheduleTerminalScrollToBottom(reason = 'scheduled') {
-    const forced = isForcedTerminalScrollReason(reason);
-    if (!forced && terminalAutoScrollLockedByUser) {
-        shouldFollowTerminalOutput = false;
-        logTerminalScrollDiagnostics('scroll-schedule:suppressed-user-lock', { reason });
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
-    if (terminalScrollRaf) {
-        logTerminalScrollDiagnostics('scroll-schedule:coalesced', { reason });
-        return;
-    }
-    logTerminalScrollDiagnostics('scroll-schedule:queued', { reason, forced });
-    terminalScrollRaf = requestAnimationFrame(() => {
-        terminalScrollRaf = 0;
-        requestAnimationFrame(() => {
-            const runForced = isForcedTerminalScrollReason(reason);
-            logTerminalScrollDiagnostics('scroll-schedule:run', { reason, forced: runForced });
-            if (!runForced && terminalAutoScrollLockedByUser) {
-                shouldFollowTerminalOutput = false;
-                logTerminalScrollDiagnostics('scroll-run:suppressed-user-lock', { reason });
-                scheduleTerminalScrollbarUpdate();
-                return;
-            }
-            if (shouldFollowTerminalOutput || runForced) scrollTerminalToBottom(reason);
-            else scheduleTerminalScrollbarUpdate();
-        });
     });
 }
 
@@ -3358,44 +3282,13 @@ function stopTerminalAutoScrollObserver() {
 
 function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     stopTerminalAutoScrollObserver();
-    shouldFollowTerminalOutput = !!followOnConnect;
-    if (followOnConnect) terminalAutoScrollLockedByUser = false;
+    resetTerminalScrollState();
 
     const onScroll = () => {
-        if (!isProgrammaticTerminalScroll) {
-            const atBottom = isTerminalAtBottom();
-            shouldFollowTerminalOutput = atBottom;
-            terminalAutoScrollLockedByUser = !atBottom;
-        }
         scheduleTerminalScrollbarUpdate();
     };
 
-    const onWheel = (e) => {
-        if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
-            const atBottom = isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2);
-            shouldFollowTerminalOutput = e.deltaY >= 0 ? atBottom : false;
-            terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
-        }
-    };
-
-    let touchStartY = 0;
-    const onTouchStart = (e) => {
-        if (e.touches.length === 1) touchStartY = e.touches[0].clientY;
-    };
-    const onTouchMove = (e) => {
-        if (e.touches.length !== 1) return;
-        const dy = e.touches[0].clientY - touchStartY;
-        if (Math.abs(dy) > 4) {
-            const atBottom = isTerminalAtBottom(getTerminalScrollElement(), TERMINAL_BOTTOM_THRESHOLD * 2);
-            shouldFollowTerminalOutput = dy < 0 ? atBottom : false;
-            terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
-        }
-    };
-
-    wtermWrapper.addEventListener('scroll', onScroll, { passive: true });
-    wtermWrapper.addEventListener('wheel', onWheel, { passive: true });
-    wtermWrapper.addEventListener('touchstart', onTouchStart, { passive: true });
-    wtermWrapper.addEventListener('touchmove', onTouchMove, { passive: true });
+    const onWheel = () => scheduleTerminalScrollbarUpdate();
 
     let resizeObserver = null;
     if (window.ResizeObserver) {
@@ -3409,12 +3302,13 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
         if (grid) resizeObserver.observe(grid);
     }
 
+    wtermWrapper.addEventListener('scroll', onScroll, { passive: true });
+    wtermWrapper.addEventListener('wheel', onWheel, { passive: true });
+
     setupTerminalCustomScrollbar();
     terminalScrollCleanup = () => {
         wtermWrapper.removeEventListener('scroll', onScroll);
         wtermWrapper.removeEventListener('wheel', onWheel);
-        wtermWrapper.removeEventListener('touchstart', onTouchStart);
-        wtermWrapper.removeEventListener('touchmove', onTouchMove);
         resizeObserver?.disconnect();
     };
 
@@ -3443,8 +3337,6 @@ function setupTerminalCustomScrollbar() {
         const ratio = Math.min(1, Math.max(0, (clientY - rect.top - thumbHeight / 2) / Math.max(1, rect.height - thumbHeight)));
         isProgrammaticTerminalScroll = true;
         el.scrollTop = ratio * maxScroll;
-        shouldFollowTerminalOutput = isTerminalAtBottom(el);
-        terminalAutoScrollLockedByUser = !shouldFollowTerminalOutput;
         scheduleTerminalScrollbarUpdate();
         requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
     };
@@ -3557,8 +3449,6 @@ function updateViewportInsets() {
     mobileKeyboardOpen = keyboardOpen;
     if (keyboardOpen !== wasKeyboardOpen) {
         mobileKeyboardResizeFreezeUntil = Date.now() + 1200;
-        shouldFollowTerminalOutput = true;
-        terminalAutoScrollLockedByUser = false;
     }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
@@ -3574,14 +3464,14 @@ function updateViewportInsets() {
         });
         requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
         scheduleTerminalScrollbarUpdate();
-        // 移动端键盘开关只改变 CSS 可视区域，不能 resize WTerm/远端 PTY；否则会把远端输出重排成空行/截断。
-        if (!isTouchKeyboardDevice()) scheduleTerminalResize(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 650);
+        // 移动端键盘开关只改变 CSS 可视区域；等键盘关闭后再刷新 WTerm 视图，避免远端内容重排出空行/截断。
+        if (!keyboardOpen) scheduleTerminalResize('keyboard-close-settled', 650);
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
         requestTerminalAutoFollow('keyboard-final-settled');
         scheduleTerminalScrollbarUpdate();
-        if (!isTouchKeyboardDevice()) scheduleTerminalResize('keyboard-final-settled', 120);
+        if (!keyboardOpen) scheduleTerminalResize('keyboard-final-settled', 360);
     }, keyboardOpen ? 720 : 360);
 }
 
@@ -3637,8 +3527,8 @@ function finalizeKeyboardClose({ force = false } = {}) {
         offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
     });
     scheduleTerminalScrollbarUpdate();
-    // 移动端键盘关闭不能 resize WTerm/远端 PTY；只同步滚动条，避免远端内容重排出空行/截断。
-    if (!isTouchKeyboardDevice()) scheduleTerminalResize('keyboard-close-final', 500);
+    // 键盘完全收起后再允许一次稳定 resize，避免恢复旧 viewport/buffer 高度。
+    scheduleTerminalResize('keyboard-close-final', 500);
 }
 
 function restoreMobileWTermNativeInput() {
@@ -3855,45 +3745,76 @@ function showInfoModal() {
 
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
-    const getEl = () => term.element || wtermWrapper;
-    const bottomDistance = () => {
-        const el = getEl();
-        return el ? el.scrollHeight - el.scrollTop - el.clientHeight : 0;
-    };
-    const isOfficialBottom = () => bottomDistance() <= 8;
 
-    // WTerm 官方 write() 依赖 _isScrolledToBottom() 决定输出后是否自动跟随。
-    // 保留该语义，只把官方 _scrollToBottom 的“按行高取整”改为精确贴底，避免底部差半行。
+    // 严格保留 @wterm/dom 官方 write()/resize() 自动滚动语义：
+    // - 输出阶段：write() 在写入前调用 _isScrolledToBottom()，渲染后仅在原本贴底时滚到底；
+    // - resize 阶段：resize() 同样按 resize 前是否贴底决定是否跟随。
+    // 同时修正官方 InputHandler 输入前无条件 _scrollToBottom() 在历史区输入会强制下滑的问题。
     const originalScrollToBottom = typeof term._scrollToBottom === 'function' ? term._scrollToBottom.bind(term) : null;
-    term._scrollToBottom = () => {
-        const el = getEl();
-        if (!el) return;
-        el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-    };
-    if (typeof term._isScrolledToBottom === 'function') {
-        term._isScrolledToBottom = isOfficialBottom;
+    const originalIsScrolledToBottom = typeof term._isScrolledToBottom === 'function' ? term._isScrolledToBottom.bind(term) : null;
+    const originalDoRender = typeof term._doRender === 'function' ? term._doRender.bind(term) : null;
+    const originalScheduleRender = typeof term._scheduleRender === 'function' ? term._scheduleRender.bind(term) : null;
+
+    if (originalScrollToBottom) {
+        term._scrollToBottom = () => {
+            const fromRender = term._zephyrRenderingDepth > 0;
+            const alreadyAtBottom = originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom();
+            // WTerm.write()/resize() 的 render 阶段保留官方自动跟随；
+            // 用户滚到历史区时，InputHandler 的输入前滚动不再把页面强制拉到底。
+            if (!fromRender && !alreadyAtBottom) {
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
+            isProgrammaticTerminalScroll = true;
+            try {
+                originalScrollToBottom();
+            } finally {
+                scheduleTerminalScrollbarUpdate();
+                requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+            }
+        };
     }
+
+    if (originalIsScrolledToBottom) {
+        term._isScrolledToBottom = () => originalIsScrolledToBottom();
+    }
+
+    if (originalDoRender) {
+        term._doRender = () => {
+            term._zephyrRenderingDepth = (term._zephyrRenderingDepth || 0) + 1;
+            try {
+                return originalDoRender();
+            } finally {
+                term._zephyrRenderingDepth = Math.max(0, (term._zephyrRenderingDepth || 1) - 1);
+                scheduleTerminalScrollbarUpdate();
+            }
+        };
+    }
+
+    if (originalScheduleRender) {
+        term._scheduleRender = () => {
+            originalScheduleRender();
+            requestAnimationFrame(() => requestAnimationFrame(scheduleTerminalScrollbarUpdate));
+        };
+    }
+
     term._zephyrOriginalScrollToBottom = originalScrollToBottom;
+    term._zephyrOriginalIsScrolledToBottom = originalIsScrolledToBottom;
+    term._zephyrOriginalDoRender = originalDoRender;
+    term._zephyrOriginalScheduleRender = originalScheduleRender;
     term._zephyrScrollPatched = true;
 }
 
 function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
     if (!isTouchKeyboardDevice()) return;
-    terminalAutoScrollLockedByUser = false;
-    shouldFollowTerminalOutput = true;
+    // 移动端页面/键盘恢复只刷新渲染和滚动条；不强制滚到底、不改变远端 PTY。
+    // 这避免 iOS/Android WebView 恢复后 viewport 与 buffer 错配造成空白撑开、截断和光标漂移。
     const keyboardRelated = /keyboard|viewport|visual/.test(String(reason));
-    const delays = keyboardRelated ? [0, 80, 220] : [0, 40, 120, 260, 520, 900];
-    if (isTouchKeyboardDevice()) return;
+    const delays = keyboardRelated ? [0, 80, 220] : [0, 40, 120, 260, 520];
     delays.forEach((delay) => {
         window.setTimeout(() => {
             if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
-            if (!keyboardRelated) {
-                requestStableTerminalLayout(`${reason}:layout:${delay}`, { includeResize: false, focus: false });
-                if (!isTouchKeyboardDevice()) scheduleTerminalResize(`${reason}:resize:${delay}`, 20);
-            }
             try { term._scheduleRender?.(); } catch (_) {}
-            try { term.renderer?.render?.(term.bridge); } catch (_) {}
-            try { term._scrollToBottom?.(); } catch (_) {}
             scheduleTerminalScrollbarUpdate();
         }, delay);
     });
@@ -3901,11 +3822,9 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
 
 function writeTerminalData(data = '') {
     if (!term?.write) return;
-    const wasAtBottom = isTerminalAtBottom();
-    const likelyInputEcho = isLikelyTerminalInputEcho(data);
+    const wasAtBottom = Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
     logTerminalScrollDiagnostics('terminal-data:before-write-official', {
         length: String(data).length,
-        likelyInputEcho,
         wasAtBottom,
     });
     // 以官方 @wterm/dom SSH 示例为准：服务端输出只调用 write(data)。
@@ -4417,13 +4336,14 @@ window.visualViewport?.addEventListener('scroll', () => {
 }, { passive: true });
 window.addEventListener('pageshow', (e) => {
     logTerminalLayoutDiagnostics('pageshow', { persisted: !!e.persisted });
-    if (!isTouchKeyboardDevice()) requestStableTerminalLayout('pageshow', { includeResize: true, focus: true });
+    refreshTerminalAfterVisibilityRestore('pageshow', { focus: true });
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize('pageshow-visible', 220);
 });
 document.addEventListener('visibilitychange', () => {
     logTerminalLayoutDiagnostics('visibilitychange');
-    if (document.visibilityState === 'visible' && !isTouchKeyboardDevice()) {
-        scheduleTerminalResize('visibility-visible', 160);
-        requestStableTerminalLayout('visibility-visible', { includeResize: true, focus: true });
+    if (document.visibilityState === 'visible') {
+        refreshTerminalAfterVisibilityRestore('visibility-visible', { focus: true });
+        if (!isTouchKeyboardDevice()) scheduleTerminalResize('visibility-visible', 220);
     }
 });
 
@@ -4468,39 +4388,19 @@ function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFo
         // 官方 SSH 示例中 WTerm onData 只负责把数据发给后端，不参与外层滚动状态机。
         // 本项目仍需 JSON 包装以匹配现有 /ssh 协议，但 payload 保持 WTerm 产生的原始字节序列。
         const payload = fromWTerm ? data : (normalizeNewlines ? normalizeTerminalInputNewlines(data) : data);
-        if (!fromWTerm) {
-            const shouldForceFollow = forceFollow
-                || source === 'command-box-send'
-                || source === 'keypad';
-            markTerminalUserInput(payload, { source, forceFollow: shouldForceFollow });
-        }
         wsConnection.send(JSON.stringify({ type: 'input', data: fromWTerm ? payload : processModifiers(payload) }));
+        scheduleTerminalScrollbarUpdate();
     }
 }
 function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {
     const el = getTerminalScrollElement();
     const shouldPreserve = Boolean(el && !isTerminalAtBottom(el));
     const previousTop = shouldPreserve ? el.scrollTop : 0;
-    if (shouldPreserve) {
-        shouldFollowTerminalOutput = false;
-        terminalAutoScrollLockedByUser = true;
-        if (terminalScrollRaf) {
-            cancelAnimationFrame(terminalScrollRaf);
-            terminalScrollRaf = 0;
-        }
-        logTerminalScrollDiagnostics('command-input:preserve-before', {
-            reason,
-            scrollTop: Math.round(previousTop),
-            bottomDistance: Math.round(getTerminalBottomDistance(el)),
-        });
-    }
     try {
         callback();
     } finally {
         if (shouldPreserve) {
             const restore = () => {
-                shouldFollowTerminalOutput = false;
-                terminalAutoScrollLockedByUser = true;
                 el.scrollTop = previousTop;
                 scheduleTerminalScrollbarUpdate();
                 logTerminalScrollDiagnostics('command-input:preserve-after', {
@@ -4511,7 +4411,6 @@ function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-
             };
             restore();
             requestAnimationFrame(restore);
-            window.setTimeout(restore, 80);
         }
     }
 }
@@ -4710,6 +4609,35 @@ function stopTerminalResizeObserver() {
     pendingTerminalResize = { cols: 0, rows: 0, timer: 0, reason: '' };
 }
 
+function refreshTerminalAfterVisibilityRestore(reason = 'visibility-restore', { focus = false } = {}) {
+    if (!term || !wtermWrapper || document.visibilityState !== 'visible') return;
+    const wasAtBottom = Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
+    const run = (phase) => {
+        if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return;
+        const rect = wtermWrapper.getBoundingClientRect?.();
+        if (!rect || rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT || wtermWrapper.offsetParent === null) {
+            logTerminalLayoutDiagnostics('restore:skip-hidden-or-tiny', { reason, phase, width: Math.round(rect?.width || 0), height: Math.round(rect?.height || 0) });
+            return;
+        }
+        try { term._scheduleRender?.(); } catch (_) {}
+        scheduleTerminalScrollbarUpdate();
+        if (focus && !isTouchKeyboardDevice()) {
+            try { term.focus?.(); } catch (_) {}
+        }
+        if (wasAtBottom && term._zephyrOriginalScrollToBottom) requestAnimationFrame(() => {
+            isProgrammaticTerminalScroll = true;
+            try { term._zephyrOriginalScrollToBottom(); } catch (_) {}
+            finally { requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; }); }
+            scheduleTerminalScrollbarUpdate();
+        });
+    };
+    [0, 80, 220, 520].forEach((delay, index) => window.setTimeout(() => run(`phase-${index}`), delay));
+}
+
+function resetTerminalScrollState() {
+    isProgrammaticTerminalScroll = false;
+}
+
 function destroyTerminalInstance({ clear = true } = {}) {
     stopTerminalAutoScrollObserver();
     stopTerminalResizeObserver();
@@ -4717,6 +4645,7 @@ function destroyTerminalInstance({ clear = true } = {}) {
         try { term.destroy?.(); } catch (_) {}
         term = null;
     }
+    resetTerminalScrollState();
     if (clear) wtermWrapper.innerHTML = '';
 }
 
@@ -4838,9 +4767,8 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
         term = new WTermClass(wtermWrapper, {
             cols: 80,
             rows: 24,
-            // 使用手动稳定 resize：官方 autoResize 直接监听 DOM ResizeObserver，
-            // iframe/标签页隐藏或 Dock 拖拽时会量到瞬时极窄尺寸，随后通过 ssh2 setWindow
-            // 改变远端 PTY，导致历史内容按几列真实重排。这里只在可见且尺寸稳定时发送 resize。
+            // 滚动逻辑完全交给 @wterm/dom 官方 write()/InputHandler；
+            // resize 仍由项目层在“可见且尺寸稳定”时手动转发到 ssh2，避免隐藏 iframe/iOS 恢复时的 0px 瞬时尺寸破坏 PTY。
             autoResize: false,
             cursorBlink: true,
             theme: getPreferredWtermTheme() === 'light' ? 'light' : 'default',
@@ -4858,21 +4786,14 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     if (typeof term.init === 'function') await term.init();
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
     lastSentTerminalSize = { cols: Number(term.cols || 80), rows: Number(term.rows || 24) };
-    if (isTouchKeyboardDevice()) {
-        resizeWTermSafely(80, 24, 'mobile-fixed-initial-size');
-        lastSentTerminalSize = { cols: 80, rows: 24 };
-    }
     applyWtermTheme(getPreferredWtermTheme());
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
     restoreMobileWTermNativeInput();
 
-    // 本项目不能直接启用 @wterm/dom autoResize：官方实现会把每一次 ResizeObserver
-    // contentRect 转成 cols/rows 并立刻触发 onResize；而 ssh2 官方的 setWindow(rows, cols,...)
-    // 会真实改变远端 PTY。隐藏 iframe / 切页 / Dock 动画中的瞬时宽度会破坏远端输出。
-    // 因此外层只在可见、稳定尺寸下调用 term.resize + ssh2 resize。
+    // 滚动逻辑使用 @wterm/dom 官方实现；项目层只在 iframe/页面可见且尺寸稳定时调用 term.resize，并同步 ssh2 setWindow。
     terminalResizeCleanup = setupStableTerminalResizeObserver();
-    if (!isTouchKeyboardDevice()) scheduleTerminalResize('initial-visible-resize', 80);
+    scheduleTerminalResize('initial-visible-resize', 80);
     setupTerminalScrollHooks({ followOnConnect });
 }
 
@@ -4930,12 +4851,32 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     case 'ready':
                         ready = true;
                         settled = true;
+                        if (msg.cols && msg.rows) {
+                            const readyCols = Math.floor(Number(msg.cols));
+                            const readyRows = Math.floor(Number(msg.rows));
+                            if (Number.isFinite(readyCols) && Number.isFinite(readyRows) && readyCols >= 20 && readyRows >= 2) {
+                                const measured = getInitialTerminalSize();
+                                const sameAsCurrentView = Math.abs(measured.cols - readyCols) <= 1 && Math.abs(measured.rows - readyRows) <= 1;
+                                const attachedReady = !!msg.attached;
+                                lastSentTerminalSize = { cols: readyCols, rows: readyRows };
+                                if (attachedReady || sameAsCurrentView) resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty');
+                            }
+                        }
                         setStatus('connected', '已连接');
                         if (!isTouchKeyboardDevice() && term?.focus) term.focus();
                         reconnectAttempts = 0;
-                        shouldFollowTerminalOutput = !!followOnConnect;
-                        if (followOnConnect) scheduleTerminalScrollToBottom('connect-ready');
-                        else scheduleTerminalScrollbarUpdate();
+                        if (followOnConnect) {
+                            requestAnimationFrame(() => {
+                                if (term?._zephyrOriginalScrollToBottom) {
+                                    isProgrammaticTerminalScroll = true;
+                                    try { term._zephyrOriginalScrollToBottom(); } catch (_) {}
+                                    finally { requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; }); }
+                                }
+                                scheduleTerminalScrollbarUpdate();
+                            });
+                        } else {
+                            scheduleTerminalScrollbarUpdate();
+                        }
                         requestInitialMobileRenderFlush('connect-ready');
                         resolve(ws);
                         break;
