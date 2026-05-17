@@ -310,6 +310,7 @@ const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
 let lastSentTerminalSize = { cols: 0, rows: 0 };
 let pendingTerminalResize = { cols: 0, rows: 0, timer: 0, reason: '' };
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
+const TERMINAL_OVERSIZED_ROWS_RATIO = 1.18;
 let terminalAutoFollowEnabled = true;
 let terminalUserScrolledAway = false;
 let terminalLastUserScrollAt = 0;
@@ -705,6 +706,7 @@ window.addEventListener('message', (e) => {
         logTerminalLayoutDiagnostics('parent-layout-stabilize-message', { payload: e.data });
         if (keyboardRelated) {
             scheduleTerminalScrollbarUpdate();
+            window.setTimeout(() => repairOversizedWTermRows(`keyboard-related:${reason}`, { force: false }), 900);
             return;
         }
         requestStableTerminalLayout(reason, { includeResize: true, focus: !!e.data.focus });
@@ -862,6 +864,7 @@ function repairWTermLayoutAfterVisibilityChange(reason = 'layout-repair', { send
     const rows = Math.max(2, measured.rows);
     const changed = Number(term.cols ?? term._cols ?? 0) !== cols || Number(term.rows ?? term._rows ?? 0) !== rows;
     resizeWTermSafely(cols, rows, reason);
+    repairOversizedWTermRows(`${reason}:oversized-check`, { force: false });
     normalizeWTermContainerLayout(`${reason}:after-resize`);
     try { term._scheduleRender?.(); } catch (_) {}
     if (sendResize && changed) sendTerminalResize(cols, rows, { reason, force: true });
@@ -872,6 +875,38 @@ function repairWTermLayoutAfterVisibilityChange(reason = 'layout-repair', { send
         if (shouldFollow) requestTerminalAutoFollow(`${reason}:follow`);
         else scheduleTerminalScrollbarUpdate();
     });
+    return true;
+}
+
+function repairOversizedWTermRows(reason = 'oversized-rows-repair', { force = false } = {}) {
+    if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return false;
+    if (!force && isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling()) return false;
+    normalizeWTermContainerLayout(`${reason}:normalize`);
+    const measured = getMeasuredTerminalSize();
+    const currentRows = Number(term.rows ?? term._rows ?? term.options?.rows ?? 0);
+    const currentCols = Number(term.cols ?? term._cols ?? term.options?.cols ?? 0);
+    if (!currentRows || !measured.rows) return false;
+    const currentPixelHeight = currentRows * measured.lineHeight;
+    const allowedPixelHeight = measured.effectiveHeight * TERMINAL_OVERSIZED_ROWS_RATIO;
+    const rowsTooLarge = currentRows > measured.rows + 2 && currentPixelHeight > allowedPixelHeight;
+    const colsTooLarge = currentCols > measured.cols + 2;
+    if (!rowsTooLarge && !colsTooLarge) return false;
+    const nextRows = Math.max(2, measured.rows);
+    const nextCols = Math.max(20, measured.cols);
+    logTerminalLayoutDiagnostics('wterm-layout:oversized-rows-repair', {
+        reason,
+        currentRows,
+        currentCols,
+        nextRows,
+        nextCols,
+        currentPixelHeight: Math.round(currentPixelHeight),
+        allowedPixelHeight: Math.round(allowedPixelHeight),
+        effectiveHeight: measured.effectiveHeight,
+        lineHeight: measured.lineHeight,
+    });
+    resizeWTermSafely(nextCols, nextRows, reason);
+    sendTerminalResize(nextCols, nextRows, { reason, force: true });
+    requestAnimationFrame(() => requestTerminalAutoFollow(`${reason}:follow`));
     return true;
 }
 
@@ -5226,6 +5261,7 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                             }
                         }
                         setStatus('connected', '已连接');
+                        window.setTimeout(() => repairOversizedWTermRows('ready-oversized-rows', { force: true }), 120);
                         if (!isTouchKeyboardDevice() && term?.focus) term.focus();
                         reconnectAttempts = 0;
                         if (followOnConnect) {
