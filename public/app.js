@@ -24,6 +24,9 @@ let terminalControlLongPress = false;
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
+let appKeyboardSettleTimer = 0;
+let appKeyboardLastSignature = '';
+let appKeyboardPendingMetrics = null;
 let closingTerminalTabs = new Set();
 let minimizingTerminalTabs = new Set();
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
@@ -1475,7 +1478,10 @@ function resetTerminalWorkspaceKeyboard() {
     if (!workspace) return;
     appKeyboardOpen = false;
     appKeyboardBaseline = 0;
-    workspace.classList.remove('keyboard-open');
+    appKeyboardPendingMetrics = null;
+    appKeyboardLastSignature = '';
+    window.clearTimeout(appKeyboardSettleTimer);
+    workspace.classList.remove('keyboard-open', 'keyboard-settling');
     document.documentElement.style.setProperty('--app-keyboard-inset', '0px');
     document.documentElement.style.setProperty('--app-visual-vh', '100vh');
     document.documentElement.style.setProperty('--app-visual-offset-top', '0px');
@@ -1486,7 +1492,37 @@ function resetTerminalWorkspaceKeyboard() {
         frame.style.maxHeight = '';
     });
     console.info('[TerminalLayoutDiagnostics]', { event: 'parent:keyboard-reset' });
-    scheduleTerminalLayoutStabilize('parent-keyboard-reset', { focus: true });
+    scheduleTerminalLayoutStabilize('parent-keyboard-reset', { focus: false });
+}
+
+function commitTerminalWorkspaceKeyboard(metrics = {}) {
+    const workspace = $('#terminalWorkspace');
+    if (!workspace) return;
+    const inset = Math.round(Number(metrics.keyboardInset) || 0);
+    const viewportHeight = Math.round(Number(metrics.viewportHeight) || window.visualViewport?.height || window.innerHeight || 0);
+    const offsetTop = Math.round(Number(metrics.offsetTop) || window.visualViewport?.offsetTop || 0);
+    const height = Math.max(240, viewportHeight);
+    appKeyboardOpen = true;
+    workspace.classList.add('keyboard-open');
+    workspace.classList.remove('keyboard-settling');
+    document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
+    document.documentElement.style.setProperty('--app-visual-vh', `${height}px`);
+    document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
+    workspace.style.height = `${height}px`;
+    workspace.style.maxHeight = `${height}px`;
+    const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
+    if (frame) {
+        frame.style.height = '100%';
+        frame.style.maxHeight = '100%';
+    }
+    console.info('[TerminalLayoutDiagnostics]', {
+        event: 'parent:keyboard-commit',
+        inset,
+        viewportHeight,
+        offsetTop,
+        activeTerminalTab,
+    });
+    scheduleTerminalLayoutStabilize('parent-keyboard-commit', { focus: false });
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
@@ -1505,27 +1541,17 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
         return;
     }
 
-    appKeyboardOpen = true;
-    workspace.classList.add('keyboard-open');
-    document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
-    document.documentElement.style.setProperty('--app-visual-vh', `${Math.max(240, viewportHeight)}px`);
-    document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
-    workspace.style.height = `${Math.max(240, viewportHeight)}px`;
-    workspace.style.maxHeight = `${Math.max(240, viewportHeight)}px`;
-    const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
-    if (frame) {
-        frame.style.height = '100%';
-        frame.style.maxHeight = '100%';
-    }
-    console.info('[TerminalLayoutDiagnostics]', {
-        event: 'parent:keyboard-apply',
-        inset,
-        viewportHeight,
-        offsetTop,
-        activeTerminalTab,
-        isFullscreenTerminalSurface,
-    });
-    scheduleTerminalLayoutStabilize('parent-keyboard-apply', { focus: true });
+    const signature = `${Math.round(inset / 24) * 24}:${Math.round(viewportHeight / 24) * 24}:${Math.round(offsetTop / 8) * 8}`;
+    appKeyboardPendingMetrics = { ...metrics, keyboardInset: inset, viewportHeight, offsetTop, keyboardOpen: true };
+    workspace.classList.add('keyboard-settling');
+    // Android visualViewport 在键盘动画期间会连续抖动多次。不要每一帧改 workspace height/通知 iframe，
+    // 等 90ms 无新指标后一次性提交，视觉上像 ServerBox 一样跟随系统键盘而不是网页自己跳动。
+    if (signature === appKeyboardLastSignature && appKeyboardOpen) return;
+    appKeyboardLastSignature = signature;
+    window.clearTimeout(appKeyboardSettleTimer);
+    appKeyboardSettleTimer = window.setTimeout(() => {
+        commitTerminalWorkspaceKeyboard(appKeyboardPendingMetrics || metrics);
+    }, appKeyboardOpen ? 70 : 110);
 }
 
 function updateFullscreenKeyboardFromViewport() {

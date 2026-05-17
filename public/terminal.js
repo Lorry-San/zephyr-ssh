@@ -703,7 +703,11 @@ window.addEventListener('message', (e) => {
             || String(reason).includes('visual')
         );
         logTerminalLayoutDiagnostics('parent-layout-stabilize-message', { payload: e.data });
-        requestStableTerminalLayout(reason, { includeResize: !keyboardRelated, focus: !!e.data.focus });
+        if (keyboardRelated) {
+            scheduleTerminalScrollbarUpdate();
+            return;
+        }
+        requestStableTerminalLayout(reason, { includeResize: true, focus: !!e.data.focus });
     }
 });
 
