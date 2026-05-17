@@ -299,6 +299,9 @@ const TERMINAL_FONT_STEP = 1;
 const TERMINAL_FONT_STORAGE_KEY = 'zephyr-terminal-font-size';
 const TERMINAL_BOTTOM_THRESHOLD = 8;
 const TERMINAL_SCROLLBAR_MIN_THUMB = 28;
+const TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD = 18;
+const TERMINAL_ALT_SCROLL_REPEAT_MS = 16;
+const TERMINAL_LINK_PROTOCOL_RE = /\b(?:https?:\/\/|ftp:\/\/|ssh:\/\/|mailto:)[^\s<>'"`\u3000]+/ig;
 const TERMINAL_LAYOUT_DIAGNOSTICS = false;
 const TERMINAL_SCROLL_DIAGNOSTICS = false;
 const TERMINAL_MIN_RESIZE_WIDTH = 120;
@@ -307,6 +310,16 @@ const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
 let lastSentTerminalSize = { cols: 0, rows: 0 };
 let pendingTerminalResize = { cols: 0, rows: 0, timer: 0, reason: '' };
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
+let terminalAutoFollowEnabled = true;
+let terminalUserScrolledAway = false;
+let terminalLastUserScrollAt = 0;
+let terminalLastWheelAt = 0;
+const terminalMouseState = {
+    enabled: false,
+    sgr: false,
+    mode: 'none',
+    buttonDown: false,
+};
 
 function logTerminalScrollDiagnostics(event, details = {}) {
     if (!TERMINAL_SCROLL_DIAGNOSTICS) return;
@@ -1022,6 +1035,7 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
         scheduleTerminalScrollbarUpdate();
         return;
     }
+    const shouldFollowAfterResize = terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
     window.clearTimeout(scheduleTerminalResize._timer);
     scheduleTerminalResize._timer = window.setTimeout(() => {
         if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return;
@@ -1042,6 +1056,8 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
         if (changed) {
             sendTerminalResize(cols, rows, { reason, force: true });
         }
+        if (shouldFollowAfterResize) requestAnimationFrame(() => requestTerminalAutoFollow(`resize:${reason}`));
+        else scheduleTerminalScrollbarUpdate();
     }, delay);
     logTerminalLayoutDiagnostics('resize:scheduled-stable-refresh', { reason, delay });
     scheduleTerminalScrollbarUpdate();
@@ -1056,14 +1072,17 @@ function setupStableTerminalResizeObserver() {
 
 function applyTerminalFontSize(size, { persist = true } = {}) {
     terminalFontSize = clampTerminalFontSize(size);
+    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
     document.documentElement.style.setProperty('--terminal-font-size', `${terminalFontSize}px`);
     wtermWrapper.style.fontSize = `${terminalFontSize}px`;
     try { term?.setOption?.('fontSize', terminalFontSize); } catch (_) {}
     try { term?.options && (term.options.fontSize = terminalFontSize); } catch (_) {}
+    try { term?._setRowHeight?.(); } catch (_) {}
     if (persist) localStorage.setItem(TERMINAL_FONT_STORAGE_KEY, String(terminalFontSize));
     updateFontSizeButtons();
-    if (!isTouchKeyboardDevice()) scheduleTerminalResize();
-    scheduleTerminalScrollbarUpdate();
+    if (!isTouchKeyboardDevice()) scheduleTerminalResize('font-size-change', 80);
+    if (wasAtBottom) requestAnimationFrame(() => requestTerminalAutoFollow('font-size-change'));
+    else scheduleTerminalScrollbarUpdate();
 }
 
 function getTouchDistance(touches) {
@@ -3224,6 +3243,40 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = TERMINA
     return getTerminalBottomDistance(el) <= threshold;
 }
 
+function setTerminalAutoFollow(enabled, reason = 'unknown') {
+    terminalAutoFollowEnabled = !!enabled;
+    terminalUserScrolledAway = !terminalAutoFollowEnabled;
+    terminalContainer?.classList.toggle('terminal-follow-paused', !terminalAutoFollowEnabled);
+    terminalContainer?.classList.toggle('terminal-following', terminalAutoFollowEnabled);
+    logTerminalScrollDiagnostics('auto-follow:set', { enabled: terminalAutoFollowEnabled, reason });
+}
+
+function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
+    const el = getTerminalScrollElement();
+    if (!el) return true;
+    const atBottom = isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+    if (atBottom) setTerminalAutoFollow(true, reason);
+    else if (!isProgrammaticTerminalScroll) {
+        terminalLastUserScrollAt = Date.now();
+        setTerminalAutoFollow(false, reason);
+    }
+    return terminalAutoFollowEnabled;
+}
+
+function scrollTerminalToBottom(reason = 'scroll-bottom') {
+    const el = getTerminalScrollElement();
+    if (!el) return;
+    isProgrammaticTerminalScroll = true;
+    try {
+        if (term?._zephyrOriginalScrollToBottom) term._zephyrOriginalScrollToBottom();
+        else el.scrollTop = getTerminalMaxScroll(el);
+        setTerminalAutoFollow(true, reason);
+    } finally {
+        scheduleTerminalScrollbarUpdate();
+        requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+    }
+}
+
 function getTerminalMaxScroll(el = getTerminalScrollElement()) {
     if (!el) return 0;
     return Math.max(0, el.scrollHeight - el.clientHeight);
@@ -3260,10 +3313,19 @@ function scheduleTerminalScrollbarUpdate() {
 }
 
 function requestTerminalAutoFollow(reason = 'auto-follow') {
-    // 官方 @wterm/dom 不会在外层因 layout/viewport/keyboard 事件主动滚底。
-    // 这些事件只同步自定义滚动条；真正的输出跟随由 WTerm.write() 内部决定。
-    logTerminalScrollDiagnostics('auto-follow:official-noop', { reason });
-    scheduleTerminalScrollbarUpdate();
+    const el = getTerminalScrollElement();
+    if (!el) return;
+    if (hasLiveTerminalSelection() || mobileTerminalSelectionMode) {
+        logTerminalScrollDiagnostics('auto-follow:selection-active', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
+    if (!terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) {
+        logTerminalScrollDiagnostics('auto-follow:paused', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
+    scrollTerminalToBottom(reason);
 }
 
 function stopTerminalAutoScrollObserver() {
@@ -3280,22 +3342,54 @@ function stopTerminalAutoScrollObserver() {
     isProgrammaticTerminalScroll = false;
 }
 
+function getTerminalAltScreenActive() {
+    try { return !!term?.bridge?.usingAltScreen?.(); } catch (_) { return false; }
+}
+
+function sendTerminalAltScroll(deltaY) {
+    if (!getTerminalAltScreenActive() || !wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return false;
+    if (hasLiveTerminalSelection()) return false;
+    const now = Date.now();
+    if (now - terminalLastWheelAt < TERMINAL_ALT_SCROLL_REPEAT_MS) return true;
+    terminalLastWheelAt = now;
+    const seq = deltaY < 0 ? '\x1b[A' : '\x1b[B';
+    const repeats = Math.max(1, Math.min(5, Math.round(Math.abs(deltaY) / 48)));
+    sendData(seq.repeat(repeats), { source: 'alt-screen-wheel', forceFollow: true });
+    return true;
+}
+
 function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     stopTerminalAutoScrollObserver();
     resetTerminalScrollState();
+    setTerminalAutoFollow(!!followOnConnect, 'connect-init');
 
     const onScroll = () => {
+        updateTerminalAutoFollowFromScroll('user-scroll');
         scheduleTerminalScrollbarUpdate();
     };
 
-    const onWheel = () => scheduleTerminalScrollbarUpdate();
+    const onWheel = (e) => {
+        if (sendTerminalMouseWheelEvent(e)) {
+            e.preventDefault();
+            return;
+        }
+        if (sendTerminalAltScroll(e.deltaY)) {
+            e.preventDefault();
+            return;
+        }
+        terminalLastWheelAt = Date.now();
+        scheduleTerminalScrollbarUpdate();
+    };
 
     let resizeObserver = null;
     if (window.ResizeObserver) {
         resizeObserver = new ResizeObserver(() => {
-            // DOM 尺寸/内容变化后的自动跟随由 WTerm 内部 write/render 决定；
-            // 外层只同步自定义滚动条，避免输入时和官方滚动逻辑抢控制权造成上下跳。
-            scheduleTerminalScrollbarUpdate();
+            // 模仿 xterm.js：尺寸/内容变化时，如果用户原本在底部才跟随；历史区阅读时不抢滚动。
+            if (terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) {
+                requestTerminalAutoFollow('resize-observer-follow');
+            } else {
+                scheduleTerminalScrollbarUpdate();
+            }
         });
         resizeObserver.observe(wtermWrapper);
         const grid = wtermWrapper.querySelector('.term-grid');
@@ -3303,7 +3397,7 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     }
 
     wtermWrapper.addEventListener('scroll', onScroll, { passive: true });
-    wtermWrapper.addEventListener('wheel', onWheel, { passive: true });
+    wtermWrapper.addEventListener('wheel', onWheel, { passive: false });
 
     setupTerminalCustomScrollbar();
     terminalScrollCleanup = () => {
@@ -3746,28 +3840,29 @@ function showInfoModal() {
 function patchWTermScrollBehavior() {
     if (!term || term._zephyrScrollPatched) return;
 
-    // 严格保留 @wterm/dom 官方 write()/resize() 自动滚动语义：
-    // - 输出阶段：write() 在写入前调用 _isScrolledToBottom()，渲染后仅在原本贴底时滚到底；
-    // - resize 阶段：resize() 同样按 resize 前是否贴底决定是否跟随。
-    // 同时修正官方 InputHandler 输入前无条件 _scrollToBottom() 在历史区输入会强制下滑的问题。
+    // xterm.js 风格滚动语义：
+    // - 输出/resize 前若贴底，则渲染后跟随到底；
+    // - 用户滚到历史区时锁定视图，不被远端输出、输入回显、键盘布局事件抢走；
+    // - 回到底部后自动恢复 follow。
     const originalScrollToBottom = typeof term._scrollToBottom === 'function' ? term._scrollToBottom.bind(term) : null;
     const originalIsScrolledToBottom = typeof term._isScrolledToBottom === 'function' ? term._isScrolledToBottom.bind(term) : null;
     const originalDoRender = typeof term._doRender === 'function' ? term._doRender.bind(term) : null;
     const originalScheduleRender = typeof term._scheduleRender === 'function' ? term._scheduleRender.bind(term) : null;
+    const originalWrite = typeof term.write === 'function' ? term.write.bind(term) : null;
+    const originalResize = typeof term.resize === 'function' ? term.resize.bind(term) : null;
 
     if (originalScrollToBottom) {
         term._scrollToBottom = () => {
             const fromRender = term._zephyrRenderingDepth > 0;
             const alreadyAtBottom = originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom();
-            // WTerm.write()/resize() 的 render 阶段保留官方自动跟随；
-            // 用户滚到历史区时，InputHandler 的输入前滚动不再把页面强制拉到底。
-            if (!fromRender && !alreadyAtBottom) {
+            if (!fromRender && !alreadyAtBottom && !terminalAutoFollowEnabled) {
                 scheduleTerminalScrollbarUpdate();
                 return;
             }
             isProgrammaticTerminalScroll = true;
             try {
                 originalScrollToBottom();
+                setTerminalAutoFollow(true, fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom');
             } finally {
                 scheduleTerminalScrollbarUpdate();
                 requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
@@ -3776,17 +3871,43 @@ function patchWTermScrollBehavior() {
     }
 
     if (originalIsScrolledToBottom) {
-        term._isScrolledToBottom = () => originalIsScrolledToBottom();
+        term._isScrolledToBottom = () => originalIsScrolledToBottom() || isTerminalAtBottom(undefined, TERMINAL_BOTTOM_THRESHOLD);
+    }
+
+    if (originalWrite) {
+        term.write = (data) => {
+            const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            term._zephyrShouldFollowAfterRender = shouldFollow;
+            const result = originalWrite(data);
+            if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('write-follow'));
+            else scheduleTerminalScrollbarUpdate();
+            return result;
+        };
+    }
+
+    if (originalResize) {
+        term.resize = (cols, rows) => {
+            const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            term._zephyrShouldFollowAfterRender = shouldFollow;
+            const result = originalResize(cols, rows);
+            if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('resize-follow'));
+            else scheduleTerminalScrollbarUpdate();
+            return result;
+        };
     }
 
     if (originalDoRender) {
         term._doRender = () => {
             term._zephyrRenderingDepth = (term._zephyrRenderingDepth || 0) + 1;
+            const shouldFollow = !!term._zephyrShouldFollowAfterRender || terminalAutoFollowEnabled;
             try {
                 return originalDoRender();
             } finally {
                 term._zephyrRenderingDepth = Math.max(0, (term._zephyrRenderingDepth || 1) - 1);
-                scheduleTerminalScrollbarUpdate();
+                term._zephyrShouldFollowAfterRender = false;
+                if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('render-follow'));
+                else scheduleTerminalScrollbarUpdate();
+                updateTerminalWebLinks();
             }
         };
     }
@@ -3794,7 +3915,11 @@ function patchWTermScrollBehavior() {
     if (originalScheduleRender) {
         term._scheduleRender = () => {
             originalScheduleRender();
-            requestAnimationFrame(() => requestAnimationFrame(scheduleTerminalScrollbarUpdate));
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (terminalAutoFollowEnabled) requestTerminalAutoFollow('scheduled-render-follow');
+                scheduleTerminalScrollbarUpdate();
+                updateTerminalWebLinks();
+            }));
         };
     }
 
@@ -3822,15 +3947,18 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
 
 function writeTerminalData(data = '') {
     if (!term?.write) return;
+    updateTerminalMouseTrackingFromData(data);
     const wasAtBottom = Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
-    logTerminalScrollDiagnostics('terminal-data:before-write-official', {
+    const shouldFollow = terminalAutoFollowEnabled || wasAtBottom;
+    logTerminalScrollDiagnostics('terminal-data:before-write-xterm-follow', {
         length: String(data).length,
         wasAtBottom,
+        shouldFollow,
     });
-    // 以官方 @wterm/dom SSH 示例为准：服务端输出只调用 write(data)。
-    // WTerm.write() 内部会在写入前判断是否位于底部，并在渲染后自动决定是否跟随。
+    term._zephyrShouldFollowAfterRender = shouldFollow;
     term.write(data);
-    requestAnimationFrame(scheduleTerminalScrollbarUpdate);
+    if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('terminal-data'));
+    else requestAnimationFrame(scheduleTerminalScrollbarUpdate);
 }
 
 function hideInfoModal() {
@@ -4382,14 +4510,17 @@ function logTerminalPasteDiagnostics(source, text = '') {
     });
 }
 
-function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFollow = false } = {}) {
+function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFollow = false, applyModifiers = true } = {}) {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         const fromWTerm = source === 'wterm-onData';
+        if (forceFollow) setTerminalAutoFollow(true, `${source}:force-follow`);
         // 官方 SSH 示例中 WTerm onData 只负责把数据发给后端，不参与外层滚动状态机。
         // 本项目仍需 JSON 包装以匹配现有 /ssh 协议，但 payload 保持 WTerm 产生的原始字节序列。
         const payload = fromWTerm ? data : (normalizeNewlines ? normalizeTerminalInputNewlines(data) : data);
-        wsConnection.send(JSON.stringify({ type: 'input', data: fromWTerm ? payload : processModifiers(payload) }));
-        scheduleTerminalScrollbarUpdate();
+        const input = fromWTerm || !applyModifiers ? payload : processModifiers(payload);
+        wsConnection.send(JSON.stringify({ type: 'input', data: input }));
+        if (forceFollow) requestTerminalAutoFollow(`${source}:sent`);
+        else scheduleTerminalScrollbarUpdate();
     }
 }
 function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {
@@ -4463,8 +4594,8 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     btn.addEventListener('click', () => {
         const key = btn.dataset.key;
         if (btn.classList.contains('modifier')) { modifierState[key] = !modifierState[key]; updateModifierUI(); return; }
-        if (keySequences[key]) sendData(keySequences[key], { source: 'keypad' });
-        if (comboSequences[key]) sendData(comboSequences[key], { source: 'keypad' });
+        if (keySequences[key]) sendData(keySequences[key], { source: 'keypad', forceFollow: true });
+        if (comboSequences[key]) sendData(comboSequences[key], { source: 'keypad', forceFollow: true });
     });
 });
 
@@ -4492,15 +4623,142 @@ async function pasteClipboardIntoTerminal(source = 'terminal-contextmenu') {
     }
     if (!text) return false;
     logTerminalPasteDiagnostics(source, text);
-    sendData(text, { source, forceFollow: true });
+    sendData(prepareTerminalPastePayload(text), { source, forceFollow: true, applyModifiers: false });
     if (!isTouchKeyboardDevice()) {
         try { term?.focus?.(); } catch (_) {}
     }
     return true;
 }
+
+function prepareTerminalPastePayload(text = '') {
+    const raw = String(text);
+    const bridge = term?.bridge;
+    try {
+        if (bridge?.bracketedPaste?.()) {
+            return '\x1b[200~' + raw.replace(/\x1b/g, '') + '\x1b[201~';
+        }
+    } catch (_) {}
+    return raw;
+}
+
+function terminalPointerCellFromEvent(e) {
+    if (!wtermWrapper) return null;
+    const rect = wtermWrapper.getBoundingClientRect();
+    const style = getComputedStyle(wtermWrapper);
+    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const { lineHeight, charWidth } = getTerminalCharMetrics();
+    const x = (e.clientX ?? e.touches?.[0]?.clientX ?? 0) - rect.left - paddingLeft;
+    const y = (e.clientY ?? e.touches?.[0]?.clientY ?? 0) - rect.top - paddingTop + (wtermWrapper.scrollTop || 0);
+    const col = Math.max(0, Math.min(Number(term?.cols || 80) - 1, Math.floor(x / Math.max(1, charWidth))));
+    const absoluteRow = Math.max(0, Math.floor(y / Math.max(1, lineHeight)));
+    const scrollback = Number(term?.bridge?.getScrollbackCount?.() || 0);
+    const row = Math.max(0, Math.min(Number(term?.rows || 24) - 1, absoluteRow - scrollback));
+    return { col, row };
+}
+
+function encodeSgrMouse(button, col, row, suffix = 'M') {
+    return `\x1b[<${button};${col + 1};${row + 1}${suffix}`;
+}
+
+function updateTerminalMouseTrackingFromData(data = '') {
+    const text = String(data || '');
+    if (!text.includes('\x1b[')) return;
+    const re = /\x1b\[\?([0-9;]+)([hl])/g;
+    let match;
+    while ((match = re.exec(text))) {
+        const params = match[1].split(';').map(Number);
+        const enable = match[2] === 'h';
+        for (const p of params) {
+            if (p === 1006) terminalMouseState.sgr = enable;
+            if (p === 1000 || p === 1002 || p === 1003) {
+                terminalMouseState.enabled = enable;
+                terminalMouseState.mode = enable ? String(p) : 'none';
+            }
+        }
+    }
+    terminalContainer?.classList.toggle('terminal-mouse-mode', terminalMouseState.enabled);
+}
+
+function terminalMouseTrackingEnabled() {
+    return !!terminalMouseState.enabled && !!terminalMouseState.sgr;
+}
+
+function sendTerminalMouseEvent(e, kind = 'press') {
+    if (!terminalMouseTrackingEnabled()) return false;
+    const cell = terminalPointerCellFromEvent(e);
+    if (!cell) return false;
+    const base = e.button === 2 ? 2 : e.button === 1 ? 1 : 0;
+    let button = kind === 'release' ? 3 : base;
+    if (e.shiftKey) button += 4;
+    if (e.altKey) button += 8;
+    if (e.ctrlKey) button += 16;
+    if (kind === 'move') button = 32 + (terminalMouseState.buttonDown ? base : 3);
+    if (kind === 'press') terminalMouseState.buttonDown = true;
+    if (kind === 'release') terminalMouseState.buttonDown = false;
+    sendData(encodeSgrMouse(button, cell.col, cell.row, kind === 'release' ? 'm' : 'M'), { source: 'mouse-sgr', applyModifiers: false });
+    return true;
+}
+
+function sendTerminalMouseWheelEvent(e) {
+    if (!terminalMouseTrackingEnabled()) return false;
+    const cell = terminalPointerCellFromEvent(e);
+    if (!cell) return false;
+    const button = e.deltaY < 0 ? 64 : 65;
+    sendData(encodeSgrMouse(button, cell.col, cell.row, 'M'), { source: 'mouse-wheel-sgr', applyModifiers: false });
+    return true;
+}
+
+function updateTerminalWebLinks() {
+    // 只给整行纯文本输出做链接化；如果 wterm 已经用 span 渲染颜色/样式，绝不重写 DOM，避免破坏 ANSI 颜色和复制。
+    if (!wtermWrapper || updateTerminalWebLinks._raf) return;
+    updateTerminalWebLinks._raf = requestAnimationFrame(() => {
+        updateTerminalWebLinks._raf = 0;
+        const rows = wtermWrapper.querySelectorAll?.('.term-row, .term-scrollback-row') || [];
+        rows.forEach((row) => {
+            const text = row.textContent || '';
+            if (row.dataset.zephyrLinks === '1' && row.dataset.zephyrLinkText === text) return;
+            if (row.dataset.zephyrLinks === '1' && row.dataset.zephyrLinkText !== text) {
+                delete row.dataset.zephyrLinks;
+                delete row.dataset.zephyrLinkText;
+            }
+            if (row.children.length > 0) return;
+            TERMINAL_LINK_PROTOCOL_RE.lastIndex = 0;
+            if (!TERMINAL_LINK_PROTOCOL_RE.test(text)) return;
+            TERMINAL_LINK_PROTOCOL_RE.lastIndex = 0;
+            const frag = document.createDocumentFragment();
+            let last = 0;
+            let match;
+            while ((match = TERMINAL_LINK_PROTOCOL_RE.exec(text))) {
+                const start = match.index;
+                const url = match[0].replace(/[),.;:!?]+$/g, '');
+                if (start > last) frag.appendChild(document.createTextNode(text.slice(last, start)));
+                const a = document.createElement('a');
+                a.className = 'terminal-link';
+                a.href = url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = url;
+                frag.appendChild(a);
+                last = start + url.length;
+                if (url.length < match[0].length) frag.appendChild(document.createTextNode(match[0].slice(url.length)));
+            }
+            if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+            row.textContent = '';
+            row.appendChild(frag);
+            row.dataset.zephyrLinks = '1';
+            row.dataset.zephyrLinkText = text;
+        });
+    });
+}
+
 wtermWrapper.addEventListener('contextmenu', async (e) => {
     const selection = window.getSelection();
     if (selection?.toString?.().length > 0) return;
+    if (terminalMouseTrackingEnabled()) {
+        sendTerminalMouseEvent(e, 'press');
+        return;
+    }
     e.preventDefault();
     const ok = await pasteClipboardIntoTerminal('terminal-right-click-paste');
     if (!ok) console.info('[terminal-paste]', '右键粘贴需要浏览器剪贴板权限或非空文本剪贴板');
@@ -4522,6 +4780,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
         });
 
         window.clearTimeout(terminalTouchFocusTimer);
+        if (eventName === 'pointerdown' && e.pointerType !== 'touch' && !hasLiveTerminalSelection() && sendTerminalMouseEvent(e, 'press')) {
+            e.preventDefault();
+            return;
+        }
         terminalTouchFocusTimer = window.setTimeout(() => {
             const hasSelection = hasLiveTerminalSelection();
             if (mobileTerminalSelectionMode || terminalTouchMoved || hasSelection) {
@@ -4549,6 +4811,9 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
         const y = e.clientY ?? e.touches?.[0]?.clientY ?? terminalTouchStartY;
         if (Math.hypot(x - terminalTouchStartX, y - terminalTouchStartY) > 8) {
             terminalTouchMoved = true;
+            if (eventName === 'pointermove' && e.pointerType !== 'touch' && terminalMouseState.buttonDown && sendTerminalMouseEvent(e, 'move')) {
+                e.preventDefault();
+            }
             window.clearTimeout(terminalTouchFocusTimer);
             window.clearTimeout(mobileTerminalSelectionTimer);
         }
@@ -4556,7 +4821,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
 });
 
 ['pointerup', 'touchend', 'touchcancel'].forEach((eventName) => {
-    wtermWrapper.addEventListener(eventName, () => {
+    wtermWrapper.addEventListener(eventName, (e) => {
+        if (eventName === 'pointerup' && e.pointerType !== 'touch' && sendTerminalMouseEvent(e, 'release')) {
+            e.preventDefault();
+        }
         window.clearTimeout(mobileTerminalSelectionTimer);
         window.setTimeout(() => {
             if (hasLiveTerminalSelection()) enterMobileTerminalSelectionMode(eventName);
@@ -4636,6 +4904,16 @@ function refreshTerminalAfterVisibilityRestore(reason = 'visibility-restore', { 
 
 function resetTerminalScrollState() {
     isProgrammaticTerminalScroll = false;
+    terminalAutoFollowEnabled = true;
+    terminalUserScrolledAway = false;
+    terminalLastUserScrollAt = 0;
+    terminalLastWheelAt = 0;
+    terminalMouseState.enabled = false;
+    terminalMouseState.sgr = false;
+    terminalMouseState.mode = 'none';
+    terminalMouseState.buttonDown = false;
+    terminalContainer?.classList.remove('terminal-follow-paused', 'terminal-mouse-mode');
+    terminalContainer?.classList.add('terminal-following');
 }
 
 function destroyTerminalInstance({ clear = true } = {}) {

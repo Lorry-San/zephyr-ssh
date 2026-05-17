@@ -2744,6 +2744,38 @@ html.keyboard-open .terminal-page {
 .terminal-container .wterm-wrapper .term-row,
 .terminal-container .wterm-wrapper .term-scrollback-row {
     min-width: 100%;
+    tab-size: 8;
+}
+.terminal-container.terminal-follow-paused::before {
+    content: '历史区';
+    position: absolute;
+    right: 18px;
+    bottom: 14px;
+    z-index: 6;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(88,166,255,0.18);
+    color: var(--accent);
+    border: 1px solid rgba(88,166,255,0.28);
+    font-size: 12px;
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+}
+.terminal-container .wterm-wrapper .terminal-link {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.terminal-container .wterm-wrapper .terminal-link:hover {
+    color: var(--accent-hover);
+}
+.terminal-container .wterm-wrapper.focused {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.terminal-container.terminal-mouse-mode .wterm-wrapper {
+    cursor: default;
 }
 .terminal-scrollbar {
     display: none;
