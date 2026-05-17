@@ -25,8 +25,9 @@
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/freerdp.h>
 #include <guacamole/client.h>
+#include <guacamole/stream.h>
 #include <guacamole/user.h>
-#include <stdio.h>
+#include <pthread.h>
 #include <winpr/stream.h>
 #include <winpr/wtypes.h>
 
@@ -43,6 +44,16 @@ typedef struct guac_rdp_clipboard_file {
     int used;
 
     /**
+     * Client-side file ID used for on-demand range requests.
+     */
+    char* id;
+
+    /**
+     * Whether this file's metadata has been completely registered by the browser.
+     */
+    int ready;
+
+    /**
      * File name, without any path separators.
      */
     char* name;
@@ -53,29 +64,39 @@ typedef struct guac_rdp_clipboard_file {
     UINT64 size;
 
     /**
-     * Bytes received from the Guacamole web client.
-     */
-    UINT64 received;
-
-    /**
-     * Temporary file path containing clipboard file data.
-     */
-    char* path;
-
-    /**
-     * Temporary file handle used while receiving the browser upload.
-     */
-    FILE* upload_file;
-
-    /**
-     * Reusable range buffer used when answering CLIPRDR FileContents range requests.
+     * Last on-demand range data returned by the browser.
      */
     BYTE* range_buffer;
 
     /**
-     * Size of the reusable range buffer.
+     * Whether this slot is currently waiting for a browser range response.
      */
-    UINT32 range_buffer_size;
+    int range_pending;
+
+    /**
+     * Last range request ID sent to the browser.
+     */
+    UINT32 range_request_id;
+
+    /**
+     * Length received for the last browser range response.
+     */
+    UINT32 range_length;
+
+    /**
+     * Status of the last browser range response.
+     */
+    int range_status;
+
+    /**
+     * Condition variable signaled when browser range data arrives.
+     */
+    pthread_cond_t range_received;
+
+    /**
+     * Mutex protecting range request/response state.
+     */
+    pthread_mutex_t range_lock;
 
 } guac_rdp_clipboard_file;
 
@@ -93,6 +114,11 @@ typedef struct guac_rdp_file_clipboard_stream {
      * Target file slot.
      */
     int index;
+
+    /**
+     * Range request ID if this stream is responding to a range request, or 0 for metadata.
+     */
+    UINT32 request_id;
 
 } guac_rdp_file_clipboard_stream;
 
@@ -145,6 +171,11 @@ typedef struct guac_rdp_clipboard {
      * Upload generation ID. Incremented each time a new file clipboard starts.
      */
     UINT64 file_generation;
+
+    /**
+     * Monotonic request ID for browser range requests.
+     */
+    UINT32 next_range_request_id;
 
 } guac_rdp_clipboard;
 

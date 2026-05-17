@@ -42,7 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <time.h>
 
 #ifdef FREERDP_CLIPRDR_CALLBACKS_REQUIRE_CONST
 /**
@@ -101,14 +101,10 @@ static void guac_rdp_clipboard_clear_files(guac_rdp_clipboard* clipboard) {
         return;
 
     for (int i = 0; i < GUAC_RDP_FILE_CLIPBOARD_MAX_FILES; i++) {
-        if (clipboard->files[i].upload_file != NULL) {
-            fclose(clipboard->files[i].upload_file);
-            clipboard->files[i].upload_file = NULL;
-        }
-        if (clipboard->files[i].path != NULL)
-            unlink(clipboard->files[i].path);
+        pthread_mutex_destroy(&(clipboard->files[i].range_lock));
+        pthread_cond_destroy(&(clipboard->files[i].range_received));
+        guac_mem_free(clipboard->files[i].id);
         guac_mem_free(clipboard->files[i].name);
-        guac_mem_free(clipboard->files[i].path);
         guac_mem_free(clipboard->files[i].range_buffer);
         memset(&(clipboard->files[i]), 0, sizeof(guac_rdp_clipboard_file));
     }
@@ -146,7 +142,7 @@ static char* guac_rdp_file_clipboard_sanitize_name(const char* name) {
 }
 
 static int guac_rdp_file_clipboard_parse_header(const char* data, int length,
-        char* name, size_t name_size, UINT64* file_size) {
+        char* id, size_t id_size, char* name, size_t name_size, UINT64* file_size) {
 
     char header[1024];
     int copy_length = length < (int) sizeof(header) - 1 ? length : (int) sizeof(header) - 1;
@@ -157,6 +153,7 @@ static int guac_rdp_file_clipboard_parse_header(const char* data, int length,
     if (first_newline != NULL)
         *first_newline = '\0';
 
+    id[0] = '\0';
     name[0] = '\0';
     *file_size = 0;
 
@@ -169,7 +166,11 @@ static int guac_rdp_file_clipboard_parse_header(const char* data, int length,
             *equals = '\0';
             char* key = token;
             char* value = equals + 1;
-            if (strcmp(key, "name") == 0) {
+            if (strcmp(key, "id") == 0) {
+                guac_rdp_percent_decode(value);
+                snprintf(id, id_size, "%s", value);
+            }
+            else if (strcmp(key, "name") == 0) {
                 guac_rdp_percent_decode(value);
                 snprintf(name, name_size, "%s", value);
             }
@@ -179,11 +180,29 @@ static int guac_rdp_file_clipboard_parse_header(const char* data, int length,
         token = strtok_r(NULL, ";", &saveptr);
     }
 
-    return name[0] != '\0';
+    return id[0] != '\0' && name[0] != '\0';
+}
+
+static int guac_rdp_file_clipboard_find_file(guac_rdp_clipboard* clipboard,
+        const char* id) {
+
+    for (int i = 0; i < clipboard->file_count; i++) {
+        if (clipboard->files[i].used && clipboard->files[i].id != NULL
+                && strcmp(clipboard->files[i].id, id) == 0)
+            return i;
+    }
+
+    return -1;
 }
 
 static int guac_rdp_file_clipboard_add_file(guac_rdp_clipboard* clipboard,
-        const char* name, UINT64 size) {
+        const char* id, const char* name, UINT64 size) {
+
+    int existing = guac_rdp_file_clipboard_find_file(clipboard, id);
+    if (existing >= 0) {
+        clipboard->files[existing].ready = 1;
+        return existing;
+    }
 
     if (clipboard->file_count >= GUAC_RDP_FILE_CLIPBOARD_MAX_FILES)
         return -1;
@@ -191,33 +210,101 @@ static int guac_rdp_file_clipboard_add_file(guac_rdp_clipboard* clipboard,
     int index = clipboard->file_count++;
     guac_rdp_clipboard_file* file = &(clipboard->files[index]);
     file->used = 1;
+    file->ready = 1;
+    file->id = strdup(id);
     file->name = guac_rdp_file_clipboard_sanitize_name(name);
     file->size = size;
-    file->received = 0;
-    file->path = guac_mem_alloc(128);
-    snprintf(file->path, 128, "/tmp/zephyr-rdp-clip-%p-%d-XXXXXX", (void*) clipboard, index);
-
-    int fd = mkstemp(file->path);
-    if (fd < 0) {
-        guac_mem_free(file->name);
-        guac_mem_free(file->path);
-        memset(file, 0, sizeof(guac_rdp_clipboard_file));
-        clipboard->file_count--;
-        return -1;
-    }
-
-    file->upload_file = fdopen(fd, "w+b");
-    if (file->upload_file == NULL) {
-        close(fd);
-        unlink(file->path);
-        guac_mem_free(file->name);
-        guac_mem_free(file->path);
-        memset(file, 0, sizeof(guac_rdp_clipboard_file));
-        clipboard->file_count--;
-        return -1;
-    }
+    file->range_status = 0;
+    pthread_mutex_init(&(file->range_lock), NULL);
+    pthread_cond_init(&(file->range_received), NULL);
 
     return index;
+}
+
+static int guac_rdp_send_zephyr_instruction(guac_user* user,
+        const char* opcode, const char* a, const char* b, const char* c, const char* d) {
+
+    if (user == NULL || user->socket == NULL)
+        return -1;
+
+    const char* args[] = { opcode, a, b, c, d };
+    int count = 5;
+    while (count > 0 && args[count - 1] == NULL)
+        count--;
+
+    guac_socket_instruction_begin(user->socket);
+    int ret = guac_socket_write_string(user->socket, "10.zephyr-rdp");
+    for (int i = 0; i < count; i++) {
+        char length[32];
+        snprintf(length, sizeof(length), ",%zu.", strlen(args[i]));
+        ret |= guac_socket_write_string(user->socket, length);
+        ret |= guac_socket_write_string(user->socket, args[i]);
+    }
+    ret |= guac_socket_write_string(user->socket, ";");
+    guac_socket_instruction_end(user->socket);
+    guac_socket_flush(user->socket);
+    return ret;
+}
+
+typedef struct guac_rdp_range_request_callback_data {
+    guac_rdp_clipboard_file* file;
+    UINT32 request_id;
+    UINT64 offset;
+    UINT32 length;
+} guac_rdp_range_request_callback_data;
+
+static void* guac_rdp_file_clipboard_send_range_request_to_user(guac_user* user, void* data) {
+    guac_rdp_range_request_callback_data* request = (guac_rdp_range_request_callback_data*) data;
+    if (user == NULL)
+        return NULL;
+
+    char request_id[32];
+    char offset[32];
+    char length[32];
+    snprintf(request_id, sizeof(request_id), "%u", request->request_id);
+    snprintf(offset, sizeof(offset), "%llu", (unsigned long long) request->offset);
+    snprintf(length, sizeof(length), "%u", request->length);
+
+    guac_rdp_send_zephyr_instruction(user, "file-range-request",
+            request_id, request->file->id, offset, length);
+    return NULL;
+}
+
+static int guac_rdp_file_clipboard_request_range(guac_rdp_clipboard* clipboard,
+        guac_rdp_clipboard_file* file, UINT64 offset, UINT32 length) {
+
+    pthread_mutex_lock(&(file->range_lock));
+    UINT32 request_id = ++clipboard->next_range_request_id;
+    if (request_id == 0)
+        request_id = ++clipboard->next_range_request_id;
+
+    file->range_pending = 1;
+    file->range_request_id = request_id;
+    file->range_length = 0;
+    file->range_status = 0;
+    guac_mem_free(file->range_buffer);
+
+    guac_rdp_range_request_callback_data callback_data = {
+        .file = file,
+        .request_id = request_id,
+        .offset = offset,
+        .length = length
+    };
+
+    guac_client_for_owner(clipboard->client,
+            guac_rdp_file_clipboard_send_range_request_to_user, &callback_data);
+
+    struct timespec timeout;
+    clock_gettime(CLOCK_REALTIME, &timeout);
+    timeout.tv_sec += 30;
+
+    int wait_result = 0;
+    while (file->range_pending && wait_result == 0)
+        wait_result = pthread_cond_timedwait(&(file->range_received), &(file->range_lock), &timeout);
+
+    int ok = !file->range_pending && file->range_status == 1;
+    pthread_mutex_unlock(&(file->range_lock));
+    return ok;
 }
 
 static BYTE* guac_rdp_file_clipboard_build_descriptor(guac_rdp_clipboard* clipboard,
@@ -286,28 +373,16 @@ static UINT guac_rdp_cliprdr_send_file_contents_response(CliprdrClientContext* c
             if (available < requested)
                 requested = (UINT32) available;
 
-            if (requested > file->range_buffer_size) {
-                guac_mem_free(file->range_buffer);
-                file->range_buffer = guac_mem_alloc(requested);
-                file->range_buffer_size = requested;
+            if (requested > 0 && guac_rdp_file_clipboard_request_range(clipboard, file, offset, requested)) {
+                response.cbRequested = file->range_length;
+                response.requestedData = file->range_buffer;
             }
-
-            if (requested > 0) {
-                FILE* range_file = fopen(file->path, "rb");
-                if (range_file == NULL || fseeko(range_file, (off_t) offset, SEEK_SET) != 0) {
-                    if (range_file != NULL) fclose(range_file);
-                    response.msgFlags = CB_RESPONSE_FAIL;
-                    response.cbRequested = 0;
-                    response.requestedData = NULL;
-                }
-                else {
-                    size_t read_length = fread(file->range_buffer, 1, requested, range_file);
-                    fclose(range_file);
-                    response.cbRequested = (UINT32) read_length;
-                    response.requestedData = file->range_buffer;
-                }
+            else if (requested == 0) {
+                response.cbRequested = 0;
+                response.requestedData = NULL;
             }
             else {
+                response.msgFlags = CB_RESPONSE_FAIL;
                 response.cbRequested = 0;
                 response.requestedData = NULL;
             }
@@ -975,10 +1050,42 @@ int guac_rdp_clipboard_handler(guac_user* user, guac_stream* stream,
     if (strncmp(mimetype, GUAC_RDP_FILE_CLIPBOARD_MIMETYPE,
             sizeof(GUAC_RDP_FILE_CLIPBOARD_MIMETYPE) - 1) == 0) {
 
+        if (strstr(mimetype, ";response=range") != NULL) {
+            char id[128];
+            char name[512];
+            UINT64 ignored_size;
+            UINT32 request_id = 0;
+            char* req = strstr(mimetype, ";request=");
+            if (req != NULL)
+                request_id = (UINT32) strtoul(req + 9, NULL, 10);
+
+            if (!guac_rdp_file_clipboard_parse_header(mimetype, strlen(mimetype),
+                    id, sizeof(id), name, sizeof(name), &ignored_size) || request_id == 0) {
+                guac_user_log(user, GUAC_LOG_WARNING, "Ignoring RDP file clipboard range response without metadata.");
+                return 0;
+            }
+
+            int index = guac_rdp_file_clipboard_find_file(clipboard, id);
+            if (index < 0) {
+                guac_user_log(user, GUAC_LOG_WARNING, "Ignoring RDP file clipboard range response for unknown file.");
+                return 0;
+            }
+
+            guac_rdp_file_clipboard_stream* file_stream = guac_mem_zalloc(sizeof(guac_rdp_file_clipboard_stream));
+            file_stream->clipboard = clipboard;
+            file_stream->index = index;
+            file_stream->request_id = request_id;
+            stream->data = file_stream;
+            stream->blob_handler = guac_rdp_clipboard_blob_handler;
+            stream->end_handler = guac_rdp_clipboard_end_handler;
+            return 0;
+        }
+
+        char id[128];
         char name[512];
         UINT64 file_size;
         if (!guac_rdp_file_clipboard_parse_header(mimetype, strlen(mimetype),
-                name, sizeof(name), &file_size)) {
+                id, sizeof(id), name, sizeof(name), &file_size)) {
             guac_user_log(user, GUAC_LOG_WARNING, "Ignoring RDP file clipboard stream without file metadata.");
             return 0;
         }
@@ -986,7 +1093,7 @@ int guac_rdp_clipboard_handler(guac_user* user, guac_stream* stream,
         if (strstr(mimetype, ";reset=1") != NULL)
             guac_rdp_clipboard_clear_files(clipboard);
 
-        int index = guac_rdp_file_clipboard_add_file(clipboard, name, file_size);
+        int index = guac_rdp_file_clipboard_add_file(clipboard, id, name, file_size);
         if (index < 0) {
             guac_user_log(user, GUAC_LOG_WARNING, "Ignoring RDP file clipboard stream because the file limit was reached.");
             return 0;
@@ -1027,17 +1134,16 @@ int guac_rdp_clipboard_blob_handler(guac_user* user, guac_stream* stream,
 
     if (stream->data != NULL) {
         guac_rdp_file_clipboard_stream* file_stream = (guac_rdp_file_clipboard_stream*) stream->data;
-        if (file_stream->index >= 0 && file_stream->index < clipboard->file_count) {
-            guac_rdp_clipboard_file* file = &(clipboard->files[file_stream->index]);
-            UINT64 remaining = file->size > file->received ? file->size - file->received : 0;
-            UINT64 copy_length = length;
-            if (copy_length > remaining)
-                copy_length = remaining;
-            if (copy_length > 0 && file->upload_file != NULL) {
-                size_t written = fwrite(data, 1, copy_length, file->upload_file);
-                file->received += written;
-                if (written != copy_length)
-                    guac_user_log(user, GUAC_LOG_WARNING, "RDP file clipboard temporary-file write short write for '%s'.", file->name);
+        if (file_stream->request_id != 0) {
+            if (file_stream->index >= 0 && file_stream->index < clipboard->file_count) {
+                guac_rdp_clipboard_file* file = &(clipboard->files[file_stream->index]);
+                pthread_mutex_lock(&(file->range_lock));
+                if (file->range_pending && file->range_request_id == file_stream->request_id) {
+                    file->range_buffer = guac_mem_realloc(file->range_buffer, file->range_length + length);
+                    memcpy(file->range_buffer + file->range_length, data, length);
+                    file->range_length += length;
+                }
+                pthread_mutex_unlock(&(file->range_lock));
             }
         }
         return 0;
@@ -1063,26 +1169,29 @@ int guac_rdp_clipboard_end_handler(guac_user* user, guac_stream* stream) {
     if (stream->data != NULL) {
         guac_rdp_file_clipboard_stream* file_stream = (guac_rdp_file_clipboard_stream*) stream->data;
         int index = file_stream->index;
+        UINT32 request_id = file_stream->request_id;
         guac_mem_free(file_stream);
         stream->data = NULL;
 
         if (index >= 0 && index < clipboard->file_count) {
             guac_rdp_clipboard_file* file = &(clipboard->files[index]);
-            if (file->upload_file != NULL) {
-                fflush(file->upload_file);
-                fclose(file->upload_file);
-                file->upload_file = NULL;
+            if (request_id != 0) {
+                pthread_mutex_lock(&(file->range_lock));
+                if (file->range_pending && file->range_request_id == request_id) {
+                    file->range_pending = 0;
+                    file->range_status = 1;
+                    pthread_cond_signal(&(file->range_received));
+                }
+                pthread_mutex_unlock(&(file->range_lock));
             }
-            if (file->received != file->size)
-                guac_user_log(user, GUAC_LOG_WARNING, "RDP file clipboard received incomplete file '%s' (%llu/%llu bytes).",
-                        file->name, (unsigned long long) file->received, (unsigned long long) file->size);
-            else
-                guac_user_log(user, GUAC_LOG_DEBUG, "RDP file clipboard received file '%s' (%llu bytes).",
+            else {
+                guac_user_log(user, GUAC_LOG_DEBUG, "RDP file clipboard registered file '%s' (%llu bytes).",
                         file->name, (unsigned long long) file->size);
+            }
         }
 
-        if (clipboard->cliprdr != NULL) {
-            guac_client_log(client, GUAC_LOG_DEBUG, "RDP file clipboard data received. Reporting file clipboard availability to RDP server.");
+        if (request_id == 0 && clipboard->cliprdr != NULL) {
+            guac_client_log(client, GUAC_LOG_DEBUG, "RDP file clipboard metadata received. Reporting file clipboard availability to RDP server.");
             guac_rdp_cliprdr_send_format_list(clipboard->cliprdr);
         }
         return 0;

@@ -51,6 +51,8 @@ let touchClickCandidate = null;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
+let rdpFileClipboardSeq = 0;
+const rdpFileClipboardFiles = new Map();
 
 const RDP_FILE_CLIPBOARD_MIMETYPE = 'application/vnd.zephyr.rdp.file-clipboard';
 
@@ -202,6 +204,10 @@ class RawGuacWebSocketTunnel {
                 this.uuid = args[0] || `zephyr-${Date.now()}`;
                 console.info('[guac-client]', 'tunnel ready', { uuid: this.uuid });
                 this.setState(1);
+                return;
+            }
+            if (opcode === 'zephyr-rdp') {
+                handleZephyrRdpInstruction(args).catch((err) => console.warn('[guac-client]', 'zephyr-rdp instruction failed', { args, error: err.message }));
                 return;
             }
             if (opcode === 'error') {
@@ -1204,40 +1210,67 @@ function installLocalClipboardBridge() {
     });
 }
 
-function encodeRdpFileClipboardMimetype(file, reset = false) {
-    const safeName = encodeURIComponent(file?.name || 'clipboard-file').replace(/%/g, '%25').replace(/;/g, '%3B');
-    const size = Math.max(0, Number(file?.size) || 0);
-    return `${RDP_FILE_CLIPBOARD_MIMETYPE};name=${safeName};size=${size};reset=${reset ? 1 : 0}`;
+function encodeRdpFileClipboardMimetype(file, reset = false, extra = {}) {
+    const safeId = encodeURIComponent(extra.id || file?.__rdpFileClipboardId || 'file').replace(/%/g, '%25').replace(/;/g, '%3B');
+    const safeName = encodeURIComponent(file?.name || extra.name || 'clipboard-file').replace(/%/g, '%25').replace(/;/g, '%3B');
+    const size = Math.max(0, Number(file?.size ?? extra.size) || 0);
+    const parts = [`${RDP_FILE_CLIPBOARD_MIMETYPE}`, `id=${safeId}`, `name=${safeName}`, `size=${size}`, `reset=${reset ? 1 : 0}`];
+    if (extra.response) parts.push(`response=${extra.response}`);
+    if (extra.request) parts.push(`request=${extra.request}`);
+    return parts.join(';');
 }
 
-function sendRdpFileClipboardFile(file, { reset = false } = {}) {
-    if (!file || !client || !connected || protocolLabel() !== 'RDP') return Promise.resolve(false);
-    return new Promise((resolve) => {
-        const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, reset));
-        const writer = new Guacamole.BlobWriter(stream);
-        writer.onack = (status) => {
-            if (status?.isError?.()) console.warn('[guac-client]', 'rdp file clipboard ack error', { file: file.name, status });
-        };
-        writer.onerror = (_blob, offset, error) => {
-            console.warn('[guac-client]', 'rdp file clipboard read failed', { file: file.name, offset, error: error?.message || String(error) });
-            setClipboardHint(`文件剪贴板读取失败：${file.name}`, 'error');
+function sendRdpFileClipboardMetadata(file, { reset = false } = {}) {
+    if (!file || !client || !connected || protocolLabel() !== 'RDP') return false;
+    const id = `f${Date.now().toString(36)}${(++rdpFileClipboardSeq).toString(36)}`;
+    Object.defineProperty(file, '__rdpFileClipboardId', { value: id, configurable: true });
+    rdpFileClipboardFiles.set(id, file);
+    const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, reset, { id }));
+    stream.sendEnd();
+    console.info('[guac-client]', 'rdp file clipboard metadata sent', { id, name: file.name, size: file.size });
+    return true;
+}
+
+async function handleRdpFileRangeRequest(requestId, fileId, offsetText, lengthText) {
+    const file = rdpFileClipboardFiles.get(fileId);
+    if (!file || !client || !connected) {
+        console.warn('[guac-client]', 'rdp file range request missing file', { requestId, fileId });
+        return;
+    }
+    const offset = Math.max(0, Number(offsetText) || 0);
+    const length = Math.max(0, Number(lengthText) || 0);
+    const chunk = file.slice(offset, Math.min(offset + length, file.size));
+    const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, false, { id: fileId, response: 'range', request: requestId }));
+    const writer = new Guacamole.BlobWriter(stream);
+    await new Promise((resolve) => {
+        writer.onerror = (_blob, readOffset, error) => {
+            console.warn('[guac-client]', 'rdp file range read failed', { requestId, fileId, readOffset, error: error?.message || String(error) });
             resolve(false);
         };
         writer.oncomplete = () => {
             writer.sendEnd();
-            console.info('[guac-client]', 'rdp file clipboard file sent', { name: file.name, size: file.size });
+            console.debug('[guac-client]', 'rdp file range response sent', { requestId, fileId, offset, length: chunk.size });
             resolve(true);
         };
-        writer.sendBlob(file);
+        writer.sendBlob(chunk);
     });
+}
+
+async function handleZephyrRdpInstruction(args = []) {
+    const [op, ...rest] = args;
+    if (op === 'file-range-request') {
+        await handleRdpFileRangeRequest(rest[0], rest[1], rest[2], rest[3]);
+        return;
+    }
+    console.debug('[guac-client]', 'unknown zephyr-rdp instruction', { op, rest });
 }
 
 async function sendRdpFilesClipboard(files, { paste = true, source = 'file-clipboard' } = {}) {
     const list = Array.from(files || []).filter(Boolean);
     if (!list.length || protocolLabel() !== 'RDP') return false;
     if (!ensureRemoteReady('同步 RDP 文件剪贴板')) return false;
-    await Promise.all(list.map((file, index) => sendRdpFileClipboardFile(file, { reset: index === 0 })));
-    setClipboardHint(`已同步 ${list.length} 个文件到 RDP 文件剪贴板${paste ? '，正在发送 Ctrl+V' : ''}`, 'success');
+    list.forEach((file, index) => sendRdpFileClipboardMetadata(file, { reset: index === 0 }));
+    setClipboardHint(`已把 ${list.length} 个文件注册到 RDP 文件剪贴板${paste ? '，正在发送 Ctrl+V' : ''}`, 'success');
     setTransientStatus(`RDP 文件剪贴板：${list.length} 个文件`);
     console.info('[guac-client]', 'rdp file clipboard sent', { count: list.length, source, names: list.map((file) => file.name) });
     notifyParentActivity();
