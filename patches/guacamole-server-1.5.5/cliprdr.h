@@ -26,6 +26,7 @@
 #include <freerdp/freerdp.h>
 #include <guacamole/client.h>
 #include <guacamole/user.h>
+#include <stdio.h>
 #include <winpr/stream.h>
 #include <winpr/wtypes.h>
 
@@ -57,9 +58,24 @@ typedef struct guac_rdp_clipboard_file {
     UINT64 received;
 
     /**
-     * In-memory file data.
+     * Temporary file path containing clipboard file data.
      */
-    BYTE* data;
+    char* path;
+
+    /**
+     * Temporary file handle used while receiving the browser upload.
+     */
+    FILE* upload_file;
+
+    /**
+     * Reusable range buffer used when answering CLIPRDR FileContents range requests.
+     */
+    BYTE* range_buffer;
+
+    /**
+     * Size of the reusable range buffer.
+     */
+    UINT32 range_buffer_size;
 
 } guac_rdp_clipboard_file;
 
