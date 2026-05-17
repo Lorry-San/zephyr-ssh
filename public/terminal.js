@@ -743,7 +743,8 @@ function getTerminalCharMetrics() {
 }
 
 function getMeasuredTerminalSize() {
-    const rect = wtermWrapper.getBoundingClientRect();
+    normalizeWTermContainerLayout('measure-terminal-size');
+    const rect = getStableTerminalSurfaceRect();
     const style = getComputedStyle(wtermWrapper);
     const paddingX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const paddingY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
@@ -792,6 +793,61 @@ function isEmbeddedTerminalFrameVisible() {
     }
 }
 
+function normalizeWTermContainerLayout(reason = 'normalize-layout') {
+    if (!wtermWrapper) return;
+    // @wterm/dom 在 autoResize:false 时会 _lockHeight()，给根元素写入 rows*rowHeight 的 inline height。
+    // 该根元素在本项目中同时是 flex 滚动容器；页面/标签隐藏、分屏比例变化后，旧 inline height 会污染下一次测量，
+    // 造成“大量空行”或“只剩一行高”。这里强制恢复为由外层 flex/viewport 决定尺寸，模拟 xterm.js FitAddon 的容器语义。
+    if (wtermWrapper.style.height) wtermWrapper.style.height = '';
+    if (wtermWrapper.style.minHeight) wtermWrapper.style.minHeight = '';
+    if (wtermWrapper.style.maxHeight) wtermWrapper.style.maxHeight = '';
+    wtermWrapper.style.flex = '1 1 auto';
+    wtermWrapper.style.width = '100%';
+    wtermWrapper.style.overflowY = 'auto';
+    wtermWrapper.style.overflowX = 'hidden';
+    logTerminalLayoutDiagnostics('wterm-layout:normalized-container', { reason });
+}
+
+function getStableTerminalSurfaceRect() {
+    normalizeWTermContainerLayout('measure-surface');
+    const wrapperRect = wtermWrapper?.getBoundingClientRect?.();
+    const containerRect = terminalContainer?.getBoundingClientRect?.();
+    if (wrapperRect && wrapperRect.width >= TERMINAL_MIN_RESIZE_WIDTH && wrapperRect.height >= TERMINAL_MIN_RESIZE_HEIGHT) return wrapperRect;
+    if (containerRect && containerRect.width >= TERMINAL_MIN_RESIZE_WIDTH && containerRect.height >= TERMINAL_MIN_RESIZE_HEIGHT) return containerRect;
+    return wrapperRect || containerRect || { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
+}
+
+function repairWTermLayoutAfterVisibilityChange(reason = 'layout-repair', { sendResize = true, follow = null } = {}) {
+    if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return false;
+    normalizeWTermContainerLayout(reason);
+    const rect = getStableTerminalSurfaceRect();
+    if (!rect || rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT || wtermWrapper.offsetParent === null) {
+        logTerminalLayoutDiagnostics('wterm-layout:repair-skipped-hidden-or-tiny', {
+            reason,
+            width: Math.round(rect?.width || 0),
+            height: Math.round(rect?.height || 0),
+        });
+        return false;
+    }
+    const shouldFollow = follow ?? (terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD));
+    const measured = getMeasuredTerminalSize();
+    const cols = Math.max(20, measured.cols);
+    const rows = Math.max(2, measured.rows);
+    const changed = Number(term.cols ?? term._cols ?? 0) !== cols || Number(term.rows ?? term._rows ?? 0) !== rows;
+    resizeWTermSafely(cols, rows, reason);
+    normalizeWTermContainerLayout(`${reason}:after-resize`);
+    try { term._scheduleRender?.(); } catch (_) {}
+    if (sendResize && changed) sendTerminalResize(cols, rows, { reason, force: true });
+    requestAnimationFrame(() => {
+        normalizeWTermContainerLayout(`${reason}:raf`);
+        const el = getTerminalScrollElement();
+        if (el && !shouldFollow) el.scrollTop = Math.min(el.scrollTop, getTerminalMaxScroll(el));
+        if (shouldFollow) requestTerminalAutoFollow(`${reason}:follow`);
+        else scheduleTerminalScrollbarUpdate();
+    });
+    return true;
+}
+
 function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
     if (!term || !wtermWrapper) return false;
     const nextCols = Math.floor(Number(cols));
@@ -820,6 +876,7 @@ function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
             term.options.rows = nextRows;
         }
         try { term.refresh?.(); } catch (_) {}
+        normalizeWTermContainerLayout(`${reason}:resizeWTermSafely`);
         logTerminalLayoutDiagnostics('wterm-layout:safe-resized', {
             reason,
             cols: nextCols,
@@ -1052,7 +1109,7 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
         const cols = Math.max(20, measured.cols);
         const rows = Math.max(2, measured.rows);
         const changed = lastSentTerminalSize.cols !== cols || lastSentTerminalSize.rows !== rows;
-        resizeWTermSafely(cols, rows, reason);
+        repairWTermLayoutAfterVisibilityChange(`scheduled:${reason}`, { sendResize: false, follow: shouldFollowAfterResize });
         if (changed) {
             sendTerminalResize(cols, rows, { reason, force: true });
         }
@@ -1065,8 +1122,12 @@ function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
 
 function setupStableTerminalResizeObserver() {
     if (!window.ResizeObserver || !wtermWrapper) return () => {};
-    const observer = new ResizeObserver(() => scheduleTerminalResize('resize-observer-stable', 160));
+    const observer = new ResizeObserver(() => {
+        normalizeWTermContainerLayout('resize-observer');
+        scheduleTerminalResize('resize-observer-stable', 160);
+    });
     observer.observe(wtermWrapper);
+    if (terminalContainer) observer.observe(terminalContainer);
     return () => observer.disconnect();
 }
 
@@ -4882,24 +4943,19 @@ function refreshTerminalAfterVisibilityRestore(reason = 'visibility-restore', { 
     const wasAtBottom = Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
     const run = (phase) => {
         if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return;
-        const rect = wtermWrapper.getBoundingClientRect?.();
+        normalizeWTermContainerLayout(`${reason}:${phase}:before`);
+        const rect = getStableTerminalSurfaceRect();
         if (!rect || rect.width < TERMINAL_MIN_RESIZE_WIDTH || rect.height < TERMINAL_MIN_RESIZE_HEIGHT || wtermWrapper.offsetParent === null) {
             logTerminalLayoutDiagnostics('restore:skip-hidden-or-tiny', { reason, phase, width: Math.round(rect?.width || 0), height: Math.round(rect?.height || 0) });
             return;
         }
-        try { term._scheduleRender?.(); } catch (_) {}
+        repairWTermLayoutAfterVisibilityChange(`${reason}:${phase}`, { follow: wasAtBottom });
         scheduleTerminalScrollbarUpdate();
         if (focus && !isTouchKeyboardDevice()) {
             try { term.focus?.(); } catch (_) {}
         }
-        if (wasAtBottom && term._zephyrOriginalScrollToBottom) requestAnimationFrame(() => {
-            isProgrammaticTerminalScroll = true;
-            try { term._zephyrOriginalScrollToBottom(); } catch (_) {}
-            finally { requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; }); }
-            scheduleTerminalScrollbarUpdate();
-        });
     };
-    [0, 80, 220, 520].forEach((delay, index) => window.setTimeout(() => run(`phase-${index}`), delay));
+    [0, 60, 160, 360, 720, 1200].forEach((delay, index) => window.setTimeout(() => run(`phase-${index}`), delay));
 }
 
 function resetTerminalScrollState() {
@@ -5041,6 +5097,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     }
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
     wtermWrapper.innerHTML = '';
+    normalizeWTermContainerLayout('init-before-create');
     try {
         term = new WTermClass(wtermWrapper, {
             cols: 80,
@@ -5062,6 +5119,7 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
         else if (typeof term.on === 'function') term.on('data', data => sendData(data, { source: 'wterm-onData' }));
     }
     if (typeof term.init === 'function') await term.init();
+    normalizeWTermContainerLayout('init-after-wterm-init');
     if (connectionToken !== activeConnectionToken) throw new Error('终端初始化已取消');
     lastSentTerminalSize = { cols: Number(term.cols || 80), rows: Number(term.rows || 24) };
     applyWtermTheme(getPreferredWtermTheme());
