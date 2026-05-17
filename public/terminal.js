@@ -726,19 +726,38 @@ function getTerminalCharMetrics() {
     const root = getTerminalScrollElement?.() || wtermWrapper;
     const grid = wtermWrapper?.querySelector?.('.term-grid');
     const computed = getComputedStyle(root);
-    const probe = document.createElement('span');
-    probe.textContent = 'W';
-    probe.style.position = 'absolute';
-    probe.style.visibility = 'hidden';
-    probe.style.whiteSpace = 'pre';
-    probe.style.pointerEvents = 'none';
-    (grid || root).appendChild(probe);
-    const probeRect = probe.getBoundingClientRect();
-    probe.remove();
     const fontSize = terminalFontSize || parseFloat(computed.fontSize) || 14;
-    const cssLineHeight = parseFloat(computed.getPropertyValue('--term-row-height')) || parseFloat(computed.lineHeight) || fontSize * 1.2;
-    const lineHeight = Math.max(1, probeRect.height || term?._rowHeight || cssLineHeight);
-    const charWidth = Math.max(1, probeRect.width || fontSize * 0.62);
+    const cssRowHeight = parseFloat(computed.getPropertyValue('--term-row-height')) || 0;
+    const existingRow = grid?.querySelector?.('.term-row, .term-scrollback-row');
+    const existingRowHeight = existingRow?.getBoundingClientRect?.().height || 0;
+
+    const rowProbe = document.createElement('div');
+    rowProbe.className = 'term-row zephyr-measure-row';
+    rowProbe.style.position = 'absolute';
+    rowProbe.style.visibility = 'hidden';
+    rowProbe.style.pointerEvents = 'none';
+    rowProbe.style.whiteSpace = 'pre';
+    rowProbe.textContent = 'W';
+    (grid || root).appendChild(rowProbe);
+    const rowProbeRect = rowProbe.getBoundingClientRect();
+    const span = document.createElement('span');
+    span.textContent = 'W';
+    span.style.whiteSpace = 'pre';
+    rowProbe.textContent = '';
+    rowProbe.appendChild(span);
+    const spanRect = span.getBoundingClientRect();
+    rowProbe.remove();
+
+    // 行高必须跟 wterm renderer 的 .term-row 一致；裸 span 高度会偏小，导致 rows 被算大，出现底部大量空白行。
+    const lineHeight = Math.max(1,
+        Number(term?._rowHeight || 0),
+        existingRowHeight,
+        rowProbeRect.height,
+        cssRowHeight,
+        parseFloat(computed.lineHeight) || 0,
+        fontSize * 1.2,
+    );
+    const charWidth = Math.max(1, spanRect.width || fontSize * 0.62);
     return { lineHeight, charWidth };
 }
 
@@ -751,9 +770,13 @@ function getMeasuredTerminalSize() {
     const { lineHeight, charWidth } = getTerminalCharMetrics();
     let effectiveHeight = Math.max(0, rect.height - paddingY);
     const effectiveWidth = Math.max(0, rect.width - paddingX);
+    const measuredRows = Math.max(2, Math.floor(effectiveHeight / Math.max(1, lineHeight)));
+    const measuredCols = Math.max(20, Math.floor(effectiveWidth / Math.max(1, charWidth)));
+    const rows = Math.min(200, measuredRows);
+    const cols = Math.min(500, measuredCols);
     return {
-        cols: Math.max(20, Math.floor(effectiveWidth / Math.max(1, charWidth))),
-        rows: Math.max(2, Math.floor(effectiveHeight / Math.max(1, lineHeight))),
+        cols,
+        rows,
         width: Math.round(rect.width),
         height: Math.round(rect.height),
         effectiveWidth: Math.round(effectiveWidth),
