@@ -52,6 +52,8 @@ let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
 
+const RDP_FILE_CLIPBOARD_MIMETYPE = 'application/vnd.zephyr.rdp.file-clipboard';
+
 const KEY = {
     BACKSPACE: 0xff08,
     TAB: 0xff09,
@@ -1134,6 +1136,12 @@ function installLocalClipboardBridge() {
     installLocalClipboardBridge._installed = true;
     document.addEventListener('paste', async (event) => {
         if (!connected || isTextInputTarget(event.target)) return;
+        const files = clipboardEventFiles(event);
+        if (files.length && protocolLabel() === 'RDP') {
+            event.preventDefault();
+            await sendRdpFilesClipboard(files, { paste: true, source: 'paste-event' });
+            return;
+        }
         const text = event.clipboardData?.getData('text/plain') || '';
         if (!text) return;
         event.preventDefault();
@@ -1151,7 +1159,40 @@ function installLocalClipboardBridge() {
         const pasteShortcut = key === 'v' && (event.ctrlKey || event.metaKey);
         if (!pasteShortcut) return;
         event.preventDefault();
+        const files = [];
+        if (protocolLabel() === 'RDP') {
+            try {
+                const items = await navigator.clipboard?.read?.();
+                for (const item of items || []) {
+                    for (const type of item.types || []) {
+                        if (type.startsWith('text/')) continue;
+                        const blob = await item.getType(type);
+                        files.push(new File([blob], blob.name || `clipboard-file-${files.length + 1}`, { type: blob.type || type }));
+                    }
+                }
+            } catch (err) {
+                console.debug('[guac-client]', 'clipboard file read unavailable', { error: err.message });
+            }
+            if (files.length) {
+                await sendRdpFilesClipboard(files, { paste: true, source: 'keyboard-paste-shortcut' });
+                return;
+            }
+        }
         await syncLocalClipboardToRemote({ paste: true, source: 'keyboard-paste-shortcut', force: true });
+    }, true);
+    document.addEventListener('drop', async (event) => {
+        if (!connected || isTextInputTarget(event.target) || protocolLabel() !== 'RDP') return;
+        const files = clipboardEventFiles(event);
+        if (!files.length) return;
+        event.preventDefault();
+        await sendRdpFilesClipboard(files, { paste: false, source: 'drop-event' });
+    }, true);
+    document.addEventListener('dragover', (event) => {
+        if (!connected || protocolLabel() !== 'RDP') return;
+        const files = clipboardEventFiles(event);
+        if (!files.length) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
     }, true);
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && connected) {
@@ -1161,6 +1202,55 @@ function installLocalClipboardBridge() {
     window.addEventListener('focus', () => {
         if (connected) syncLocalClipboardToRemote({ paste: false, source: 'window-focus' }).catch(() => {});
     });
+}
+
+function encodeRdpFileClipboardMimetype(file, reset = false) {
+    const safeName = encodeURIComponent(file?.name || 'clipboard-file').replace(/%/g, '%25').replace(/;/g, '%3B');
+    const size = Math.max(0, Number(file?.size) || 0);
+    return `${RDP_FILE_CLIPBOARD_MIMETYPE};name=${safeName};size=${size};reset=${reset ? 1 : 0}`;
+}
+
+function sendRdpFileClipboardFile(file, { reset = false } = {}) {
+    if (!file || !client || !connected || protocolLabel() !== 'RDP') return Promise.resolve(false);
+    return new Promise((resolve) => {
+        const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, reset));
+        const writer = new Guacamole.BlobWriter(stream);
+        writer.onack = (status) => {
+            if (status?.isError?.()) console.warn('[guac-client]', 'rdp file clipboard ack error', { file: file.name, status });
+        };
+        writer.onerror = (_blob, offset, error) => {
+            console.warn('[guac-client]', 'rdp file clipboard read failed', { file: file.name, offset, error: error?.message || String(error) });
+            setClipboardHint(`文件剪贴板读取失败：${file.name}`, 'error');
+            resolve(false);
+        };
+        writer.oncomplete = () => {
+            writer.sendEnd();
+            console.info('[guac-client]', 'rdp file clipboard file sent', { name: file.name, size: file.size });
+            resolve(true);
+        };
+        writer.sendBlob(file);
+    });
+}
+
+async function sendRdpFilesClipboard(files, { paste = true, source = 'file-clipboard' } = {}) {
+    const list = Array.from(files || []).filter(Boolean);
+    if (!list.length || protocolLabel() !== 'RDP') return false;
+    if (!ensureRemoteReady('同步 RDP 文件剪贴板')) return false;
+    await Promise.all(list.map((file, index) => sendRdpFileClipboardFile(file, { reset: index === 0 })));
+    setClipboardHint(`已同步 ${list.length} 个文件到 RDP 文件剪贴板${paste ? '，正在发送 Ctrl+V' : ''}`, 'success');
+    setTransientStatus(`RDP 文件剪贴板：${list.length} 个文件`);
+    console.info('[guac-client]', 'rdp file clipboard sent', { count: list.length, source, names: list.map((file) => file.name) });
+    notifyParentActivity();
+    if (paste) {
+        await sleep(160);
+        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+    }
+    return true;
+}
+
+function clipboardEventFiles(event) {
+    const dt = event?.clipboardData || event?.dataTransfer;
+    return Array.from(dt?.files || []).filter((file) => file && file.size >= 0);
 }
 
 function sendRemoteClipboardText(text) {

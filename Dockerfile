@@ -28,6 +28,23 @@ RUN mkdir -p public/vendor/@wterm/core && \
 
 COPY . .
 
+FROM guacamole/guacd:1.5.5 AS guacd-build
+
+USER root
+WORKDIR /tmp/guacamole-server
+
+RUN apk add --no-cache \
+        autoconf automake build-base cairo-dev cmake cunit-dev git grep \
+        libjpeg-turbo-dev libpng-dev libtool libwebp-dev openssl-dev pango-dev \
+        pulseaudio-dev util-linux-dev wget freerdp-dev libssh2-dev libvncserver-dev
+RUN git clone --depth 1 --branch 1.5.5 https://github.com/apache/guacamole-server.git .
+COPY patches/guacamole-server-1.5.5 /tmp/zephyr-guacd-patches
+RUN /bin/sh /tmp/zephyr-guacd-patches/apply.sh && \
+    autoreconf -fi && \
+    ./configure --prefix=/opt/guacamole --with-init-dir=/tmp --disable-dependency-tracking && \
+    make -j$(nproc) && \
+    make install
+
 FROM guacamole/guacd:1.5.5
 
 USER root
@@ -38,6 +55,7 @@ WORKDIR /app
 # 从 Alpine 版 Node 官方镜像复制 Node.js 运行时，避免 glibc/musl 不兼容。
 # 同步复制构建阶段的 C++ 运行库，避免 guacd 镜像内旧 libstdc++ 导致 better-sqlite3 符号缺失。
 ENV PATH="/opt/guacamole/sbin:${PATH}"
+COPY --from=guacd-build /opt/guacamole /opt/guacamole
 COPY --from=app-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=app-build /tmp/native-runtime-libs/libstdc++.so.6 /usr/lib/libstdc++.so.6
