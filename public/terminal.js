@@ -315,6 +315,7 @@ let terminalAutoFollowEnabled = true;
 let terminalUserScrolledAway = false;
 let terminalLastUserScrollAt = 0;
 let terminalLastWheelAt = 0;
+let parentKeyboardResizeFreezeUntil = 0;
 const terminalMouseState = {
     enabled: false,
     sgr: false,
@@ -695,6 +696,14 @@ window.addEventListener('message', (e) => {
     }
     if (e.data.type === 'reconnect-terminal') {
         reconnectBtn?.click?.();
+    }
+    if (e.data.type === 'keyboard-freeze') {
+        const settleMs = Math.max(300, Math.min(2500, Number(e.data.settleMs) || 1000));
+        parentKeyboardResizeFreezeUntil = e.data.frozen ? Date.now() + settleMs : 0;
+        logTerminalLayoutDiagnostics('parent-keyboard-freeze-message', { payload: e.data, freezeUntil: parentKeyboardResizeFreezeUntil });
+        scheduleTerminalScrollbarUpdate();
+        if (!e.data.frozen) window.setTimeout(() => repairOversizedWTermRows(`keyboard-freeze-release:${e.data.reason || ''}`, { force: false }), 180);
+        return;
     }
     if (e.data.type === 'layout-stabilize') {
         const reason = e.data.reason || 'parent-layout-stabilize';
@@ -1137,7 +1146,12 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     });
 }
 
+function isParentKeyboardResizeFrozen() {
+    return Date.now() < parentKeyboardResizeFreezeUntil;
+}
+
 function isMobileKeyboardActiveOrSettling() {
+    if (isParentKeyboardResizeFrozen()) return true;
     if (!isTouchKeyboardDevice()) return false;
     const metrics = getViewportKeyboardMetrics();
     return Boolean(
@@ -5026,6 +5040,7 @@ function resetTerminalScrollState() {
     terminalUserScrolledAway = false;
     terminalLastUserScrollAt = 0;
     terminalLastWheelAt = 0;
+    parentKeyboardResizeFreezeUntil = 0;
     terminalMouseState.enabled = false;
     terminalMouseState.sgr = false;
     terminalMouseState.mode = 'none';

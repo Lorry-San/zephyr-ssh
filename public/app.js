@@ -27,6 +27,7 @@ let appKeyboardOpen = false;
 let appKeyboardSettleTimer = 0;
 let appKeyboardLastSignature = '';
 let appKeyboardPendingMetrics = null;
+let appKeyboardFreezeReleaseTimer = 0;
 let closingTerminalTabs = new Set();
 let minimizingTerminalTabs = new Set();
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
@@ -52,6 +53,18 @@ function getPreferredTheme() {
     if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
     const saved = localStorage.getItem('zephyr-theme');
     return saved === 'light' || saved === 'dark' ? saved : getSystemTheme();
+}
+function postTerminalKeyboardFreeze(frozen, reason = 'keyboard-freeze', { settleMs = 900, tabId = activeTerminalTab } = {}) {
+    const frames = tabId
+        ? $$(`#terminalWorkspace iframe.terminal-frame[data-frame="${CSS.escape(tabId)}"]`)
+        : $$('#terminalWorkspace iframe.terminal-frame');
+    frames.forEach((frame) => frame.contentWindow?.postMessage({
+        source: 'zephyr-app',
+        type: 'keyboard-freeze',
+        frozen: !!frozen,
+        reason,
+        settleMs,
+    }, '*'));
 }
 function postTerminalLayoutStabilize(reason = 'layout-stabilize', { focus = false, tabId = activeTerminalTab } = {}) {
     const workspace = $('#terminalWorkspace');
@@ -1491,6 +1504,9 @@ function resetTerminalWorkspaceKeyboard() {
         frame.style.height = '';
         frame.style.maxHeight = '';
     });
+    postTerminalKeyboardFreeze(true, 'parent-keyboard-reset-start', { settleMs: 900 });
+    window.clearTimeout(appKeyboardFreezeReleaseTimer);
+    appKeyboardFreezeReleaseTimer = window.setTimeout(() => postTerminalKeyboardFreeze(false, 'parent-keyboard-reset-settled'), 900);
     console.info('[TerminalLayoutDiagnostics]', { event: 'parent:keyboard-reset' });
     scheduleTerminalLayoutStabilize('parent-keyboard-reset', { focus: false });
 }
@@ -1544,6 +1560,8 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     const signature = `${Math.round(inset / 24) * 24}:${Math.round(viewportHeight / 24) * 24}:${Math.round(offsetTop / 8) * 8}`;
     appKeyboardPendingMetrics = { ...metrics, keyboardInset: inset, viewportHeight, offsetTop, keyboardOpen: true };
     workspace.classList.add('keyboard-settling');
+    postTerminalKeyboardFreeze(true, 'parent-keyboard-opening', { settleMs: 1200 });
+    window.clearTimeout(appKeyboardFreezeReleaseTimer);
     // Android visualViewport 在键盘动画期间会连续抖动多次。不要每一帧改 workspace height/通知 iframe，
     // 等 90ms 无新指标后一次性提交，视觉上像 ServerBox 一样跟随系统键盘而不是网页自己跳动。
     if (signature === appKeyboardLastSignature && appKeyboardOpen) return;
@@ -1551,6 +1569,7 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     window.clearTimeout(appKeyboardSettleTimer);
     appKeyboardSettleTimer = window.setTimeout(() => {
         commitTerminalWorkspaceKeyboard(appKeyboardPendingMetrics || metrics);
+        appKeyboardFreezeReleaseTimer = window.setTimeout(() => postTerminalKeyboardFreeze(false, 'parent-keyboard-open-settled'), 1100);
     }, appKeyboardOpen ? 70 : 110);
 }
 
