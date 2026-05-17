@@ -48,6 +48,9 @@ let clipboardAutoWriteFailed = false;
 let panelLayoutMenu = null;
 let suppressNextLayoutClick = false;
 let touchClickCandidate = null;
+let lastLocalClipboardText = '';
+let lastLocalClipboardSentAt = 0;
+let pasteShortcutInProgress = false;
 
 const KEY = {
     BACKSPACE: 0xff08,
@@ -516,6 +519,8 @@ async function connect() {
 
         stage?.focus?.({ preventScroll: true });
         client.connect();
+        installLocalClipboardBridge();
+        syncLocalClipboardToRemote({ paste: false, source: 'connect-initial' }).catch(() => {});
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
         setStatus('error', err.message || `${label} 连接失败`);
@@ -1085,6 +1090,79 @@ async function writeHostClipboard(text) {
     return ok;
 }
 
+function isTextInputTarget(target = document.activeElement) {
+    if (!target) return false;
+    if (target.closest?.('.guac-floating-panel')) return true;
+    const tag = target.tagName?.toLowerCase();
+    return tag === 'textarea' || tag === 'input' || target.isContentEditable;
+}
+
+async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipboard-sync', force = false } = {}) {
+    if (!ensureRemoteReady('同步本机剪贴板')) return false;
+    let text = '';
+    try {
+        text = await navigator.clipboard.readText();
+    } catch (err) {
+        console.warn('[guac-client]', 'local clipboard sync read failed', { source, error: err.message });
+        setClipboardHint('浏览器拒绝读取本机剪贴板，请打开剪贴板面板手动发送', 'warning');
+        return false;
+    }
+    if (!text) return false;
+    const now = Date.now();
+    const duplicate = text === lastLocalClipboardText && now - lastLocalClipboardSentAt < 1500;
+    if (!force && duplicate && !paste) return true;
+    if (!force && duplicate && paste && pasteShortcutInProgress) return true;
+    lastLocalClipboardText = text;
+    lastLocalClipboardSentAt = now;
+    if (clipboardText) clipboardText.value = text;
+    const ok = sendRemoteClipboardText(text);
+    if (!ok) return false;
+    setClipboardHint(`本机剪贴板已同步到远程 ${text.length} 字符${paste ? '，并发送粘贴' : ''}`, 'success');
+    setTransientStatus(paste ? '已同步本机剪贴板并发送粘贴' : '已同步本机剪贴板到远程');
+    if (paste) {
+        pasteShortcutInProgress = true;
+        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || '');
+        await sleep(80);
+        await sendKeyCombo([isMac ? KEY.SUPER : KEY.CTRL, 0x0076], isMac ? 'Cmd+V' : 'Ctrl+V');
+        window.setTimeout(() => { pasteShortcutInProgress = false; }, 300);
+    }
+    return true;
+}
+
+function installLocalClipboardBridge() {
+    if (installLocalClipboardBridge._installed) return;
+    installLocalClipboardBridge._installed = true;
+    document.addEventListener('paste', async (event) => {
+        if (!connected || isTextInputTarget(event.target)) return;
+        const text = event.clipboardData?.getData('text/plain') || '';
+        if (!text) return;
+        event.preventDefault();
+        lastLocalClipboardText = text;
+        lastLocalClipboardSentAt = Date.now();
+        if (clipboardText) clipboardText.value = text;
+        sendRemoteClipboardText(text);
+        setClipboardHint(`已捕获本机粘贴并同步到远程 ${text.length} 字符，正在发送 Ctrl+V`, 'success');
+        await sleep(70);
+        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+    }, true);
+    document.addEventListener('keydown', async (event) => {
+        if (!connected || isTextInputTarget(event.target)) return;
+        const key = String(event.key || '').toLowerCase();
+        const pasteShortcut = key === 'v' && (event.ctrlKey || event.metaKey);
+        if (!pasteShortcut) return;
+        event.preventDefault();
+        await syncLocalClipboardToRemote({ paste: true, source: 'keyboard-paste-shortcut', force: true });
+    }, true);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && connected) {
+            syncLocalClipboardToRemote({ paste: false, source: 'visibility-visible' }).catch(() => {});
+        }
+    });
+    window.addEventListener('focus', () => {
+        if (connected) syncLocalClipboardToRemote({ paste: false, source: 'window-focus' }).catch(() => {});
+    });
+}
+
 function sendRemoteClipboardText(text) {
     const label = protocolLabel();
     if (!client || !connected) {
@@ -1353,6 +1431,12 @@ clipboardSendBtn?.addEventListener('click', () => {
     if (sendRemoteClipboardText(text)) setClipboardHint(`已发送 ${text.length} 字符到远程`, 'success');
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
+stage?.addEventListener('focus', () => {
+    if (connected) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus' }).catch(() => {});
+});
+stage?.addEventListener('pointerdown', () => {
+    if (connected) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown' }).catch(() => {});
+}, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
 mobileKeyboardInput?.addEventListener('input', handleMobileKeyboardInput);
