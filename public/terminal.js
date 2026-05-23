@@ -158,6 +158,7 @@ let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let editorFullscreenRestore = null;
 let activeEditorPanel = null;
+let editorZIndexSeed = 260;
 const editorPanelsByPath = new Map();
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -2720,6 +2721,12 @@ function setEditorScrollFromMinimap(clientY) {
     syncEditorCodeScroll();
 }
 
+function updateEditorZIndex(panel) {
+    if (!panel?.classList?.contains('editor-window')) return;
+    editorZIndexSeed = Math.max(editorZIndexSeed + 1, Number(panel.style.zIndex || 0) + 1);
+    panel.style.zIndex = String(editorZIndexSeed);
+}
+
 function updateActiveEditorRefs(panel = activeEditorPanel || fmEditorModal) {
     if (!panel) return;
     activeEditorPanel = panel;
@@ -2791,14 +2798,21 @@ function updateEditorFullscreenButton() {
 }
 
 function getEditorFullscreenRect() {
-    const pageRect = document.querySelector('.terminal-page')?.getBoundingClientRect?.();
-    const inputRect = document.querySelector('.terminal-input-panel')?.getBoundingClientRect?.();
-    const toolbarRect = document.querySelector('.terminal-topbar')?.getBoundingClientRect?.();
     const viewport = window.visualViewport;
-    const left = Math.round(pageRect?.left ?? viewport?.offsetLeft ?? 0);
-    const right = Math.round(pageRect?.right ?? ((viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth || 0)));
-    const top = Math.round(inputRect?.bottom ?? terminalContainer?.getBoundingClientRect?.().top ?? pageRect?.top ?? 0);
-    const bottom = Math.round(toolbarRect?.top ?? terminalContainer?.getBoundingClientRect?.().bottom ?? pageRect?.bottom ?? window.innerHeight ?? 0);
+    const inputRect = document.querySelector('.terminal-input-panel')?.getBoundingClientRect?.();
+    const topbarRect = document.querySelector('.terminal-topbar')?.getBoundingClientRect?.();
+    const pageRect = document.querySelector('.terminal-page')?.getBoundingClientRect?.();
+    const containerRect = terminalContainer?.getBoundingClientRect?.();
+    const vvLeft = viewport?.offsetLeft || 0;
+    const vvTop = viewport?.offsetTop || 0;
+    const vvWidth = viewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
+    const vvHeight = viewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+    const left = Math.round(Math.max(vvLeft, pageRect?.left ?? vvLeft));
+    const right = Math.round(Math.min(vvLeft + vvWidth, pageRect?.right ?? vvLeft + vvWidth));
+    const top = Math.round(topbarRect?.bottom ?? containerRect?.top ?? pageRect?.top ?? vvTop);
+    let bottom = Math.round(inputRect?.top ?? containerRect?.bottom ?? pageRect?.bottom ?? (vvTop + vvHeight));
+    const maxBottom = Math.round(Math.min(pageRect?.bottom ?? vvTop + vvHeight, vvTop + vvHeight));
+    if (!Number.isFinite(bottom) || bottom <= top + 260) bottom = maxBottom;
     return {
         left,
         top,
@@ -2826,10 +2840,10 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen, snapshot
     if (!fmEditorModal || !firstRect || !fmEditorModal.animate) return;
     const lastRect = fmEditorModal.getBoundingClientRect();
     if (!lastRect.width || !lastRect.height || !firstRect.width || !firstRect.height) return;
-    const dx = lastRect.left - firstRect.left;
-    const dy = lastRect.top - firstRect.top;
-    const sx = lastRect.width / firstRect.width;
-    const sy = lastRect.height / firstRect.height;
+    const dx = firstRect.left - lastRect.left;
+    const dy = firstRect.top - lastRect.top;
+    const sx = firstRect.width / lastRect.width;
+    const sy = firstRect.height / lastRect.height;
     const fromRadius = shouldFullscreen ? 'var(--radius-lg)' : '22px';
     const toRadius = shouldFullscreen ? '22px' : 'var(--radius-lg)';
     fmEditorModal.getAnimations?.().forEach((animation) => {
@@ -2849,12 +2863,12 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen, snapshot
     Object.assign(ghost.style, {
         display: 'flex',
         position: 'fixed',
-        left: `${firstRect.left}px`,
-        top: `${firstRect.top}px`,
-        width: `${firstRect.width}px`,
-        height: `${firstRect.height}px`,
+        left: `${lastRect.left}px`,
+        top: `${lastRect.top}px`,
+        width: `${lastRect.width}px`,
+        height: `${lastRect.height}px`,
         pointerEvents: 'none',
-        zIndex: '260',
+        zIndex: '9999',
         opacity: '1',
         transformOrigin: 'top left',
     });
@@ -2862,7 +2876,7 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen, snapshot
     const animation = ghost.animate([
         {
             transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`,
-            filter: shouldFullscreen ? 'blur(0px) saturate(1)' : 'blur(8px) saturate(1.08)',
+            filter: shouldFullscreen ? 'blur(8px) saturate(1.08)' : 'blur(0px) saturate(1)',
             opacity: 1,
             borderRadius: fromRadius,
             boxShadow: shouldFullscreen ? '0 18px 54px rgba(0,0,0,0.30)' : '0 30px 100px rgba(0,0,0,0.46)'
@@ -2887,20 +2901,12 @@ function captureEditorGhost(rect) {
     ghost.querySelectorAll('textarea').forEach((textarea) => {
         textarea.value = fmEditorTextarea?.value || textarea.value;
     });
-    Object.assign(ghost.style, {
-        position: 'fixed',
-        left: `${rect.left}px`,
-        top: `${rect.top}px`,
-        width: `${rect.width}px`,
-        height: `${rect.height}px`,
-        right: 'auto',
-        bottom: 'auto',
-    });
     return ghost;
 }
 
 function toggleEditorFullscreen(force, { restoreIfFullscreen = true } = {}) {
     if (!fmEditorModal) return;
+    updateEditorZIndex(fmEditorModal);
     const isFullscreen = fmEditorModal.classList.contains('fullscreen');
     const shouldFullscreen = typeof force === 'boolean' ? force : !isFullscreen;
     if (shouldFullscreen === isFullscreen) {
@@ -3033,7 +3039,15 @@ function setupEditorPanel(panel) {
     panel._editorPanelReady = true;
     markEditorRoles(panel);
     panel.classList.add('editor-window');
-    if (panel.parentElement === fileManager) panel.style.zIndex = '120';
+    if (panel === document.getElementById('fmEditorModal') && panel.parentElement !== document.body) {
+        const rect = fileManager.getBoundingClientRect();
+        document.body.appendChild(panel);
+        panel.style.left = `${Math.round(rect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
+        panel.style.top = `${Math.round(rect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    }
+    updateEditorZIndex(panel);
     if (!panel.querySelector('[data-editor-resize-edge="left"]')) {
         const leftHandle = document.createElement('div');
         leftHandle.className = 'panel-resize-handle left';
@@ -3045,14 +3059,16 @@ function setupEditorPanel(panel) {
         rightHandle.title = '拖动调整大小';
         panel.append(leftHandle, rightHandle);
     }
-    panel.addEventListener('pointerdown', () => {
+    panel.addEventListener('pointerdown', (e) => {
         updateActiveEditorRefs(panel);
+        updateEditorZIndex(panel);
         bringPanelToFront(panel);
-    });
+    }, { capture: true });
     panel.querySelector('.fm-editor-header')?.addEventListener('pointerdown', (e) => {
         if (e.target.closest('button,input,select,textarea,label')) return;
         e.preventDefault();
         updateActiveEditorRefs(panel);
+        updateEditorZIndex(panel);
         bringPanelToFront(panel);
         panel.classList.add('dragging');
         const startX = e.clientX;
@@ -3080,6 +3096,7 @@ function setupEditorPanel(panel) {
             e.preventDefault();
             e.stopPropagation();
             updateActiveEditorRefs(panel);
+            updateEditorZIndex(panel);
             bringPanelToFront(panel);
             panel.classList.add('resizing');
             const startX = e.clientX;
@@ -3138,12 +3155,11 @@ function setupEditorPanel(panel) {
 }
 
 function createEditorPanel(filePath) {
-    markEditorRoles(fmEditorModal);
     const template = document.getElementById('fmEditorModal') || fmEditorModal;
+    markEditorRoles(template);
     const canReuseTemplate = !template.dataset.editorPath
         && editorPanelsByPath.size === 0
-        && !template.classList.contains('fullscreen')
-        && template.parentElement === fileManager;
+        && !template.classList.contains('fullscreen');
     const panel = canReuseTemplate ? template : template.cloneNode(true);
     if (panel !== template) {
         panel.removeAttribute('id');
@@ -3156,7 +3172,7 @@ function createEditorPanel(filePath) {
         const rect = fileManager.getBoundingClientRect();
         panel.style.left = `${Math.round(rect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
         panel.style.top = `${Math.round(rect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
-        panel.style.zIndex = '120';
+        updateEditorZIndex(panel);
     } else {
         panel.style.left = panel.style.left || `${16 + (editorPanelsByPath.size % 4) * 22}px`;
         panel.style.top = panel.style.top || `${52 + (editorPanelsByPath.size % 4) * 22}px`;
@@ -3166,6 +3182,7 @@ function createEditorPanel(filePath) {
     panel.style.width = panel.style.width || '';
     panel.style.height = panel.style.height || '';
     setupEditorPanel(panel);
+    setupClonedEditorEvents(panel);
     if (hasAnyFullscreenEditor(panel)) {
         panel.style.left = panel.style.left || '16px';
         panel.style.top = panel.style.top || '52px';
@@ -3188,25 +3205,32 @@ function openEditor(filePath) {
     fmEditorStatus.textContent = '读取中...';
     fmEditorTextarea.value = '';
     updateEditorMinimap();
+    updateEditorZIndex(panel);
     bringPanelToFront(panel);
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
 }
-fmEditorCloseBtn.addEventListener('click', () => { updateActiveEditorRefs(fmEditorCloseBtn.closest('.fm-editor-modal')); closeEditor(); });
-fmEditorCancelBtn.addEventListener('click', () => { updateActiveEditorRefs(fmEditorCancelBtn.closest('.fm-editor-modal')); closeEditor(); });
-fmEditorUndoBtn.addEventListener('click', () => {
+fmEditorCloseBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCloseBtn.closest('.fm-editor-modal')); closeEditor(); });
+fmEditorCancelBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCancelBtn.closest('.fm-editor-modal')); closeEditor(); });
+fmEditorUndoBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     updateActiveEditorRefs(fmEditorUndoBtn.closest('.fm-editor-modal'));
     fmEditorTextarea.focus();
     document.execCommand('undo');
     updateEditorStatus();
 });
-fmEditorRedoBtn.addEventListener('click', () => {
+fmEditorRedoBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     updateActiveEditorRefs(fmEditorRedoBtn.closest('.fm-editor-modal'));
     fmEditorTextarea.focus();
     document.execCommand('redo');
     updateEditorStatus();
 });
-fmEditorFullscreenBtn?.addEventListener('click', () => { updateActiveEditorRefs(fmEditorFullscreenBtn.closest('.fm-editor-modal')); toggleEditorFullscreen(true); });
-fmEditorSaveBtn.addEventListener('click', () => {
+fmEditorFullscreenBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorFullscreenBtn.closest('.fm-editor-modal')); toggleEditorFullscreen(true); });
+fmEditorSaveBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     updateActiveEditorRefs(fmEditorSaveBtn.closest('.fm-editor-modal'));
     if (!editorFilePath) return;
     const text = normalizeLineEnding(fmEditorTextarea.value, fmEditorLineEnding.value);
@@ -3261,12 +3285,17 @@ fmEditorTextarea.addEventListener('keydown', (e) => {
 });
 
 function setupClonedEditorEvents(panel) {
-    if (!panel || panel._clonedEditorEventsReady || panel.id === 'fmEditorModal') return;
+    if (!panel || panel._clonedEditorEventsReady) return;
     panel._clonedEditorEventsReady = true;
     panel.addEventListener('click', (e) => {
-        const action = e.target.closest('[data-editor-action]')?.dataset.editorAction;
+        const actionEl = e.target.closest('[data-editor-action]');
+        if (!actionEl || !panel.contains(actionEl)) return;
+        const action = actionEl.dataset.editorAction;
         if (!action) return;
+        e.preventDefault();
+        e.stopPropagation();
         updateActiveEditorRefs(panel);
+        updateEditorZIndex(panel);
         if (action === 'close' || action === 'cancel') closeEditor();
         else if (action === 'fullscreen') toggleEditorFullscreen(true);
         else if (action === 'undo') { fmEditorTextarea.focus(); document.execCommand('undo'); updateEditorStatus(); }
@@ -4952,8 +4981,16 @@ function setupPanelLayoutMenu() {
 
 function bringPanelToFront(panel) {
     if (!panel) return;
+    if (panel.classList?.contains('editor-window')) {
+        document.querySelectorAll('.fm-editor-modal.editor-window').forEach((p) => {
+            if (p !== panel) p.classList.remove('front-switching');
+        });
+        updateEditorZIndex(panel);
+        panel.classList.add('front');
+        return;
+    }
     const wasFront = panel.classList.contains('front');
-    document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window').forEach((p) => {
+    document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel').forEach((p) => {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });

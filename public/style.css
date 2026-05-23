@@ -2894,7 +2894,7 @@ html.keyboard-open .terminal-page {
 .info-modal.front,
 .snippet-panel.front,
 .shortcut-panel.front { z-index: 47; }
-.fm-editor-modal.editor-window.front { z-index: 220; }
+.fm-editor-modal.editor-window.front { z-index: 520; }
 .file-manager.front-switching,
 .info-modal.front-switching,
 .docker-panel.front-switching,
@@ -3473,7 +3473,7 @@ html.keyboard-open .terminal-page {
     height: min(620px, calc(100dvh - 112px));
     min-width: 280px;
     min-height: 260px;
-    z-index: 120;
+    z-index: 260;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: 0 28px 90px rgba(0,0,0,0.38);
@@ -3520,7 +3520,7 @@ html.keyboard-open .terminal-page {
     height: var(--editor-fullscreen-height, 100dvh);
     right: auto;
     bottom: auto;
-    z-index: 240;
+    z-index: 360;
     border: 1px solid var(--border);
     border-radius: 22px;
     box-shadow: 0 30px 100px rgba(0,0,0,0.46);
