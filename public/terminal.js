@@ -158,6 +158,7 @@ let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let editorFullscreenRestore = null;
 let activeEditorPanel = null;
+let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
 const editorPanelsByPath = new Map();
 let reconnectAttempts = 0;
@@ -4981,11 +4982,16 @@ function setupPanelLayoutMenu() {
 
 function bringPanelToFront(panel) {
     if (!panel) return;
+    const nextZIndex = () => {
+        floatingPanelZIndexSeed = Math.max(floatingPanelZIndexSeed + 1, Number(panel.style.zIndex || 0) + 1);
+        editorZIndexSeed = Math.max(editorZIndexSeed, floatingPanelZIndexSeed);
+        return floatingPanelZIndexSeed;
+    };
     if (panel.classList?.contains('editor-window')) {
         document.querySelectorAll('.fm-editor-modal.editor-window').forEach((p) => {
             if (p !== panel) p.classList.remove('front-switching');
         });
-        updateEditorZIndex(panel);
+        panel.style.zIndex = String(nextZIndex());
         panel.classList.add('front');
         return;
     }
@@ -4994,6 +5000,7 @@ function bringPanelToFront(panel) {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
+    panel.style.zIndex = String(nextZIndex());
     panel.classList.add('front');
     if (!wasFront) {
         panel.classList.remove('front-switching');
