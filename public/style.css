@@ -2893,7 +2893,8 @@ html.keyboard-open .terminal-page {
 .docker-panel.front,
 .info-modal.front,
 .snippet-panel.front,
-.shortcut-panel.front { z-index: 47; }
+.shortcut-panel.front,
+.fm-editor-modal.editor-window.front { z-index: 47; }
 .file-manager.front-switching,
 .info-modal.front-switching,
 .docker-panel.front-switching,
@@ -2910,7 +2911,9 @@ html.keyboard-open .terminal-page {
 .snippet-panel.dragging,
 .snippet-panel.resizing,
 .shortcut-panel.dragging,
-.shortcut-panel.resizing { transition: none; user-select: none; touch-action: none; }
+.shortcut-panel.resizing,
+.fm-editor-modal.editor-window.dragging,
+.fm-editor-modal.editor-window.resizing { transition: none; user-select: none; touch-action: none; }
 .file-manager.layout-animating,
 .info-modal.layout-animating,
 .docker-panel.layout-animating,
@@ -3350,7 +3353,8 @@ html.keyboard-open .terminal-page {
 .info-modal.resizing .panel-resize-handle,
 .docker-panel.resizing .panel-resize-handle,
 .snippet-panel.resizing .panel-resize-handle,
-.shortcut-panel.resizing .panel-resize-handle {
+.shortcut-panel.resizing .panel-resize-handle,
+.fm-editor-modal.editor-window.resizing .panel-resize-handle {
     opacity: 0.95;
 }
 .panel-resize-handle::before {
@@ -3459,6 +3463,85 @@ html.keyboard-open .terminal-page {
 .fm-editor-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; min-width: 0; }
 .fm-editor-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-editor-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.fm-editor-modal.editor-window {
+    position: absolute;
+    top: 52px;
+    left: 16px;
+    right: auto;
+    bottom: auto;
+    width: min(760px, calc(100vw - 32px));
+    height: min(620px, calc(100dvh - 112px));
+    min-width: 280px;
+    min-height: 260px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 28px 90px rgba(0,0,0,0.38);
+    overflow: hidden;
+}
+.fm-editor-modal.editor-window .fm-editor-header { cursor: grab; touch-action: none; }
+.fm-editor-modal.editor-window.dragging .fm-editor-header { cursor: grabbing; }
+.fm-editor-modal.editor-window .panel-resize-handle { z-index: 9; }
+.fm-editor-modal.editor-window.fullscreen { overflow: hidden; }
+.fm-editor-modal.editor-window.fullscreen .panel-resize-handle { display: none; }
+.fm-editor-fullscreen-btn {
+    position: relative;
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.fm-editor-fullscreen-icon {
+    position: relative;
+    width: 12px;
+    height: 12px;
+}
+.fm-editor-fullscreen-icon::before,
+.fm-editor-fullscreen-icon::after {
+    content: '';
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-color: currentColor;
+    border-style: solid;
+    transition: transform 0.34s var(--ios-open), inset 0.34s var(--ios-open);
+}
+.fm-editor-fullscreen-icon::before { top: 0; left: 0; border-width: 2px 0 0 2px; }
+.fm-editor-fullscreen-icon::after { right: 0; bottom: 0; border-width: 0 2px 2px 0; }
+.fm-editor-fullscreen-btn.active .fm-editor-fullscreen-icon::before { top: 2px; left: 2px; transform: rotate(180deg); }
+.fm-editor-fullscreen-btn.active .fm-editor-fullscreen-icon::after { right: 2px; bottom: 2px; transform: rotate(180deg); }
+.fm-editor-modal.fullscreen {
+    position: fixed;
+    left: var(--editor-fullscreen-left, 0px);
+    top: var(--editor-fullscreen-top, 0px);
+    width: var(--editor-fullscreen-width, 100vw);
+    height: var(--editor-fullscreen-height, 100dvh);
+    right: auto;
+    bottom: auto;
+    z-index: 90;
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    box-shadow: 0 30px 100px rgba(0,0,0,0.46);
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+}
+body > .fm-editor-modal.fullscreen { display: flex; }
+.fm-editor-modal.fullscreen-animating { will-change: transform, opacity, filter; }
+.fm-editor-modal.editor-fullscreen-morph-ghost {
+    overflow: hidden;
+    pointer-events: none !important;
+    contain: paint;
+    backdrop-filter: blur(18px) saturate(1.35);
+    -webkit-backdrop-filter: blur(18px) saturate(1.35);
+}
+.fm-editor-modal.editor-fullscreen-morph-ghost,
+.fm-editor-modal.editor-fullscreen-morph-ghost * {
+    user-select: none !important;
+    caret-color: transparent !important;
+}
+.fm-editor-modal.editor-fullscreen-morph-ghost .fm-editor-textarea { pointer-events: none; }
 #fmCloseBtn,
 #infoCloseBtn,
 #dockerCloseBtn {
@@ -4207,6 +4290,7 @@ html.keyboard-open .terminal-page {
     .toast { width: 100%; max-width: none; }
     .panel-resize-handle { width: 26px; height: 26px; }
     .fm-editor-minimap { width: 112px; flex-basis: 112px; }
+    .fm-editor-fullscreen-btn { width: 24px; min-width: 24px; height: 24px; }
     .fm-editor-actions { flex-wrap: wrap; }
     .fm-editor-actions .btn { min-width: 90px; }
     #view-settings .settings-content {
