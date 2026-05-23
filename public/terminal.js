@@ -165,9 +165,6 @@ function markEditorTemplateRoles(panel = fmEditorModal) {
     panel.querySelector('#fmEditorWrap')?.setAttribute('data-editor-field', 'wrap');
 }
 
-markEditorTemplateRoles(fmEditorModal);
-bindActiveEditorElements(fmEditorModal);
-
 // 监控相关 DOM
 const infoModal = $('#infoModal');
 const infoCloseBtn = $('#infoCloseBtn');
@@ -217,6 +214,8 @@ let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') =
 let editorFullscreenRestore = null;
 let activeEditorPanel = null;
 const openEditorPanels = new Map();
+markEditorTemplateRoles(fmEditorModal);
+bindActiveEditorElements(fmEditorModal);
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
