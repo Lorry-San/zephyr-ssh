@@ -2837,20 +2837,10 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen) {
         if (animation.effect?.target === fmEditorModal) animation.cancel();
     });
     setEditorChildrenVisibility(false);
-    const overlay = fmEditorModal.cloneNode(true);
-    overlay.classList.add('editor-fullscreen-morph-ghost', 'open');
-    overlay.classList.remove('dragging', 'resizing', 'fullscreen-animating');
+    const overlay = fmEditorModal.cloneNode(false);
+    overlay.className = 'fm-editor-modal editor-fullscreen-morph-ghost open';
     overlay.removeAttribute('id');
-    overlay.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
-    overlay.querySelectorAll('textarea').forEach((textarea) => {
-        textarea.value = fmEditorTextarea?.value || textarea.value;
-        textarea.setAttribute('readonly', '');
-    });
-    overlay.querySelectorAll('button,input,select,textarea,label').forEach((el) => {
-        el.tabIndex = -1;
-    });
-    overlay.querySelectorAll('.panel-resize-handle').forEach((el) => el.remove());
-    overlay.style.display = 'flex';
+    overlay.style.display = 'block';
     overlay.style.position = 'fixed';
     overlay.style.left = `${lastRect.left}px`;
     overlay.style.top = `${lastRect.top}px`;
@@ -2860,30 +2850,24 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen) {
     overlay.style.pointerEvents = 'none';
     overlay.style.zIndex = '120';
     overlay.style.opacity = '1';
-    overlay.style.filter = 'blur(0px) saturate(1)';
-    overlay.style.backdropFilter = 'blur(18px) saturate(1.35)';
-    overlay.style.webkitBackdropFilter = 'blur(18px) saturate(1.35)';
+    overlay.style.filter = 'none';
     overlay.style.transformOrigin = 'top left';
     overlay.style.background = getComputedStyle(fmEditorModal).backgroundColor;
     document.body.appendChild(overlay);
     const animation = overlay.animate([
         {
             transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`,
-            filter: shouldFullscreen ? 'blur(10px) saturate(1.12)' : 'blur(0px) saturate(1)',
-            opacity: shouldFullscreen ? 0.92 : 1,
             borderRadius: fromRadius,
             boxShadow: shouldFullscreen ? '0 18px 54px rgba(0,0,0,0.30)' : '0 30px 100px rgba(0,0,0,0.46)'
         },
         {
             transform: 'translate3d(0, 0, 0) scale(1, 1)',
-            filter: shouldFullscreen ? 'blur(0px) saturate(1)' : 'blur(8px) saturate(1.08)',
-            opacity: shouldFullscreen ? 1 : 0.96,
             borderRadius: toRadius,
             boxShadow: shouldFullscreen ? '0 30px 100px rgba(0,0,0,0.46)' : '0 18px 54px rgba(0,0,0,0.30)'
         }
     ], {
-        duration: 700,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        duration: 640,
+        easing: 'cubic-bezier(0.32, 0.72, 0, 1)',
         fill: 'both'
     });
     animation.finished
@@ -2938,7 +2922,7 @@ function toggleEditorFullscreen(force) {
         setEditorChildrenVisibility(true);
         renderEditorCodeLayers();
         updateEditorMinimapViewport();
-    }, 760);
+    }, 700);
     requestAnimationFrame(() => {
         renderEditorCodeLayers();
         updateEditorMinimapViewport();
