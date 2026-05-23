@@ -40,6 +40,8 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const sessions = new Map();
 const sshTerminalSessions = new Map();
 const sftpDownloadTokens = new Map();
+const SFTP_DOWNLOAD_TOKEN_TTL = 24 * 60 * 60 * 1000;
+const SFTP_DOWNLOAD_KEEPALIVE_INTERVAL = 30 * 1000;
 const tempTotpTokens = new Map();
 const webauthnChallenges = new Map();
 const resetRequestHits = new Map();
@@ -1827,7 +1829,7 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
-app.get('/api/sftp/download/:token', requireAuth, (req, res) => {
+app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     const token = String(req.params.token || '');
     const download = sftpDownloadTokens.get(token);
     if (!download || download.username !== req.session.username || download.expiresAt < Date.now()) {
@@ -1835,31 +1837,95 @@ app.get('/api/sftp/download/:token', requireAuth, (req, res) => {
         return res.status(404).send('下载链接已失效');
     }
     const session = sshTerminalSessions.get(download.sessionId);
-    const sftp = session?.sftpStream;
-    if (!session || session.closed || !sftp) {
+    if (!session || session.closed || !session.sshClient) {
         sftpDownloadTokens.delete(token);
-        return res.status(410).send('SFTP 会话已关闭，请重新打开文件管理器后下载');
+        return res.status(410).send('SSH 会话已关闭，请重新打开文件管理器后下载');
+    }
+    let sftp = session.sftpStream;
+    if (!sftp) {
+        try {
+            sftp = await new Promise((resolve, reject) => {
+                session.sshClient.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
+            });
+            session.sftpStream = sftp;
+        } catch (err) {
+            sftpDownloadTokens.delete(token);
+            return res.status(410).send(`SFTP 会话恢复失败：${err.message}`);
+        }
     }
     const fileName = path.basename(download.path || 'download') || 'download';
+    const size = Number(download.size) || 0;
+    const range = String(req.headers.range || '');
+    let start = 0;
+    let end = size > 0 ? size - 1 : undefined;
+    let partial = false;
+    if (range) {
+        const match = range.match(/^bytes=(\d*)-(\d*)$/);
+        const rejectRange = () => {
+            res.setHeader('Content-Range', `bytes */${size || '*'}`);
+            return res.status(416).end();
+        };
+        if (!match || !size) return rejectRange();
+        if (match[1] === '' && match[2] === '') return rejectRange();
+        if (match[1] === '') {
+            const suffix = Number(match[2]);
+            if (!Number.isFinite(suffix) || suffix <= 0) return rejectRange();
+            start = Math.max(0, size - suffix);
+        } else {
+            start = Number(match[1]);
+            if (match[2] !== '') end = Number(match[2]);
+        }
+        if (!Number.isFinite(start) || start < 0 || start >= size || !Number.isFinite(end) || end < start) return rejectRange();
+        end = Math.min(end, size - 1);
+        partial = true;
+    }
+    const contentLength = size > 0 && Number.isFinite(end) ? end - start + 1 : size;
+    download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+    res.status(partial ? 206 : 200);
     res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
-    if (Number.isFinite(download.size) && download.size >= 0) res.setHeader('Content-Length', String(download.size));
-    const readStream = sftp.createReadStream(download.path, { highWaterMark: 256 * 1024 });
-    let settled = false;
-    const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        sftpDownloadTokens.delete(token);
-        try { readStream.destroy(); } catch {}
+    if (size > 0) res.setHeader('Content-Length', String(contentLength));
+    if (partial) res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    let sftpDownloadKeepaliveTimer = null;
+    const stopSftpDownloadKeepalive = () => {
+        if (sftpDownloadKeepaliveTimer) {
+            clearInterval(sftpDownloadKeepaliveTimer);
+            sftpDownloadKeepaliveTimer = null;
+        }
     };
+    const streamOptions = size > 0 ? { start, end, highWaterMark: 256 * 1024 } : { highWaterMark: 256 * 1024 };
+    const readStream = sftp.createReadStream(download.path, streamOptions);
+    if (session.sshClient?._sock?.setKeepAlive) {
+        try { session.sshClient._sock.setKeepAlive(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
+    }
+    sftpDownloadKeepaliveTimer = setInterval(() => {
+        if (session.closed || res.destroyed) {
+            stopSftpDownloadKeepalive();
+            return;
+        }
+        download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+        try { session.sshClient?._sock?.setKeepAlive?.(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
+    }, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL);
+    sftpDownloadKeepaliveTimer.unref?.();
+    let completed = false;
+    readStream.on('end', () => {
+        completed = true;
+        stopSftpDownloadKeepalive();
+        if (!partial || end >= size - 1) sftpDownloadTokens.delete(token);
+    });
     readStream.on('error', (err) => {
-        console.warn('[sftp-download]', 'stream failed', { path: download.path, error: err.message });
+        stopSftpDownloadKeepalive();
+        console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
         if (!res.headersSent) res.status(500).send(err.message || '下载失败');
         else res.destroy(err);
-        cleanup();
     });
-    res.on('close', cleanup);
-    readStream.on('end', cleanup);
+    res.on('close', () => {
+        stopSftpDownloadKeepalive();
+        try { readStream.destroy(); } catch {}
+        if (!completed) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+    });
     readStream.pipe(res);
 });
 
@@ -2733,7 +2799,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     username: currentSession(req)?.username || '',
                     path: targetPath,
                     size: Number(stats.size) || 0,
-                    expiresAt: Date.now() + 5 * 60 * 1000,
+                    expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
                 });
                 sendJSON({ type: 'sftp-download-ready', path: targetPath, url: `/api/sftp/download/${token}`, size: Number(stats.size) || 0 });
             });
