@@ -1697,7 +1697,7 @@ function hideFileManager() {
     window.setTimeout(() => clearPanelMotion(fileManager), 320);
 }
 fileBtn.addEventListener('click', () => {
-    if (fileManager.classList.contains('open')) hideFileManager();
+    if (fileManager.classList.contains('open')) bringPanelToFront(fileManager);
     else showFileManager();
 });
 fmCloseBtn.addEventListener('click', hideFileManager);
@@ -1771,9 +1771,9 @@ function hideShortcutPanel() {
     shortcutBtn?.classList.remove('active');
     window.setTimeout(() => { clearPanelMotion(shortcutPanel); if (!shortcutPanel.classList.contains('open')) shortcutPanel.style.display = 'none'; }, 320);
 }
-snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? hideSnippetPanel() : showSnippetPanel());
+snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? bringPanelToFront(snippetPanel) : showSnippetPanel());
 snippetSearch?.addEventListener('input', renderSnippetPanel);
-shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? hideShortcutPanel() : showShortcutPanel());
+shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? bringPanelToFront(shortcutPanel) : showShortcutPanel());
 window.addEventListener('storage', (event) => { if (event.key === SNIPPET_STORAGE_KEY && snippetPanel?.classList.contains('open')) renderSnippetPanel(); });
 
 function initSFTP() {
@@ -2722,10 +2722,16 @@ function setEditorScrollFromMinimap(clientY) {
     syncEditorCodeScroll();
 }
 
+function allocateFloatingPanelZIndex(panel) {
+    const currentZIndex = Number(panel?.style?.zIndex || 0) || 0;
+    floatingPanelZIndexSeed = Math.max(floatingPanelZIndexSeed, editorZIndexSeed, currentZIndex) + 1;
+    editorZIndexSeed = Math.max(editorZIndexSeed, floatingPanelZIndexSeed);
+    return floatingPanelZIndexSeed;
+}
+
 function updateEditorZIndex(panel) {
     if (!panel?.classList?.contains('editor-window')) return;
-    editorZIndexSeed = Math.max(editorZIndexSeed + 1, Number(panel.style.zIndex || 0) + 1);
-    panel.style.zIndex = String(editorZIndexSeed);
+    panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
 }
 
 function updateActiveEditorRefs(panel = activeEditorPanel || fmEditorModal) {
@@ -3268,7 +3274,9 @@ fmEditorMinimap?.addEventListener('pointerdown', (e) => {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
 });
-fmEditorMinimapToggle?.addEventListener('click', () => {
+fmEditorMinimapToggle?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     updateActiveEditorRefs(fmEditorMinimapToggle.closest('.fm-editor-modal'));
     editorMinimapHidden = !editorMinimapHidden;
     localStorage.setItem('zephyr-editor-minimap-hidden', editorMinimapHidden ? '1' : '0');
@@ -3296,7 +3304,7 @@ function setupClonedEditorEvents(panel) {
         e.preventDefault();
         e.stopPropagation();
         updateActiveEditorRefs(panel);
-        updateEditorZIndex(panel);
+        bringPanelToFront(panel);
         if (action === 'close' || action === 'cancel') closeEditor();
         else if (action === 'fullscreen') toggleEditorFullscreen(true);
         else if (action === 'undo') { fmEditorTextarea.focus(); document.execCommand('undo'); updateEditorStatus(); }
@@ -3308,6 +3316,7 @@ function setupClonedEditorEvents(panel) {
             wsConnection.send(JSON.stringify({ type: 'sftp-writefile', path: editorFilePath, data: bytesToBase64(bytes), encoding: 'base64' }));
             closeEditor();
         } else if (action === 'minimap') {
+            if (actionEl.id === 'fmEditorMinimapToggle') return;
             editorMinimapHidden = !editorMinimapHidden;
             localStorage.setItem('zephyr-editor-minimap-hidden', editorMinimapHidden ? '1' : '0');
             updateEditorMinimap();
@@ -3735,7 +3744,7 @@ function resetFeatureStateAfterReconnect() {
 }
 
 dockerBtn?.addEventListener('click', () => {
-    if (dockerPanel.classList.contains('open')) hideDockerPanel();
+    if (dockerPanel.classList.contains('open')) bringPanelToFront(dockerPanel);
     else showDockerPanel();
 });
 dockerCloseBtn?.addEventListener('click', hideDockerPanel);
@@ -4982,16 +4991,11 @@ function setupPanelLayoutMenu() {
 
 function bringPanelToFront(panel) {
     if (!panel) return;
-    const nextZIndex = () => {
-        floatingPanelZIndexSeed = Math.max(floatingPanelZIndexSeed + 1, Number(panel.style.zIndex || 0) + 1);
-        editorZIndexSeed = Math.max(editorZIndexSeed, floatingPanelZIndexSeed);
-        return floatingPanelZIndexSeed;
-    };
     if (panel.classList?.contains('editor-window')) {
         document.querySelectorAll('.fm-editor-modal.editor-window').forEach((p) => {
             if (p !== panel) p.classList.remove('front-switching');
         });
-        panel.style.zIndex = String(nextZIndex());
+        panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
         panel.classList.add('front');
         return;
     }
@@ -5000,7 +5004,7 @@ function bringPanelToFront(panel) {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
-    panel.style.zIndex = String(nextZIndex());
+    panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
     panel.classList.add('front');
     if (!wasFront) {
         panel.classList.remove('front-switching');
