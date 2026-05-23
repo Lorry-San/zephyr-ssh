@@ -76,6 +76,7 @@ const fontDecreaseBtn = $('#fontDecreaseBtn');
 const fontIncreaseBtn = $('#fontIncreaseBtn');
 
 // 文件管理器 DOM
+const fmTransferBtn = $('#fmTransferBtn');
 const fileManager = $('#fileManager');
 const fmBackBtn = $('#fmBackBtn');
 const fmPathInput = $('#fmPathInput');
@@ -150,7 +151,10 @@ let allFiles = [];
 let pendingUploadFiles = [];
 const SFTP_UPLOAD_CHUNK_SIZE = 192 * 1024;
 const activeSftpUploads = new Map();
-let activeSftpDownloadCount = 0;
+const activeSftpDownloads = new Map();
+let transferPopover = null;
+let transferPopoverHideTimer = 0;
+let transferRenderRaf = 0;
 let fileDragDepth = 0;
 let searchQuery = '';
 let editorFilePath = null;
@@ -1632,6 +1636,132 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+function formatTransferSize(bytes) {
+    const value = Number(bytes) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let size = value;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+    return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function getTransferItems() {
+    const uploads = Array.from(activeSftpUploads.values()).map((item) => ({ ...item, direction: 'upload' }));
+    const downloads = Array.from(activeSftpDownloads.values()).map((item) => ({ ...item, direction: 'download' }));
+    return [...uploads, ...downloads].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function ensureTransferPopover() {
+    if (transferPopover) return transferPopover;
+    transferPopover = document.createElement('div');
+    transferPopover.className = 'transfer-popover';
+    transferPopover.innerHTML = '<div class="transfer-popover-head"><strong>文件传输</strong><button type="button" class="transfer-popover-close" aria-label="关闭">×</button></div><div class="transfer-popover-body"></div>';
+    document.body.appendChild(transferPopover);
+    transferPopover.querySelector('.transfer-popover-close')?.addEventListener('click', () => hideTransferPopover(true));
+    transferPopover.addEventListener('pointerdown', (e) => e.stopPropagation());
+    transferPopover.addEventListener('pointerenter', () => window.clearTimeout(transferPopoverHideTimer));
+    return transferPopover;
+}
+
+function positionTransferPopover() {
+    const popover = ensureTransferPopover();
+    const rect = fmTransferBtn?.getBoundingClientRect?.();
+    if (!rect) return;
+    const width = Math.min(360, Math.max(280, window.innerWidth - 24));
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left));
+    const top = Math.min(window.innerHeight - 80, rect.bottom + 8);
+    popover.style.width = `${width}px`;
+    popover.style.left = `${Math.round(left)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+}
+
+function renderTransferPopover() {
+    const items = getTransferItems();
+    const hasActive = items.some((item) => item.status === 'active' || item.status === 'pending');
+    fmTransferBtn?.classList.toggle('active', items.length > 0);
+    fmTransferBtn?.classList.toggle('transfer-active', hasActive);
+    fmTransferBtn?.setAttribute('data-count', String(items.length || ''));
+    if (!transferPopover?.classList.contains('open')) return;
+    positionTransferPopover();
+    const body = transferPopover.querySelector('.transfer-popover-body');
+    if (!body) return;
+    if (!items.length) {
+        body.innerHTML = '<div class="transfer-empty">暂无上传或下载任务</div>';
+        return;
+    }
+    body.innerHTML = items.map((item) => {
+        const loaded = Number(item.loaded ?? item.offset ?? 0) || 0;
+        const total = Number(item.size ?? item.total ?? 0) || 0;
+        const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
+        const statusText = item.status === 'done' ? '已完成' : item.status === 'error' ? '失败' : item.status === 'pending' ? '等待中' : `${pct.toFixed(0)}%`;
+        const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
+        const icon = item.direction === 'upload' ? '⬆️' : '⬇️';
+        return `<div class="transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}"><div class="transfer-item-row"><span class="transfer-icon">${icon}</span><span class="transfer-name" title="${escapeHtml(item.path || item.name || '')}">${escapeHtml(item.name || String(item.path || '').split('/').pop() || '文件')}</span><span class="transfer-status">${escapeHtml(statusText)}</span></div><div class="transfer-progress"><span style="width:${activeIndeterminate ? 38 : pct}%"></span></div><div class="transfer-meta">${formatTransferSize(loaded)} / ${total ? formatTransferSize(total) : '未知大小'}</div></div>`;
+    }).join('');
+}
+
+function scheduleTransferRender() {
+    window.cancelAnimationFrame(transferRenderRaf);
+    transferRenderRaf = window.requestAnimationFrame(renderTransferPopover);
+}
+
+function showTransferPopover({ autoHide = false } = {}) {
+    ensureTransferPopover().classList.add('open');
+    fmTransferBtn?.setAttribute('aria-expanded', 'true');
+    window.clearTimeout(transferPopoverHideTimer);
+    positionTransferPopover();
+    renderTransferPopover();
+    if (autoHide) {
+        transferPopoverHideTimer = window.setTimeout(() => hideTransferPopover(), 5200);
+    }
+}
+
+function hideTransferPopover(force = false) {
+    if (!transferPopover) return;
+    if (!force && getTransferItems().some((item) => item.status === 'active' || item.status === 'pending')) return;
+    window.clearTimeout(transferPopoverHideTimer);
+    transferPopover.classList.remove('open');
+    fmTransferBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function markDownloadProgress(id, patch) {
+    const current = activeSftpDownloads.get(id) || { id, loaded: 0, size: 0, status: 'pending', updatedAt: Date.now() };
+    activeSftpDownloads.set(id, { ...current, ...patch, updatedAt: Date.now() });
+    scheduleTransferRender();
+}
+
+function startDownloadProgressPoll(id, size = 0, progressUrl = '') {
+    const total = Number(size) || 0;
+    const tick = async () => {
+        const item = activeSftpDownloads.get(id);
+        if (!item || (item.status !== 'active' && item.status !== 'pending')) return;
+        if (progressUrl) {
+            try {
+                const res = await fetch(progressUrl, { credentials: 'same-origin', cache: 'no-store' });
+                if (res.ok) {
+                    const data = await res.json();
+                    markDownloadProgress(id, { loaded: Number(data.loaded) || 0, size: Number(data.size) || total, status: data.status || 'active' });
+                    if (data.status === 'done' || data.status === 'error') {
+                        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, data.status === 'done' ? 5000 : 8000);
+                        return;
+                    }
+                }
+            } catch (_) {}
+        }
+        const current = activeSftpDownloads.get(id);
+        if (!current || (current.status !== 'active' && current.status !== 'pending')) return;
+        current._timer = window.setTimeout(tick, 900);
+    };
+    tick();
+}
+
+function markUploadProgress(id, patch) {
+    const current = activeSftpUploads.get(id);
+    if (!current) return;
+    Object.assign(current, patch, { updatedAt: Date.now() });
+    scheduleTransferRender();
+}
+
 // ---------- 通用提示 ----------
 function showToast(message, type = 'info', timeout = 2800) {
     let container = document.querySelector('.toast-container');
@@ -1887,11 +2017,14 @@ function renderFileList(files) {
                 downloadBtn.disabled = true;
                 window.setTimeout(() => { downloadBtn.disabled = false; }, 2400);
                 const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
-                activeSftpDownloadCount += 1;
+                const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                markDownloadProgress(downloadId, { name: file.name, path: targetPath, size: file.size, loaded: 0, status: 'pending' });
+                showTransferPopover({ autoHide: true });
                 showToast(`准备下载：${file.name}`, 'info');
                 wsConnection.send(JSON.stringify({
                     type: 'sftp-download',
-                    path: targetPath
+                    path: targetPath,
+                    downloadId
                 }));
             });
             actions.appendChild(downloadBtn);
@@ -1922,10 +2055,13 @@ function sendSftpUploadChunk(upload, offset = 0) {
     if (!upload || upload.cancelled) return;
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
         showToast(`上传中断：SSH 连接不可用（${upload.file.name}）`, 'error');
+        markUploadProgress(upload.id, { loaded: offset, status: 'error' });
         activeSftpUploads.delete(upload.id);
+        scheduleTransferRender();
         return;
     }
     if (offset >= upload.file.size) {
+        markUploadProgress(upload.id, { loaded: upload.file.size, status: 'active' });
         wsConnection.send(JSON.stringify({ type: 'sftp-upload-complete', uploadId: upload.id, path: upload.path }));
         return;
     }
@@ -1945,7 +2081,9 @@ function sendSftpUploadChunk(upload, offset = 0) {
     };
     reader.onerror = () => {
         showToast(`读取文件失败：${upload.file.name}`, 'error');
+        markUploadProgress(upload.id, { status: 'error' });
         activeSftpUploads.delete(upload.id);
+        scheduleTransferRender();
     };
     reader.readAsDataURL(chunk);
 }
@@ -1957,8 +2095,15 @@ function uploadFile(file) {
         file,
         path: currentPath.replace(/\/+$/, '') + '/' + file.name,
         cancelled: false,
+        name: file.name,
+        size: file.size,
+        loaded: 0,
+        status: 'pending',
+        updatedAt: Date.now(),
     };
     activeSftpUploads.set(upload.id, upload);
+    showTransferPopover({ autoHide: true });
+    scheduleTransferRender();
     wsConnection.send(JSON.stringify({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: file.name, size: file.size }));
 }
 
@@ -1989,6 +2134,19 @@ function hasDraggedFiles(e) {
 function setFileDragActive(active) {
     fileManager.classList.toggle('drag-over', active);
 }
+
+fmTransferBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (transferPopover?.classList.contains('open')) hideTransferPopover(true);
+    else showTransferPopover();
+});
+document.addEventListener('pointerdown', (e) => {
+    if (!transferPopover?.classList.contains('open')) return;
+    if (e.target.closest('.transfer-popover') || e.target.closest('#fmTransferBtn')) return;
+    hideTransferPopover(true);
+}, { capture: true });
+window.addEventListener('resize', () => { if (transferPopover?.classList.contains('open')) positionTransferPopover(); });
 
 fmUploadInput.addEventListener('change', (e) => {
     uploadFiles(e.target.files);
@@ -3415,29 +3573,39 @@ function handleSFTPMessage(msg) {
             break;
         case 'sftp-upload-ready': {
             const upload = activeSftpUploads.get(msg.uploadId);
-            if (upload) sendSftpUploadChunk(upload, 0);
+            if (upload) {
+                markUploadProgress(msg.uploadId, { status: 'active', loaded: 0, size: upload.file?.size || upload.size || 0 });
+                sendSftpUploadChunk(upload, 0);
+            }
             break;
         }
         case 'sftp-upload-progress': {
             const upload = activeSftpUploads.get(msg.uploadId);
-            if (upload) sendSftpUploadChunk(upload, Number(msg.nextOffset) || 0);
+            if (upload) {
+                const nextOffset = Number(msg.nextOffset) || 0;
+                markUploadProgress(msg.uploadId, { status: 'active', loaded: nextOffset, size: Number(msg.size) || upload.size || 0 });
+                sendSftpUploadChunk(upload, nextOffset);
+            }
             break;
         }
-        case 'sftp-upload-complete':
-            activeSftpUploads.delete(msg.uploadId);
+        case 'sftp-upload-complete': {
+            const upload = activeSftpUploads.get(msg.uploadId);
+            if (upload) markUploadProgress(msg.uploadId, { status: 'done', loaded: upload.size || upload.file?.size || 0 });
+            window.setTimeout(() => { activeSftpUploads.delete(msg.uploadId); scheduleTransferRender(); }, 5000);
             refreshFileList();
             showToast('文件上传完成', 'success');
             break;
+        }
         case 'sftp-upload-error':
-            activeSftpUploads.delete(msg.uploadId);
+            markUploadProgress(msg.uploadId, { status: 'error' });
+            window.setTimeout(() => { activeSftpUploads.delete(msg.uploadId); scheduleTransferRender(); }, 8000);
             showToast('上传失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-download':
-            activeSftpDownloadCount = Math.max(0, activeSftpDownloadCount - 1);
+            if (msg.downloadId) markDownloadProgress(msg.downloadId, { status: 'error' });
             if (msg.error) alert('下载失败: ' + msg.error);
             break;
         case 'sftp-download-ready': {
-            activeSftpDownloadCount = Math.max(0, activeSftpDownloadCount - 1);
             if (msg.error) {
                 alert('下载失败: ' + msg.error);
                 break;
@@ -3446,6 +3614,8 @@ function handleSFTPMessage(msg) {
                 alert('下载失败: 缺少下载地址');
                 break;
             }
+            const downloadId = msg.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            markDownloadProgress(downloadId, { path: msg.path, name: (msg.path || 'download').split('/').pop() || 'download', size: Number(msg.size) || 0, loaded: 0, status: 'active' });
             const a = document.createElement('a');
             a.href = msg.url;
             a.download = (msg.path || 'download').split('/').pop() || 'download';
@@ -3453,6 +3623,8 @@ function handleSFTPMessage(msg) {
             document.body.appendChild(a);
             a.click();
             a.remove();
+            showTransferPopover({ autoHide: true });
+            startDownloadProgressPoll(downloadId, Number(msg.size) || 0, msg.progressUrl || '');
             showToast('已开始流式下载，文件不会再加载到网页内存', 'success');
             break;
         }

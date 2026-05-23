@@ -5995,3 +5995,52 @@ body.smartbar-trash-hover .smartbar-trash-target {
         border-radius: 999px !important;
     }
 }
+
+.fm-transfer-btn {
+    position: relative;
+    min-width: 34px;
+    height: 30px;
+    padding-inline: 9px;
+}
+.fm-transfer-btn.transfer-active::after {
+    content: '';
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,.16);
+}
+.transfer-popover {
+    position: fixed;
+    z-index: 2000;
+    display: none;
+    max-height: min(420px, calc(100dvh - 80px));
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    box-shadow: 0 22px 70px rgba(0,0,0,.32);
+    backdrop-filter: blur(24px) saturate(1.35);
+    -webkit-backdrop-filter: blur(24px) saturate(1.35);
+}
+.transfer-popover.open { display: flex; flex-direction: column; animation: transferPopoverIn .2s cubic-bezier(.16,1,.3,1); }
+@keyframes transferPopoverIn { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.transfer-popover-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.transfer-popover-close { border: 0; background: transparent; color: var(--text-secondary); font-size: 18px; cursor: pointer; }
+.transfer-popover-body { overflow: auto; padding: 8px; display: grid; gap: 8px; }
+.transfer-empty { padding: 18px 10px; color: var(--text-secondary); text-align: center; font-size: 13px; }
+.transfer-item { border: 1px solid var(--border); border-radius: 14px; padding: 9px 10px; background: color-mix(in srgb, var(--bg) 78%, transparent); }
+.transfer-item-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.transfer-icon { flex: 0 0 auto; }
+.transfer-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 650; }
+.transfer-status { flex: 0 0 auto; color: var(--text-secondary); font-size: 12px; }
+.transfer-progress { height: 5px; border-radius: 999px; overflow: hidden; background: rgba(139,148,158,.18); margin-top: 8px; }
+.transfer-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .24s ease; }
+.transfer-meta { margin-top: 5px; color: var(--text-secondary); font-size: 11px; }
+.transfer-item.done .transfer-progress span { background: var(--success); }
+.transfer-item.error .transfer-progress span { background: var(--danger); }
+.transfer-item.indeterminate .transfer-progress span { animation: transferIndeterminate 1.15s ease-in-out infinite; }
+@keyframes transferIndeterminate { 0% { transform: translateX(-120%); } 100% { transform: translateX(260%); } }

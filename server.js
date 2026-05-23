@@ -1829,6 +1829,21 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
+app.get('/api/sftp/download-progress/:token', requireAuth, (req, res) => {
+    const token = String(req.params.token || '');
+    const download = sftpDownloadTokens.get(token);
+    if (!download || download.username !== req.session.username || download.expiresAt < Date.now()) {
+        return res.status(404).json({ error: '下载任务不存在' });
+    }
+    res.json({
+        downloadId: download.downloadId || '',
+        path: download.path,
+        size: Number(download.size) || 0,
+        loaded: Number(download.loaded) || 0,
+        status: download.status || 'pending',
+    });
+});
+
 app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     const token = String(req.params.token || '');
     const download = sftpDownloadTokens.get(token);
@@ -1897,6 +1912,8 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     };
     const streamOptions = size > 0 ? { start, end, highWaterMark: 256 * 1024 } : { highWaterMark: 256 * 1024 };
     const readStream = sftp.createReadStream(download.path, streamOptions);
+    download.status = 'active';
+    download.loaded = start;
     if (session.sshClient?._sock?.setKeepAlive) {
         try { session.sshClient._sock.setKeepAlive(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
     }
@@ -1910,12 +1927,20 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     }, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL);
     sftpDownloadKeepaliveTimer.unref?.();
     let completed = false;
+    readStream.on('data', (chunk) => {
+        download.loaded = Math.min(size || Number.MAX_SAFE_INTEGER, (Number(download.loaded) || start) + chunk.length);
+        download.status = 'active';
+        download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+    });
     readStream.on('end', () => {
         completed = true;
+        download.loaded = size || download.loaded;
+        download.status = 'done';
         stopSftpDownloadKeepalive();
-        if (!partial || end >= size - 1) sftpDownloadTokens.delete(token);
+        if (!partial || end >= size - 1) window.setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     readStream.on('error', (err) => {
+        download.status = 'error';
         stopSftpDownloadKeepalive();
         console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
         if (!res.headersSent) res.status(500).send(err.message || '下载失败');
@@ -2797,11 +2822,14 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 sftpDownloadTokens.set(token, {
                     sessionId: attachedSshSession?.id || '',
                     username: currentSession(req)?.username || '',
+                    downloadId: msg.downloadId || '',
                     path: targetPath,
                     size: Number(stats.size) || 0,
+                    loaded: 0,
+                    status: 'pending',
                     expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
                 });
-                sendJSON({ type: 'sftp-download-ready', path: targetPath, url: `/api/sftp/download/${token}`, size: Number(stats.size) || 0 });
+                sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, size: Number(stats.size) || 0 });
             });
             return;
         }
