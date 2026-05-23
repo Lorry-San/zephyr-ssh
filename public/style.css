@@ -2893,8 +2893,8 @@ html.keyboard-open .terminal-page {
 .docker-panel.front,
 .info-modal.front,
 .snippet-panel.front,
-.shortcut-panel.front,
-.fm-editor-modal.editor-window.front { z-index: 47; }
+.shortcut-panel.front { z-index: 47; }
+.fm-editor-modal.editor-window.front { z-index: 101; }
 .file-manager.front-switching,
 .info-modal.front-switching,
 .docker-panel.front-switching,
@@ -3473,6 +3473,7 @@ html.keyboard-open .terminal-page {
     height: min(620px, calc(100dvh - 112px));
     min-width: 280px;
     min-height: 260px;
+    z-index: 48;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: 0 28px 90px rgba(0,0,0,0.38);
@@ -3482,7 +3483,8 @@ html.keyboard-open .terminal-page {
 .fm-editor-modal.editor-window.dragging .fm-editor-header { cursor: grabbing; }
 .fm-editor-modal.editor-window .panel-resize-handle { z-index: 9; }
 .fm-editor-modal.editor-window.fullscreen { overflow: hidden; }
-.fm-editor-modal.editor-window.fullscreen .panel-resize-handle { display: none; }
+.fm-editor-modal.fullscreen .panel-resize-handle,
+.fm-editor-modal.editor-window.fullscreen .panel-resize-handle { display: none !important; }
 .fm-editor-fullscreen-btn {
     position: relative;
     width: 26px;
@@ -3520,7 +3522,7 @@ html.keyboard-open .terminal-page {
     height: var(--editor-fullscreen-height, 100dvh);
     right: auto;
     bottom: auto;
-    z-index: 90;
+    z-index: 100;
     border: 1px solid var(--border);
     border-radius: 22px;
     box-shadow: 0 30px 100px rgba(0,0,0,0.46);

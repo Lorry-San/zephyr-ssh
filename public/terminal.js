@@ -2791,13 +2791,19 @@ function updateEditorFullscreenButton() {
 }
 
 function getEditorFullscreenRect() {
-    const host = terminalContainer || document.querySelector('.terminal-container') || document.querySelector('.terminal-page');
-    const rect = host?.getBoundingClientRect?.();
+    const pageRect = document.querySelector('.terminal-page')?.getBoundingClientRect?.();
+    const inputRect = document.querySelector('.terminal-input-panel')?.getBoundingClientRect?.();
+    const toolbarRect = document.querySelector('.terminal-topbar')?.getBoundingClientRect?.();
+    const viewport = window.visualViewport;
+    const left = Math.round(pageRect?.left ?? viewport?.offsetLeft ?? 0);
+    const right = Math.round(pageRect?.right ?? ((viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth || 0)));
+    const top = Math.round(inputRect?.bottom ?? terminalContainer?.getBoundingClientRect?.().top ?? pageRect?.top ?? 0);
+    const bottom = Math.round(toolbarRect?.top ?? terminalContainer?.getBoundingClientRect?.().bottom ?? pageRect?.bottom ?? window.innerHeight ?? 0);
     return {
-        left: Math.round(rect?.left || 0),
-        top: Math.round(rect?.top || 0),
-        width: Math.max(280, Math.round(rect?.width || window.innerWidth || 0)),
-        height: Math.max(240, Math.round(rect?.height || window.innerHeight || 0)),
+        left,
+        top,
+        width: Math.max(280, right - left),
+        height: Math.max(240, bottom - top),
     };
 }
 
@@ -2979,6 +2985,10 @@ function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
     updateEditorStatus();
 }
 
+function hasAnyFullscreenEditor(exceptPanel = null) {
+    return Array.from(editorPanelsByPath.values()).some((panel) => panel !== exceptPanel && panel.classList?.contains('fullscreen'));
+}
+
 function setupEditorPanel(panel) {
     if (!panel || panel._editorPanelReady) return panel;
     panel._editorPanelReady = true;
@@ -3080,7 +3090,11 @@ function setupEditorPanel(panel) {
 function createEditorPanel(filePath) {
     markEditorRoles(fmEditorModal);
     const template = document.getElementById('fmEditorModal') || fmEditorModal;
-    const panel = (!template.dataset.editorPath && editorPanelsByPath.size === 0) ? template : template.cloneNode(true);
+    const canReuseTemplate = !template.dataset.editorPath
+        && editorPanelsByPath.size === 0
+        && !template.classList.contains('fullscreen')
+        && template.parentElement === fileManager;
+    const panel = canReuseTemplate ? template : template.cloneNode(true);
     if (panel !== template) {
         panel.removeAttribute('id');
         panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
@@ -3095,6 +3109,10 @@ function createEditorPanel(filePath) {
     panel.style.width = panel.style.width || '';
     panel.style.height = panel.style.height || '';
     setupEditorPanel(panel);
+    if (hasAnyFullscreenEditor(panel)) {
+        panel.style.left = panel.style.left || '16px';
+        panel.style.top = panel.style.top || '52px';
+    }
     editorPanelsByPath.set(filePath, panel);
     return panel;
 }
@@ -3105,7 +3123,7 @@ function openEditor(filePath) {
     editorFilePath = filePath;
     editorLanguage = detectEditorLanguage(filePath);
     panel._editorLanguage = editorLanguage;
-    toggleEditorFullscreen(false);
+    if (panel.classList.contains('fullscreen')) toggleEditorFullscreen(false);
     panel.style.display = 'flex';
     panel.classList.remove('closing');
     requestAnimationFrame(() => panel.classList.add('open'));
