@@ -618,6 +618,9 @@ docker run -d \
 
 3.修复切换页面或移动端键盘弹出/收起后，SSH 终端出现文字排版错乱（竖排/错位）、空白行及位移不平滑问题
 
+4.优化下载问题，避免导致文件过大而造成网页被kill
+
+
 ## 致谢
 
 - [wterm](https://github.com/vercel-labs/wterm)
