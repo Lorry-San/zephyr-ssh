@@ -88,85 +88,27 @@ const fmUploadInput = $('#fmUploadInput');
 const fmDropOverlay = $('#fmDropOverlay');
 const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
-let fmEditorModal = $('#fmEditorModal');
-let fmEditorTitle = $('#fmEditorTitle');
-let fmEditorMain = $('#fmEditorMain');
-let fmEditorTextarea = $('#fmEditorTextarea');
+const fmEditorModal = $('#fmEditorModal');
+const fmEditorTitle = $('#fmEditorTitle');
+const fmEditorMain = $('#fmEditorMain');
+const fmEditorTextarea = $('#fmEditorTextarea');
 let fmEditorLineNumbers = $('#fmEditorLineNumbers');
-let fmEditorHighlight = $('#fmEditorHighlight');
+const fmEditorHighlight = $('#fmEditorHighlight');
 let fmEditorIndentGuides = $('#fmEditorIndentGuides');
-let fmEditorMinimap = $('#fmEditorMinimap');
-let fmEditorMinimapCode = $('#fmEditorMinimapCode');
-let fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
-let fmEditorFullscreenBtn = $('#fmEditorFullscreenBtn');
-let fmEditorSaveBtn = $('#fmEditorSaveBtn');
-let fmEditorCancelBtn = $('#fmEditorCancelBtn');
-let fmEditorCloseBtn = $('#fmEditorCloseBtn');
-let fmEditorUndoBtn = $('#fmEditorUndoBtn');
-let fmEditorRedoBtn = $('#fmEditorRedoBtn');
-let fmEditorEncoding = $('#fmEditorEncoding');
-let fmEditorLineEnding = $('#fmEditorLineEnding');
-let fmEditorTabSize = $('#fmEditorTabSize');
-let fmEditorWrap = $('#fmEditorWrap');
-let fmEditorStatus = $('#fmEditorStatus');
-
-function bindActiveEditorElements(panel = activeEditorPanel || fmEditorModal) {
-    if (!panel) return;
-    activeEditorPanel = panel;
-    fmEditorModal = panel;
-    fmEditorTitle = panel.querySelector('#fmEditorTitle, [data-editor-role="title"]');
-    fmEditorMain = panel.querySelector('#fmEditorMain, [data-editor-role="main"]');
-    fmEditorTextarea = panel.querySelector('#fmEditorTextarea, [data-editor-role="textarea"]');
-    fmEditorLineNumbers = panel.querySelector('#fmEditorLineNumbers, [data-editor-role="lineNumbers"]');
-    fmEditorHighlight = panel.querySelector('#fmEditorHighlight, [data-editor-role="highlight"]');
-    fmEditorIndentGuides = panel.querySelector('#fmEditorIndentGuides, [data-editor-role="indentGuides"]');
-    fmEditorMinimap = panel.querySelector('#fmEditorMinimap, [data-editor-role="minimap"]');
-    fmEditorMinimapCode = panel.querySelector('#fmEditorMinimapCode, [data-editor-role="minimapCode"]');
-    fmEditorMinimapToggle = panel.querySelector('#fmEditorMinimapToggle, [data-editor-action="minimap"]');
-    fmEditorFullscreenBtn = panel.querySelector('#fmEditorFullscreenBtn, [data-editor-action="fullscreen"]');
-    fmEditorSaveBtn = panel.querySelector('#fmEditorSaveBtn, [data-editor-action="save"]');
-    fmEditorCancelBtn = panel.querySelector('#fmEditorCancelBtn, [data-editor-action="cancel"]');
-    fmEditorCloseBtn = panel.querySelector('#fmEditorCloseBtn, [data-editor-action="close"]');
-    fmEditorUndoBtn = panel.querySelector('#fmEditorUndoBtn, [data-editor-action="undo"]');
-    fmEditorRedoBtn = panel.querySelector('#fmEditorRedoBtn, [data-editor-action="redo"]');
-    fmEditorEncoding = panel.querySelector('#fmEditorEncoding, [data-editor-field="encoding"]');
-    fmEditorLineEnding = panel.querySelector('#fmEditorLineEnding, [data-editor-field="lineEnding"]');
-    fmEditorTabSize = panel.querySelector('#fmEditorTabSize, [data-editor-field="tabSize"]');
-    fmEditorWrap = panel.querySelector('#fmEditorWrap, [data-editor-field="wrap"]');
-    fmEditorStatus = panel.querySelector('#fmEditorStatus, [data-editor-role="status"]');
-    editorFilePath = panel.dataset.editorPath || editorFilePath;
-    editorLanguage = panel._editorLanguage || detectEditorLanguage(editorFilePath || '');
-    editorRawBytes = panel._editorRawBytes || null;
-    editorFullscreenRestore = panel._fullscreenRestore || null;
-}
-
-function markEditorTemplateRoles(panel = fmEditorModal) {
-    if (!panel || panel._editorRolesMarked) return;
-    panel._editorRolesMarked = true;
-    panel.querySelector('#fmEditorTitle')?.setAttribute('data-editor-role', 'title');
-    panel.querySelector('#fmEditorMain')?.setAttribute('data-editor-role', 'main');
-    panel.querySelector('#fmEditorTextarea')?.setAttribute('data-editor-role', 'textarea');
-    panel.querySelector('#fmEditorLineNumbers')?.setAttribute('data-editor-role', 'lineNumbers');
-    panel.querySelector('#fmEditorHighlight')?.setAttribute('data-editor-role', 'highlight');
-    panel.querySelector('#fmEditorIndentGuides')?.setAttribute('data-editor-role', 'indentGuides');
-    panel.querySelector('#fmEditorMinimap')?.setAttribute('data-editor-role', 'minimap');
-    panel.querySelector('#fmEditorMinimapCode')?.setAttribute('data-editor-role', 'minimapCode');
-    panel.querySelector('#fmEditorStatus')?.setAttribute('data-editor-role', 'status');
-    panel.querySelector('#fmEditorFullscreenBtn')?.setAttribute('data-editor-action', 'fullscreen');
-    panel.querySelector('#fmEditorMinimapToggle')?.setAttribute('data-editor-action', 'minimap');
-    panel.querySelector('#fmEditorUndoBtn')?.setAttribute('data-editor-action', 'undo');
-    panel.querySelector('#fmEditorRedoBtn')?.setAttribute('data-editor-action', 'redo');
-    panel.querySelector('#fmEditorCloseBtn')?.setAttribute('data-editor-action', 'close');
-    panel.querySelector('#fmEditorSaveBtn')?.setAttribute('data-editor-action', 'save');
-    panel.querySelector('#fmEditorCancelBtn')?.setAttribute('data-editor-action', 'cancel');
-    panel.querySelector('#fmEditorEncoding')?.setAttribute('data-editor-field', 'encoding');
-    panel.querySelector('#fmEditorLineEnding')?.setAttribute('data-editor-field', 'lineEnding');
-    panel.querySelector('#fmEditorTabSize')?.setAttribute('data-editor-field', 'tabSize');
-    panel.querySelector('#fmEditorWrap')?.setAttribute('data-editor-field', 'wrap');
-}
-
-markEditorTemplateRoles(fmEditorModal);
-bindActiveEditorElements(fmEditorModal);
+const fmEditorMinimap = $('#fmEditorMinimap');
+const fmEditorMinimapCode = $('#fmEditorMinimapCode');
+const fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
+const fmEditorFullscreenBtn = $('#fmEditorFullscreenBtn');
+const fmEditorSaveBtn = $('#fmEditorSaveBtn');
+const fmEditorCancelBtn = $('#fmEditorCancelBtn');
+const fmEditorCloseBtn = $('#fmEditorCloseBtn');
+const fmEditorUndoBtn = $('#fmEditorUndoBtn');
+const fmEditorRedoBtn = $('#fmEditorRedoBtn');
+const fmEditorEncoding = $('#fmEditorEncoding');
+const fmEditorLineEnding = $('#fmEditorLineEnding');
+const fmEditorTabSize = $('#fmEditorTabSize');
+const fmEditorWrap = $('#fmEditorWrap');
+const fmEditorStatus = $('#fmEditorStatus');
 
 // 监控相关 DOM
 const infoModal = $('#infoModal');
@@ -215,8 +157,6 @@ let editorLanguage = 'plain';
 let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
 let editorFullscreenRestore = null;
-let activeEditorPanel = null;
-const openEditorPanels = new Map();
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
@@ -2880,8 +2820,7 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen) {
 
 function toggleEditorFullscreen(force) {
     if (!fmEditorModal || !fileManager) return;
-    const panel = fmEditorModal;
-    const isFullscreen = panel.classList.contains('fullscreen');
+    const isFullscreen = fmEditorModal.classList.contains('fullscreen');
     const shouldFullscreen = typeof force === 'boolean' ? force : !isFullscreen;
     if (shouldFullscreen === isFullscreen) {
         updateEditorFullscreenButton();
@@ -2902,14 +2841,12 @@ function toggleEditorFullscreen(force) {
             parent: fmEditorModal.parentNode,
             nextSibling: fmEditorModal.nextSibling,
         };
-        panel._fullscreenRestore = editorFullscreenRestore;
         document.body.appendChild(fmEditorModal);
         applyEditorFullscreenRect();
     } else if (editorFullscreenRestore?.parent) {
         editorFullscreenRestore.parent.insertBefore(fmEditorModal, editorFullscreenRestore.nextSibling);
         Object.assign(fmEditorModal.style, editorFullscreenRestore.style || {});
         editorFullscreenRestore = null;
-        panel._fullscreenRestore = null;
     }
     fmEditorModal.classList.add('fullscreen-animating');
     fmEditorModal.classList.toggle('fullscreen', shouldFullscreen);
@@ -2931,23 +2868,16 @@ function toggleEditorFullscreen(force) {
 }
 
 function closeEditor({ animated = true } = {}) {
-    const panel = fmEditorModal;
-    const closingPath = panel?.dataset.editorPath || editorFilePath;
-    const wasFullscreen = panel?.classList.contains('fullscreen');
+    const wasFullscreen = fmEditorModal?.classList.contains('fullscreen');
     toggleEditorFullscreen(false);
     if (!animated) {
         if (wasFullscreen) {
             window.clearTimeout(toggleEditorFullscreen._timer);
-            panel.classList.remove('fullscreen-animating');
+            fmEditorModal.classList.remove('fullscreen-animating');
             setEditorChildrenVisibility(true);
         }
-        panel.style.display = 'none';
-        panel.classList.remove('open', 'closing');
-        if (closingPath) openEditorPanels.delete(closingPath);
-        delete panel.dataset.editorPath;
-        panel._editorRawBytes = null;
-        panel._editorLanguage = null;
-        if (panel !== document.getElementById('fmEditorModal')) panel.remove();
+        fmEditorModal.style.display = 'none';
+        fmEditorModal.classList.remove('open', 'closing');
         return;
     }
     window.clearTimeout(closeEditor._timer);
@@ -2955,17 +2885,12 @@ function closeEditor({ animated = true } = {}) {
         closeEditor._timer = window.setTimeout(() => closeEditor({ animated: true }), 360);
         return;
     }
-    panel.classList.remove('open');
-    panel.classList.add('closing');
+    fmEditorModal.classList.remove('open');
+    fmEditorModal.classList.add('closing');
     window.clearTimeout(closeEditor._timer);
     closeEditor._timer = window.setTimeout(() => {
-        panel.style.display = 'none';
-        panel.classList.remove('closing');
-        if (closingPath) openEditorPanels.delete(closingPath);
-        delete panel.dataset.editorPath;
-        panel._editorRawBytes = null;
-        panel._editorLanguage = null;
-        if (panel !== document.getElementById('fmEditorModal')) panel.remove();
+        fmEditorModal.style.display = 'none';
+        fmEditorModal.classList.remove('closing');
     }, 260);
 }
 
@@ -2980,7 +2905,6 @@ function applyEditorOptions() {
 
 function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
     editorRawBytes = bytes;
-    if (activeEditorPanel) activeEditorPanel._editorRawBytes = bytes;
     let text = decodeBytes(bytes, encoding);
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
     fmEditorTextarea.value = text;
@@ -2989,234 +2913,17 @@ function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
     updateEditorStatus();
 }
 
-function setupEditorControlEvents(panel) {
-    if (!panel || panel._editorControlEventsReady || panel.id === 'fmEditorModal') return;
-    panel._editorControlEventsReady = true;
-    panel.addEventListener('click', (e) => {
-        const actionEl = e.target.closest('[data-editor-action]');
-        if (!actionEl || !panel.contains(actionEl)) return;
-        bindActiveEditorElements(panel);
-        const action = actionEl.dataset.editorAction;
-        if (action === 'close' || action === 'cancel') closeEditor();
-        else if (action === 'fullscreen') toggleEditorFullscreen();
-        else if (action === 'undo') {
-            fmEditorTextarea.focus();
-            document.execCommand('undo');
-            updateEditorStatus();
-        } else if (action === 'redo') {
-            fmEditorTextarea.focus();
-            document.execCommand('redo');
-            updateEditorStatus();
-        } else if (action === 'save') {
-            if (!editorFilePath) return;
-            const text = normalizeLineEnding(fmEditorTextarea.value, fmEditorLineEnding.value);
-            const bytes = encodeText(text, fmEditorEncoding.value);
-            wsConnection.send(JSON.stringify({
-                type: 'sftp-writefile',
-                path: editorFilePath,
-                data: bytesToBase64(bytes),
-                encoding: 'base64',
-            }));
-            closeEditor();
-        } else if (action === 'minimap') {
-            editorMinimapHidden = !editorMinimapHidden;
-            localStorage.setItem('zephyr-editor-minimap-hidden', editorMinimapHidden ? '1' : '0');
-            updateEditorMinimap();
-        }
-    });
-    panel.addEventListener('change', (e) => {
-        bindActiveEditorElements(panel);
-        if (e.target.matches('[data-editor-field="encoding"]')) {
-            if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value);
-        } else if (e.target.matches('[data-editor-field="lineEnding"]')) updateEditorStatus();
-        else if (e.target.matches('[data-editor-field="tabSize"], [data-editor-field="wrap"]')) applyEditorOptions();
-    });
-    const textarea = panel.querySelector('[data-editor-role="textarea"]');
-    textarea?.addEventListener('input', () => {
-        bindActiveEditorElements(panel);
-        updateEditorStatus();
-    });
-    textarea?.addEventListener('scroll', () => {
-        bindActiveEditorElements(panel);
-        syncEditorCodeScroll();
-    }, { passive: true });
-    textarea?.addEventListener('keydown', (e) => {
-        if (e.key !== 'Tab') return;
-        bindActiveEditorElements(panel);
-        e.preventDefault();
-        const tab = ' '.repeat(Number(fmEditorTabSize.value) || 4);
-        const { selectionStart, selectionEnd, value } = fmEditorTextarea;
-        fmEditorTextarea.value = value.slice(0, selectionStart) + tab + value.slice(selectionEnd);
-        fmEditorTextarea.selectionStart = fmEditorTextarea.selectionEnd = selectionStart + tab.length;
-        updateEditorStatus();
-    });
-    const minimap = panel.querySelector('[data-editor-role="minimap"]');
-    minimap?.addEventListener('pointerdown', (e) => {
-        bindActiveEditorElements(panel);
-        e.preventDefault();
-        fmEditorMinimap.setPointerCapture?.(e.pointerId);
-        fmEditorMinimap.classList.add('dragging');
-        setEditorScrollFromMinimap(e.clientY);
-        fmEditorTextarea.focus();
-        const onMove = (ev) => setEditorScrollFromMinimap(ev.clientY);
-        const onUp = () => {
-            fmEditorMinimap.classList.remove('dragging');
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-        };
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp, { once: true });
-    });
-}
-
-function createEditorWindow(filePath) {
-    markEditorTemplateRoles(fmEditorModal);
-    const template = document.getElementById('fmEditorModal') || fmEditorModal;
-    const panel = openEditorPanels.size === 0 && template && !template.dataset.editorPath
-        ? template
-        : template.cloneNode(true);
-    const isTemplatePanel = panel === template;
-    if (panel !== template) {
-        panel.removeAttribute('id');
-        panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
-        fileManager.appendChild(panel);
-    }
-    panel.classList.add('editor-window');
-    panel.dataset.editorPath = filePath;
-    panel.style.display = 'flex';
-    panel.style.left = `${16 + (openEditorPanels.size % 4) * 22}px`;
-    panel.style.top = `${52 + (openEditorPanels.size % 4) * 22}px`;
-    panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
-    panel.style.width = panel.style.width || 'min(760px, calc(100vw - 32px))';
-    panel.style.height = panel.style.height || 'min(620px, calc(100dvh - 112px))';
-    if (!panel.querySelector('[data-resize-editor-edge="left"]')) {
-        const leftHandle = document.createElement('div');
-        leftHandle.className = 'panel-resize-handle left';
-        leftHandle.dataset.resizeEditorEdge = 'left';
-        leftHandle.title = '拖动调整大小';
-        const rightHandle = document.createElement('div');
-        rightHandle.className = 'panel-resize-handle right';
-        rightHandle.dataset.resizeEditorEdge = 'right';
-        rightHandle.title = '拖动调整大小';
-        panel.append(leftHandle, rightHandle);
-    }
-    setupEditorControlEvents(panel);
-    setupEditorWindowInteractions(panel);
-    openEditorPanels.set(filePath, panel);
-    return panel;
-}
-
-function setupEditorWindowInteractions(panel) {
-    if (!panel || panel._editorWindowInteractionsReady) return;
-    panel._editorWindowInteractionsReady = true;
-    panel.addEventListener('pointerdown', () => {
-        bindActiveEditorElements(panel);
-        bringPanelToFront(panel);
-    });
-    const header = panel.querySelector('.fm-editor-header');
-    header?.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button,input,select,textarea,label')) return;
-        e.preventDefault();
-        bindActiveEditorElements(panel);
-        bringPanelToFront(panel);
-        panel.classList.add('dragging');
-        header.setPointerCapture?.(e.pointerId);
-        const startX = e.clientX;
-        const startY = e.clientY;
-        const startLeft = panel.offsetLeft;
-        const startTop = panel.offsetTop;
-        const onMove = (ev) => {
-            ev.preventDefault();
-            panel.style.left = `${startLeft + ev.clientX - startX}px`;
-            panel.style.top = `${startTop + ev.clientY - startY}px`;
-            panel.style.right = 'auto';
-            panel.style.bottom = 'auto';
-            clampPanel(panel);
-        };
-        const onUp = () => {
-            panel.classList.remove('dragging');
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-        };
-        window.addEventListener('pointermove', onMove, { passive: false });
-        window.addEventListener('pointerup', onUp, { once: true });
-    });
-    panel.querySelectorAll('[data-resize-editor-edge]').forEach((handle) => {
-        handle.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            bindActiveEditorElements(panel);
-            bringPanelToFront(panel);
-            panel.classList.add('resizing');
-            handle.setPointerCapture?.(e.pointerId);
-            const startX = e.clientX;
-            const startY = e.clientY;
-            const startWidth = panel.offsetWidth;
-            const startHeight = panel.offsetHeight;
-            const startLeft = panel.offsetLeft;
-            const edge = handle.dataset.resizeEditorEdge || 'right';
-            const parentRect = panel.parentElement.getBoundingClientRect();
-            const compact = isCompactScreen();
-            const minWidth = compact ? 280 : 420;
-            const minHeight = compact ? 260 : 320;
-            const onMove = (ev) => {
-                ev.preventDefault();
-                let nextLeft = startLeft;
-                let nextWidth = startWidth + ev.clientX - startX;
-                if (edge === 'left') {
-                    nextWidth = startWidth - (ev.clientX - startX);
-                    nextLeft = startLeft + (ev.clientX - startX);
-                    if (nextWidth < minWidth) {
-                        nextLeft -= minWidth - nextWidth;
-                        nextWidth = minWidth;
-                    }
-                    if (nextLeft < 8) {
-                        nextWidth += nextLeft - 8;
-                        nextLeft = 8;
-                    }
-                    panel.style.left = `${nextLeft}px`;
-                }
-                const maxWidth = edge === 'left' ? startLeft + startWidth - 8 : parentRect.width - panel.offsetLeft - 12;
-                const maxHeight = parentRect.height - panel.offsetTop - 12;
-                const width = Math.min(Math.max(minWidth, nextWidth), maxWidth);
-                const height = Math.min(Math.max(minHeight, startHeight + ev.clientY - startY), maxHeight);
-                panel.style.width = `${width}px`;
-                panel.style.height = `${height}px`;
-                renderEditorCodeLayers();
-                updateEditorMinimapViewport();
-            };
-            const onUp = () => {
-                panel.classList.remove('resizing');
-                window.removeEventListener('pointermove', onMove);
-                window.removeEventListener('pointerup', onUp);
-                renderEditorCodeLayers();
-                updateEditorMinimapViewport();
-            };
-            window.addEventListener('pointermove', onMove, { passive: false });
-            window.addEventListener('pointerup', onUp, { once: true });
-        });
-    });
-}
-
 function openEditor(filePath) {
-    let panel = openEditorPanels.get(filePath);
-    if (!panel) {
-        panel = createEditorWindow(filePath);
-    }
-    bindActiveEditorElements(panel);
     editorFilePath = filePath;
     editorLanguage = detectEditorLanguage(filePath);
-    panel._editorLanguage = editorLanguage;
     toggleEditorFullscreen(false);
-    panel.style.display = 'flex';
-    panel.classList.remove('closing');
-    requestAnimationFrame(() => panel.classList.add('open'));
+    fmEditorModal.style.display = 'flex';
+    fmEditorModal.classList.remove('closing');
+    requestAnimationFrame(() => fmEditorModal.classList.add('open'));
     fmEditorTitle.textContent = `编辑: ${filePath}`;
     fmEditorStatus.textContent = '读取中...';
     fmEditorTextarea.value = '';
     updateEditorMinimap();
-    bringPanelToFront(panel);
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
 }
 function updateEditorFullscreenBounds() {
@@ -3345,7 +3052,6 @@ function handleSFTPMessage(msg) {
             }
             break;
         case 'sftp-readfile':
-            if (msg.path && openEditorPanels.has(msg.path)) bindActiveEditorElements(openEditorPanels.get(msg.path));
             if (msg.error) {
                 alert('读取失败: ' + msg.error);
                 fmEditorStatus.textContent = '读取失败';
@@ -3356,7 +3062,6 @@ function handleSFTPMessage(msg) {
             }
             break;
         case 'sftp-writefile':
-            if (msg.path && openEditorPanels.has(msg.path)) bindActiveEditorElements(openEditorPanels.get(msg.path));
             if (msg.success) { refreshFileList(); closeEditor(); } else alert('保存失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-error': alert('SFTP 错误: ' + msg.message); sftpReady = false; break;
@@ -4921,7 +4626,7 @@ function setupPanelLayoutMenu() {
 function bringPanelToFront(panel) {
     if (!panel) return;
     const wasFront = panel.classList.contains('front');
-    document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window').forEach((p) => {
+    document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel').forEach((p) => {
         p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
