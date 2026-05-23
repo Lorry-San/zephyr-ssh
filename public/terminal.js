@@ -160,6 +160,7 @@ let editorFullscreenRestore = null;
 let activeEditorPanel = null;
 let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
+const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window';
 const editorPanelsByPath = new Map();
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -2724,9 +2725,29 @@ function setEditorScrollFromMinimap(clientY) {
 
 function allocateFloatingPanelZIndex(panel) {
     const currentZIndex = Number(panel?.style?.zIndex || 0) || 0;
-    floatingPanelZIndexSeed = Math.max(floatingPanelZIndexSeed, editorZIndexSeed, currentZIndex) + 1;
+    let maxZIndex = Math.max(floatingPanelZIndexSeed, editorZIndexSeed, currentZIndex);
+    document.querySelectorAll(FLOATING_PANEL_SELECTOR).forEach((item) => {
+        maxZIndex = Math.max(maxZIndex, Number(item.style.zIndex || 0) || 0);
+    });
+    floatingPanelZIndexSeed = maxZIndex + 1;
     editorZIndexSeed = Math.max(editorZIndexSeed, floatingPanelZIndexSeed);
     return floatingPanelZIndexSeed;
+}
+
+function dockEditorPanel(panel) {
+    if (!panel) return panel;
+    const terminalPage = document.querySelector('.terminal-page');
+    if (!terminalPage || panel.parentElement === terminalPage || panel.classList?.contains('fullscreen')) return panel;
+    const rect = panel.getBoundingClientRect?.();
+    const pageRect = terminalPage.getBoundingClientRect?.();
+    terminalPage.appendChild(panel);
+    if (rect && pageRect) {
+        panel.style.left = `${Math.round(rect.left - pageRect.left)}px`;
+        panel.style.top = `${Math.round(rect.top - pageRect.top)}px`;
+    }
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    return panel;
 }
 
 function updateEditorZIndex(panel) {
@@ -3046,11 +3067,12 @@ function setupEditorPanel(panel) {
     panel._editorPanelReady = true;
     markEditorRoles(panel);
     panel.classList.add('editor-window');
-    if (panel === document.getElementById('fmEditorModal') && panel.parentElement !== document.body) {
+    if (panel === document.getElementById('fmEditorModal') && panel.parentElement !== document.querySelector('.terminal-page')) {
         const rect = fileManager.getBoundingClientRect();
-        document.body.appendChild(panel);
-        panel.style.left = `${Math.round(rect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
-        panel.style.top = `${Math.round(rect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
+        dockEditorPanel(panel);
+        const pageRect = panel.parentElement.getBoundingClientRect();
+        panel.style.left = `${Math.round(rect.left - pageRect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
+        panel.style.top = `${Math.round(rect.top - pageRect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
     }
@@ -3088,7 +3110,7 @@ function setupEditorPanel(panel) {
             panel.style.top = `${startTop + ev.clientY - startY}px`;
             panel.style.right = 'auto';
             panel.style.bottom = 'auto';
-            if (panel.parentElement !== document.body) clampPanel(panel);
+            clampPanel(panel);
         };
         const onUp = () => {
             panel.classList.remove('dragging');
@@ -3112,7 +3134,7 @@ function setupEditorPanel(panel) {
             const startHeight = panel.offsetHeight;
             const startLeft = panel.offsetLeft;
             const edge = handle.dataset.editorResizeEdge || 'right';
-            const parentRect = (panel.classList.contains('fullscreen') || panel.parentElement === document.body)
+            const parentRect = panel.classList.contains('fullscreen')
                 ? { width: window.innerWidth || document.documentElement.clientWidth || startWidth, height: window.innerHeight || document.documentElement.clientHeight || startHeight }
                 : panel.parentElement.getBoundingClientRect();
             const minWidth = isCompactScreen() ? 280 : 420;
@@ -3171,14 +3193,15 @@ function createEditorPanel(filePath) {
     if (panel !== template) {
         panel.removeAttribute('id');
         panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
-        document.body.appendChild(panel);
+        dockEditorPanel(panel);
     }
     panel.dataset.editorPath = filePath;
     panel.style.display = 'flex';
-    if (panel.parentElement === document.body) {
+    if (panel.parentElement === document.querySelector('.terminal-page') && !panel.style.left && !panel.style.top) {
         const rect = fileManager.getBoundingClientRect();
-        panel.style.left = `${Math.round(rect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
-        panel.style.top = `${Math.round(rect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
+        const pageRect = panel.parentElement.getBoundingClientRect();
+        panel.style.left = `${Math.round(rect.left - pageRect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
+        panel.style.top = `${Math.round(rect.top - pageRect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
         updateEditorZIndex(panel);
     } else {
         panel.style.left = panel.style.left || `${16 + (editorPanelsByPath.size % 4) * 22}px`;
