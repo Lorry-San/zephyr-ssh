@@ -150,6 +150,7 @@ let allFiles = [];
 let pendingUploadFiles = [];
 const SFTP_UPLOAD_CHUNK_SIZE = 192 * 1024;
 const activeSftpUploads = new Map();
+let activeSftpDownloadCount = 0;
 let fileDragDepth = 0;
 let searchQuery = '';
 let editorFilePath = null;
@@ -1883,9 +1884,14 @@ function renderFileList(files) {
             downloadBtn.title = '下载';
             downloadBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                downloadBtn.disabled = true;
+                window.setTimeout(() => { downloadBtn.disabled = false; }, 2400);
+                const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
+                activeSftpDownloadCount += 1;
+                showToast(`准备下载：${file.name}`, 'info');
                 wsConnection.send(JSON.stringify({
                     type: 'sftp-download',
-                    path: currentPath.replace(/\/+$/, '') + '/' + file.name
+                    path: targetPath
                 }));
             });
             actions.appendChild(downloadBtn);
@@ -3427,17 +3433,29 @@ function handleSFTPMessage(msg) {
             showToast('上传失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-download':
+            activeSftpDownloadCount = Math.max(0, activeSftpDownloadCount - 1);
             if (msg.error) alert('下载失败: ' + msg.error);
-            else {
-                const byteChars = atob(msg.data);
-                const byteNums = new Array(byteChars.length).fill(0).map((_, i) => byteChars.charCodeAt(i));
-                const blob = new Blob([new Uint8Array(byteNums)]);
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; a.download = msg.path.split('/').pop(); a.click();
-                URL.revokeObjectURL(url);
-            }
             break;
+        case 'sftp-download-ready': {
+            activeSftpDownloadCount = Math.max(0, activeSftpDownloadCount - 1);
+            if (msg.error) {
+                alert('下载失败: ' + msg.error);
+                break;
+            }
+            if (!msg.url) {
+                alert('下载失败: 缺少下载地址');
+                break;
+            }
+            const a = document.createElement('a');
+            a.href = msg.url;
+            a.download = (msg.path || 'download').split('/').pop() || 'download';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            showToast('已开始流式下载，文件不会再加载到网页内存', 'success');
+            break;
+        }
         case 'sftp-readfile':
             if (msg.path && editorPanelsByPath.has(msg.path)) updateActiveEditorRefs(editorPanelsByPath.get(msg.path));
             if (msg.error) {

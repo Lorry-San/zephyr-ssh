@@ -39,6 +39,7 @@ const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const sessions = new Map();
 const sshTerminalSessions = new Map();
+const sftpDownloadTokens = new Map();
 const tempTotpTokens = new Map();
 const webauthnChallenges = new Map();
 const resetRequestHits = new Map();
@@ -71,6 +72,9 @@ function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
     if (!session || session.closed) return;
     session.closed = true;
     sshTerminalSessions.delete(session.id);
+    for (const [token, download] of sftpDownloadTokens.entries()) {
+        if (download.sessionId === session.id) sftpDownloadTokens.delete(token);
+    }
     console.info('[SSH-SESSION]', 'destroy', {
         sessionId: session.id,
         reason,
@@ -1823,6 +1827,42 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
+app.get('/api/sftp/download/:token', requireAuth, (req, res) => {
+    const token = String(req.params.token || '');
+    const download = sftpDownloadTokens.get(token);
+    if (!download || download.username !== req.session.username || download.expiresAt < Date.now()) {
+        sftpDownloadTokens.delete(token);
+        return res.status(404).send('下载链接已失效');
+    }
+    const session = sshTerminalSessions.get(download.sessionId);
+    const sftp = session?.sftpStream;
+    if (!session || session.closed || !sftp) {
+        sftpDownloadTokens.delete(token);
+        return res.status(410).send('SFTP 会话已关闭，请重新打开文件管理器后下载');
+    }
+    const fileName = path.basename(download.path || 'download') || 'download';
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    if (Number.isFinite(download.size) && download.size >= 0) res.setHeader('Content-Length', String(download.size));
+    const readStream = sftp.createReadStream(download.path, { highWaterMark: 256 * 1024 });
+    let settled = false;
+    const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        sftpDownloadTokens.delete(token);
+        try { readStream.destroy(); } catch {}
+    };
+    readStream.on('error', (err) => {
+        console.warn('[sftp-download]', 'stream failed', { path: download.path, error: err.message });
+        if (!res.headersSent) res.status(500).send(err.message || '下载失败');
+        else res.destroy(err);
+        cleanup();
+    });
+    res.on('close', cleanup);
+    readStream.on('end', cleanup);
+    readStream.pipe(res);
+});
+
 app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
 app.get('/vendor/@wterm/dom/terminal.css', (req, res) => {
     res.type('text/css').sendFile(path.join(__dirname, 'node_modules', '@wterm', 'dom', 'src', 'terminal.css'));
@@ -2073,8 +2113,10 @@ wss.on('connection', (ws, req) => {
             guacdSessionUuid = '';
         }
         if (sftpStream) {
-            try { sftpStream.end(); } catch {}
+            const closingSftp = sftpStream;
+            try { closingSftp.end(); } catch {}
             sftpStream = null;
+            if (attachedSshSession?.sftpStream === closingSftp) attachedSshSession.sftpStream = null;
         }
         if (destroySsh) {
             if (attachedSshSession) {
@@ -2106,6 +2148,7 @@ wss.on('connection', (ws, req) => {
         sshClient = session.sshClient;
         sshClients = session.sshClients || [session.sshClient].filter(Boolean);
         sshStream = session.sshStream;
+        sftpStream = session.sftpStream || null;
         session.attachedWs.add(ws);
         session.lastActive = Date.now();
         ws._sshTerminalSession = session;
@@ -2574,6 +2617,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     return;
                 }
                 sftpStream = sftp;
+                if (attachedSshSession) attachedSshSession.sftpStream = sftp;
                 sendJSON({ type: 'sftp-ready' });
             });
             return;
@@ -2667,15 +2711,31 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             return;
         }
 
-        // 下载文件（返回 base64）
+        // 下载文件：签发一次性 HTTP 下载地址，由浏览器通过响应流直接落盘，避免在 WebSocket/JS 内存中拼接大文件。
         if (msg.type === 'sftp-download') {
-            sftpStream.readFile(msg.path, (err, data) => {
+            const targetPath = String(msg.path || '');
+            if (!targetPath) {
+                sendJSON({ type: 'sftp-download', path: targetPath, error: '缺少下载路径' });
+                return;
+            }
+            sftpStream.stat(targetPath, (err, stats) => {
                 if (err) {
-                    sendJSON({ type: 'sftp-download', path: msg.path, error: err.message });
+                    sendJSON({ type: 'sftp-download', path: targetPath, error: err.message });
                     return;
                 }
-                const base64 = Buffer.isBuffer(data) ? data.toString('base64') : '';
-                sendJSON({ type: 'sftp-download', path: msg.path, data: base64 });
+                if (stats.isDirectory?.()) {
+                    sendJSON({ type: 'sftp-download', path: targetPath, error: '暂不支持直接下载目录' });
+                    return;
+                }
+                const token = crypto.randomBytes(24).toString('hex');
+                sftpDownloadTokens.set(token, {
+                    sessionId: attachedSshSession?.id || '',
+                    username: currentSession(req)?.username || '',
+                    path: targetPath,
+                    size: Number(stats.size) || 0,
+                    expiresAt: Date.now() + 5 * 60 * 1000,
+                });
+                sendJSON({ type: 'sftp-download-ready', path: targetPath, url: `/api/sftp/download/${token}`, size: Number(stats.size) || 0 });
             });
             return;
         }
