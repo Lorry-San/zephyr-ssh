@@ -2894,7 +2894,7 @@ html.keyboard-open .terminal-page {
 .info-modal.front,
 .snippet-panel.front,
 .shortcut-panel.front { z-index: 47; }
-.fm-editor-modal.editor-window.front { z-index: 101; }
+.fm-editor-modal.editor-window.front { z-index: 220; }
 .file-manager.front-switching,
 .info-modal.front-switching,
 .docker-panel.front-switching,
@@ -3473,7 +3473,7 @@ html.keyboard-open .terminal-page {
     height: min(620px, calc(100dvh - 112px));
     min-width: 280px;
     min-height: 260px;
-    z-index: 48;
+    z-index: 120;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: 0 28px 90px rgba(0,0,0,0.38);
@@ -3520,7 +3520,7 @@ html.keyboard-open .terminal-page {
     height: var(--editor-fullscreen-height, 100dvh);
     right: auto;
     bottom: auto;
-    z-index: 100;
+    z-index: 240;
     border: 1px solid var(--border);
     border-radius: 22px;
     box-shadow: 0 30px 100px rgba(0,0,0,0.46);
@@ -3874,7 +3874,15 @@ body > .fm-editor-modal.fullscreen { display: flex; }
 :root[data-theme="light"] .tok-tag { color: #116329; }
 :root[data-theme="light"] .tok-variable,
 :root[data-theme="light"] .tok-type { color: #953800; }
-.fm-editor-actions { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.fm-editor-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: flex-start;
+    padding-left: clamp(0px, 44vw, 260px);
+    padding-right: 12px;
+    flex-wrap: wrap;
+}
 .fm-editor-actions .btn {
     width: auto;
     min-width: 96px;
