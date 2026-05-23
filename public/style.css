@@ -3542,6 +3542,19 @@ html.keyboard-open .terminal-page {
 .file-manager.editor-fullscreen-active .fm-list,
 .file-manager.editor-fullscreen-active .fm-drop-overlay,
 .file-manager.editor-fullscreen-active > .panel-resize-handle { pointer-events: none; }
+.fm-editor-modal.editor-fullscreen-morph-ghost {
+    overflow: hidden;
+    pointer-events: none !important;
+    contain: paint;
+}
+.fm-editor-modal.editor-fullscreen-morph-ghost,
+.fm-editor-modal.editor-fullscreen-morph-ghost * {
+    user-select: none !important;
+    caret-color: transparent !important;
+}
+.fm-editor-modal.editor-fullscreen-morph-ghost .fm-editor-textarea {
+    pointer-events: none;
+}
 body > .fm-editor-modal.fullscreen { display: flex; }
 .fm-editor-modal.fullscreen {
     position: fixed;
