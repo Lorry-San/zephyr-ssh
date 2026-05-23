@@ -2881,11 +2881,23 @@ function animateEditorFullscreenTransition(firstRect, shouldFullscreen) {
     });
 }
 
-function toggleEditorFullscreen(force) {
+function toggleEditorFullscreen(force, { restoreIfFullscreen = true } = {}) {
     if (!fmEditorModal) return;
     const isFullscreen = fmEditorModal.classList.contains('fullscreen');
     const shouldFullscreen = typeof force === 'boolean' ? force : !isFullscreen;
     if (shouldFullscreen === isFullscreen) {
+        if (shouldFullscreen) {
+            const firstRect = fmEditorModal.getBoundingClientRect();
+            applyEditorFullscreenRect();
+            animateEditorFullscreenTransition(firstRect, true);
+            window.clearTimeout(toggleEditorFullscreen._timer);
+            toggleEditorFullscreen._timer = window.setTimeout(() => {
+                fmEditorModal.classList.remove('fullscreen-animating');
+                setEditorChildrenVisibility(true);
+                renderEditorCodeLayers();
+                updateEditorMinimapViewport();
+            }, 760);
+        }
         updateEditorFullscreenButton();
         return;
     }
@@ -2908,6 +2920,10 @@ function toggleEditorFullscreen(force) {
         document.body.appendChild(fmEditorModal);
         applyEditorFullscreenRect();
     } else if (editorFullscreenRestore?.parent) {
+        if (!restoreIfFullscreen) {
+            updateEditorFullscreenButton();
+            return;
+        }
         editorFullscreenRestore.parent.insertBefore(fmEditorModal, editorFullscreenRestore.nextSibling);
         Object.assign(fmEditorModal.style, editorFullscreenRestore.style || {});
         editorFullscreenRestore = null;
@@ -2935,7 +2951,7 @@ function closeEditor({ animated = true } = {}) {
     const panel = fmEditorModal;
     const closingPath = panel?.dataset.editorPath || editorFilePath;
     const wasFullscreen = panel?.classList.contains('fullscreen');
-    toggleEditorFullscreen(false);
+    toggleEditorFullscreen(false, { restoreIfFullscreen: animated });
     const removePanel = () => {
         panel.style.display = 'none';
         panel.classList.remove('open', 'closing');
@@ -3048,7 +3064,9 @@ function setupEditorPanel(panel) {
             const startHeight = panel.offsetHeight;
             const startLeft = panel.offsetLeft;
             const edge = handle.dataset.editorResizeEdge || 'right';
-            const parentRect = panel.parentElement.getBoundingClientRect();
+            const parentRect = panel.classList.contains('fullscreen')
+                ? { width: window.innerWidth || document.documentElement.clientWidth || startWidth, height: window.innerHeight || document.documentElement.clientHeight || startHeight }
+                : panel.parentElement.getBoundingClientRect();
             const minWidth = isCompactScreen() ? 280 : 420;
             const minHeight = isCompactScreen() ? 260 : 320;
             const onMove = (ev) => {
@@ -3072,6 +3090,12 @@ function setupEditorPanel(panel) {
                 const maxHeight = parentRect.height - panel.offsetTop - 12;
                 panel.style.width = `${Math.min(Math.max(minWidth, nextWidth), maxWidth)}px`;
                 panel.style.height = `${Math.min(Math.max(minHeight, startHeight + ev.clientY - startY), maxHeight)}px`;
+                if (panel.classList.contains('fullscreen')) {
+                    panel.style.setProperty('--editor-fullscreen-left', `${panel.offsetLeft}px`);
+                    panel.style.setProperty('--editor-fullscreen-top', `${panel.offsetTop}px`);
+                    panel.style.setProperty('--editor-fullscreen-width', panel.style.width);
+                    panel.style.setProperty('--editor-fullscreen-height', panel.style.height);
+                }
                 renderEditorCodeLayers();
                 updateEditorMinimapViewport();
             };

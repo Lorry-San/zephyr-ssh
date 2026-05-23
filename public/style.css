@@ -3483,8 +3483,6 @@ html.keyboard-open .terminal-page {
 .fm-editor-modal.editor-window.dragging .fm-editor-header { cursor: grabbing; }
 .fm-editor-modal.editor-window .panel-resize-handle { z-index: 9; }
 .fm-editor-modal.editor-window.fullscreen { overflow: hidden; }
-.fm-editor-modal.fullscreen .panel-resize-handle,
-.fm-editor-modal.editor-window.fullscreen .panel-resize-handle { display: none !important; }
 .fm-editor-fullscreen-btn {
     position: relative;
     width: 26px;
