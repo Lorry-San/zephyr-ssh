@@ -1762,6 +1762,7 @@ function openNativeDownload(download) {
     const a = document.createElement('a');
     a.href = download.url;
     a.download = download.name || 'download';
+    a.target = '_blank';
     a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
