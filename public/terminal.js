@@ -153,6 +153,7 @@ let allFiles = [];
 let pendingUploadFiles = [];
 const activeSftpUploads = new Map();
 const activeSftpDownloads = new Map();
+let imagePreview = null;
 let transferPopover = null;
 let transferPopoverHideTimer = 0;
 let transferRenderRaf = 0;
@@ -165,7 +166,7 @@ let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') =
 let activeEditorPanel = null;
 let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
-const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window';
+const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal';
 const editorPanelsByPath = new Map();
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -2107,6 +2108,7 @@ fmList.addEventListener('click', (e) => {
     if (!fileName) return;
     const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
     if (fileType === 'd') navigateTo(fullPath);
+    else if (window.ZephyrImagePreview?.isImage?.(fullPath)) openImagePreview(fullPath);
     else openEditor(fullPath);
 });
 
@@ -2119,7 +2121,7 @@ function renderFileList(files) {
         item.className = 'fm-item';
         item.dataset.fileName = file.name;
         item.dataset.fileType = file.type;
-        const icon = file.type === 'd' ? '📁' : '📄';
+        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : '📄');
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
         const actions = document.createElement('div');
@@ -2151,6 +2153,17 @@ function renderFileList(files) {
         });
 
         if (file.type !== 'd') {
+            if (window.ZephyrImagePreview?.isImage?.(file.name)) {
+                const imagePreviewBtn = document.createElement('button');
+                imagePreviewBtn.textContent = '🖼️';
+                imagePreviewBtn.title = '预览图片';
+                imagePreviewBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
+                    openImagePreview(targetPath);
+                });
+                actions.appendChild(imagePreviewBtn);
+            }
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
             downloadBtn.title = '下载';
@@ -3367,6 +3380,29 @@ function createEditorPanel(filePath) {
     setupClonedEditorEvents(panel);
     editorPanelsByPath.set(filePath, panel);
     return panel;
+}
+
+function openImagePreview(filePath) {
+    if (!window.ZephyrImagePreview) {
+        showToast('图片预览模块未加载', 'error');
+        return;
+    }
+    if (!imagePreview) {
+        imagePreview = new window.ZephyrImagePreview({
+            send: (payload) => {
+                if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+                    showToast('SSH 尚未连接，无法预览图片', 'error');
+                    return;
+                }
+                wsConnection.send(JSON.stringify(payload));
+            },
+            notify: showToast,
+            bringToFront: bringPanelToFront,
+            allocateZIndex: allocateFloatingPanelZIndex,
+            formatSize: formatTransferSize,
+        });
+    }
+    imagePreview.open(filePath);
 }
 
 function openEditor(filePath) {
@@ -5107,8 +5143,8 @@ function setupPanelLayoutMenu() {
 
 function bringPanelToFront(panel) {
     if (!panel) return;
-    if (panel.classList?.contains('editor-window')) {
-        document.querySelectorAll('.fm-editor-modal.editor-window').forEach((p) => {
+    if (panel.classList?.contains('editor-window') || panel.classList?.contains('image-preview-modal')) {
+        document.querySelectorAll('.fm-editor-modal.editor-window, .image-preview-modal').forEach((p) => {
             if (p !== panel) p.classList.remove('front-switching');
         });
         panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
@@ -5247,7 +5283,7 @@ setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
-    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, imagePreview?.modal].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
     if (!isTouchKeyboardDevice()) requestStableTerminalLayout('window-resize', { includeResize: true });
@@ -5926,7 +5962,11 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     }
                     return;
                 }
-                if (msg.type?.startsWith('sftp-')) { handleSFTPMessage(msg); return; }
+                if (msg.type?.startsWith('sftp-')) {
+                    if (imagePreview?.handleMessage?.(msg)) return;
+                    handleSFTPMessage(msg);
+                    return;
+                }
                 if (msg.type?.startsWith('docker-')) { handleDockerMessage(msg); return; }
                 switch (msg.type) {
                     case 'ready':

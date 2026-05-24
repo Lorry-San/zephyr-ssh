@@ -1,0 +1,247 @@
+(function () {
+    'use strict';
+
+    const IMAGE_EXTENSIONS = new Set([
+        'jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'avif',
+        'tif', 'tiff', 'heic', 'heif', 'jxl', 'jp2', 'j2k', 'bmp', 'dib', 'ico', 'cur', 'icns',
+        'psd', 'psb', 'xcf', 'dds', 'tga', 'hdr', 'exr', 'pnm', 'pbm', 'pgm', 'ppm', 'pam',
+        'pcx', 'sgi', 'ras', 'sun', 'fits', 'fit', 'dng', 'cr2', 'cr3', 'nef', 'arw', 'orf',
+        'rw2', 'raf', 'pef', 'srw', 'x3f', 'mrw', 'erf', 'kdc', 'dcr', 'mos'
+    ]);
+
+    function extname(filePath) {
+        const base = String(filePath || '').split(/[\\/]/).pop() || '';
+        const idx = base.lastIndexOf('.');
+        return idx > -1 ? base.slice(idx + 1).toLowerCase() : '';
+    }
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (ch) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+    }
+
+    function formatSize(bytes) {
+        const value = Number(bytes) || 0;
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = value;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+        return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+    }
+
+    class ZephyrImagePreview {
+        constructor(options = {}) {
+            this.send = options.send || (() => {});
+            this.notify = options.notify || (() => {});
+            this.bringToFront = options.bringToFront || (() => {});
+            this.allocateZIndex = options.allocateZIndex || (() => '320');
+            this.formatSize = options.formatSize || formatSize;
+            this.currentPath = '';
+            this.pending = new Set();
+            this.viewer = null;
+            this.modal = this.createModal();
+            (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
+        }
+
+        static isImage(filePath) {
+            return IMAGE_EXTENSIONS.has(extname(filePath));
+        }
+
+        createModal() {
+            const modal = document.createElement('div');
+            modal.className = 'image-preview-modal';
+            modal.style.display = 'none';
+            modal.innerHTML = `
+                <div class="image-preview-header panel-titlebar">
+                    <div class="image-preview-title" data-role="title">图片预览</div>
+                    <div class="image-preview-actions">
+                        <button class="tool-btn" type="button" data-action="refresh" title="重新加载预览">刷新</button>
+                        <button class="tool-btn" type="button" data-action="open-viewer" title="打开 Viewer.js 查看器">查看</button>
+                        <button class="tool-btn" type="button" data-action="close" title="关闭">✕</button>
+                    </div>
+                </div>
+                <div class="image-preview-body" data-role="body">
+                    <div class="image-preview-state" data-role="state">准备预览...</div>
+                    <div class="image-preview-stage" data-role="stage" style="display:none;"><img data-role="image" alt="图片预览"></div>
+                </div>
+                <div class="image-preview-meta" data-role="meta"></div>
+                <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
+            modal.addEventListener('pointerdown', () => this.bringToFront(modal));
+            modal.querySelector('[data-action="close"]')?.addEventListener('click', () => this.close());
+            modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
+            modal.querySelector('[data-action="open-viewer"]')?.addEventListener('click', () => this.showViewer());
+            this.setupDrag(modal);
+            this.setupResize(modal);
+            return modal;
+        }
+
+        setupDrag(modal) {
+            const header = modal.querySelector('.image-preview-header');
+            header?.addEventListener('pointerdown', (event) => {
+                if (event.target.closest('button,input,select,textarea,label')) return;
+                event.preventDefault();
+                this.bringToFront(modal);
+                header.setPointerCapture?.(event.pointerId);
+                const rect = modal.getBoundingClientRect();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const startLeft = rect.left;
+                const startTop = rect.top;
+                const onMove = (ev) => {
+                    const left = Math.min(Math.max(6, startLeft + ev.clientX - startX), window.innerWidth - 80);
+                    const top = Math.min(Math.max(6, startTop + ev.clientY - startY), window.innerHeight - 80);
+                    modal.style.left = `${left}px`;
+                    modal.style.top = `${top}px`;
+                    modal.style.right = 'auto';
+                    modal.style.bottom = 'auto';
+                };
+                const onUp = () => {
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                };
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onUp, { once: true });
+            });
+        }
+
+        setupResize(modal) {
+            modal.querySelectorAll('[data-role^="resize-"]').forEach((handle) => {
+                handle.addEventListener('pointerdown', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.bringToFront(modal);
+                    const edge = handle.dataset.role === 'resize-left' ? 'left' : 'right';
+                    const rect = modal.getBoundingClientRect();
+                    const startX = event.clientX;
+                    const startY = event.clientY;
+                    const startWidth = rect.width;
+                    const startHeight = rect.height;
+                    const startLeft = rect.left;
+                    const onMove = (ev) => {
+                        let width = edge === 'left' ? startWidth - (ev.clientX - startX) : startWidth + (ev.clientX - startX);
+                        let left = edge === 'left' ? startLeft + (ev.clientX - startX) : startLeft;
+                        width = Math.min(Math.max(300, width), window.innerWidth - 12);
+                        const height = Math.min(Math.max(260, startHeight + ev.clientY - startY), window.innerHeight - 12);
+                        if (edge === 'left') left = Math.max(6, startLeft + startWidth - width);
+                        modal.style.width = `${width}px`;
+                        modal.style.height = `${height}px`;
+                        modal.style.left = `${left}px`;
+                        modal.style.right = 'auto';
+                    };
+                    const onUp = () => {
+                        window.removeEventListener('pointermove', onMove);
+                        window.removeEventListener('pointerup', onUp);
+                    };
+                    window.addEventListener('pointermove', onMove);
+                    window.addEventListener('pointerup', onUp, { once: true });
+                });
+            });
+        }
+
+        open(filePath, options = {}) {
+            if (!filePath || !ZephyrImagePreview.isImage(filePath)) return false;
+            this.currentPath = filePath;
+            this.pending.add(filePath);
+            this.modal.style.display = 'flex';
+            if (!this.modal.style.left) {
+                this.modal.style.left = window.innerWidth <= 720 ? '6px' : '56px';
+                this.modal.style.top = window.innerWidth <= 720 ? '6px' : '72px';
+            }
+            this.bringToFront(this.modal);
+            this.setLoading(filePath);
+            this.send({ type: 'sftp-preview', path: filePath, force: !!options.force });
+            return true;
+        }
+
+        handleMessage(message) {
+            if (message?.type === 'sftp-preview-ready') {
+                this.pending.delete(message.path);
+                this.renderImage(message);
+                return true;
+            }
+            if (message?.type === 'sftp-preview') {
+                this.pending.delete(message.path);
+                if (message.error) this.setError(message.path, message.error);
+                return true;
+            }
+            return false;
+        }
+
+        setLoading(filePath) {
+            this.destroyViewer();
+            const title = this.modal.querySelector('[data-role="title"]');
+            const state = this.modal.querySelector('[data-role="state"]');
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            const meta = this.modal.querySelector('[data-role="meta"]');
+            const image = this.modal.querySelector('[data-role="image"]');
+            title.textContent = `图片预览: ${filePath.split('/').pop() || filePath}`;
+            state.className = 'image-preview-state loading';
+            state.textContent = '正在准备图片预览...';
+            state.style.display = 'grid';
+            stage.style.display = 'none';
+            image.removeAttribute('src');
+            meta.textContent = filePath;
+        }
+
+        setError(filePath, error) {
+            const state = this.modal.querySelector('[data-role="state"]');
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            state.className = 'image-preview-state error';
+            state.innerHTML = `<strong>预览失败</strong><span>${escapeHtml(error || '未知错误')}</span>`;
+            state.style.display = 'grid';
+            stage.style.display = 'none';
+            this.notify(`图片预览失败：${error || '未知错误'}`, 'error');
+        }
+
+        renderImage(message) {
+            if (!message?.url) return this.setError(message?.path || this.currentPath, '缺少预览地址');
+            this.currentPath = message.path || this.currentPath;
+            const state = this.modal.querySelector('[data-role="state"]');
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            const image = this.modal.querySelector('[data-role="image"]');
+            const meta = this.modal.querySelector('[data-role="meta"]');
+            const cacheBust = message.converted ? `&t=${Date.now()}` : '';
+            image.onload = () => {
+                state.style.display = 'none';
+                stage.style.display = 'grid';
+                this.initViewer(image);
+            };
+            image.onerror = () => this.setError(this.currentPath, '浏览器加载预览图片失败');
+            image.alt = this.currentPath.split('/').pop() || '图片预览';
+            image.src = `${message.url}${message.url.includes('?') ? '&' : '?'}inline=1${cacheBust}`;
+            meta.innerHTML = `<span title="${escapeHtml(this.currentPath)}">${escapeHtml(this.currentPath)}</span><b>${message.converted ? '已转 WebP' : '原图直出'}</b><em>${this.formatSize(message.size)}</em>`;
+        }
+
+        initViewer(image) {
+            this.destroyViewer();
+            if (!window.Viewer) return;
+            this.viewer = new window.Viewer(image, {
+                inline: false,
+                navbar: false,
+                toolbar: true,
+                title: [1, () => this.currentPath.split('/').pop() || '图片预览'],
+                viewed() { this.viewer.zoomTo(1); },
+            });
+        }
+
+        showViewer() {
+            if (this.viewer) this.viewer.show();
+            else this.modal.querySelector('[data-role="image"]')?.click();
+        }
+
+        destroyViewer() {
+            if (!this.viewer) return;
+            try { this.viewer.destroy(); } catch {}
+            this.viewer = null;
+        }
+
+        close() {
+            this.destroyViewer();
+            this.modal.style.display = 'none';
+        }
+    }
+
+    window.ZephyrImagePreview = ZephyrImagePreview;
+})();

@@ -6,6 +6,7 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
 const { spawn } = require('child_process');
 const nodemailer = require('nodemailer');
 const { TOTP, generateSecret, generateURI, verifySync } = require('otplib');
@@ -23,6 +24,14 @@ const {
 const { getRemoteStats } = require('./stats');
 const storage = require('./storage');
 const { handleEditorLspConnection } = require('./editor-lsp-server');
+const {
+    getImageExt,
+    isBrowserImageExt,
+    isPreviewImageExt,
+    getBrowserImageContentType,
+    ensurePreviewCacheFile,
+    cleanupPreviewCache,
+} = require('./preview/image/preview-service');
 
 const PORT = process.env.PORT || 3000;
 const GUACD_HOST = process.env.GUACD_HOST || '127.0.0.1';
@@ -42,6 +51,23 @@ const sessions = new Map();
 const sshTerminalSessions = new Map();
 const sftpDownloadTokens = new Map();
 const sftpUploadTokens = new Map();
+const sftpPreviewTokens = new Map();
+const previewCache = new Map();
+const PREVIEW_TOKEN_TTL = 10 * 60 * 1000;
+const PREVIEW_CACHE_TTL = 30 * 60 * 1000;
+const PREVIEW_CACHE_DIR = path.join(os.tmpdir(), 'zephyr-preview-cache');
+const BROWSER_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'avif']);
+const BROWSER_IMAGE_CONTENT_TYPES = new Map([
+    ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['png', 'image/png'], ['webp', 'image/webp'],
+    ['gif', 'image/gif'], ['svg', 'image/svg+xml'], ['avif', 'image/avif'],
+]);
+const PREVIEW_IMAGE_EXTENSIONS = new Set([
+    ...BROWSER_IMAGE_EXTENSIONS,
+    'tif', 'tiff', 'heic', 'heif', 'jxl', 'jp2', 'j2k', 'bmp', 'dib', 'ico', 'cur', 'icns',
+    'psd', 'psb', 'xcf', 'dds', 'tga', 'hdr', 'exr', 'pnm', 'pbm', 'pgm', 'ppm', 'pam',
+    'pcx', 'sgi', 'ras', 'sun', 'fits', 'fit', 'dng', 'cr2', 'cr3', 'nef', 'arw', 'orf',
+    'rw2', 'raf', 'pef', 'srw', 'x3f', 'mrw', 'erf', 'kdc', 'dcr', 'mos'
+]);
 const SFTP_DOWNLOAD_TOKEN_TTL = 24 * 60 * 60 * 1000;
 const SFTP_UPLOAD_TOKEN_TTL = 24 * 60 * 60 * 1000;
 const SFTP_DOWNLOAD_KEEPALIVE_INTERVAL = 30 * 1000;
@@ -90,6 +116,9 @@ function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
     }
     for (const [token, uploadTask] of sftpUploadTokens.entries()) {
         if (uploadTask.sessionId === session.id) sftpUploadTokens.delete(token);
+    }
+    for (const [token, previewTask] of sftpPreviewTokens.entries()) {
+        if (previewTask.sessionId === session.id) sftpPreviewTokens.delete(token);
     }
     console.info('[SSH-SESSION]', 'destroy', {
         sessionId: session.id,
@@ -1843,6 +1872,95 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
+app.get('/api/sftp/preview/:token', requireAuth, async (req, res) => {
+    const token = String(req.params.token || '');
+    const previewTask = sftpPreviewTokens.get(token);
+    if (!previewTask || previewTask.username !== req.session.username || previewTask.expiresAt < Date.now()) {
+        sftpPreviewTokens.delete(token);
+        return res.status(404).json({ error: '预览链接已失效' });
+    }
+    const connectionConfig = previewTask.connectionConfig;
+    if (!connectionConfig) {
+        sftpPreviewTokens.delete(token);
+        return res.status(410).json({ error: '预览连接配置已失效，请重新打开文件管理器后预览' });
+    }
+    const ext = getImageExt(previewTask.path);
+    if (!isPreviewImageExt(ext, PREVIEW_IMAGE_EXTENSIONS)) return res.status(415).json({ error: '当前文件不是已知图片格式' });
+
+    let routed = null;
+    let sftp = null;
+    const closeConnection = () => {
+        try { sftp?.end?.(); } catch {}
+        [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
+    };
+    try {
+        cleanupPreviewCache(previewCache);
+        routed = await createRoutedSSHConnection(connectionConfig, 10000);
+        sftp = await new Promise((resolve, reject) => {
+            routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
+        });
+        const stats = await new Promise((resolve, reject) => {
+            sftp.stat(previewTask.path, (err, nextStats) => err ? reject(err) : resolve(nextStats));
+        });
+        if (stats.isDirectory?.()) throw new Error('目录不支持图片预览');
+        const size = Number(stats.size) || 0;
+        const mtime = Number(stats.mtime) || Number(stats.modifyTime) || 0;
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(path.basename(previewTask.path))}`);
+        previewTask.expiresAt = Date.now() + PREVIEW_TOKEN_TTL;
+
+        if (isBrowserImageExt(ext, BROWSER_IMAGE_EXTENSIONS)) {
+            res.type(getBrowserImageContentType(ext, BROWSER_IMAGE_CONTENT_TYPES));
+            if (size) res.setHeader('Content-Length', String(size));
+            const readStream = sftp.createReadStream(previewTask.path);
+            readStream.on('error', (err) => {
+                closeConnection();
+                if (!res.headersSent) res.status(500).end(err.message || '图片预览读取失败');
+                else res.destroy(err);
+            });
+            res.on('close', closeConnection);
+            res.on('finish', closeConnection);
+            readStream.pipe(res);
+            return;
+        }
+
+        const result = await ensurePreviewCacheFile({
+            cache: { ttl: PREVIEW_CACHE_TTL },
+            cacheMap: previewCache,
+            cacheDir: PREVIEW_CACHE_DIR,
+            sourcePath: previewTask.path,
+            sourceSize: size,
+            sourceMtime: mtime,
+            ext,
+            readSourceFile: (inputPath) => new Promise((resolve, reject) => {
+                let settled = false;
+                const done = (err) => {
+                    if (settled) return;
+                    settled = true;
+                    err ? reject(err) : resolve();
+                };
+                const readStream = sftp.createReadStream(previewTask.path);
+                const writeStream = fs.createWriteStream(inputPath);
+                readStream.on('error', done);
+                writeStream.on('error', done);
+                writeStream.on('finish', () => done());
+                readStream.pipe(writeStream);
+            }),
+        });
+        res.type('image/webp');
+        res.setHeader('X-Zephyr-Preview-Engine', result.engine || 'unknown');
+        res.sendFile(result.outputPath, (err) => {
+            closeConnection();
+            if (err) console.warn('[sftp-preview]', 'send failed', { path: previewTask.path, error: err.message });
+        });
+    } catch (err) {
+        closeConnection();
+        console.warn('[sftp-preview]', 'failed', { path: previewTask?.path || '', error: err.message });
+        if (!res.headersSent) res.status(500).json({ error: err.message || '图片预览失败' });
+    }
+});
+
 app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
     const token = String(req.params.token || '');
     const uploadTask = sftpUploadTokens.get(token);
@@ -2166,6 +2284,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     readStream.pipe(res);
 });
 
+app.use('/vendor/viewerjs', express.static(path.join(__dirname, 'node_modules', 'viewerjs', 'dist')));
 app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
 app.get('/vendor/@wterm/dom/terminal.css', (req, res) => {
     res.type('text/css').sendFile(path.join(__dirname, 'node_modules', '@wterm', 'dom', 'src', 'terminal.css'));
@@ -3154,6 +3273,48 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         }
 
         // 编辑文件：读取内容
+        if (msg.type === 'sftp-preview') {
+            const targetPath = String(msg.path || '').trim();
+            const ext = path.extname(targetPath).slice(1).toLowerCase();
+            if (!targetPath) {
+                sendJSON({ type: 'sftp-preview', path: targetPath, error: '缺少预览路径' });
+                return;
+            }
+            if (!PREVIEW_IMAGE_EXTENSIONS.has(ext)) {
+                sendJSON({ type: 'sftp-preview', path: targetPath, error: '当前文件不是已知图片格式' });
+                return;
+            }
+            sftpStream.stat(targetPath, (err, stats) => {
+                if (err) {
+                    sendJSON({ type: 'sftp-preview', path: targetPath, error: err.message });
+                    return;
+                }
+                if (stats.isDirectory?.()) {
+                    sendJSON({ type: 'sftp-preview', path: targetPath, error: '目录不支持图片预览' });
+                    return;
+                }
+                const token = crypto.randomBytes(24).toString('hex');
+                sftpPreviewTokens.set(token, {
+                    path: targetPath,
+                    username: currentSession(req)?.username || '',
+                    sessionId: attachedSshSession?.id || '',
+                    connectionConfig: attachedSshSession?.connectionConfig || conn,
+                    size: Number(stats.size) || 0,
+                    mtime: Number(stats.mtime) || Number(stats.modifyTime) || 0,
+                    expiresAt: Date.now() + PREVIEW_TOKEN_TTL,
+                });
+                sendJSON({
+                    type: 'sftp-preview-ready',
+                    path: targetPath,
+                    url: `/api/sftp/preview/${token}`,
+                    contentType: isBrowserImageExt(ext, BROWSER_IMAGE_EXTENSIONS) ? getBrowserImageContentType(ext, BROWSER_IMAGE_CONTENT_TYPES) : 'image/webp',
+                    converted: !isBrowserImageExt(ext, BROWSER_IMAGE_EXTENSIONS),
+                    size: Number(stats.size) || 0,
+                });
+            });
+            return;
+        }
+
         if (msg.type === 'sftp-readfile') {
             sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {

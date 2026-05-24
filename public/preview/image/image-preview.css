@@ -1,0 +1,158 @@
+.image-preview-modal {
+    position: absolute;
+    z-index: 320;
+    width: min(860px, calc(100vw - 24px));
+    height: min(680px, calc(100vh - 110px));
+    min-width: 300px;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+    backdrop-filter: blur(18px) saturate(140%);
+}
+
+.image-preview-header {
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 12px 0 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: grab;
+    user-select: none;
+}
+
+.image-preview-header:active { cursor: grabbing; }
+
+.image-preview-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.image-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.image-preview-body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    background:
+        linear-gradient(45deg, color-mix(in srgb, var(--bg) 92%, #fff 8%) 25%, transparent 25%),
+        linear-gradient(-45deg, color-mix(in srgb, var(--bg) 92%, #fff 8%) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--bg) 92%, #fff 8%) 75%),
+        linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--bg) 92%, #fff 8%) 75%);
+    background-color: color-mix(in srgb, var(--bg) 96%, #000 4%);
+    background-size: 22px 22px;
+    background-position: 0 0, 0 11px, 11px -11px, -11px 0;
+}
+
+.image-preview-stage,
+.image-preview-state {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    place-items: center;
+}
+
+.image-preview-stage img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    cursor: zoom-in;
+    user-select: none;
+}
+
+.image-preview-state {
+    display: grid;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    gap: 8px;
+}
+
+.image-preview-state.loading::before {
+    content: '';
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 3px solid color-mix(in srgb, var(--accent) 24%, transparent);
+    border-top-color: var(--accent);
+    animation: image-preview-spin .8s linear infinite;
+}
+
+.image-preview-state.error {
+    color: var(--danger, #ff6b6b);
+}
+
+.image-preview-state.error strong {
+    color: inherit;
+    font-size: 16px;
+}
+
+.image-preview-meta {
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.image-preview-meta span {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.image-preview-meta b,
+.image-preview-meta em {
+    flex-shrink: 0;
+    font-style: normal;
+    color: var(--text);
+}
+
+.image-preview-modal .panel-resize-handle {
+    z-index: 4;
+}
+
+@keyframes image-preview-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+    .image-preview-modal {
+        width: calc(100vw - 12px);
+        height: calc(100vh - 92px);
+        border-radius: 16px;
+    }
+    .image-preview-header {
+        height: 42px;
+        padding-inline: 10px;
+    }
+    .image-preview-actions {
+        gap: 6px;
+    }
+    .image-preview-actions .tool-btn {
+        min-width: 34px;
+        padding-inline: 8px;
+    }
+}

@@ -61,7 +61,8 @@ COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=app-build /tmp/native-runtime-libs/libstdc++.so.6 /usr/lib/libstdc++.so.6
 COPY --from=app-build /tmp/native-runtime-libs/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 COPY --from=app-build /app /app
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+RUN apk add --no-cache imagemagick && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     echo "=== runtime diagnostics ===" && \
     cat /etc/alpine-release && \

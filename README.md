@@ -35,6 +35,7 @@
 - 🧭 **代理与跳板路由**：支持 SOCKS5 / HTTP CONNECT 代理、SSH 跳板机和多级 SSH 跳板链路。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
 - 🧰 **远程运维能力**：支持远程状态监控、Docker 容器/镜像查看、日志查看、镜像拉取等 SSH 运维操作。
+- 🖼️ **图片类文件预览**：文件管理器支持图片预览，前端使用 Viewer.js 负责缩放/拖动/全屏，后端 Preview API 对浏览器不支持的 HEIC/TIFF/PSD/RAW/DDS/HDR 等格式通过 Sharp 优先、ImageMagick 兜底转为 WebP。
 
 ### 安全与账号
 
@@ -533,12 +534,14 @@ zephyr-ssh/
 │   ├── app.js           # 管理后台逻辑
 │   ├── terminal.html    # SSH 终端页面
 │   ├── terminal.js      # SSH 终端逻辑
+│   ├── preview/image/   # 图片预览前端模块（Viewer.js UI 接入与样式）
 │   ├── guacamole.html   # RDP/VNC 远程桌面页面
 │   ├── guacamole.js     # Guacamole 前端逻辑
 │   └── style.css        # 全局样式
 ├── data/                # 运行数据目录
 │   ├── .env             # 环境变量配置
 │   └── zephyr.db        # SQLite 数据库
+├── preview/image/       # 图片预览后端模块（Sharp 转码、ImageMagick 兜底、缓存）
 ├── server.js            # 后端服务、API、WebSocket、协议路由
 ├── storage.js           # SQLite 存储层
 ├── stats.js             # 远程状态采集
