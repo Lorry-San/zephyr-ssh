@@ -5996,23 +5996,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
-.fm-transfer-btn {
-    position: relative;
-    min-width: 34px;
-    height: 30px;
-    padding-inline: 9px;
-}
-.fm-transfer-btn.transfer-active::after {
-    content: '';
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px rgba(88,166,255,.16);
-}
 .transfer-popover {
     position: fixed;
     z-index: 2000;
@@ -6044,3 +6027,62 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-item.error .transfer-progress span { background: var(--danger); }
 .transfer-item.indeterminate .transfer-progress span { animation: transferIndeterminate 1.15s ease-in-out infinite; }
 @keyframes transferIndeterminate { 0% { transform: translateX(-120%); } 100% { transform: translateX(260%); } }
+
+.fm-transfer-btn {
+    position: relative;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+}
+.fm-transfer-btn > span {
+    position: relative;
+    width: 19px;
+    height: 19px;
+    display: block;
+    color: var(--text-secondary);
+}
+.fm-transfer-btn > span::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    clip-path: polygon(0 0, 44% 0, 44% 30%, 68% 30%, 68% 0, 100% 0, 100% 100%, 68% 100%, 68% 70%, 44% 70%, 44% 100%, 0 100%);
+    opacity: .9;
+}
+.fm-transfer-btn > span::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 5px;
+    width: 11px;
+    height: 10px;
+    background: currentColor;
+    clip-path: polygon(0 45%, 28% 45%, 28% 0, 52% 0, 52% 45%, 80% 45%, 40% 100%, 0 45%, 72% 55%, 72% 100%, 96% 100%, 96% 55%, 100% 55%, 60% 0, 20% 55%);
+}
+.fm-transfer-btn.transfer-active::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,.14);
+}
+.transfer-icon { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 7px; position: relative; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.transfer-icon::before { content: ''; position: absolute; inset: 3px; border-radius: 50%; border: 1.8px solid var(--accent); opacity: .9; }
+.transfer-icon::after { content: ''; position: absolute; left: 5px; top: 5px; width: 8px; height: 8px; background: var(--accent); }
+.transfer-icon.download::after { clip-path: polygon(30% 0, 70% 0, 70% 45%, 100% 45%, 50% 100%, 0 45%, 30% 45%); }
+.transfer-icon.upload::after { clip-path: polygon(50% 0, 100% 55%, 70% 55%, 70% 100%, 30% 100%, 30% 55%, 0 55%); }
+.transfer-meta { margin-top: 5px; color: var(--text-secondary); font-size: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.transfer-actions { display: inline-flex; gap: 5px; flex-shrink: 0; }
+.transfer-action { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; }
+.transfer-action:hover { border-color: var(--accent); color: var(--accent-hover); }
+.transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
+.transfer-item.paused .transfer-progress span { background: var(--warning); }
+.transfer-item.done .transfer-progress span { background: var(--success); }

@@ -69,6 +69,13 @@ function broadcastSshSession(session, obj) {
     }
 }
 
+function sendTransferEvent(username, payload) {
+    for (const session of sshTerminalSessions.values()) {
+        if (session.username !== username || session.closed || !session.attachedWs) continue;
+        broadcastSshSession(session, { type: 'sftp-transfer-progress', ...payload });
+    }
+}
+
 function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
     const session = typeof sessionOrId === 'string' ? sshTerminalSessions.get(sessionOrId) : sessionOrId;
     if (!session || session.closed) return;
@@ -1844,6 +1851,28 @@ app.get('/api/sftp/download-progress/:token', requireAuth, (req, res) => {
     });
 });
 
+app.post('/api/sftp/download-control/:token', requireAuth, (req, res) => {
+    const token = String(req.params.token || '');
+    const action = String(req.body?.action || '').toLowerCase();
+    const download = sftpDownloadTokens.get(token);
+    if (!download || download.username !== req.session.username || download.expiresAt < Date.now()) return res.status(404).json({ error: '下载任务不存在' });
+    if (action === 'pause') {
+        download.status = 'paused';
+        download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+        try { download.activeStream?.destroy?.(); } catch {}
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size: Number(download.size) || 0, status: 'paused' });
+        return res.json({ ok: true, status: 'paused' });
+    }
+    if (action === 'cancel') {
+        download.status = 'error';
+        try { download.activeStream?.destroy?.(); } catch {}
+        sftpDownloadTokens.delete(token);
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size: Number(download.size) || 0, status: 'error' });
+        return res.json({ ok: true, status: 'cancelled' });
+    }
+    res.status(400).json({ error: '不支持的操作' });
+});
+
 app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     const token = String(req.params.token || '');
     const download = sftpDownloadTokens.get(token);
@@ -1912,6 +1941,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     };
     const streamOptions = size > 0 ? { start, end, highWaterMark: 256 * 1024 } : { highWaterMark: 256 * 1024 };
     const readStream = sftp.createReadStream(download.path, streamOptions);
+    download.activeStream = readStream;
     download.status = 'active';
     download.loaded = start;
     if (session.sshClient?._sock?.setKeepAlive) {
@@ -1931,16 +1961,21 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         download.loaded = Math.min(size || Number.MAX_SAFE_INTEGER, (Number(download.loaded) || start) + chunk.length);
         download.status = 'active';
         download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'active' });
     });
     readStream.on('end', () => {
         completed = true;
         download.loaded = size || download.loaded;
         download.status = 'done';
+        download.activeStream = null;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
         stopSftpDownloadKeepalive();
         if (!partial || end >= size - 1) window.setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     readStream.on('error', (err) => {
         download.status = 'error';
+        download.activeStream = null;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
         stopSftpDownloadKeepalive();
         console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
         if (!res.headersSent) res.status(500).send(err.message || '下载失败');
@@ -1949,6 +1984,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     res.on('close', () => {
         stopSftpDownloadKeepalive();
         try { readStream.destroy(); } catch {}
+        if (download.activeStream === readStream) download.activeStream = null;
         if (!completed) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
     });
     readStream.pipe(res);
@@ -2606,6 +2642,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     createdAt: Date.now(),
                     lastActive: Date.now(),
                     lastDetachedAt: 0,
+                    username: currentSession(req)?.username || '',
                     closed: false,
                 };
                 attachedSshSession = session;
@@ -2829,7 +2866,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     status: 'pending',
                     expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
                 });
-                sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, size: Number(stats.size) || 0 });
+                sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, size: Number(stats.size) || 0 });
             });
             return;
         }
@@ -2893,6 +2930,18 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             const next = () => sendJSON({ type: 'sftp-upload-progress', uploadId, path: upload.path, nextOffset: upload.offset, size: upload.size });
             if (!upload.stream.write(buffer)) upload.stream.once('drain', next);
             else next();
+            return;
+        }
+
+        if (msg.type === 'sftp-upload-cancel') {
+            const uploadId = String(msg.uploadId || '');
+            const upload = sftpUploadStreams.get(uploadId);
+            if (upload) {
+                upload.failed = true;
+                try { upload.stream?.destroy?.(); } catch {}
+                sftpUploadStreams.delete(uploadId);
+            }
+            sendJSON({ type: 'sftp-upload-error', uploadId, error: '已取消上传' });
             return;
         }
 
