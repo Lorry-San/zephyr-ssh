@@ -41,6 +41,7 @@
 }
 .fm-editor-modal.editor-window.cm-editor-compact .fm-editor-actions {
     padding-top: 6px;
+    transform: translate(-6px, -3px);
 }
 .fm-editor-modal.editor-window.cm-editor-compact .fm-editor-actions .btn {
     padding: 8px 14px;
@@ -307,8 +308,10 @@
         font-size: 11px;
     }
     .fm-editor-actions {
-        padding-top: 6px;
+        padding-top: 4px;
+        padding-right: 8px;
         gap: 8px;
+        transform: translate(-6px, -4px);
     }
     .fm-editor-actions .btn {
         min-width: 0;

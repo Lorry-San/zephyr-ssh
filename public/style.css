@@ -3822,8 +3822,9 @@ html.keyboard-open .terminal-page {
     gap: 8px;
     margin-top: 8px;
     justify-content: flex-start;
-    padding-left: clamp(0px, 44vw, 260px);
-    padding-right: 12px;
+    padding-left: calc(clamp(0px, 44vw, 260px) - 8px);
+    padding-right: 20px;
+    transform: translateY(-4px);
     flex-wrap: wrap;
 }
 .fm-editor-actions .btn {
