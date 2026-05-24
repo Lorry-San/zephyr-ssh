@@ -1752,8 +1752,12 @@ function hideTransferPopover(force = false) {
 function markDownloadProgress(id, patch) {
     const current = activeSftpDownloads.get(id) || { id, loaded: 0, size: 0, status: 'pending', updatedAt: Date.now(), speed: 0 };
     const next = { ...current, ...patch };
-    if (patch.loaded !== undefined) updateTransferMetrics(next, patch.loaded);
-    else next.updatedAt = Date.now();
+    if (patch.loaded !== undefined) {
+        updateTransferMetrics(current, patch.loaded);
+        next.loaded = current.loaded;
+        next.updatedAt = current.updatedAt;
+        next.speed = current.speed;
+    } else next.updatedAt = Date.now();
     activeSftpDownloads.set(id, next);
     scheduleTransferRender();
 }

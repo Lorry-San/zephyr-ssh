@@ -1958,7 +1958,11 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     }, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL);
     sftpDownloadKeepaliveTimer.unref?.();
     let completed = false;
+    let responseFinished = false;
+    let cleanedUp = false;
     const closeDownloadConnection = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         try { sftp?.end?.(); } catch {}
         [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
     };
@@ -1979,6 +1983,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     readStream.on('error', (err) => {
+        if (completed || responseFinished || res.writableEnded) return;
         download.status = 'error';
         download.activeStream = null;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
@@ -1987,6 +1992,17 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
         if (!res.headersSent) res.status(500).send(err.message || '下载失败');
         else res.destroy(err);
+    });
+    res.on('finish', () => {
+        responseFinished = true;
+        completed = true;
+        download.loaded = size || download.loaded;
+        download.status = 'done';
+        download.activeStream = null;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
+        stopSftpDownloadKeepalive();
+        closeDownloadConnection();
+        if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     res.on('close', () => {
         stopSftpDownloadKeepalive();
