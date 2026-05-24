@@ -1817,9 +1817,14 @@ function startDownloadProgressPoll(id, size = 0, progressUrl = '') {
 function markUploadProgress(id, patch) {
     const current = activeSftpUploads.get(id);
     if (!current) return;
-    Object.assign(current, patch);
-    if (patch.loaded !== undefined) updateTransferMetrics(current, patch.loaded);
-    else current.updatedAt = Date.now();
+    if (patch.loaded !== undefined) {
+        updateTransferMetrics(current, patch.loaded);
+        const preservedMetrics = { loaded: current.loaded, updatedAt: current.updatedAt, speed: current.speed };
+        Object.assign(current, patch, preservedMetrics);
+    } else {
+        Object.assign(current, patch);
+        current.updatedAt = Date.now();
+    }
     scheduleTransferRender();
 }
 
@@ -2238,6 +2243,7 @@ function uploadFile(file) {
         status: 'pending',
         paused: false,
         updatedAt: Date.now(),
+        speed: 0,
     };
     activeSftpUploads.set(upload.id, upload);
     showTransferPopover({ autoHide: true });
