@@ -3483,16 +3483,7 @@ html.keyboard-open .terminal-page {
 .fm-editor-modal.editor-window.dragging .fm-editor-header { cursor: grabbing; }
 .fm-editor-modal.editor-window .panel-resize-handle {
     z-index: 40;
-    width: 58px;
-    height: 58px;
-    bottom: 0;
     pointer-events: auto;
-}
-.fm-editor-modal.editor-window .panel-resize-handle.right { right: 0; }
-.fm-editor-modal.editor-window .panel-resize-handle.left { left: 0; }
-.fm-editor-modal.editor-window .panel-resize-handle::before {
-    width: 34px;
-    height: 34px;
 }
 #fmCloseBtn,
 #infoCloseBtn,
@@ -4249,7 +4240,6 @@ html.keyboard-open .terminal-page {
     .toast-container { left: 12px; right: 12px; top: auto; bottom: calc(12px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px)); }
     .toast { width: 100%; max-width: none; }
     .panel-resize-handle { width: 38px; height: 38px; }
-    .fm-editor-modal.editor-window .panel-resize-handle { width: 64px; height: 64px; bottom: 0; }
     .fm-editor-minimap { width: 112px; flex-basis: 112px; }
     .fm-editor-actions { flex-wrap: wrap; }
     .fm-editor-actions .btn { min-width: 90px; }
@@ -4363,7 +4353,6 @@ html.keyboard-open .terminal-page {
     .docker-log-header { align-items: flex-start; flex-direction: column; }
     .docker-log-actions { width: 100%; overflow-x: auto; gap: 4px; }
     .panel-resize-handle { width: 38px; height: 38px; }
-    .fm-editor-modal.editor-window .panel-resize-handle { width: 64px; height: 64px; bottom: 0; }
     .fm-editor-code-shell { gap: 6px; padding: 6px; }
     .fm-editor-minimap { width: 98px; flex-basis: 98px; }
 }
