@@ -1881,21 +1881,22 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         return res.status(404).send('下载链接已失效');
     }
     const session = sshTerminalSessions.get(download.sessionId);
-    if (!session || session.closed || !session.sshClient) {
+    const connectionConfig = download.connectionConfig || session?.connectionConfig;
+    if (!connectionConfig) {
         sftpDownloadTokens.delete(token);
-        return res.status(410).send('SSH 会话已关闭，请重新打开文件管理器后下载');
+        return res.status(410).send('下载连接配置已失效，请重新打开文件管理器后下载');
     }
-    let sftp = session.sftpStream;
-    if (!sftp) {
-        try {
-            sftp = await new Promise((resolve, reject) => {
-                session.sshClient.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
-            });
-            session.sftpStream = sftp;
-        } catch (err) {
-            sftpDownloadTokens.delete(token);
-            return res.status(410).send(`SFTP 会话恢复失败：${err.message}`);
-        }
+    let routed = null;
+    let sftp = null;
+    try {
+        routed = await createRoutedSSHConnection(connectionConfig, 10000);
+        sftp = await new Promise((resolve, reject) => {
+            routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
+        });
+    } catch (err) {
+        if (routed?.clients) routed.clients.reverse().forEach((client) => { try { client.end(); } catch {} });
+        sftpDownloadTokens.delete(token);
+        return res.status(410).send(`下载专用 SFTP 连接失败：${err.message}`);
     }
     const fileName = path.basename(download.path || 'download') || 'download';
     const size = Number(download.size) || 0;
@@ -1944,19 +1945,23 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     download.activeStream = readStream;
     download.status = 'active';
     download.loaded = start;
-    if (session.sshClient?._sock?.setKeepAlive) {
-        try { session.sshClient._sock.setKeepAlive(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
+    if (routed?.client?._sock?.setKeepAlive) {
+        try { routed.client._sock.setKeepAlive(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
     }
     sftpDownloadKeepaliveTimer = setInterval(() => {
-        if (session.closed || res.destroyed) {
+        if (res.destroyed) {
             stopSftpDownloadKeepalive();
             return;
         }
         download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
-        try { session.sshClient?._sock?.setKeepAlive?.(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
+        try { routed?.client?._sock?.setKeepAlive?.(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
     }, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL);
     sftpDownloadKeepaliveTimer.unref?.();
     let completed = false;
+    const closeDownloadConnection = () => {
+        try { sftp?.end?.(); } catch {}
+        [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
+    };
     readStream.on('data', (chunk) => {
         download.loaded = Math.min(size || Number.MAX_SAFE_INTEGER, (Number(download.loaded) || start) + chunk.length);
         download.status = 'active';
@@ -1970,6 +1975,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         download.activeStream = null;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
         stopSftpDownloadKeepalive();
+        closeDownloadConnection();
         if (!partial || end >= size - 1) window.setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     readStream.on('error', (err) => {
@@ -1977,6 +1983,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         download.activeStream = null;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
         stopSftpDownloadKeepalive();
+        closeDownloadConnection();
         console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
         if (!res.headersSent) res.status(500).send(err.message || '下载失败');
         else res.destroy(err);
@@ -1985,6 +1992,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         stopSftpDownloadKeepalive();
         try { readStream.destroy(); } catch {}
         if (download.activeStream === readStream) download.activeStream = null;
+        closeDownloadConnection();
         if (!completed) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
     });
     readStream.pipe(res);
@@ -2642,7 +2650,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     createdAt: Date.now(),
                     lastActive: Date.now(),
                     lastDetachedAt: 0,
-                    username: currentSession(req)?.username || '',
+                    connectionConfig: conn,
                     closed: false,
                 };
                 attachedSshSession = session;
@@ -2859,6 +2867,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 sftpDownloadTokens.set(token, {
                     sessionId: attachedSshSession?.id || '',
                     username: currentSession(req)?.username || '',
+                    connectionConfig: attachedSshSession?.connectionConfig || conn,
                     downloadId: msg.downloadId || '',
                     path: targetPath,
                     size: Number(stats.size) || 0,
