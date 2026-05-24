@@ -5998,32 +5998,10 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
 .fm-transfer-btn {
     position: relative;
-    width: 30px;
-    min-width: 30px;
+    min-width: 34px;
     height: 30px;
-    padding: 0;
-    display: inline-grid;
-    place-items: center;
+    padding-inline: 9px;
 }
-.fm-transfer-btn > span {
-    position: relative;
-    width: 14px;
-    height: 16px;
-    display: block;
-}
-.fm-transfer-btn > span::before,
-.fm-transfer-btn > span::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    width: 6px;
-    height: 6px;
-    border: 2px solid currentColor;
-    transform: translateX(-50%) rotate(45deg);
-}
-.fm-transfer-btn > span::before { top: 0; border-right: 0; border-bottom: 0; box-shadow: -3px 3px 0 -1.5px currentColor; }
-.fm-transfer-btn > span::after { bottom: 0; border-left: 0; border-top: 0; box-shadow: 3px -3px 0 -1.5px currentColor; }
-.fm-transfer-btn > span { color: var(--text-secondary); }
 .fm-transfer-btn.transfer-active::after {
     content: '';
     position: absolute;
@@ -6056,20 +6034,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-empty { padding: 18px 10px; color: var(--text-secondary); text-align: center; font-size: 13px; }
 .transfer-item { border: 1px solid var(--border); border-radius: 14px; padding: 9px 10px; background: color-mix(in srgb, var(--bg) 78%, transparent); }
 .transfer-item-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.transfer-icon { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 7px; position: relative; background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.transfer-icon::before { content: ''; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; border: 2px solid var(--accent); transform: translate(-50%, -50%) rotate(45deg); }
-.transfer-icon.upload::before { border-right: 0; border-bottom: 0; margin-top: 2px; }
-.transfer-icon.download::before { border-left: 0; border-top: 0; margin-top: -2px; }
+.transfer-icon { flex: 0 0 auto; }
 .transfer-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 650; }
 .transfer-status { flex: 0 0 auto; color: var(--text-secondary); font-size: 12px; }
 .transfer-progress { height: 5px; border-radius: 999px; overflow: hidden; background: rgba(139,148,158,.18); margin-top: 8px; }
 .transfer-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .24s ease; }
-.transfer-meta { margin-top: 5px; color: var(--text-secondary); font-size: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.transfer-actions { display: inline-flex; gap: 5px; flex-shrink: 0; }
-.transfer-action { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; }
-.transfer-action:hover { border-color: var(--accent); color: var(--accent-hover); }
-.transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
-.transfer-item.paused .transfer-progress span { background: var(--warning); }
+.transfer-meta { margin-top: 5px; color: var(--text-secondary); font-size: 11px; }
+.transfer-item.done .transfer-progress span { background: var(--success); }
 .transfer-item.error .transfer-progress span { background: var(--danger); }
 .transfer-item.indeterminate .transfer-progress span { animation: transferIndeterminate 1.15s ease-in-out infinite; }
 @keyframes transferIndeterminate { 0% { transform: translateX(-120%); } 100% { transform: translateX(260%); } }
