@@ -407,7 +407,12 @@ function createMobileToolbar(instance, parent) {
     toolbar = document.createElement('div');
     toolbar.className = 'cm-mobile-toolbar';
     toolbar.dataset.editorRole = 'mobileToolbar';
-    parent.appendChild(toolbar);
+    const codeShell = parent.querySelector?.('.fm-editor-code-shell') || parent.querySelector?.('[data-editor-role="codeShell"]');
+    if (codeShell?.parentNode) codeShell.parentNode.insertBefore(toolbar, codeShell);
+    else parent.appendChild(toolbar);
+  } else {
+    const codeShell = parent.querySelector?.('.fm-editor-code-shell') || parent.querySelector?.('[data-editor-role="codeShell"]');
+    if (codeShell?.parentNode && toolbar.nextElementSibling !== codeShell) codeShell.parentNode.insertBefore(toolbar, codeShell);
   }
   toolbar.innerHTML = '';
   const items = [
