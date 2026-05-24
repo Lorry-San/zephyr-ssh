@@ -2153,17 +2153,6 @@ function renderFileList(files) {
         });
 
         if (file.type !== 'd') {
-            if (window.ZephyrImagePreview?.isImage?.(file.name)) {
-                const imagePreviewBtn = document.createElement('button');
-                imagePreviewBtn.textContent = '🖼️';
-                imagePreviewBtn.title = '预览图片';
-                imagePreviewBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
-                    openImagePreview(targetPath);
-                });
-                actions.appendChild(imagePreviewBtn);
-            }
             const downloadBtn = document.createElement('button');
             downloadBtn.textContent = '⬇️';
             downloadBtn.title = '下载';

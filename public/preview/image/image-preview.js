@@ -82,26 +82,33 @@
             header?.addEventListener('pointerdown', (event) => {
                 if (event.target.closest('button,input,select,textarea,label')) return;
                 event.preventDefault();
+                event.stopPropagation();
                 this.bringToFront(modal);
-                header.setPointerCapture?.(event.pointerId);
-                const rect = modal.getBoundingClientRect();
+                modal.classList.add('dragging');
+                modal.setPointerCapture?.(event.pointerId);
                 const startX = event.clientX;
                 const startY = event.clientY;
-                const startLeft = rect.left;
-                const startTop = rect.top;
+                const startLeft = modal.offsetLeft;
+                const startTop = modal.offsetTop;
+                const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+                const clamp = (left, top) => ({
+                    left: Math.min(Math.max(0, left), Math.max(0, parentRect.width - 80)),
+                    top: Math.min(Math.max(0, top), Math.max(0, parentRect.height - 80)),
+                });
                 const onMove = (ev) => {
-                    const left = Math.min(Math.max(6, startLeft + ev.clientX - startX), window.innerWidth - 80);
-                    const top = Math.min(Math.max(6, startTop + ev.clientY - startY), window.innerHeight - 80);
-                    modal.style.left = `${left}px`;
-                    modal.style.top = `${top}px`;
+                    ev.preventDefault();
+                    const next = clamp(startLeft + ev.clientX - startX, startTop + ev.clientY - startY);
+                    modal.style.left = `${next.left}px`;
+                    modal.style.top = `${next.top}px`;
                     modal.style.right = 'auto';
                     modal.style.bottom = 'auto';
                 };
                 const onUp = () => {
+                    modal.classList.remove('dragging');
                     window.removeEventListener('pointermove', onMove);
                     window.removeEventListener('pointerup', onUp);
                 };
-                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointermove', onMove, { passive: false });
                 window.addEventListener('pointerup', onUp, { once: true });
             });
         }
@@ -111,30 +118,34 @@
                 handle.addEventListener('pointerdown', (event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    handle.setPointerCapture?.(event.pointerId);
                     this.bringToFront(modal);
+                    modal.classList.add('resizing');
                     const edge = handle.dataset.role === 'resize-left' ? 'left' : 'right';
-                    const rect = modal.getBoundingClientRect();
                     const startX = event.clientX;
                     const startY = event.clientY;
-                    const startWidth = rect.width;
-                    const startHeight = rect.height;
-                    const startLeft = rect.left;
+                    const startWidth = modal.offsetWidth;
+                    const startHeight = modal.offsetHeight;
+                    const startLeft = modal.offsetLeft;
+                    const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
                     const onMove = (ev) => {
+                        ev.preventDefault();
                         let width = edge === 'left' ? startWidth - (ev.clientX - startX) : startWidth + (ev.clientX - startX);
-                        let left = edge === 'left' ? startLeft + (ev.clientX - startX) : startLeft;
-                        width = Math.min(Math.max(300, width), window.innerWidth - 12);
-                        const height = Math.min(Math.max(260, startHeight + ev.clientY - startY), window.innerHeight - 12);
-                        if (edge === 'left') left = Math.max(6, startLeft + startWidth - width);
+                        let left = startLeft;
+                        width = Math.min(Math.max(300, width), Math.max(300, parentRect.width - 12));
+                        const height = Math.min(Math.max(260, startHeight + ev.clientY - startY), Math.max(260, parentRect.height - modal.offsetTop));
+                        if (edge === 'left') left = Math.max(0, startLeft + startWidth - width);
                         modal.style.width = `${width}px`;
                         modal.style.height = `${height}px`;
                         modal.style.left = `${left}px`;
                         modal.style.right = 'auto';
                     };
                     const onUp = () => {
+                        modal.classList.remove('resizing');
                         window.removeEventListener('pointermove', onMove);
                         window.removeEventListener('pointerup', onUp);
                     };
-                    window.addEventListener('pointermove', onMove);
+                    window.addEventListener('pointermove', onMove, { passive: false });
                     window.addEventListener('pointerup', onUp, { once: true });
                 });
             });

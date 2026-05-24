@@ -13,6 +13,8 @@
     background: color-mix(in srgb, var(--panel) 94%, transparent);
     box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
     backdrop-filter: blur(18px) saturate(140%);
+    touch-action: none;
+    will-change: left, top, width, height;
 }
 
 .image-preview-header {
@@ -25,6 +27,7 @@
     border-bottom: 1px solid var(--border);
     cursor: grab;
     user-select: none;
+    touch-action: none;
 }
 
 .image-preview-header:active { cursor: grabbing; }
