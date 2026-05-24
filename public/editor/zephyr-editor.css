@@ -1,11 +1,69 @@
 /* CodeMirror IDE shell for Zephyr SFTP editor */
+:root {
+    --cm-editor-bg: #0f172a;
+    --cm-editor-fg: #dbeafe;
+    --cm-gutter-bg: #111827;
+    --cm-gutter-fg: #7c8da5;
+    --cm-gutter-border: rgba(148, 163, 184, 0.22);
+    --cm-active-line: rgba(59, 130, 246, 0.12);
+    --cm-active-gutter: rgba(59, 130, 246, 0.16);
+    --cm-selection: rgba(96, 165, 250, 0.32);
+    --cm-minimap-bg: rgba(15, 23, 42, 0.92);
+    --cm-minimap-overlay: rgba(96, 165, 250, 0.18);
+}
+:root[data-theme="light"] {
+    --cm-editor-bg: #ffffff;
+    --cm-editor-fg: #24292f;
+    --cm-gutter-bg: #f6f8fa;
+    --cm-gutter-fg: #6e7781;
+    --cm-gutter-border: #d0d7de;
+    --cm-active-line: rgba(9, 105, 218, 0.08);
+    --cm-active-gutter: rgba(9, 105, 218, 0.10);
+    --cm-selection: rgba(9, 105, 218, 0.22);
+    --cm-minimap-bg: rgba(246, 248, 250, 0.95);
+    --cm-minimap-overlay: rgba(9, 105, 218, 0.14);
+}
+.fm-editor-modal.editor-window {
+    width: min(880px, calc(100vw - 24px));
+    height: min(720px, calc(100dvh - 74px));
+    padding: 10px;
+}
+.fm-editor-modal.editor-window.cm-editor-compact {
+    padding: 7px;
+}
+.fm-editor-modal.editor-window.cm-editor-compact .fm-editor-header {
+    margin-bottom: 5px;
+}
+.fm-editor-modal.editor-window.cm-editor-compact .fm-editor-toolbar {
+    padding: 5px 7px;
+    margin-bottom: 6px;
+    gap: 7px;
+}
+.fm-editor-modal.editor-window.cm-editor-compact .fm-editor-actions {
+    padding-top: 6px;
+}
+.fm-editor-modal.editor-window.cm-editor-compact .fm-editor-actions .btn {
+    padding: 8px 14px;
+}
+.fm-editor-header-actions .tool-btn.active,
+.fm-editor-minimap-toggle.active,
+#fmEditorMinimapToggle.active,
+#fmEditorCompactBtn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
 .fm-editor-code-shell.cm-ide-shell {
     position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    background: #111827;
+    background: var(--cm-editor-bg);
+    border-radius: 16px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 45%, transparent);
 }
 .fm-editor-main.cm-editor-host {
     flex: 1;
@@ -13,50 +71,122 @@
     display: block;
     overflow: hidden;
     padding: 0;
-    border: 1px solid rgba(148, 163, 184, 0.18);
+    border: 0;
     border-radius: 12px;
-    background: #0f172a;
+    background: var(--cm-editor-bg);
 }
 .fm-editor-main.cm-editor-host .cm-editor {
     height: 100%;
-    background: transparent;
+    background: var(--cm-editor-bg);
+    color: var(--cm-editor-fg);
 }
 .fm-editor-main.cm-editor-host .cm-scroller {
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
 }
 .fm-editor-main.cm-editor-host .cm-focused {
-    outline: 1px solid rgba(96, 165, 250, 0.35);
+    outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.fm-editor-main.cm-editor-host .cm-foldPlaceholder {
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    color: var(--accent);
+}
+.fm-editor-main.cm-editor-host .cm-snippet-placeholder {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+    border-radius: 4px;
+}
+.zephyr-cm-minimap {
+    width: 82px;
+    height: 100%;
+    opacity: .78;
+}
+.cm-editor-compact .zephyr-cm-minimap,
+.fm-editor-modal:not(.cm-editor-minimap-on) .zephyr-cm-minimap {
+    display: none;
+}
+.cm-command-palette {
+    position: absolute;
+    left: 50%;
+    top: 58px;
+    transform: translateX(-50%) translateY(-8px);
+    width: min(520px, calc(100% - 24px));
+    max-height: min(420px, calc(100% - 84px));
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    box-shadow: 0 22px 70px rgba(0,0,0,.34);
+    z-index: 30;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+.cm-command-palette.open { display: flex; }
+.cm-command-palette input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: var(--bg);
+    color: var(--text);
+    outline: none;
+    font: 600 13px var(--font-sans);
+}
+.cm-command-list {
+    display: grid;
+    gap: 5px;
+    overflow: auto;
+}
+.cm-command-list button {
+    text-align: left;
+    border: 0;
+    border-radius: 10px;
+    padding: 9px 10px;
+    background: transparent;
+    color: var(--text);
+    font: 600 13px var(--font-sans);
+}
+.cm-command-list button:hover,
+.cm-command-list button:focus {
+    background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+    outline: none;
 }
 .cm-mobile-toolbar {
     display: flex;
     gap: 6px;
     overflow-x: auto;
-    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
-    background: rgba(15, 23, 42, 0.96);
-    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--surface) 88%, #0f172a 12%);
+    border-top: 1px solid var(--border);
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
 }
 .cm-mobile-toolbar::-webkit-scrollbar { display: none; }
 .cm-mobile-toolbar button {
     flex: 0 0 auto;
-    min-width: 42px;
-    padding: 8px 10px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
+    min-width: 38px;
+    padding: 7px 9px;
+    border: 1px solid color-mix(in srgb, var(--border) 80%, var(--text-secondary));
     border-radius: 10px;
-    color: #dbeafe;
-    background: rgba(30, 41, 59, 0.92);
-    font: 700 12px var(--font-mono);
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface) 82%, var(--bg));
+    font: 800 12px var(--font-mono);
 }
 .cm-mobile-toolbar button:active {
     transform: translateY(1px) scale(0.98);
-    background: rgba(37, 99, 235, 0.42);
+    background: color-mix(in srgb, var(--accent) 22%, var(--surface));
 }
 .fm-editor-format-btn,
-.fm-editor-diff-btn {
-    min-width: 54px;
+.fm-editor-diff-btn,
+.fm-editor-compact-btn,
+.fm-editor-palette-btn {
+    min-width: 42px;
 }
+.fm-editor-palette-btn { font-weight: 900; }
 .fm-editor-modal.fullscreen {
     height: var(--editor-visual-height, var(--editor-fullscreen-height, 100dvh));
     top: calc(var(--editor-fullscreen-top, 0px) + var(--editor-visual-top, 0px));
@@ -65,15 +195,98 @@
     .cm-mobile-toolbar { display: none; }
 }
 @media (max-width: 720px) {
-    .fm-editor-main.cm-editor-host .cm-content,
-    .fm-editor-main.cm-editor-host .cm-gutterElement {
-        line-height: 1.55;
+    .fm-editor-modal.editor-window {
+        width: calc(100vw - 10px) !important;
+        height: calc(var(--visual-vh, 100dvh) - 12px) !important;
+        left: 5px !important;
+        top: 6px !important;
+        padding: 6px;
+        border-radius: 18px;
     }
+    .fm-editor-header {
+        margin-bottom: 5px;
+        gap: 5px;
+    }
+    .fm-editor-header span {
+        font-size: 14px;
+        min-width: 0;
+    }
+    .fm-editor-header-actions {
+        gap: 4px;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+    .fm-editor-header-actions::-webkit-scrollbar { display: none; }
+    .fm-editor-header-actions .tool-btn {
+        min-width: 34px;
+        height: 32px;
+        padding: 4px 8px;
+        border-radius: 11px;
+        font-size: 12px;
+    }
+    .fm-editor-toolbar {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, auto));
+        gap: 5px 7px;
+        padding: 5px 6px;
+        margin-bottom: 6px;
+        border-radius: 13px;
+        font-size: 11px;
+    }
+    .fm-editor-toolbar label { gap: 3px; }
+    .fm-editor-select {
+        max-width: 92px;
+        padding: 3px 6px;
+        font-size: 12px;
+        border-radius: 10px;
+    }
+    .fm-editor-check { white-space: nowrap; }
     .fm-editor-status {
+        grid-column: 1 / -1;
         width: 100%;
         margin-left: 0;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        font-size: 11px;
+    }
+    .fm-editor-code-shell.cm-ide-shell {
+        padding: 4px;
+        border-radius: 14px;
+    }
+    .fm-editor-main.cm-editor-host .cm-content,
+    .fm-editor-main.cm-editor-host .cm-gutterElement {
+        line-height: 1.34;
+    }
+    .fm-editor-main.cm-editor-host .cm-gutters {
+        font-size: 11px;
+    }
+    .fm-editor-actions {
+        padding-top: 6px;
+        gap: 8px;
+    }
+    .fm-editor-actions .btn {
+        min-width: 0;
+        flex: 1;
+        padding: 9px 12px;
+        border-radius: 13px;
+    }
+    .zephyr-cm-minimap { display: none; }
+    .cm-mobile-toolbar {
+        gap: 5px;
+        padding: 5px 6px calc(5px + env(safe-area-inset-bottom));
+    }
+    .cm-mobile-toolbar button {
+        min-width: 34px;
+        padding: 6px 8px;
+        border-radius: 9px;
+        font-size: 11px;
+    }
+    .cm-command-palette {
+        top: 46px;
+        width: calc(100% - 14px);
+        max-height: calc(100% - 60px);
+        padding: 8px;
+        border-radius: 14px;
     }
 }

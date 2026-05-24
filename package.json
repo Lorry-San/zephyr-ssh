@@ -9,6 +9,7 @@
     "build:editor": "esbuild public/editor/src/zephyr-editor.js --bundle --format=esm --target=es2020 --outfile=public/editor/zephyr-editor.bundle.js --minify"
   },
   "dependencies": {
+    "@babel/runtime": "^7.29.2",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
@@ -25,6 +26,7 @@
     "@codemirror/lang-xml": "^6.1.0",
     "@codemirror/lang-yaml": "^6.1.3",
     "@codemirror/language": "^6.12.3",
+    "@codemirror/language-data": "^6.5.2",
     "@codemirror/legacy-modes": "^6.5.3",
     "@codemirror/lint": "^6.9.6",
     "@codemirror/lsp-client": "^6.2.4",
@@ -34,7 +36,9 @@
     "@codemirror/theme-one-dark": "^6.1.3",
     "@codemirror/view": "^6.43.0",
     "@lezer/highlight": "^1.2.3",
+    "@replit/codemirror-minimap": "^0.5.2",
     "@simplewebauthn/server": "^13.3.0",
+    "@uiw/codemirror-theme-github": "^4.25.10",
     "@wterm/dom": "^0.1.9",
     "archiver": "^7.0.1",
     "better-sqlite3": "^11.10.0",
