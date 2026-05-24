@@ -7,6 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="editor/zephyr-editor.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script type="importmap">
         {
@@ -72,7 +73,7 @@
                     <span id="fmEditorTitle">编辑文件</span>
                     <div class="fm-editor-header-actions">
                         <button class="tool-btn fm-editor-fullscreen-btn" id="fmEditorFullscreenBtn" title="全屏编辑" aria-label="全屏编辑" aria-pressed="false"><span class="fm-editor-fullscreen-icon" aria-hidden="true"></span></button>
-                        <button class="tool-btn" id="fmEditorMinimapToggle" title="显示/隐藏代码概览">概览</button>
+                        <button class="tool-btn fm-editor-format-btn" id="fmEditorFormatBtn" title="格式化 YAML/JSON/JS">格式化</button>
                         <button class="tool-btn" id="fmEditorUndoBtn" title="撤回">↶</button>
                         <button class="tool-btn" id="fmEditorRedoBtn" title="前进">↷</button>
                         <button class="tool-btn" id="fmEditorCloseBtn">关闭</button>
@@ -103,15 +104,8 @@
                     <label class="fm-editor-check"><input type="checkbox" id="fmEditorWrap" checked> 自动换行</label>
                     <span class="fm-editor-status" id="fmEditorStatus">Ready</span>
                 </div>
-                <div class="fm-editor-code-shell">
-                    <div class="fm-editor-main wrap-enabled" id="fmEditorMain">
-                        <div class="fm-editor-line-numbers" id="fmEditorLineNumbers" aria-hidden="true"></div>
-                        <pre class="fm-editor-highlight" id="fmEditorHighlight" aria-hidden="true"></pre>
-                        <textarea class="fm-editor-textarea" id="fmEditorTextarea" rows="15" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
-                    </div>
-                    <div class="fm-editor-minimap" id="fmEditorMinimap" title="代码概览，点击快速定位">
-                        <pre class="fm-minimap-code" id="fmEditorMinimapCode" aria-hidden="true"></pre>
-                    </div>
+                <div class="fm-editor-code-shell cm-ide-shell">
+                    <div class="fm-editor-main cm-editor-host wrap-enabled" id="fmEditorMain"></div>
                 </div>
                 <div class="fm-editor-actions">
                     <button class="btn btn-primary" id="fmEditorSaveBtn">保存</button>
@@ -317,6 +311,7 @@
             </div>
         </div>
     </div>
+    <script src="editor/zephyr-editor.bundle.js" type="module"></script>
     <script src="terminal.js" type="module"></script>
 </body>
 </html>

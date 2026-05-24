@@ -22,6 +22,7 @@ const {
 } = require('@simplewebauthn/server');
 const { getRemoteStats } = require('./stats');
 const storage = require('./storage');
+const { handleEditorLspConnection } = require('./editor-lsp-server');
 
 const PORT = process.env.PORT || 3000;
 const GUACD_HOST = process.env.GUACD_HOST || '127.0.0.1';
@@ -2040,6 +2041,7 @@ const wsServerOptions = {
 };
 const wss = new WebSocketServer(wsServerOptions);
 const guacWss = new WebSocketServer(wsServerOptions);
+const editorLspWss = new WebSocketServer(wsServerOptions);
 
 server.on('upgrade', (req, socket, head) => {
     let pathname = '';
@@ -2049,10 +2051,15 @@ server.on('upgrade', (req, socket, head) => {
         pathname = req.url || '';
     }
 
-    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : null;
+    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/editor-lsp' ? editorLspWss : null;
     if (!targetWss) {
         console.warn('[WS-DIAG] rejected websocket upgrade for unknown path', { url: req.url || '' });
         try { socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); } catch {}
+        try { socket.destroy(); } catch {}
+        return;
+    }
+    if (targetWss === editorLspWss && !currentSession(req)) {
+        try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); } catch {}
         try { socket.destroy(); } catch {}
         return;
     }
@@ -2061,6 +2068,8 @@ server.on('upgrade', (req, socket, head) => {
         targetWss.emit('connection', ws, req);
     });
 });
+
+editorLspWss.on('connection', handleEditorLspConnection);
 
 guacWss.on('connection', async (ws, req) => {
     const started = Date.now();

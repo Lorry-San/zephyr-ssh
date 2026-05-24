@@ -1,0 +1,79 @@
+/* CodeMirror IDE shell for Zephyr SFTP editor */
+.fm-editor-code-shell.cm-ide-shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: #111827;
+}
+.fm-editor-main.cm-editor-host {
+    flex: 1;
+    min-height: 0;
+    display: block;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 12px;
+    background: #0f172a;
+}
+.fm-editor-main.cm-editor-host .cm-editor {
+    height: 100%;
+    background: transparent;
+}
+.fm-editor-main.cm-editor-host .cm-scroller {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.fm-editor-main.cm-editor-host .cm-focused {
+    outline: 1px solid rgba(96, 165, 250, 0.35);
+}
+.cm-mobile-toolbar {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+    background: rgba(15, 23, 42, 0.96);
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+.cm-mobile-toolbar::-webkit-scrollbar { display: none; }
+.cm-mobile-toolbar button {
+    flex: 0 0 auto;
+    min-width: 42px;
+    padding: 8px 10px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 10px;
+    color: #dbeafe;
+    background: rgba(30, 41, 59, 0.92);
+    font: 700 12px var(--font-mono);
+}
+.cm-mobile-toolbar button:active {
+    transform: translateY(1px) scale(0.98);
+    background: rgba(37, 99, 235, 0.42);
+}
+.fm-editor-format-btn,
+.fm-editor-diff-btn {
+    min-width: 54px;
+}
+.fm-editor-modal.fullscreen {
+    height: var(--editor-visual-height, var(--editor-fullscreen-height, 100dvh));
+    top: calc(var(--editor-fullscreen-top, 0px) + var(--editor-visual-top, 0px));
+}
+@media (pointer: fine) and (min-width: 760px) {
+    .cm-mobile-toolbar { display: none; }
+}
+@media (max-width: 720px) {
+    .fm-editor-main.cm-editor-host .cm-content,
+    .fm-editor-main.cm-editor-host .cm-gutterElement {
+        line-height: 1.55;
+    }
+    .fm-editor-status {
+        width: 100%;
+        margin-left: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}
