@@ -6086,3 +6086,32 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
 .transfer-item.paused .transfer-progress span { background: var(--warning); }
 .transfer-item.done .transfer-progress span { background: var(--success); }
+
+.fm-header.panel-titlebar .fm-transfer-btn {
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    height: auto;
+    min-height: auto;
+    padding: 3px 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: normal;
+}
+.fm-header.panel-titlebar .fm-transfer-btn > span {
+    width: 14px;
+    height: 14px;
+}
+
+.fm-header.panel-titlebar .fm-transfer-btn {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: var(--font-sans);
+    transition: all 0.1s;
+}
