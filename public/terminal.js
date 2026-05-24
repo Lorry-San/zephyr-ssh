@@ -1759,14 +1759,26 @@ function markDownloadProgress(id, patch) {
 }
 
 function openNativeDownload(download) {
-    const a = document.createElement('a');
-    a.href = download.url;
-    a.download = download.name || 'download';
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    if (embeddedMode && window.parent && window.parent !== window) {
+        window.parent.postMessage({
+            source: 'zephyr-terminal',
+            type: 'download-url',
+            tabId: params?.tabId,
+            url: download.url,
+            name: download.name || 'download',
+        }, '*');
+        return;
+    }
+    const frame = document.createElement('iframe');
+    frame.style.position = 'fixed';
+    frame.style.width = '1px';
+    frame.style.height = '1px';
+    frame.style.opacity = '0';
+    frame.style.pointerEvents = 'none';
+    frame.style.inset = 'auto 0 0 auto';
+    frame.src = download.url;
+    document.body.appendChild(frame);
+    window.setTimeout(() => frame.remove(), 60000);
 }
 
 function startDownloadProgressPoll(id, size = 0, progressUrl = '') {

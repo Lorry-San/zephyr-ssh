@@ -2480,6 +2480,19 @@ function bindEvents() {
             closeTerminalTab(e.data.tabId, { reason: e.data.reason || 'iframe-close-request' });
             return;
         }
+        if (e.data.type === 'download-url') {
+            const frame = document.createElement('iframe');
+            frame.style.position = 'fixed';
+            frame.style.width = '1px';
+            frame.style.height = '1px';
+            frame.style.opacity = '0';
+            frame.style.pointerEvents = 'none';
+            frame.style.inset = 'auto 0 0 auto';
+            frame.src = e.data.url;
+            document.body.appendChild(frame);
+            window.setTimeout(() => frame.remove(), 60000);
+            return;
+        }
         const t = terminalTabs.find((x) => x.id === e.data.tabId);
         if (t) {
             t.status = e.data.status || t.status;

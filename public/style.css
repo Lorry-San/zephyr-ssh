@@ -6028,41 +6028,42 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-item.indeterminate .transfer-progress span { animation: transferIndeterminate 1.15s ease-in-out infinite; }
 @keyframes transferIndeterminate { 0% { transform: translateX(-120%); } 100% { transform: translateX(260%); } }
 
-.fm-transfer-btn {
-    position: relative;
-    width: 30px;
-    min-width: 30px;
-    height: 30px;
-    padding: 0;
-    display: inline-grid;
-    place-items: center;
+.fm-header.panel-titlebar .fm-transfer-btn {
+    box-sizing: border-box;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    height: auto;
+    min-height: auto;
+    padding: 3px 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: normal;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: var(--font-sans);
+    transition: all 0.1s;
 }
-.fm-transfer-btn > span {
+.fm-header.panel-titlebar .fm-transfer-btn > span {
     position: relative;
-    width: 19px;
-    height: 19px;
+    width: 14px;
+    height: 14px;
     display: block;
     color: var(--text-secondary);
 }
-.fm-transfer-btn > span::before {
-    content: '';
-    position: absolute;
-    inset: 1px;
-    border-radius: 50%;
-    border: 2px solid currentColor;
-    clip-path: polygon(0 0, 44% 0, 44% 30%, 68% 30%, 68% 0, 100% 0, 100% 100%, 68% 100%, 68% 70%, 44% 70%, 44% 100%, 0 100%);
-    opacity: .9;
-}
-.fm-transfer-btn > span::after {
-    content: '';
-    position: absolute;
-    left: 4px;
-    top: 5px;
-    width: 11px;
-    height: 10px;
-    background: currentColor;
-    clip-path: polygon(0 45%, 28% 45%, 28% 0, 52% 0, 52% 45%, 80% 45%, 40% 100%, 0 45%, 72% 55%, 72% 100%, 96% 100%, 96% 55%, 100% 55%, 60% 0, 20% 55%);
-}
+.fm-transfer-btn > span::before,
+.fm-transfer-btn > span::after { content: ''; position: absolute; border-radius: 50%; border: 2px solid currentColor; opacity: .9; }
+.fm-transfer-btn > span::before { inset: 0; clip-path: polygon(0 0, 45% 0, 45% 100%, 0 100%); }
+.fm-transfer-btn > span::after { inset: 0; clip-path: polygon(55% 0, 100% 0, 100% 100%, 55% 100%); }
+.fm-transfer-btn > span > i,
+.fm-transfer-btn > span > b { position: absolute; display: block; width: 5px; height: 9px; background: currentColor; }
+.fm-transfer-btn > span > i { left: 3px; top: 3px; clip-path: polygon(25% 0, 75% 0, 75% 55%, 100% 55%, 50% 100%, 0 55%, 25% 55%); }
+.fm-transfer-btn > span > b { right: 3px; top: 2px; clip-path: polygon(50% 0, 100% 45%, 75% 45%, 75% 100%, 25% 100%, 25% 45%, 0 45%); }
 .fm-transfer-btn.transfer-active::before {
     content: '';
     position: absolute;
@@ -6086,32 +6087,3 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
 .transfer-item.paused .transfer-progress span { background: var(--warning); }
 .transfer-item.done .transfer-progress span { background: var(--success); }
-
-.fm-header.panel-titlebar .fm-transfer-btn {
-    box-sizing: border-box;
-    flex: 0 0 auto;
-    width: auto;
-    min-width: max-content;
-    height: auto;
-    min-height: auto;
-    padding: 3px 7px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: normal;
-}
-.fm-header.panel-titlebar .fm-transfer-btn > span {
-    width: 14px;
-    height: 14px;
-}
-
-.fm-header.panel-titlebar .fm-transfer-btn {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
-    white-space: nowrap;
-    font-family: var(--font-sans);
-    transition: all 0.1s;
-}
