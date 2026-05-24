@@ -1862,6 +1862,7 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
     let requestEnded = false;
     let requestCompleted = false;
     let settled = false;
+    let statConfirmTimer = null;
     let lastProgressSentAt = 0;
     const fail = (status, message) => {
         if (settled) return;
@@ -1880,6 +1881,10 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         if (keepaliveTimer) {
             clearInterval(keepaliveTimer);
             keepaliveTimer = null;
+        }
+        if (statConfirmTimer) {
+            clearTimeout(statConfirmTimer);
+            statConfirmTimer = null;
         }
     }
     function closeConnection() {
@@ -1933,10 +1938,8 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         }
     });
     req.on('error', (err) => fail(500, err.message || '读取上传请求失败'));
-    writeStream.on('error', (err) => fail(500, err.message || '写入远端文件失败'));
-    writeStream.on('finish', () => {
+    const completeUpload = () => {
         if (settled) return;
-        if (!requestCompleted) return fail(499, '上传请求尚未完整到达服务器');
         settled = true;
         requestEnded = true;
         uploadTask.loaded = Number(uploadTask.size) || uploadTask.loaded;
@@ -1946,7 +1949,41 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         stopKeepalive();
         closeConnection();
         sftpUploadTokens.delete(token);
-        res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, loaded: uploadTask.loaded });
+        if (!res.headersSent) res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, loaded: uploadTask.loaded });
+    };
+    const confirmUploadByStat = (delay = 800) => {
+        if (statConfirmTimer || settled) return;
+        statConfirmTimer = setTimeout(() => {
+            statConfirmTimer = null;
+            if (settled) return;
+            sftp.stat(uploadTask.path, (err, stats) => {
+                if (settled) return;
+                const expectedSize = Number(uploadTask.size) || 0;
+                const remoteSize = Number(stats?.size) || 0;
+                if (!err && (!expectedSize || remoteSize === expectedSize)) {
+                    completeUpload();
+                    return;
+                }
+                if (err) console.warn('[sftp-upload]', 'stat confirm failed', { path: uploadTask.path, error: err.message });
+            });
+        }, delay);
+        statConfirmTimer.unref?.();
+    };
+    req.on('close', () => {
+        if (!settled && requestCompleted && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
+            confirmUploadByStat(250);
+        }
+    });
+    writeStream.on('close', () => {
+        if (!settled && requestCompleted && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
+            confirmUploadByStat(250);
+        }
+    });
+    writeStream.on('error', (err) => fail(500, err.message || '写入远端文件失败'));
+    writeStream.on('finish', () => {
+        if (settled) return;
+        if (!requestCompleted) return fail(499, '上传请求尚未完整到达服务器');
+        completeUpload();
     });
     req.pipe(writeStream);
 });
