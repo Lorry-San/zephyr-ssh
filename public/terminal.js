@@ -151,7 +151,6 @@ let sftpReady = false;
 let currentPath = '.';
 let allFiles = [];
 let pendingUploadFiles = [];
-const SFTP_UPLOAD_CHUNK_SIZE = 192 * 1024;
 const activeSftpUploads = new Map();
 const activeSftpDownloads = new Map();
 let transferPopover = null;
@@ -1843,6 +1842,7 @@ function cancelUploadTransfer(id) {
     const upload = activeSftpUploads.get(id);
     if (!upload) return;
     upload.cancelled = true;
+    upload.controller?.abort?.();
     markUploadProgress(id, { status: 'error' });
     sendJsonMessage({ type: 'sftp-upload-cancel', uploadId: id });
     window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, 1200);
@@ -1852,15 +1852,15 @@ function pauseUploadTransfer(id) {
     const upload = activeSftpUploads.get(id);
     if (!upload) return;
     upload.paused = true;
+    upload.controller?.abort?.();
     markUploadProgress(id, { status: 'paused' });
 }
 
 function resumeUploadTransfer(id) {
     const upload = activeSftpUploads.get(id);
     if (!upload) return;
-    upload.paused = false;
-    markUploadProgress(id, { status: 'active' });
-    sendSftpUploadChunk(upload, Number(upload.loaded) || 0);
+    showToast('HTTP 流式上传已重新开始', 'info');
+    sendJsonMessage({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: upload.file.name, size: upload.file.size });
 }
 
 function cancelDownloadTransfer(id) {
@@ -2192,43 +2192,53 @@ fmNewFileBtn.addEventListener('click', () => {
     if (!name) return;
     wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: currentPath.replace(/\/+$/, '') + '/' + name }));
 });
-// 上传文件：分片发送，避免拖拽大文件时单条 WebSocket 消息过大导致连接断开。
-function sendSftpUploadChunk(upload, offset = 0) {
+// 上传文件：先通过 WebSocket 签发同源 HTTP 上传地址，再让浏览器把 File 作为请求体流式上传，避免 base64/JSON 改写二进制内容。
+function sendSftpUploadChunk(upload) {
     if (!upload || upload.cancelled) return;
-    if (upload.paused) return;
-    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) {
-        showToast(`上传中断：SSH 连接不可用（${upload.file.name}）`, 'error');
-        markUploadProgress(upload.id, { loaded: offset, status: 'error' });
-        activeSftpUploads.delete(upload.id);
-        scheduleTransferRender();
-        return;
-    }
-    if (offset >= upload.file.size) {
-        markUploadProgress(upload.id, { loaded: upload.file.size, status: 'active' });
-        wsConnection.send(JSON.stringify({ type: 'sftp-upload-complete', uploadId: upload.id, path: upload.path }));
-        return;
-    }
-    const chunk = upload.file.slice(offset, Math.min(offset + SFTP_UPLOAD_CHUNK_SIZE, upload.file.size));
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-        const base64 = String(ev.target.result || '').split(',')[1] || '';
-        wsConnection.send(JSON.stringify({
-            type: 'sftp-upload-chunk',
-            uploadId: upload.id,
-            path: upload.path,
-            name: upload.file.name,
-            offset,
-            size: upload.file.size,
-            data: base64,
-        }));
-    };
-    reader.onerror = () => {
-        showToast(`读取文件失败：${upload.file.name}`, 'error');
+    if (!upload.url) {
+        showToast(`上传失败：缺少上传地址（${upload.file.name}）`, 'error');
         markUploadProgress(upload.id, { status: 'error' });
-        activeSftpUploads.delete(upload.id);
-        scheduleTransferRender();
-    };
-    reader.readAsDataURL(chunk);
+        return;
+    }
+    if (upload.controller) return;
+    const controller = new AbortController();
+    upload.controller = controller;
+    upload.paused = false;
+    markUploadProgress(upload.id, { status: 'active', loaded: 0, size: upload.file.size });
+    fetch(upload.url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: upload.file,
+        signal: controller.signal,
+    }).then(async (res) => {
+        upload.controller = null;
+        if (!res.ok) {
+            let message = `HTTP ${res.status}`;
+            try {
+                const data = await res.json();
+                if (data?.error) message = data.error;
+            } catch (_) {
+                try { message = await res.text() || message; } catch (_) {}
+            }
+            throw new Error(message);
+        }
+        markUploadProgress(upload.id, { status: 'done', loaded: upload.file.size, size: upload.file.size });
+        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
+        refreshFileList();
+        showToast('文件上传完成', 'success');
+    }).catch((err) => {
+        upload.controller = null;
+        if (upload.cancelled) return;
+        if (upload.paused || err?.name === 'AbortError') {
+            markUploadProgress(upload.id, { status: 'paused' });
+            return;
+        }
+        markUploadProgress(upload.id, { status: 'error' });
+        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
+        showToast('上传失败: ' + (err?.message || '未知错误'), 'error');
+    });
 }
 
 function uploadFile(file) {
@@ -3464,6 +3474,7 @@ function handleSFTPMessage(msg) {
         case 'sftp-upload-ready': {
             const upload = activeSftpUploads.get(msg.uploadId);
             if (upload) {
+                upload.url = msg.url || '';
                 markUploadProgress(msg.uploadId, { status: 'active', loaded: 0, size: upload.file?.size || upload.size || 0 });
                 sendSftpUploadChunk(upload, 0);
             }
@@ -3471,11 +3482,7 @@ function handleSFTPMessage(msg) {
         }
         case 'sftp-upload-progress': {
             const upload = activeSftpUploads.get(msg.uploadId);
-            if (upload) {
-                const nextOffset = Number(msg.nextOffset) || 0;
-                markUploadProgress(msg.uploadId, { status: 'active', loaded: nextOffset, size: Number(msg.size) || upload.size || 0 });
-                sendSftpUploadChunk(upload, nextOffset);
-            }
+            if (upload) markUploadProgress(msg.uploadId, { status: 'active', loaded: Number(msg.nextOffset) || 0, size: Number(msg.size) || upload.size || 0 });
             break;
         }
         case 'sftp-upload-complete': {
@@ -3497,6 +3504,9 @@ function handleSFTPMessage(msg) {
             if (msg.direction === 'download') {
                 markDownloadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
+            } else if (msg.direction === 'upload') {
+                markUploadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
+                if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             }
             break;
         }

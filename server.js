@@ -41,8 +41,11 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const sessions = new Map();
 const sshTerminalSessions = new Map();
 const sftpDownloadTokens = new Map();
+const sftpUploadTokens = new Map();
 const SFTP_DOWNLOAD_TOKEN_TTL = 24 * 60 * 60 * 1000;
+const SFTP_UPLOAD_TOKEN_TTL = 24 * 60 * 60 * 1000;
 const SFTP_DOWNLOAD_KEEPALIVE_INTERVAL = 30 * 1000;
+const SFTP_UPLOAD_KEEPALIVE_INTERVAL = 30 * 1000;
 const tempTotpTokens = new Map();
 const webauthnChallenges = new Map();
 const resetRequestHits = new Map();
@@ -84,6 +87,9 @@ function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
     sshTerminalSessions.delete(session.id);
     for (const [token, download] of sftpDownloadTokens.entries()) {
         if (download.sessionId === session.id) sftpDownloadTokens.delete(token);
+    }
+    for (const [token, uploadTask] of sftpUploadTokens.entries()) {
+        if (uploadTask.sessionId === session.id) sftpUploadTokens.delete(token);
     }
     console.info('[SSH-SESSION]', 'destroy', {
         sessionId: session.id,
@@ -1837,6 +1843,114 @@ function dockerServiceRestartCommand() {
 }
 
 // 提供静态文件
+app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
+    const token = String(req.params.token || '');
+    const uploadTask = sftpUploadTokens.get(token);
+    if (!uploadTask || uploadTask.username !== req.session.username || uploadTask.expiresAt < Date.now()) {
+        sftpUploadTokens.delete(token);
+        return res.status(404).json({ error: '上传链接已失效' });
+    }
+    const connectionConfig = uploadTask.connectionConfig;
+    if (!connectionConfig) {
+        sftpUploadTokens.delete(token);
+        return res.status(410).json({ error: '上传连接配置已失效，请重新打开文件管理器后上传' });
+    }
+    let routed = null;
+    let sftp = null;
+    let writeStream = null;
+    let keepaliveTimer = null;
+    let requestEnded = false;
+    let requestCompleted = false;
+    let settled = false;
+    let lastProgressSentAt = 0;
+    const fail = (status, message) => {
+        if (settled) return;
+        settled = true;
+        uploadTask.status = 'error';
+        uploadTask.activeStream = null;
+        sftpUploadTokens.delete(token);
+        sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: Number(uploadTask.loaded) || 0, size: Number(uploadTask.size) || 0, status: 'error' });
+        try { writeStream?.destroy?.(); } catch {}
+        stopKeepalive();
+        closeConnection();
+        if (!res.headersSent) res.status(status).json({ error: message || '上传失败' });
+        else try { res.destroy(); } catch {}
+    };
+    function stopKeepalive() {
+        if (keepaliveTimer) {
+            clearInterval(keepaliveTimer);
+            keepaliveTimer = null;
+        }
+    }
+    function closeConnection() {
+        try { sftp?.end?.(); } catch {}
+        [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
+    }
+    try {
+        routed = await createRoutedSSHConnection(connectionConfig, 10000);
+        sftp = await new Promise((resolve, reject) => {
+            routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
+        });
+    } catch (err) {
+        closeConnection();
+        return fail(410, `上传专用 SFTP 连接失败：${err.message}`);
+    }
+    uploadTask.status = 'active';
+    uploadTask.loaded = 0;
+    uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+    sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: 0, size: Number(uploadTask.size) || 0, status: 'active' });
+    if (routed?.client?._sock?.setKeepAlive) {
+        try { routed.client._sock.setKeepAlive(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
+    }
+    keepaliveTimer = setInterval(() => {
+        if (settled || req.destroyed) {
+            stopKeepalive();
+            return;
+        }
+        uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+        try { routed?.client?._sock?.setKeepAlive?.(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
+    }, SFTP_UPLOAD_KEEPALIVE_INTERVAL);
+    keepaliveTimer.unref?.();
+    writeStream = sftp.createWriteStream(uploadTask.path, { flags: 'w', highWaterMark: 256 * 1024 });
+    uploadTask.activeStream = writeStream;
+    req.on('data', (chunk) => {
+        uploadTask.loaded = (Number(uploadTask.loaded) || 0) + chunk.length;
+        uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+        const now = Date.now();
+        if (now - lastProgressSentAt > 250 || uploadTask.loaded >= Number(uploadTask.size || 0)) {
+            lastProgressSentAt = now;
+            sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: uploadTask.loaded, size: Number(uploadTask.size) || 0, status: 'active' });
+        }
+    });
+    req.on('aborted', () => {
+        if (!settled && !requestEnded) fail(499, '浏览器中断了上传');
+    });
+    req.on('end', () => {
+        requestEnded = true;
+        requestCompleted = true;
+        if (Number(uploadTask.size) && Number(uploadTask.loaded) !== Number(uploadTask.size)) {
+            fail(400, `上传大小不一致：期望 ${uploadTask.size} 字节，收到 ${uploadTask.loaded} 字节`);
+        }
+    });
+    req.on('error', (err) => fail(500, err.message || '读取上传请求失败'));
+    writeStream.on('error', (err) => fail(500, err.message || '写入远端文件失败'));
+    writeStream.on('finish', () => {
+        if (settled) return;
+        if (!requestCompleted) return fail(499, '上传请求尚未完整到达服务器');
+        settled = true;
+        requestEnded = true;
+        uploadTask.loaded = Number(uploadTask.size) || uploadTask.loaded;
+        uploadTask.status = 'done';
+        uploadTask.activeStream = null;
+        sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: uploadTask.loaded, size: Number(uploadTask.size) || 0, status: 'done' });
+        stopKeepalive();
+        closeConnection();
+        sftpUploadTokens.delete(token);
+        res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, loaded: uploadTask.loaded });
+    });
+    req.pipe(writeStream);
+});
+
 app.get('/api/sftp/download-progress/:token', requireAuth, (req, res) => {
     const token = String(req.params.token || '');
     const download = sftpDownloadTokens.get(token);
@@ -2926,25 +3040,28 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         if (msg.type === 'sftp-upload-start') {
             const uploadId = String(msg.uploadId || '');
+            const targetPath = String(msg.path || '');
             if (!uploadId) {
-                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: '缺少上传 ID' });
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: targetPath, error: '缺少上传 ID' });
                 return;
             }
-            const writeStream = sftpStream.createWriteStream(msg.path);
-            const upload = { stream: writeStream, path: msg.path, size: Number(msg.size) || 0, offset: 0, failed: false, ending: false };
-            sftpUploadStreams.set(uploadId, upload);
-            writeStream.on('error', (err) => {
-                if (upload.failed) return;
-                upload.failed = true;
-                sftpUploadStreams.delete(uploadId);
-                sendJSON({ type: 'sftp-upload-error', uploadId, path: msg.path, error: err.message });
+            if (!targetPath) {
+                sendJSON({ type: 'sftp-upload-error', uploadId, path: targetPath, error: '缺少上传路径' });
+                return;
+            }
+            const token = crypto.randomBytes(24).toString('hex');
+            sftpUploadTokens.set(token, {
+                sessionId: attachedSshSession?.id || '',
+                username: currentSession(req)?.username || '',
+                connectionConfig: attachedSshSession?.connectionConfig || conn,
+                uploadId,
+                path: targetPath,
+                size: Number(msg.size) || 0,
+                loaded: 0,
+                status: 'pending',
+                expiresAt: Date.now() + SFTP_UPLOAD_TOKEN_TTL,
             });
-            writeStream.on('finish', () => {
-                if (upload.failed) return;
-                sftpUploadStreams.delete(uploadId);
-                sendJSON({ type: 'sftp-upload-complete', uploadId, path: upload.path, success: true });
-            });
-            sendJSON({ type: 'sftp-upload-ready', uploadId, path: msg.path });
+            sendJSON({ type: 'sftp-upload-ready', uploadId, path: targetPath, url: `/api/sftp/upload/${token}`, size: Number(msg.size) || 0 });
             return;
         }
 
@@ -2970,6 +3087,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         if (msg.type === 'sftp-upload-cancel') {
             const uploadId = String(msg.uploadId || '');
+            for (const [token, uploadTask] of sftpUploadTokens.entries()) {
+                if (uploadTask.uploadId !== uploadId) continue;
+                uploadTask.status = 'error';
+                try { uploadTask.activeStream?.destroy?.(); } catch {}
+                sftpUploadTokens.delete(token);
+                sendTransferEvent(uploadTask.username, { transferId: uploadId || token, direction: 'upload', path: uploadTask.path, loaded: Number(uploadTask.loaded) || 0, size: Number(uploadTask.size) || 0, status: 'error' });
+            }
             const upload = sftpUploadStreams.get(uploadId);
             if (upload) {
                 upload.failed = true;
