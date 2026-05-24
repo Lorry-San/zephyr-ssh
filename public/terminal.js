@@ -153,7 +153,8 @@ let allFiles = [];
 let pendingUploadFiles = [];
 const activeSftpUploads = new Map();
 const activeSftpDownloads = new Map();
-let imagePreview = null;
+const imagePreviewPanelsByPath = new Map();
+let activeImagePreview = null;
 let transferPopover = null;
 let transferPopoverHideTimer = 0;
 let transferRenderRaf = 0;
@@ -3376,8 +3377,12 @@ function openImagePreview(filePath) {
         showToast('图片预览模块未加载', 'error');
         return;
     }
-    if (!imagePreview) {
-        imagePreview = new window.ZephyrImagePreview({
+    const existingEntry = Array.from(imagePreviewPanelsByPath.entries()).find(([path, instance]) => path === filePath || instance.currentPath === filePath);
+    let preview = existingEntry?.[1];
+    if (!preview) {
+        preview = new window.ZephyrImagePreview({
+            path: filePath,
+            index: imagePreviewPanelsByPath.size,
             send: (payload) => {
                 if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
                     showToast('SSH 尚未连接，无法预览图片', 'error');
@@ -3389,9 +3394,19 @@ function openImagePreview(filePath) {
             bringToFront: bringPanelToFront,
             allocateZIndex: allocateFloatingPanelZIndex,
             formatSize: formatTransferSize,
+            onFocus: (instance) => { activeImagePreview = instance; },
+            onClose: (instance) => {
+                if (activeImagePreview === instance) activeImagePreview = null;
+                if (instance?.currentPath) imagePreviewPanelsByPath.delete(instance.currentPath);
+                for (const [path, previewInstance] of imagePreviewPanelsByPath.entries()) {
+                    if (previewInstance === instance) imagePreviewPanelsByPath.delete(path);
+                }
+            },
         });
+        imagePreviewPanelsByPath.set(filePath, preview);
     }
-    imagePreview.open(filePath);
+    activeImagePreview = preview;
+    preview.open(filePath);
 }
 
 function openEditor(filePath) {
@@ -5272,7 +5287,7 @@ setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
-    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, imagePreview?.modal].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, ...Array.from(imagePreviewPanelsByPath.values(), (preview) => preview.modal)].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
     if (!isTouchKeyboardDevice()) requestStableTerminalLayout('window-resize', { includeResize: true });
@@ -5952,7 +5967,8 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     return;
                 }
                 if (msg.type?.startsWith('sftp-')) {
-                    if (imagePreview?.handleMessage?.(msg)) return;
+                    const imagePanel = msg.path ? imagePreviewPanelsByPath.get(msg.path) : activeImagePreview;
+                    if (imagePanel?.handleMessage?.(msg)) return;
                     handleSFTPMessage(msg);
                     return;
                 }

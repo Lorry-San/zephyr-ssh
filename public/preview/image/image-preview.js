@@ -35,11 +35,14 @@
             this.send = options.send || (() => {});
             this.notify = options.notify || (() => {});
             this.bringToFront = options.bringToFront || (() => {});
-            this.allocateZIndex = options.allocateZIndex || (() => '320');
             this.formatSize = options.formatSize || formatSize;
-            this.currentPath = '';
+            this.onFocus = options.onFocus || (() => {});
+            this.onClose = options.onClose || (() => {});
+            this.index = Number(options.index) || 0;
+            this.currentPath = options.path || '';
             this.pending = new Set();
             this.viewer = null;
+            this.closed = false;
             this.modal = this.createModal();
             (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
         }
@@ -68,7 +71,7 @@
                 <div class="image-preview-meta" data-role="meta"></div>
                 <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整大小"></div>
                 <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
-            modal.addEventListener('pointerdown', () => this.bringToFront(modal));
+            modal.addEventListener('pointerdown', () => this.focus());
             modal.querySelector('[data-action="close"]')?.addEventListener('click', () => this.close());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
             modal.querySelector('[data-action="open-viewer"]')?.addEventListener('click', () => this.showViewer());
@@ -77,13 +80,18 @@
             return modal;
         }
 
+        focus() {
+            this.onFocus(this);
+            this.bringToFront(this.modal);
+        }
+
         setupDrag(modal) {
             const header = modal.querySelector('.image-preview-header');
             header?.addEventListener('pointerdown', (event) => {
                 if (event.target.closest('button,input,select,textarea,label')) return;
                 event.preventDefault();
                 event.stopPropagation();
-                this.bringToFront(modal);
+                this.focus();
                 modal.classList.add('dragging');
                 modal.setPointerCapture?.(event.pointerId);
                 const startX = event.clientX;
@@ -119,7 +127,7 @@
                     event.preventDefault();
                     event.stopPropagation();
                     handle.setPointerCapture?.(event.pointerId);
-                    this.bringToFront(modal);
+                    this.focus();
                     modal.classList.add('resizing');
                     const edge = handle.dataset.role === 'resize-left' ? 'left' : 'right';
                     const startX = event.clientX;
@@ -154,19 +162,23 @@
         open(filePath, options = {}) {
             if (!filePath || !ZephyrImagePreview.isImage(filePath)) return false;
             this.currentPath = filePath;
+            this.closed = false;
             this.pending.add(filePath);
+            this.modal.dataset.previewPath = filePath;
             this.modal.style.display = 'flex';
             if (!this.modal.style.left) {
-                this.modal.style.left = window.innerWidth <= 720 ? '6px' : '56px';
-                this.modal.style.top = window.innerWidth <= 720 ? '6px' : '72px';
+                const offset = (this.index % 5) * 22;
+                this.modal.style.left = window.innerWidth <= 720 ? '6px' : `${56 + offset}px`;
+                this.modal.style.top = window.innerWidth <= 720 ? '6px' : `${72 + offset}px`;
             }
-            this.bringToFront(this.modal);
+            this.focus();
             this.setLoading(filePath);
             this.send({ type: 'sftp-preview', path: filePath, force: !!options.force });
             return true;
         }
 
         handleMessage(message) {
+            if (message?.path && message.path !== this.currentPath) return false;
             if (message?.type === 'sftp-preview-ready') {
                 this.pending.delete(message.path);
                 this.renderImage(message);
@@ -192,6 +204,8 @@
             state.textContent = '正在准备图片预览...';
             state.style.display = 'grid';
             stage.style.display = 'none';
+            image.onload = null;
+            image.onerror = null;
             image.removeAttribute('src');
             meta.textContent = filePath;
         }
@@ -238,6 +252,7 @@
         }
 
         showViewer() {
+            this.focus();
             if (this.viewer) this.viewer.show();
             else this.modal.querySelector('[data-role="image"]')?.click();
         }
@@ -249,8 +264,10 @@
         }
 
         close() {
+            this.closed = true;
             this.destroyViewer();
-            this.modal.style.display = 'none';
+            this.modal.remove();
+            this.onClose(this);
         }
     }
 
