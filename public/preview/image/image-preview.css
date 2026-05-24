@@ -9,10 +9,9 @@
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 18px;
-    background: color-mix(in srgb, var(--panel) 94%, transparent);
-    box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
-    backdrop-filter: blur(18px) saturate(140%);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: 0 28px 90px rgba(0,0,0,0.38);
     touch-action: none;
     will-change: left, top, width, height;
 }
@@ -25,6 +24,7 @@
     gap: 12px;
     padding: 0 12px 0 16px;
     border-bottom: 1px solid var(--border);
+    background: var(--surface);
     cursor: grab;
     user-select: none;
     touch-action: none;
@@ -114,7 +114,8 @@
     gap: 12px;
     padding: 0 14px;
     border-top: 1px solid var(--border);
-    color: var(--muted);
+    background: var(--surface);
+    color: var(--text-secondary);
     font-size: 12px;
 }
 
