@@ -1976,7 +1976,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
         stopSftpDownloadKeepalive();
         closeDownloadConnection();
-        if (!partial || end >= size - 1) window.setTimeout(() => sftpDownloadTokens.delete(token), 10000);
+        if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     });
     readStream.on('error', (err) => {
         download.status = 'error';
@@ -2650,6 +2650,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     createdAt: Date.now(),
                     lastActive: Date.now(),
                     lastDetachedAt: 0,
+                    username: currentSession(req)?.username || '',
                     connectionConfig: conn,
                     closed: false,
                 };
