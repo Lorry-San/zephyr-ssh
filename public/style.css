@@ -3337,8 +3337,8 @@ html.keyboard-open .terminal-page {
     --resize-corner-color: color-mix(in srgb, var(--text-secondary) 64%, transparent);
     position: absolute;
     bottom: 8px;
-    width: 34px;
-    height: 34px;
+    width: 46px;
+    height: 46px;
     cursor: nwse-resize;
     z-index: 5;
     opacity: 0.62;
@@ -3346,8 +3346,8 @@ html.keyboard-open .terminal-page {
     border-radius: var(--radius-lg);
     transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.2, 1);
 }
-.panel-resize-handle.right { right: 8px; }
-.panel-resize-handle.left { left: 8px; cursor: nesw-resize; }
+.panel-resize-handle.right { right: 4px; }
+.panel-resize-handle.left { left: 4px; cursor: nesw-resize; }
 .panel-resize-handle:hover,
 .file-manager.resizing .panel-resize-handle,
 .info-modal.resizing .panel-resize-handle,
@@ -3361,8 +3361,8 @@ html.keyboard-open .terminal-page {
     content: '';
     position: absolute;
     pointer-events: none;
-    width: 27px;
-    height: 27px;
+    width: 31px;
+    height: 31px;
     bottom: 0;
     border-color: var(--resize-corner-color);
     border-style: solid;
@@ -3482,66 +3482,6 @@ html.keyboard-open .terminal-page {
 .fm-editor-modal.editor-window .fm-editor-header { cursor: grab; touch-action: none; }
 .fm-editor-modal.editor-window.dragging .fm-editor-header { cursor: grabbing; }
 .fm-editor-modal.editor-window .panel-resize-handle { z-index: 9; }
-.fm-editor-modal.editor-window.fullscreen { overflow: hidden; }
-.fm-editor-fullscreen-btn {
-    position: relative;
-    width: 26px;
-    min-width: 26px;
-    height: 26px;
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-.fm-editor-fullscreen-icon {
-    position: relative;
-    width: 12px;
-    height: 12px;
-}
-.fm-editor-fullscreen-icon::before,
-.fm-editor-fullscreen-icon::after {
-    content: '';
-    position: absolute;
-    width: 5px;
-    height: 5px;
-    border-color: currentColor;
-    border-style: solid;
-    transition: transform 0.34s var(--ios-open), inset 0.34s var(--ios-open);
-}
-.fm-editor-fullscreen-icon::before { top: 0; left: 0; border-width: 2px 0 0 2px; }
-.fm-editor-fullscreen-icon::after { right: 0; bottom: 0; border-width: 0 2px 2px 0; }
-.fm-editor-fullscreen-btn.active .fm-editor-fullscreen-icon::before { top: 2px; left: 2px; transform: rotate(180deg); }
-.fm-editor-fullscreen-btn.active .fm-editor-fullscreen-icon::after { right: 2px; bottom: 2px; transform: rotate(180deg); }
-.fm-editor-modal.fullscreen {
-    position: fixed;
-    left: var(--editor-fullscreen-left, 0px);
-    top: var(--editor-fullscreen-top, 0px);
-    width: var(--editor-fullscreen-width, 100vw);
-    height: var(--editor-fullscreen-height, 100dvh);
-    right: auto;
-    bottom: auto;
-    z-index: 360;
-    border: 1px solid var(--border);
-    border-radius: 22px;
-    box-shadow: 0 30px 100px rgba(0,0,0,0.46);
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
-}
-body > .fm-editor-modal.fullscreen { display: flex; }
-.fm-editor-modal.fullscreen-animating { will-change: transform, opacity, filter; }
-.fm-editor-modal.editor-fullscreen-morph-ghost {
-    overflow: hidden;
-    pointer-events: none !important;
-    contain: paint;
-    backdrop-filter: blur(18px) saturate(1.35);
-    -webkit-backdrop-filter: blur(18px) saturate(1.35);
-}
-.fm-editor-modal.editor-fullscreen-morph-ghost,
-.fm-editor-modal.editor-fullscreen-morph-ghost * {
-    user-select: none !important;
-    caret-color: transparent !important;
-}
-.fm-editor-modal.editor-fullscreen-morph-ghost .fm-editor-textarea { pointer-events: none; }
 #fmCloseBtn,
 #infoCloseBtn,
 #dockerCloseBtn {
@@ -4296,9 +4236,10 @@ body > .fm-editor-modal.fullscreen { display: flex; }
     .fm-toolbar { padding-inline: 8px; overflow-x: auto; gap: 4px; }
     .toast-container { left: 12px; right: 12px; top: auto; bottom: calc(12px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px)); }
     .toast { width: 100%; max-width: none; }
-    .panel-resize-handle { width: 26px; height: 26px; }
+    .panel-resize-handle { width: 44px; height: 44px; }
+    .fm-editor-modal.editor-window .panel-resize-handle.right { right: 12px; }
+    .fm-editor-modal.editor-window .panel-resize-handle.left { left: 12px; }
     .fm-editor-minimap { width: 112px; flex-basis: 112px; }
-    .fm-editor-fullscreen-btn { width: 24px; min-width: 24px; height: 24px; }
     .fm-editor-actions { flex-wrap: wrap; }
     .fm-editor-actions .btn { min-width: 90px; }
     #view-settings .settings-content {
@@ -4410,7 +4351,9 @@ body > .fm-editor-modal.fullscreen { display: flex; }
     .docker-table td { padding: 6px 8px; }
     .docker-log-header { align-items: flex-start; flex-direction: column; }
     .docker-log-actions { width: 100%; overflow-x: auto; gap: 4px; }
-    .panel-resize-handle { width: 26px; height: 26px; }
+    .panel-resize-handle { width: 44px; height: 44px; }
+    .fm-editor-modal.editor-window .panel-resize-handle.right { right: 12px; }
+    .fm-editor-modal.editor-window .panel-resize-handle.left { left: 12px; }
     .fm-editor-code-shell { gap: 6px; padding: 6px; }
     .fm-editor-minimap { width: 98px; flex-basis: 98px; }
 }

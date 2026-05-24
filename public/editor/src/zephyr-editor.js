@@ -196,13 +196,37 @@ function compactExtension(instance) {
 }
 
 function createMinimapExtension(instance) {
-  if (instance.largeFile || !instance.minimap || instance.compact) return [];
+  if (instance.largeFile || !instance.minimap) return [];
   const create = () => {
     const dom = document.createElement('div');
     dom.className = 'zephyr-cm-minimap';
     return {dom};
   };
-  return showMinimap.compute(['doc'], () => ({create, displayText: 'blocks', showOverlay: 'always'}));
+  return showMinimap.compute(['doc'], () => ({
+    create,
+    displayText: 'blocks',
+    showOverlay: 'always',
+    eventHandlers: {
+      pointerdown(event, view) { jumpFromMinimap(event, view); },
+      pointermove(event, view) { if (event.buttons) jumpFromMinimap(event, view); },
+      click(event, view) { jumpFromMinimap(event, view); }
+    }
+  }));
+}
+
+function jumpFromMinimap(event, view) {
+  const target = event.currentTarget || event.target;
+  const rect = target?.getBoundingClientRect?.();
+  if (!rect || !view) return;
+  event.preventDefault?.();
+  event.stopPropagation?.();
+  const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+  const scroller = view.scrollDOM;
+  const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  scroller.scrollTop = ratio * maxScroll;
+  const pos = Math.round(ratio * view.state.doc.length);
+  view.dispatch({selection: {anchor: Math.max(0, Math.min(view.state.doc.length, pos))}, scrollIntoView: true});
+  view.focus();
 }
 
 function statusParts(instance) {
@@ -401,6 +425,12 @@ function closeCommandPalette(instance) {
   instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.remove('open');
 }
 
+function toggleCommandPalette(instance) {
+  const palette = instance?.panel?.querySelector('[data-editor-role="commandPalette"]');
+  if (palette?.classList.contains('open')) { closeCommandPalette(instance); instance.view?.focus(); return true; }
+  return openCommandPalette(instance);
+}
+
 function createMobileToolbar(instance, parent) {
   let toolbar = parent.querySelector('[data-editor-role="mobileToolbar"]');
   if (!toolbar) {
@@ -419,7 +449,7 @@ function createMobileToolbar(instance, parent) {
     ['TAB', () => insertSnippet(instance, ' '.repeat(instance.tabSize || 4))], ['{}', () => insertSnippet(instance, '{}')],
     ['[]', () => insertSnippet(instance, '[]')], ['()', () => insertSnippet(instance, '()')], ['<>', () => insertSnippet(instance, '<>')],
     [':', () => insertSnippet(instance, ':')], [';', () => insertSnippet(instance, ';')], ['$', () => insertSnippet(instance, '$')],
-    ['/', () => insertSnippet(instance, '/')], ['⌘', () => openCommandPalette(instance)], ['ESC', () => instance.view?.contentDOM.blur()],
+    ['/', () => insertSnippet(instance, '/')], ['命令', () => toggleCommandPalette(instance)],
   ];
   items.forEach(([label, run]) => {
     const button = document.createElement('button');
@@ -459,7 +489,7 @@ function installThemeObserver(instance) {
 
 function setPanelFlags(instance) {
   instance.panel?.classList.toggle('cm-editor-compact', !!instance.compact);
-  instance.panel?.classList.toggle('cm-editor-minimap-on', !!instance.minimap && !instance.compact && !instance.largeFile);
+  instance.panel?.classList.toggle('cm-editor-minimap-on', !!instance.minimap && !instance.largeFile);
 }
 
 export function createZephyrEditor(options) {
@@ -561,7 +591,7 @@ export function focusZephyrEditor(instance) { instance?.view?.focus(); }
 export function isZephyrEditorDirty(instance) { return !!instance?.dirty; }
 export function toggleMinimap(instance) { updateZephyrEditorOptions(instance, {minimap: !instance?.minimap}); return true; }
 export function toggleCompact(instance) { updateZephyrEditorOptions(instance, {compact: !instance?.compact}); return true; }
-export function openPalette(instance) { return openCommandPalette(instance); }
+export function openPalette(instance) { return toggleCommandPalette(instance); }
 
 window.ZephyrCodeEditor = {
   create: createZephyrEditor,

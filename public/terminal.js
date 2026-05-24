@@ -102,7 +102,6 @@ let fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
 let fmEditorCompactBtn = $('#fmEditorCompactBtn');
 let fmEditorPaletteBtn = $('#fmEditorPaletteBtn');
 let fmEditorFormatBtn = $('#fmEditorFormatBtn');
-let fmEditorFullscreenBtn = $('#fmEditorFullscreenBtn');
 let fmEditorSaveBtn = $('#fmEditorSaveBtn');
 let fmEditorCancelBtn = $('#fmEditorCancelBtn');
 let fmEditorCloseBtn = $('#fmEditorCloseBtn');
@@ -164,7 +163,6 @@ let editorFilePath = null;
 let editorLanguage = 'plain';
 let editorRawBytes = null;
 let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') === '1';
-let editorFullscreenRestore = null;
 let activeEditorPanel = null;
 let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
@@ -1973,7 +1971,7 @@ function hideFileManager() {
     window.setTimeout(() => clearPanelMotion(fileManager), 320);
 }
 fileBtn.addEventListener('click', () => {
-    if (fileManager.classList.contains('open')) bringPanelToFront(fileManager);
+    if (fileManager.classList.contains('open')) hideFileManager();
     else showFileManager();
 });
 fmCloseBtn.addEventListener('click', hideFileManager);
@@ -2047,9 +2045,9 @@ function hideShortcutPanel() {
     shortcutBtn?.classList.remove('active');
     window.setTimeout(() => { clearPanelMotion(shortcutPanel); if (!shortcutPanel.classList.contains('open')) shortcutPanel.style.display = 'none'; }, 320);
 }
-snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? bringPanelToFront(snippetPanel) : showSnippetPanel());
+snippetBtn?.addEventListener('click', () => snippetPanel.classList.contains('open') ? hideSnippetPanel() : showSnippetPanel());
 snippetSearch?.addEventListener('input', renderSnippetPanel);
-shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? bringPanelToFront(shortcutPanel) : showShortcutPanel());
+shortcutBtn?.addEventListener('click', () => shortcutPanel.classList.contains('open') ? hideShortcutPanel() : showShortcutPanel());
 window.addEventListener('storage', (event) => { if (event.key === SNIPPET_STORAGE_KEY && snippetPanel?.classList.contains('open')) renderSnippetPanel(); });
 
 function initSFTP() {
@@ -3063,7 +3061,7 @@ function allocateFloatingPanelZIndex(panel) {
 function dockEditorPanel(panel) {
     if (!panel) return panel;
     const terminalPage = document.querySelector('.terminal-page');
-    if (!terminalPage || panel.parentElement === terminalPage || panel.classList?.contains('fullscreen')) return panel;
+    if (!terminalPage || panel.parentElement === terminalPage) return panel;
     const rect = panel.getBoundingClientRect?.();
     const pageRect = terminalPage.getBoundingClientRect?.();
     terminalPage.appendChild(panel);
@@ -3097,7 +3095,6 @@ function updateActiveEditorRefs(panel = activeEditorPanel || fmEditorModal) {
     fmEditorCompactBtn = panel.querySelector('[data-editor-action="compact"], #fmEditorCompactBtn');
     fmEditorPaletteBtn = panel.querySelector('[data-editor-action="palette"], #fmEditorPaletteBtn');
     fmEditorFormatBtn = panel.querySelector('[data-editor-action="format"], #fmEditorFormatBtn');
-    fmEditorFullscreenBtn = panel.querySelector('[data-editor-action="fullscreen"], #fmEditorFullscreenBtn');
     fmEditorSaveBtn = panel.querySelector('[data-editor-action="save"], #fmEditorSaveBtn');
     fmEditorCancelBtn = panel.querySelector('[data-editor-action="cancel"], #fmEditorCancelBtn');
     fmEditorCloseBtn = panel.querySelector('[data-editor-action="close"], #fmEditorCloseBtn');
@@ -3111,7 +3108,6 @@ function updateActiveEditorRefs(panel = activeEditorPanel || fmEditorModal) {
     editorFilePath = panel.dataset.editorPath || editorFilePath;
     editorLanguage = panel._editorLanguage || detectEditorLanguage(editorFilePath || '');
     editorRawBytes = panel._editorRawBytes || null;
-    editorFullscreenRestore = panel._editorFullscreenRestore || null;
 }
 
 function markEditorRoles(panel) {
@@ -3121,7 +3117,6 @@ function markEditorRoles(panel) {
         ['#fmEditorTitle', 'data-editor-role', 'title'],
         ['#fmEditorMain', 'data-editor-role', 'main'],
         ['#fmEditorStatus', 'data-editor-role', 'status'],
-        ['#fmEditorFullscreenBtn', 'data-editor-action', 'fullscreen'],
         ['#fmEditorCompactBtn', 'data-editor-action', 'compact'],
         ['#fmEditorMinimapToggle', 'data-editor-action', 'minimap'],
         ['#fmEditorPaletteBtn', 'data-editor-action', 'palette'],
@@ -3142,115 +3137,13 @@ function markEditorRoles(panel) {
 markEditorRoles(fmEditorModal);
 updateActiveEditorRefs(fmEditorModal);
 
-function updateEditorFullscreenButton() {
-    const isFullscreen = fmEditorModal?.classList.contains('fullscreen');
-    if (!fmEditorFullscreenBtn) return;
-    fmEditorFullscreenBtn.classList.toggle('active', !!isFullscreen);
-    fmEditorFullscreenBtn.setAttribute('aria-pressed', isFullscreen ? 'true' : 'false');
-    fmEditorFullscreenBtn.setAttribute('title', isFullscreen ? '退出全屏编辑' : '全屏编辑');
-    fmEditorFullscreenBtn.setAttribute('aria-label', isFullscreen ? '退出全屏编辑' : '全屏编辑');
-}
-
-function getEditorFullscreenRect() {
-    const viewport = window.visualViewport;
-    const inputRect = document.querySelector('.terminal-input-panel')?.getBoundingClientRect?.();
-    const topbarRect = document.querySelector('.terminal-topbar')?.getBoundingClientRect?.();
-    const pageRect = document.querySelector('.terminal-page')?.getBoundingClientRect?.();
-    const containerRect = terminalContainer?.getBoundingClientRect?.();
-    const vvLeft = viewport?.offsetLeft || 0;
-    const vvTop = viewport?.offsetTop || 0;
-    const vvWidth = viewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
-    const vvHeight = viewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
-    const left = Math.round(Math.max(vvLeft, pageRect?.left ?? vvLeft));
-    const right = Math.round(Math.min(vvLeft + vvWidth, pageRect?.right ?? vvLeft + vvWidth));
-    const top = Math.round(topbarRect?.bottom ?? containerRect?.top ?? pageRect?.top ?? vvTop);
-    let bottom = Math.round(inputRect?.top ?? containerRect?.bottom ?? pageRect?.bottom ?? (vvTop + vvHeight));
-    const maxBottom = Math.round(Math.min(pageRect?.bottom ?? vvTop + vvHeight, vvTop + vvHeight));
-    if (!Number.isFinite(bottom) || bottom <= top + 260) bottom = maxBottom;
-    return { left, top, width: Math.max(280, right - left), height: Math.max(240, bottom - top) };
-}
-
-function applyEditorFullscreenRect(rect = getEditorFullscreenRect()) {
-    if (!fmEditorModal || !rect) return;
-    fmEditorModal.style.setProperty('--editor-fullscreen-left', `${rect.left}px`);
-    fmEditorModal.style.setProperty('--editor-fullscreen-top', `${rect.top}px`);
-    fmEditorModal.style.setProperty('--editor-fullscreen-width', `${rect.width}px`);
-    fmEditorModal.style.setProperty('--editor-fullscreen-height', `${rect.height}px`);
-}
-
-function setEditorChildrenVisibility(visible) {
-    if (!fmEditorModal) return;
-    [...fmEditorModal.children].forEach((child) => { child.style.visibility = visible ? '' : 'hidden'; });
-}
-
-function animateEditorFullscreenTransition(firstRect, shouldFullscreen, snapshot = null) {
-    if (!fmEditorModal || !firstRect || !fmEditorModal.animate) return;
-    const lastRect = fmEditorModal.getBoundingClientRect();
-    if (!lastRect.width || !lastRect.height || !firstRect.width || !firstRect.height) return;
-    const dx = firstRect.left - lastRect.left;
-    const dy = firstRect.top - lastRect.top;
-    const sx = firstRect.width / lastRect.width;
-    const sy = firstRect.height / lastRect.height;
-    setEditorChildrenVisibility(false);
-    const ghost = snapshot || fmEditorModal.cloneNode(true);
-    ghost.classList.add('editor-fullscreen-morph-ghost', 'open');
-    ghost.removeAttribute('id');
-    ghost.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
-    ghost.querySelectorAll('button,input,select,label,[contenteditable]').forEach((el) => { el.tabIndex = -1; });
-    Object.assign(ghost.style, { display: 'flex', position: 'fixed', left: `${lastRect.left}px`, top: `${lastRect.top}px`, width: `${lastRect.width}px`, height: `${lastRect.height}px`, pointerEvents: 'none', zIndex: '9999', opacity: '1', transformOrigin: 'top left' });
-    document.body.appendChild(ghost);
-    const animation = ghost.animate([
-        { transform: `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`, filter: shouldFullscreen ? 'blur(8px) saturate(1.08)' : 'blur(0px)', opacity: 1, borderRadius: shouldFullscreen ? 'var(--radius-lg)' : '22px' },
-        { transform: 'translate3d(0, 0, 0) scale(1, 1)', filter: 'blur(0px) saturate(1)', opacity: 1, borderRadius: shouldFullscreen ? '22px' : 'var(--radius-lg)' }
-    ], { duration: 700, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'both' });
-    animation.finished.catch(() => {}).then(() => { ghost.remove(); setEditorChildrenVisibility(true); });
-}
-
-function captureEditorGhost(rect) {
-    if (!fmEditorModal || !rect) return null;
-    return fmEditorModal.cloneNode(true);
-}
-
 function refreshCodeMirrorLayout() {
     window.requestAnimationFrame(() => getEditorInstance()?.view?.requestMeasure?.());
-}
-
-function toggleEditorFullscreen(force, { restoreIfFullscreen = true } = {}) {
-    if (!fmEditorModal) return;
-    updateEditorZIndex(fmEditorModal);
-    const isFullscreen = fmEditorModal.classList.contains('fullscreen');
-    const shouldFullscreen = typeof force === 'boolean' ? force : !isFullscreen;
-    if (shouldFullscreen === isFullscreen) { updateEditorFullscreenButton(); refreshCodeMirrorLayout(); return; }
-    const firstRect = fmEditorModal.getBoundingClientRect();
-    const snapshot = captureEditorGhost(firstRect);
-    if (shouldFullscreen) {
-        editorFullscreenRestore = { parent: fmEditorModal.parentNode, nextSibling: fmEditorModal.nextSibling, style: { position: fmEditorModal.style.position, left: fmEditorModal.style.left, top: fmEditorModal.style.top, right: fmEditorModal.style.right, bottom: fmEditorModal.style.bottom, width: fmEditorModal.style.width, height: fmEditorModal.style.height } };
-        fmEditorModal._editorFullscreenRestore = editorFullscreenRestore;
-        document.body.appendChild(fmEditorModal);
-        applyEditorFullscreenRect();
-    } else if (editorFullscreenRestore?.parent) {
-        if (!restoreIfFullscreen) { updateEditorFullscreenButton(); return; }
-        const restoreParent = editorFullscreenRestore.parent;
-        if (restoreParent.isConnected) restoreParent.insertBefore(fmEditorModal, editorFullscreenRestore.nextSibling);
-        else document.body.appendChild(fmEditorModal);
-        Object.assign(fmEditorModal.style, editorFullscreenRestore.style || {});
-        editorFullscreenRestore = null;
-        fmEditorModal._editorFullscreenRestore = null;
-    }
-    fmEditorModal.classList.add('fullscreen-animating');
-    fmEditorModal.classList.toggle('fullscreen', shouldFullscreen);
-    animateEditorFullscreenTransition(firstRect, shouldFullscreen, snapshot);
-    updateEditorFullscreenButton();
-    window.clearTimeout(toggleEditorFullscreen._timer);
-    toggleEditorFullscreen._timer = window.setTimeout(() => { fmEditorModal.classList.remove('fullscreen-animating'); setEditorChildrenVisibility(true); refreshCodeMirrorLayout(); }, 760);
-    refreshCodeMirrorLayout();
 }
 
 function closeEditor({ animated = true } = {}) {
     const panel = fmEditorModal;
     const closingPath = panel?.dataset.editorPath || editorFilePath;
-    const wasFullscreen = panel?.classList.contains('fullscreen');
-    toggleEditorFullscreen(false, { restoreIfFullscreen: animated });
     const removePanel = () => {
         window.ZephyrCodeEditor?.destroy?.(panel._codeEditor);
         panel._codeEditor = null;
@@ -3262,8 +3155,7 @@ function closeEditor({ animated = true } = {}) {
         panel._editorLanguage = null;
         if (panel !== document.getElementById('fmEditorModal')) panel.remove();
     };
-    if (!animated) { if (wasFullscreen) { window.clearTimeout(toggleEditorFullscreen._timer); panel.classList.remove('fullscreen-animating'); setEditorChildrenVisibility(true); } removePanel(); return; }
-    if (wasFullscreen) { window.clearTimeout(closeEditor._timer); closeEditor._timer = window.setTimeout(() => closeEditor({ animated: true }), 360); return; }
+    if (!animated) { removePanel(); return; }
     panel.classList.remove('open');
     panel.classList.add('closing');
     window.clearTimeout(closeEditor._timer);
@@ -3307,10 +3199,6 @@ function loadEditorFromBytes(bytes, encoding = fmEditorEncoding.value) {
     };
     if (window.ZephyrCodeEditor?.create) create();
     else window.setTimeout(create, 80);
-}
-
-function hasAnyFullscreenEditor(exceptPanel = null) {
-    return Array.from(editorPanelsByPath.values()).some((panel) => panel !== exceptPanel && panel.classList?.contains('fullscreen'));
 }
 
 function setupEditorPanel(panel) {
@@ -3385,9 +3273,7 @@ function setupEditorPanel(panel) {
             const startHeight = panel.offsetHeight;
             const startLeft = panel.offsetLeft;
             const edge = handle.dataset.editorResizeEdge || 'right';
-            const parentRect = panel.classList.contains('fullscreen')
-                ? { width: window.innerWidth || document.documentElement.clientWidth || startWidth, height: window.innerHeight || document.documentElement.clientHeight || startHeight }
-                : panel.parentElement.getBoundingClientRect();
+            const parentRect = panel.parentElement.getBoundingClientRect();
             const minWidth = isCompactScreen() ? 280 : 420;
             const minHeight = isCompactScreen() ? 260 : 320;
             const onMove = (ev) => {
@@ -3413,12 +3299,6 @@ function setupEditorPanel(panel) {
                 const height = Math.max(minHeight, Math.min(startHeight + ev.clientY - startY, Math.max(minHeight, maxHeight)));
                 panel.style.width = `${width}px`;
                 panel.style.height = `${height}px`;
-                if (panel.classList.contains('fullscreen')) {
-                    panel.style.setProperty('--editor-fullscreen-left', `${panel.offsetLeft}px`);
-                    panel.style.setProperty('--editor-fullscreen-top', `${panel.offsetTop}px`);
-                    panel.style.setProperty('--editor-fullscreen-width', panel.style.width);
-                    panel.style.setProperty('--editor-fullscreen-height', panel.style.height);
-                }
                 refreshCodeMirrorLayout();
             };
             const onUp = () => {
@@ -3437,8 +3317,7 @@ function createEditorPanel(filePath) {
     const template = document.getElementById('fmEditorModal') || fmEditorModal;
     markEditorRoles(template);
     const canReuseTemplate = !template.dataset.editorPath
-        && editorPanelsByPath.size === 0
-        && !template.classList.contains('fullscreen');
+        && editorPanelsByPath.size === 0;
     const panel = canReuseTemplate ? template : template.cloneNode(true);
     if (panel !== template) {
         panel.removeAttribute('id');
@@ -3463,10 +3342,6 @@ function createEditorPanel(filePath) {
     panel.style.height = panel.style.height || '';
     setupEditorPanel(panel);
     setupClonedEditorEvents(panel);
-    if (hasAnyFullscreenEditor(panel)) {
-        panel.style.left = panel.style.left || '16px';
-        panel.style.top = panel.style.top || '52px';
-    }
     editorPanelsByPath.set(filePath, panel);
     return panel;
 }
@@ -3477,7 +3352,6 @@ function openEditor(filePath) {
     editorFilePath = filePath;
     editorLanguage = detectEditorLanguage(filePath);
     panel._editorLanguage = editorLanguage;
-    if (panel.classList.contains('fullscreen')) toggleEditorFullscreen(false);
     panel.style.display = 'flex';
     panel.classList.remove('closing');
     requestAnimationFrame(() => panel.classList.add('open'));
@@ -3507,10 +3381,9 @@ fmEditorCloseBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopP
 fmEditorCancelBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCancelBtn.closest('.fm-editor-modal')); closeEditor(); });
 fmEditorUndoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorUndoBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.undo?.(getEditorInstance()); });
 fmEditorRedoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorRedoBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.redo?.(getEditorInstance()); });
-fmEditorFullscreenBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorFullscreenBtn.closest('.fm-editor-modal')); toggleEditorFullscreen(true); });
 fmEditorMinimapToggle?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorMinimapToggle.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); });
 fmEditorCompactBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCompactBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); });
-fmEditorPaletteBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorPaletteBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.openPalette?.(getEditorInstance()); });
+fmEditorPaletteBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorPaletteBtn.closest('.fm-editor-modal')); const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); });
 fmEditorSaveBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorSaveBtn.closest('.fm-editor-modal')); saveActiveEditor(); });
 fmEditorEncoding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorEncoding.closest('.fm-editor-modal')); if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value); });
 fmEditorLineEnding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorLineEnding.closest('.fm-editor-modal')); updateEditorStatus(); });
@@ -3538,10 +3411,9 @@ function setupClonedEditorEvents(panel) {
         updateActiveEditorRefs(panel);
         bringPanelToFront(panel);
         if (action === 'close' || action === 'cancel') closeEditor();
-        else if (action === 'fullscreen') toggleEditorFullscreen(true);
         else if (action === 'minimap') { window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); }
         else if (action === 'compact') { window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); }
-        else if (action === 'palette') window.ZephyrCodeEditor?.openPalette?.(getEditorInstance());
+        else if (action === 'palette') { const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); }
         else if (action === 'undo') window.ZephyrCodeEditor?.undo?.(getEditorInstance());
         else if (action === 'redo') window.ZephyrCodeEditor?.redo?.(getEditorInstance());
         else if (action === 'save') saveActiveEditor();
@@ -3965,7 +3837,7 @@ function resetFeatureStateAfterReconnect() {
 }
 
 dockerBtn?.addEventListener('click', () => {
-    if (dockerPanel.classList.contains('open')) bringPanelToFront(dockerPanel);
+    if (dockerPanel.classList.contains('open')) hideDockerPanel();
     else showDockerPanel();
 });
 dockerCloseBtn?.addEventListener('click', hideDockerPanel);
@@ -5368,8 +5240,7 @@ window.visualViewport?.addEventListener('scroll', () => {
     else requestStableTerminalLayout('visual-viewport-scroll', { includeResize: true });
 }, { passive: true });
 window.addEventListener('resize', () => {
-    if (fmEditorModal?.classList.contains('fullscreen')) {
-        applyEditorFullscreenRect();
+    if (fmEditorModal?.classList.contains('editor-window')) {
         refreshCodeMirrorLayout();
     }
 });
