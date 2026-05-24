@@ -3235,10 +3235,12 @@ function setupEditorPanel(panel) {
     panel.querySelector('.fm-editor-header')?.addEventListener('pointerdown', (e) => {
         if (e.target.closest('button,input,select,textarea,label')) return;
         e.preventDefault();
+        e.stopPropagation();
         updateActiveEditorRefs(panel);
         updateEditorZIndex(panel);
         bringPanelToFront(panel);
         panel.classList.add('dragging');
+        panel.setPointerCapture?.(e.pointerId);
         const startX = e.clientX;
         const startY = e.clientY;
         const startLeft = panel.offsetLeft;
@@ -3247,6 +3249,7 @@ function setupEditorPanel(panel) {
             ev.preventDefault();
             panel.style.left = `${startLeft + ev.clientX - startX}px`;
             panel.style.top = `${startTop + ev.clientY - startY}px`;
+            panel.dataset.editorMoved = '1';
             panel.style.right = 'auto';
             panel.style.bottom = 'auto';
             clampPanel(panel);
@@ -3263,6 +3266,7 @@ function setupEditorPanel(panel) {
         handle.addEventListener('pointerdown', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            handle.setPointerCapture?.(e.pointerId);
             updateActiveEditorRefs(panel);
             updateEditorZIndex(panel);
             bringPanelToFront(panel);
@@ -3274,8 +3278,8 @@ function setupEditorPanel(panel) {
             const startLeft = panel.offsetLeft;
             const edge = handle.dataset.editorResizeEdge || 'right';
             const parentRect = panel.parentElement.getBoundingClientRect();
-            const minWidth = isCompactScreen() ? 280 : 420;
-            const minHeight = isCompactScreen() ? 260 : 320;
+            const minWidth = isCompactScreen() ? 260 : 420;
+            const minHeight = isCompactScreen() ? 220 : 320;
             const onMove = (ev) => {
                 ev.preventDefault();
                 let nextLeft = startLeft;
@@ -3287,18 +3291,19 @@ function setupEditorPanel(panel) {
                         nextLeft -= minWidth - nextWidth;
                         nextWidth = minWidth;
                     }
-                    if (nextLeft < 8) {
-                        nextWidth += nextLeft - 8;
-                        nextLeft = 8;
+                    if (nextLeft < 0) {
+                        nextWidth += nextLeft;
+                        nextLeft = 0;
                     }
                     panel.style.left = `${nextLeft}px`;
                 }
-                const maxWidth = edge === 'left' ? startLeft + startWidth - 8 : parentRect.width - panel.offsetLeft - 12;
-                const maxHeight = parentRect.height - panel.offsetTop - 12;
+                const maxWidth = edge === 'left' ? startLeft + startWidth : parentRect.width - panel.offsetLeft;
+                const maxHeight = parentRect.height - panel.offsetTop;
                 const width = Math.max(minWidth, Math.min(nextWidth, Math.max(minWidth, maxWidth)));
                 const height = Math.max(minHeight, Math.min(startHeight + ev.clientY - startY, Math.max(minHeight, maxHeight)));
                 panel.style.width = `${width}px`;
                 panel.style.height = `${height}px`;
+                panel.dataset.editorResized = '1';
                 refreshCodeMirrorLayout();
             };
             const onUp = () => {
@@ -3327,10 +3332,18 @@ function createEditorPanel(filePath) {
     panel.dataset.editorPath = filePath;
     panel.style.display = 'flex';
     if (panel.parentElement === document.querySelector('.terminal-page') && !panel.style.left && !panel.style.top) {
-        const rect = fileManager.getBoundingClientRect();
-        const pageRect = panel.parentElement.getBoundingClientRect();
-        panel.style.left = `${Math.round(rect.left - pageRect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
-        panel.style.top = `${Math.round(rect.top - pageRect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
+        if (!panel.dataset.editorMoved && !panel.dataset.editorResized) {
+            if (isCompactScreen()) {
+                panel.style.width = 'calc(100vw - 12px)';
+                panel.style.left = '6px';
+                panel.style.top = '6px';
+            } else {
+                const rect = fileManager.getBoundingClientRect();
+                const pageRect = panel.parentElement.getBoundingClientRect();
+                panel.style.left = `${Math.round(rect.left - pageRect.left + 16 + (editorPanelsByPath.size % 4) * 22)}px`;
+                panel.style.top = `${Math.round(rect.top - pageRect.top + 52 + (editorPanelsByPath.size % 4) * 22)}px`;
+            }
+        }
         updateEditorZIndex(panel);
     } else {
         panel.style.left = panel.style.left || `${16 + (editorPanelsByPath.size % 4) * 22}px`;

@@ -98,15 +98,57 @@
     border-radius: 4px;
 }
 .zephyr-cm-minimap {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
     width: 54px;
     height: 100%;
     opacity: .86;
     cursor: pointer;
     touch-action: none;
+    border-left: 1px solid var(--border);
+    background: var(--cm-minimap-bg);
+    z-index: 20;
+    overflow: hidden;
+    padding: 4px 3px;
+    pointer-events: auto;
 }
 .zephyr-cm-minimap:hover,
 .zephyr-cm-minimap:active {
     opacity: 1;
+}
+.zephyr-cm-minimap-content {
+    position: absolute;
+    inset: 4px 3px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    justify-content: stretch;
+    pointer-events: none;
+}
+.zephyr-cm-minimap-content i {
+    display: block;
+    flex: 1 1 1px;
+    min-height: 1px;
+    margin-left: calc(var(--mm-i, 0) * 3px);
+    width: var(--mm-w, 32%);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--cm-editor-fg) 32%, transparent);
+}
+.zephyr-cm-minimap-thumb {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    min-height: 18px;
+    border-radius: 6px;
+    background: var(--cm-minimap-overlay);
+    outline: 1px solid color-mix(in srgb, var(--accent) 62%, transparent);
+    pointer-events: none;
+}
+.fm-editor-modal.cm-editor-minimap-on .fm-editor-main.cm-editor-host .cm-scroller {
+    padding-right: 54px;
 }
 .fm-editor-modal:not(.cm-editor-minimap-on) .zephyr-cm-minimap {
     display: none;
@@ -199,10 +241,10 @@
 }
 @media (max-width: 720px) {
     .fm-editor-modal.editor-window {
-        width: calc(100vw - 30px) !important;
-        height: calc(var(--visual-vh, 100dvh) - 12px) !important;
-        left: 0 !important;
-        top: 6px !important;
+        width: calc(100vw - 12px);
+        height: calc(var(--visual-vh, 100dvh) - 12px);
+        left: 6px;
+        top: 6px;
         padding: 6px;
         border-radius: 18px;
     }
@@ -231,8 +273,8 @@
         display: grid;
         grid-template-columns: repeat(4, minmax(0, auto));
         gap: 5px 7px;
-        padding: 5px 10px 5px 4px;
-        margin: 0 8px 6px 0;
+        padding: 5px 6px;
+        margin-bottom: 6px;
         border-radius: 13px;
         font-size: 11px;
     }
@@ -265,8 +307,8 @@
         font-size: 11px;
     }
     .fm-editor-actions {
-        padding: 6px 16px 0 0;
-        gap: 14px;
+        padding-top: 6px;
+        gap: 8px;
     }
     .fm-editor-actions .btn {
         min-width: 0;
@@ -277,6 +319,12 @@
     .zephyr-cm-minimap {
         display: block;
         width: 34px;
+    }
+    .fm-editor-modal.cm-editor-minimap-on .fm-editor-main.cm-editor-host .cm-scroller {
+        padding-right: 34px;
+    }
+    .zephyr-cm-minimap-content {
+        inset: 3px 2px;
     }
     .cm-mobile-toolbar {
         gap: 5px;

@@ -1,6 +1,6 @@
 import {basicSetup, EditorView} from 'codemirror';
 import {EditorState, Compartment, StateEffect, StateField} from '@codemirror/state';
-import {keymap, lineNumbers, highlightActiveLineGutter, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars, Decoration} from '@codemirror/view';
+import {keymap, lineNumbers, highlightActiveLineGutter, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars, Decoration, ViewPlugin} from '@codemirror/view';
 import {defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, toggleComment, moveLineUp, moveLineDown, copyLineUp, copyLineDown, deleteLine, selectLine, selectParentSyntax, insertBlankLine, deleteTrailingWhitespace} from '@codemirror/commands';
 import {searchKeymap, highlightSelectionMatches, openSearchPanel, findNext, findPrevious, selectNextOccurrence, gotoLine} from '@codemirror/search';
 import {autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap, startCompletion} from '@codemirror/autocomplete';
@@ -24,7 +24,6 @@ import {toml} from '@codemirror/legacy-modes/mode/toml';
 import {dockerFile} from '@codemirror/legacy-modes/mode/dockerfile';
 import {oneDark} from '@codemirror/theme-one-dark';
 import {githubLight, githubDark} from '@uiw/codemirror-theme-github';
-import {showMinimap} from '@replit/codemirror-minimap';
 import {LSPClient, languageServerExtensions} from '@codemirror/lsp-client';
 import {MergeView} from '@codemirror/merge';
 import {format as prettierFormat} from 'prettier/standalone';
@@ -197,37 +196,93 @@ function compactExtension(instance) {
 
 function createMinimapExtension(instance) {
   if (instance.largeFile || !instance.minimap) return [];
-  const create = () => {
-    const dom = document.createElement('div');
-    dom.className = 'zephyr-cm-minimap';
-    return {dom};
-  };
-  return showMinimap.compute(['doc'], () => ({
-    create,
-    displayText: 'blocks',
-    showOverlay: 'always',
-    eventHandlers: {
-      pointerdown(event, view) { jumpFromMinimap(event, view); },
-      pointermove(event, view) { if (event.buttons) jumpFromMinimap(event, view); },
-      click(event, view) { jumpFromMinimap(event, view); }
-    }
-  }));
+  return [zephyrMinimapPlugin];
 }
 
-function jumpFromMinimap(event, view) {
-  const target = event.currentTarget || event.target;
-  const rect = target?.getBoundingClientRect?.();
-  if (!rect || !view) return;
-  event.preventDefault?.();
-  event.stopPropagation?.();
-  const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
-  const scroller = view.scrollDOM;
-  const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-  scroller.scrollTop = ratio * maxScroll;
-  const pos = Math.round(ratio * view.state.doc.length);
-  view.dispatch({selection: {anchor: Math.max(0, Math.min(view.state.doc.length, pos))}, scrollIntoView: true});
-  view.focus();
-}
+const zephyrMinimapPlugin = ViewPlugin.fromClass(class {
+  constructor(view) {
+    this.view = view;
+    this.dom = document.createElement('div');
+    this.dom.className = 'zephyr-cm-minimap';
+    this.content = document.createElement('div');
+    this.content.className = 'zephyr-cm-minimap-content';
+    this.thumb = document.createElement('div');
+    this.thumb.className = 'zephyr-cm-minimap-thumb';
+    this.dom.append(this.content, this.thumb);
+    this.dom.onpointerdown = this.onPointerDown;
+    this.dom.onclick = this.onPointerEvent;
+    this.dom.addEventListener('pointerdown', this.onPointerDown, {capture: true, passive: false});
+    this.dom.addEventListener('mousedown', this.onPointerDown, {capture: true, passive: false});
+    this.dom.addEventListener('touchstart', this.onPointerDown, {capture: true, passive: false});
+    this.view.scrollDOM.addEventListener('scroll', this.onScroll, {passive: true});
+    view.dom.appendChild(this.dom);
+    this.render();
+  }
+  update(update) {
+    if (update.docChanged || update.geometryChanged || update.viewportChanged) this.render();
+  }
+  destroy() { this.view.scrollDOM.removeEventListener('scroll', this.onScroll); this.dom.remove(); }
+  onScroll = () => this.render();
+  onPointerDown = (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    this.dom.setPointerCapture?.(event.pointerId);
+    this.jump(event.touches?.[0] || event);
+    const move = (ev) => this.jump(ev.touches?.[0] || ev);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchend', up);
+      window.removeEventListener('pointercancel', up);
+    };
+    window.addEventListener('pointermove', move, {passive: false});
+    window.addEventListener('touchmove', move, {passive: false});
+    window.addEventListener('mousemove', move, {passive: false});
+    window.addEventListener('pointerup', up, {once: true});
+    window.addEventListener('mouseup', up, {once: true});
+    window.addEventListener('touchend', up, {once: true});
+    window.addEventListener('pointercancel', up, {once: true});
+  };
+  onPointerEvent = (event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    this.jump(event.touches?.[0] || event);
+  };
+  jump(event) {
+    const rect = this.dom.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
+    const doc = this.view.state.doc;
+    const targetLine = Math.max(1, Math.min(doc.lines, Math.round(1 + ratio * Math.max(0, doc.lines - 1))));
+    const line = doc.line(targetLine);
+    const block = this.view.lineBlockAt(line.from);
+    const scroller = this.view.scrollDOM;
+    scroller.scrollTop = Math.max(0, block.top - scroller.clientHeight / 2);
+    this.view.dispatch({selection: {anchor: line.from}, scrollIntoView: false});
+    this.view.focus();
+    this.render();
+  }
+  render() {
+    const doc = this.view.state.doc;
+    const lines = [];
+    for (let lineNo = 1; lineNo <= doc.lines; lineNo++) {
+      const line = doc.line(lineNo).text;
+      const indent = Math.min(7, Math.floor((line.match(/^\s*/)?.[0]?.length || 0) / 2));
+      const width = Math.max(12, Math.min(96, Math.round((line.trim().length || 1) * 2.1)));
+      lines.push(`<i style="--mm-i:${indent};--mm-w:${width}%"></i>`);
+    }
+    this.content.innerHTML = lines.join('');
+    const scroll = this.view.scrollDOM;
+    const maxScroll = Math.max(1, scroll.scrollHeight - scroll.clientHeight);
+    const top = scroll.scrollTop / maxScroll;
+    const height = Math.max(7, Math.min(100, (scroll.clientHeight / Math.max(scroll.scrollHeight, 1)) * 100));
+    this.thumb.style.top = `${top * (100 - height)}%`;
+    this.thumb.style.height = `${height}%`;
+  }
+});
+
 
 function statusParts(instance) {
   const text = instance.view?.state.doc.toString() || '';
