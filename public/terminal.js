@@ -1773,9 +1773,8 @@ function markDownloadProgress(id, patch) {
 
 // 分片下载：自适应分片（同上传逻辑），通过 Range 请求逐片获取
 // 规则：成功翻倍，失败减半（下限 64KB，无上限）
-// <=500MB 时用 Blob 组装后触发下载；>500MB 时用 <a> 触发原生下载管理器
+// 全部收齐后 Blob 组装触发下载；Blob 失败（OOM）时降级为原生 <a> 下载
 const DOWNLOAD_MIN_CHUNK = 64 * 1024;
-const DOWNLOAD_BLOB_LIMIT = 500 * 1024 * 1024;
 
 async function startChunkedDownload(download) {
     if (!download || !download.url) return;
@@ -1792,8 +1791,8 @@ async function startChunkedDownload(download) {
         });
     }
 
-    // For very large files or unknown size, fall back to native download manager
-    if (totalSize <= 0 || totalSize > DOWNLOAD_BLOB_LIMIT) {
+    // Unknown size — use native download manager
+    if (totalSize <= 0) {
         const a = document.createElement('a');
         a.href = download.url;
         a.download = fileName;
@@ -1871,6 +1870,8 @@ async function startChunkedDownload(download) {
     const blobs = chunks.map(c => c.data);
     try {
         const blob = new Blob(blobs, { type: 'application/octet-stream' });
+        // Free chunk memory
+        chunks.length = 0;
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = blobUrl;
@@ -1886,9 +1887,17 @@ async function startChunkedDownload(download) {
         window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
         showToast('文件下载完成', 'success');
     } catch (err) {
-        markDownloadProgress(id, { status: 'error' });
-        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-        showToast('下载文件组装失败', 'error');
+        // Blob creation failed (likely OOM for huge files) — fall back to native <a> download
+        console.warn('[download]', 'Blob assembly failed, falling back to native download', { file: fileName, size: totalSize, error: err.message });
+        chunks.length = 0;
+        const a = document.createElement('a');
+        a.href = download.url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
+        startProgressPoll(id, totalSize, download.progressUrl || '');
     }
 }
 
