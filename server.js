@@ -2041,7 +2041,8 @@ function destroyUploadSession(token) {
     sftpUploadSessions.delete(token);
 }
 
-// 分片上传：每个分片一个 POST，X-Upload-Offset 指定写入位置
+// 分片上传：每个分片一个 POST，URL query ?offset=N 指定写入位置
+// 使用 query 参数而非自定义头，避免 CORS 预检（自定义头+非简单 content-type 触发 OPTIONS）
 app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
     const token = String(req.params.token || '');
     const uploadTask = sftpUploadTokens.get(token);
@@ -2052,11 +2053,9 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         return res.status(404).json({ error: '上传链接已失效' });
     }
 
-    let offset = Number(req.headers['x-upload-offset']);
+    const offset = Number(req.query.offset);
     if (!Number.isFinite(offset) || offset < 0) {
-        // Default to 0 if header missing — enables first-chunk upload without custom header
-        offset = 0;
-        console.warn('[sftp-upload-chunk]', 'missing X-Upload-Offset, defaulting to 0', { token: token.slice(0, 8) + '...' });
+        return res.status(400).json({ error: '缺少或无效的 ?offset 参数' });
     }
 
     let session = getUploadSession(token, uploadTask);

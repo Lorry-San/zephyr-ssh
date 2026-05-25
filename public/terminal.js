@@ -2308,15 +2308,14 @@ async function sendSftpUploadChunk(upload) {
         const end = Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
         const chunk = file.slice(offset, end);
 
+        const chunkUrl = upload.url + (upload.url.includes('?') ? '&' : '?') + 'offset=' + offset;
+
         try {
-            const res = await fetch(upload.url, {
+            const res = await fetch(chunkUrl, {
                 method: 'POST',
                 credentials: 'same-origin',
                 cache: 'no-store',
-                headers: {
-                    'Content-Type': 'application/octet-stream',
-                    'X-Upload-Offset': String(offset),
-                },
+                headers: { 'Content-Type': 'application/octet-stream' },
                 body: chunk,
                 signal: controller.signal,
             });
@@ -2350,15 +2349,13 @@ async function sendSftpUploadChunk(upload) {
             }
             lastError = err;
             // Retry failed chunk once immediately
+            const retryChunkUrl = upload.url + (upload.url.includes('?') ? '&' : '?') + 'offset=' + offset;
             try {
-                const res = await fetch(upload.url, {
+                const res = await fetch(retryChunkUrl, {
                     method: 'POST',
                     credentials: 'same-origin',
                     cache: 'no-store',
-                    headers: {
-                        'Content-Type': 'application/octet-stream',
-                        'X-Upload-Offset': String(offset),
-                    },
+                    headers: { 'Content-Type': 'application/octet-stream' },
                     body: file.slice(offset, Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize)),
                     signal: AbortSignal.timeout(30000),
                 });
