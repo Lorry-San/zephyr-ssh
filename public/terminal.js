@@ -1775,16 +1775,16 @@ function openNativeDownload(download) {
         }, '*');
         return;
     }
-    const frame = document.createElement('iframe');
-    frame.style.position = 'fixed';
-    frame.style.width = '1px';
-    frame.style.height = '1px';
-    frame.style.opacity = '0';
-    frame.style.pointerEvents = 'none';
-    frame.style.inset = 'auto 0 0 auto';
-    frame.src = download.url;
-    document.body.appendChild(frame);
-    window.setTimeout(() => frame.remove(), 60000);
+    // Use <a> click instead of iframe — iframes buffer large files in renderer memory
+    // causing tab crashes on Chrome for files >~512MB. Anchor download triggers the
+    // browser's native download manager which streams directly to disk.
+    const a = document.createElement('a');
+    a.href = download.url;
+    a.download = download.name || 'download';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
 }
 
 function startDownloadProgressPoll(id, size = 0, progressUrl = '') {

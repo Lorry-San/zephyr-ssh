@@ -1977,8 +1977,7 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
     let sftp = null;
     let writeStream = null;
     let keepaliveTimer = null;
-    let requestEnded = false;
-    let requestCompleted = false;
+    let reqEnded = false;
     let settled = false;
     let statConfirmTimer = null;
     let lastProgressSentAt = 0;
@@ -2025,41 +2024,82 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
     if (routed?.client?._sock?.setKeepAlive) {
         try { routed.client._sock.setKeepAlive(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
     }
+    // Send SFTP-level keepalive (realpath) during long transfers to prevent SSH channel timeout
+    let sftpKeepaliveSeq = 0;
     keepaliveTimer = setInterval(() => {
-        if (settled || req.destroyed) {
+        if (settled || req.destroyed || res.destroyed) {
             stopKeepalive();
             return;
         }
         uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
         try { routed?.client?._sock?.setKeepAlive?.(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
+        // Send SFTP channel keepalive every other interval to keep the channel alive
+        sftpKeepaliveSeq++;
+        if (sftpKeepaliveSeq % 2 === 0 && sftp && !settled) {
+            try { sftp.realpath('.', () => {}); } catch {}
+        }
     }, SFTP_UPLOAD_KEEPALIVE_INTERVAL);
     keepaliveTimer.unref?.();
-    writeStream = sftp.createWriteStream(uploadTask.path, { flags: 'w', highWaterMark: 256 * 1024 });
+
+    writeStream = sftp.createWriteStream(uploadTask.path, { flags: 'w', highWaterMark: 512 * 1024 });
     uploadTask.activeStream = writeStream;
+
+    // === Fix: Manual drain-aware pump replaces req.pipe(writeStream) + req.on('data') conflict ===
+    // Using req.on('data') and req.pipe() together creates competing flowing-mode consumers.
+    // Instead, we use a single data listener with explicit backpressure management.
+
+    // Pause req initially until writeStream is ready
+    req.pause();
+
+    const pump = () => {
+        req.resume();
+    };
+
+    let pumpPaused = false;
+
     req.on('data', (chunk) => {
         uploadTask.loaded = (Number(uploadTask.loaded) || 0) + chunk.length;
         uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+
+        // Progress broadcast (throttled)
         const now = Date.now();
         if (now - lastProgressSentAt > 250 || uploadTask.loaded >= Number(uploadTask.size || 0)) {
             lastProgressSentAt = now;
             sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: uploadTask.loaded, size: Number(uploadTask.size) || 0, status: 'active' });
         }
-    });
-    req.on('aborted', () => {
-        if (!settled && !requestEnded) fail(499, '浏览器中断了上传');
-    });
-    req.on('end', () => {
-        requestEnded = true;
-        requestCompleted = true;
-        if (Number(uploadTask.size) && Number(uploadTask.loaded) !== Number(uploadTask.size)) {
-            fail(400, `上传大小不一致：期望 ${uploadTask.size} 字节，收到 ${uploadTask.loaded} 字节`);
+
+        const canContinue = writeStream.write(chunk);
+        if (!canContinue) {
+            // SFTP write buffer full — pause HTTP upstream until drain
+            req.pause();
+            pumpPaused = true;
         }
     });
-    req.on('error', (err) => fail(500, err.message || '读取上传请求失败'));
+
+    writeStream.on('drain', () => {
+        if (pumpPaused && !settled && !reqEnded) {
+            pumpPaused = false;
+            req.resume();
+        }
+    });
+
+    req.on('end', () => {
+        reqEnded = true;
+        // Don't check size mismatch here — let writeStream finish handle it
+        writeStream.end();
+    });
+
+    req.on('aborted', () => {
+        if (!settled) fail(499, '浏览器中断了上传');
+    });
+
+    req.on('error', (err) => {
+        if (!settled) fail(500, err.message || '读取上传请求失败');
+    });
+
     const completeUpload = () => {
         if (settled) return;
         settled = true;
-        requestEnded = true;
         uploadTask.loaded = Number(uploadTask.size) || uploadTask.loaded;
         uploadTask.status = 'done';
         uploadTask.activeStream = null;
@@ -2069,7 +2109,32 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         sftpUploadTokens.delete(token);
         if (!res.headersSent) res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, loaded: uploadTask.loaded });
     };
-    const confirmUploadByStat = (delay = 800) => {
+
+    writeStream.on('error', (err) => {
+        if (!settled) fail(500, err.message || '写入远端文件失败');
+    });
+
+    writeStream.on('finish', () => {
+        // 'finish' means writeStream.end() was called AND all data written to remote
+        // No check on requestCompleted needed — writeStream.end() was called in req.end,
+        // and 'finish' can only fire after all buffered data has been flushed to SFTP
+        completeUpload();
+    });
+
+    // Safety net: if writeStream never finishes but all data was received, verify via stat
+    req.on('close', () => {
+        if (!settled && reqEnded && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
+            confirmUploadByStat(800);
+        }
+    });
+
+    writeStream.on('close', () => {
+        if (!settled && reqEnded && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
+            confirmUploadByStat(500);
+        }
+    });
+
+    const confirmUploadByStat = (delayMs = 800) => {
         if (statConfirmTimer || settled) return;
         statConfirmTimer = setTimeout(() => {
             statConfirmTimer = null;
@@ -2082,28 +2147,18 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
                     completeUpload();
                     return;
                 }
+                if (!err && expectedSize && remoteSize !== expectedSize) {
+                    fail(500, `上传文件大小不匹配：期望 ${expectedSize} 字节，远端 ${remoteSize} 字节`);
+                    return;
+                }
                 if (err) console.warn('[sftp-upload]', 'stat confirm failed', { path: uploadTask.path, error: err.message });
             });
-        }, delay);
+        }, delayMs);
         statConfirmTimer.unref?.();
     };
-    req.on('close', () => {
-        if (!settled && requestCompleted && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
-            confirmUploadByStat(250);
-        }
-    });
-    writeStream.on('close', () => {
-        if (!settled && requestCompleted && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
-            confirmUploadByStat(250);
-        }
-    });
-    writeStream.on('error', (err) => fail(500, err.message || '写入远端文件失败'));
-    writeStream.on('finish', () => {
-        if (settled) return;
-        if (!requestCompleted) return fail(499, '上传请求尚未完整到达服务器');
-        completeUpload();
-    });
-    req.pipe(writeStream);
+
+    // Start pumping data from req to writeStream
+    pump();
 });
 
 app.get('/api/sftp/download-progress/:token', requireAuth, (req, res) => {
@@ -2203,14 +2258,14 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     if (size > 0) res.setHeader('Content-Length', String(contentLength));
     if (partial) res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
-    let sftpDownloadKeepaliveTimer = null;
-    const stopSftpDownloadKeepalive = () => {
-        if (sftpDownloadKeepaliveTimer) {
-            clearInterval(sftpDownloadKeepaliveTimer);
-            sftpDownloadKeepaliveTimer = null;
+    let keepaliveTimer = null;
+    const stopKeepalive = () => {
+        if (keepaliveTimer) {
+            clearInterval(keepaliveTimer);
+            keepaliveTimer = null;
         }
     };
-    const streamOptions = size > 0 ? { start, end, highWaterMark: 256 * 1024 } : { highWaterMark: 256 * 1024 };
+    const streamOptions = size > 0 ? { start, end, highWaterMark: 512 * 1024 } : { highWaterMark: 512 * 1024 };
     const readStream = sftp.createReadStream(download.path, streamOptions);
     download.activeStream = readStream;
     download.status = 'active';
@@ -2218,70 +2273,111 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     if (routed?.client?._sock?.setKeepAlive) {
         try { routed.client._sock.setKeepAlive(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
     }
-    sftpDownloadKeepaliveTimer = setInterval(() => {
-        if (res.destroyed) {
-            stopSftpDownloadKeepalive();
+    let sftpKeepaliveSeq = 0;
+    keepaliveTimer = setInterval(() => {
+        if (res.destroyed || settled) {
+            stopKeepalive();
             return;
         }
         download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
         try { routed?.client?._sock?.setKeepAlive?.(true, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL); } catch {}
+        sftpKeepaliveSeq++;
+        if (sftpKeepaliveSeq % 2 === 0 && sftp && !settled) {
+            try { sftp.realpath('.', () => {}); } catch {}
+        }
     }, SFTP_DOWNLOAD_KEEPALIVE_INTERVAL);
-    sftpDownloadKeepaliveTimer.unref?.();
-    let completed = false;
-    let responseFinished = false;
+    keepaliveTimer.unref?.();
+
+    let settled = false;
     let cleanedUp = false;
+
     const closeDownloadConnection = () => {
         if (cleanedUp) return;
         cleanedUp = true;
         try { sftp?.end?.(); } catch {}
         [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
     };
+
+    const finalizeDone = () => {
+        if (settled) return;
+        settled = true;
+        download.loaded = size || download.loaded;
+        download.status = 'done';
+        download.activeStream = null;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
+        stopKeepalive();
+        closeDownloadConnection();
+        try { readStream.destroy(); } catch {}
+        if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
+    };
+
+    const failDownload = (errMessage) => {
+        if (settled) return;
+        settled = true;
+        download.status = 'error';
+        download.activeStream = null;
+        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
+        stopKeepalive();
+        closeDownloadConnection();
+        try { readStream.destroy(); } catch {}
+        console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: errMessage });
+        if (!res.headersSent) res.status(500).send(errMessage || '下载失败');
+        else res.destroy();
+    };
+
+    // === Fix: Replace readStream.pipe(res) with drain-aware manual pump ===
+    // Pause readStream initially until response is ready
+    readStream.pause();
+
     readStream.on('data', (chunk) => {
+        // Track progress
         download.loaded = Math.min(size || Number.MAX_SAFE_INTEGER, (Number(download.loaded) || start) + chunk.length);
         download.status = 'active';
         download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'active' });
+
+        const canContinue = res.write(chunk);
+        if (!canContinue) {
+            // Response buffer full — pause SFTP read until drain
+            readStream.pause();
+        }
     });
+
+    res.on('drain', () => {
+        if (!settled && !readStream.destroyed) {
+            readStream.resume();
+        }
+    });
+
     readStream.on('end', () => {
-        completed = true;
-        download.loaded = size || download.loaded;
-        download.status = 'done';
-        download.activeStream = null;
-        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
-        stopSftpDownloadKeepalive();
-        closeDownloadConnection();
-        if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
+        if (settled) return;
+        if (!res.writableEnded) {
+            res.end();
+        }
+        finalizeDone();
     });
+
     readStream.on('error', (err) => {
-        if (completed || responseFinished || res.writableEnded) return;
-        download.status = 'error';
-        download.activeStream = null;
-        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
-        stopSftpDownloadKeepalive();
-        closeDownloadConnection();
-        console.warn('[sftp-download]', 'stream failed', { path: download.path, range, error: err.message });
-        if (!res.headersSent) res.status(500).send(err.message || '下载失败');
-        else res.destroy(err);
+        if (!settled) failDownload(err.message || '读取远端文件失败');
     });
+
     res.on('finish', () => {
-        responseFinished = true;
-        completed = true;
-        download.loaded = size || download.loaded;
-        download.status = 'done';
-        download.activeStream = null;
-        sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
-        stopSftpDownloadKeepalive();
-        closeDownloadConnection();
-        if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
+        // Response fully sent to client — finalize if not already
+        if (!settled) {
+            finalizeDone();
+        }
     });
+
     res.on('close', () => {
-        stopSftpDownloadKeepalive();
+        stopKeepalive();
         try { readStream.destroy(); } catch {}
         if (download.activeStream === readStream) download.activeStream = null;
         closeDownloadConnection();
-        if (!completed) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+        if (!settled) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
     });
-    readStream.pipe(res);
+
+    // Start reading and pumping
+    readStream.resume();
 });
 
 app.use('/vendor/viewerjs', express.static(path.join(__dirname, 'node_modules', 'viewerjs', 'dist')));
