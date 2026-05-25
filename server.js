@@ -2052,9 +2052,11 @@ app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
         return res.status(404).json({ error: '上传链接已失效' });
     }
 
-    const offset = Number(req.headers['x-upload-offset']);
+    let offset = Number(req.headers['x-upload-offset']);
     if (!Number.isFinite(offset) || offset < 0) {
-        return res.status(400).json({ error: '缺少或无效的 X-Upload-Offset 头' });
+        // Default to 0 if header missing — enables first-chunk upload without custom header
+        offset = 0;
+        console.warn('[sftp-upload-chunk]', 'missing X-Upload-Offset, defaulting to 0', { token: token.slice(0, 8) + '...' });
     }
 
     let session = getUploadSession(token, uploadTask);
