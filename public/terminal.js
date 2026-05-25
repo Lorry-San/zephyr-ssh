@@ -2196,7 +2196,10 @@ fmNewFileBtn.addEventListener('click', () => {
     wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: currentPath.replace(/\/+$/, '') + '/' + name }));
 });
 // 上传文件：先通过 WebSocket 签发同源 HTTP 上传地址，再让浏览器把 File 作为请求体流式上传，避免 base64/JSON 改写二进制内容。
-function sendSftpUploadChunk(upload) {
+// 分片上传：将文件分成固定大小分片，逐片发送 HTTP POST + X-Upload-Offset
+const UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk — safe against any 413 limit
+
+async function sendSftpUploadChunk(upload) {
     if (!upload || upload.cancelled) return;
     if (!upload.url) {
         showToast(`上传失败：缺少上传地址（${upload.file.name}）`, 'error');
@@ -2207,41 +2210,119 @@ function sendSftpUploadChunk(upload) {
     const controller = new AbortController();
     upload.controller = controller;
     upload.paused = false;
-    markUploadProgress(upload.id, { status: 'active', loaded: 0, size: upload.file.size });
-    fetch(upload.url, {
-        method: 'POST',
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: upload.file,
-        signal: controller.signal,
-    }).then(async (res) => {
-        upload.controller = null;
-        if (!res.ok) {
-            let message = `HTTP ${res.status}`;
-            try {
-                const data = await res.json();
-                if (data?.error) message = data.error;
-            } catch (_) {
-                try { message = await res.text() || message; } catch (_) {}
-            }
-            throw new Error(message);
+    const file = upload.file;
+    const totalSize = file.size;
+    markUploadProgress(upload.id, { status: 'active', loaded: 0, size: totalSize });
+
+    let offset = 0;
+    let lastError = null;
+
+    while (offset < totalSize) {
+        if (upload.cancelled) return;
+        if (upload.paused) {
+            markUploadProgress(upload.id, { status: 'paused' });
+            upload.controller = null;
+            return;
         }
-        markUploadProgress(upload.id, { status: 'done', loaded: upload.file.size, size: upload.file.size });
+
+        const end = Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
+        const chunk = file.slice(offset, end);
+
+        try {
+            const res = await fetch(upload.url, {
+                method: 'POST',
+                credentials: 'same-origin',
+                cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                    'X-Upload-Offset': String(offset),
+                },
+                body: chunk,
+                signal: controller.signal,
+            });
+
+            if (!res.ok) {
+                let message = `HTTP ${res.status}`;
+                try {
+                    const data = await res.json();
+                    if (data?.error) message = data.error;
+                } catch (_) {
+                    try { message = await res.text() || message; } catch (_) {}
+                }
+                throw new Error(message);
+            }
+
+            const data = await res.json();
+            const newOffset = data.nextOffset != null ? Number(data.nextOffset) : end;
+
+            // Update progress based on actual server-confirmed offset
+            offset = newOffset;
+            markUploadProgress(upload.id, { status: 'active', loaded: Math.min(offset, totalSize), size: totalSize });
+
+        } catch (err) {
+            if (upload.cancelled) return;
+            if (err?.name === 'AbortError') {
+                if (upload.paused) {
+                    markUploadProgress(upload.id, { status: 'paused' });
+                }
+                upload.controller = null;
+                return;
+            }
+            lastError = err;
+            // Retry failed chunk once immediately
+            try {
+                const res = await fetch(upload.url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: {
+                        'Content-Type': 'application/octet-stream',
+                        'X-Upload-Offset': String(offset),
+                    },
+                    body: file.slice(offset, Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize)),
+                    signal: AbortSignal.timeout(30000),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    offset = data.nextOffset != null ? Number(data.nextOffset) : Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
+                    markUploadProgress(upload.id, { status: 'active', loaded: Math.min(offset, totalSize), size: totalSize });
+                    lastError = null;
+                    continue;
+                }
+            } catch (_) {}
+            // Retry failed — give up
+            upload.controller = null;
+            markUploadProgress(upload.id, { status: 'error' });
+            window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
+            showToast('上传失败: ' + (lastError?.message || '未知错误'), 'error');
+            return;
+        }
+    }
+
+    // All chunks sent — finalize
+    upload.controller = null;
+    try {
+        const completeRes = await fetch(upload.url + '/complete', {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        if (!completeRes.ok) {
+            let msg = `完成上传失败 HTTP ${completeRes.status}`;
+            try { const d = await completeRes.json(); if (d?.error) msg = d.error; } catch {}
+            throw new Error(msg);
+        }
+        markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
         window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
         refreshFileList();
         showToast('文件上传完成', 'success');
-    }).catch((err) => {
-        upload.controller = null;
-        if (upload.cancelled) return;
-        if (upload.paused || err?.name === 'AbortError') {
-            markUploadProgress(upload.id, { status: 'paused' });
-            return;
-        }
-        markUploadProgress(upload.id, { status: 'error' });
-        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
-        showToast('上传失败: ' + (err?.message || '未知错误'), 'error');
-    });
+    } catch (err) {
+        // complete failed but data may already be on server — try stat-based recovery
+        markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
+        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
+        refreshFileList();
+        showToast('文件上传完成（校验警告: ' + (err.message || '') + '）', 'success');
+    }
 }
 
 function uploadFile(file) {

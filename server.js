@@ -115,7 +115,10 @@ function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
         if (download.sessionId === session.id) sftpDownloadTokens.delete(token);
     }
     for (const [token, uploadTask] of sftpUploadTokens.entries()) {
-        if (uploadTask.sessionId === session.id) sftpUploadTokens.delete(token);
+        if (uploadTask.sessionId === session.id) {
+            sftpUploadTokens.delete(token);
+            destroyUploadSession(token);
+        }
     }
     for (const [token, previewTask] of sftpPreviewTokens.entries()) {
         if (previewTask.sessionId === session.id) sftpPreviewTokens.delete(token);
@@ -1961,204 +1964,235 @@ app.get('/api/sftp/preview/:token', requireAuth, async (req, res) => {
     }
 });
 
-app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
-    const token = String(req.params.token || '');
-    const uploadTask = sftpUploadTokens.get(token);
-    if (!uploadTask || uploadTask.username !== req.session.username || uploadTask.expiresAt < Date.now()) {
-        sftpUploadTokens.delete(token);
-        return res.status(404).json({ error: '上传链接已失效' });
+// ===== 分片上传 API =====
+// POST /api/sftp/upload/:token       — 上传一个分片（X-Upload-Offset 指定偏移）
+// POST /api/sftp/upload/:token/complete — 完成上传，关闭句柄并校验
+
+// 存储每个 token 对应的 SFTP session 缓存（conn/file handle）
+const sftpUploadSessions = new Map(); // token -> { routed, sftp, fileHandle, totalLoaded, keepaliveTimer, settled }
+
+function getUploadSession(token, uploadTask) {
+    let session = sftpUploadSessions.get(token);
+    if (session) {
+        session.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+        return session;
     }
+    return null;
+}
+
+async function createUploadSession(token, uploadTask) {
     const connectionConfig = uploadTask.connectionConfig;
-    if (!connectionConfig) {
-        sftpUploadTokens.delete(token);
-        return res.status(410).json({ error: '上传连接配置已失效，请重新打开文件管理器后上传' });
-    }
-    let routed = null;
-    let sftp = null;
-    let writeStream = null;
-    let keepaliveTimer = null;
-    let reqEnded = false;
-    let settled = false;
-    let statConfirmTimer = null;
-    let lastProgressSentAt = 0;
-    const fail = (status, message) => {
-        if (settled) return;
-        settled = true;
-        uploadTask.status = 'error';
-        uploadTask.activeStream = null;
-        sftpUploadTokens.delete(token);
-        sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: Number(uploadTask.loaded) || 0, size: Number(uploadTask.size) || 0, status: 'error' });
-        try { writeStream?.destroy?.(); } catch {}
-        stopKeepalive();
-        closeConnection();
-        if (!res.headersSent) res.status(status).json({ error: message || '上传失败' });
-        else try { res.destroy(); } catch {}
-    };
-    function stopKeepalive() {
-        if (keepaliveTimer) {
-            clearInterval(keepaliveTimer);
-            keepaliveTimer = null;
-        }
-        if (statConfirmTimer) {
-            clearTimeout(statConfirmTimer);
-            statConfirmTimer = null;
-        }
-    }
-    function closeConnection() {
-        try { sftp?.end?.(); } catch {}
-        [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
-    }
-    try {
-        routed = await createRoutedSSHConnection(connectionConfig, 10000);
-        sftp = await new Promise((resolve, reject) => {
-            routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
-        });
-    } catch (err) {
-        closeConnection();
-        return fail(410, `上传专用 SFTP 连接失败：${err.message}`);
-    }
-    uploadTask.status = 'active';
-    uploadTask.loaded = 0;
-    uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
-    sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: 0, size: Number(uploadTask.size) || 0, status: 'active' });
+    if (!connectionConfig) throw new Error('上传连接配置已失效');
+
+    const routed = await createRoutedSSHConnection(connectionConfig, 10000);
+    const sftp = await new Promise((resolve, reject) => {
+        routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp));
+    });
+
+    // Open file handle for offset writes
+    const fileHandle = await new Promise((resolve, reject) => {
+        sftp.open(uploadTask.path, 'w', (err, handle) => err ? reject(err) : resolve(handle));
+    });
+
     if (routed?.client?._sock?.setKeepAlive) {
         try { routed.client._sock.setKeepAlive(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
     }
-    // Send SFTP-level keepalive (realpath) during long transfers to prevent SSH channel timeout
+
     let sftpKeepaliveSeq = 0;
-    keepaliveTimer = setInterval(() => {
-        if (settled || req.destroyed || res.destroyed) {
-            stopKeepalive();
+    const keepaliveTimer = setInterval(() => {
+        if (session.settled) {
+            clearInterval(keepaliveTimer);
             return;
         }
-        uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
         try { routed?.client?._sock?.setKeepAlive?.(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
-        // Send SFTP channel keepalive every other interval to keep the channel alive
         sftpKeepaliveSeq++;
-        if (sftpKeepaliveSeq % 2 === 0 && sftp && !settled) {
+        if (sftpKeepaliveSeq % 2 === 0 && sftp && !session.settled) {
             try { sftp.realpath('.', () => {}); } catch {}
         }
     }, SFTP_UPLOAD_KEEPALIVE_INTERVAL);
     keepaliveTimer.unref?.();
 
-    writeStream = sftp.createWriteStream(uploadTask.path, { flags: 'w', highWaterMark: 512 * 1024 });
-    uploadTask.activeStream = writeStream;
-
-    // === Fix: Manual drain-aware pump replaces req.pipe(writeStream) + req.on('data') conflict ===
-    // Using req.on('data') and req.pipe() together creates competing flowing-mode consumers.
-    // Instead, we use a single data listener with explicit backpressure management.
-
-    // Pause req initially until writeStream is ready
-    req.pause();
-
-    const pump = () => {
-        req.resume();
+    const session = {
+        routed,
+        sftp,
+        fileHandle,
+        totalLoaded: 0,
+        keepaliveTimer,
+        settled: false,
+        expiresAt: Date.now() + SFTP_UPLOAD_TOKEN_TTL,
+        username: uploadTask.username,
+        path: uploadTask.path,
+        uploadId: uploadTask.uploadId || '',
     };
+    sftpUploadSessions.set(token, session);
+    return session;
+}
 
-    let pumpPaused = false;
+function destroyUploadSession(token) {
+    const session = sftpUploadSessions.get(token);
+    if (!session) return;
+    session.settled = true;
+    if (session.keepaliveTimer) clearInterval(session.keepaliveTimer);
+    try {
+        if (session.fileHandle) session.sftp.close(session.fileHandle, () => {});
+    } catch {}
+    try { session.sftp?.end?.(); } catch {}
+    [...(session.routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
+    sftpUploadSessions.delete(token);
+}
 
+// 分片上传：每个分片一个 POST，X-Upload-Offset 指定写入位置
+app.post('/api/sftp/upload/:token', requireAuth, async (req, res) => {
+    const token = String(req.params.token || '');
+    const uploadTask = sftpUploadTokens.get(token);
+
+    if (!uploadTask || uploadTask.username !== req.session.username || uploadTask.expiresAt < Date.now()) {
+        sftpUploadTokens.delete(token);
+        destroyUploadSession(token);
+        return res.status(404).json({ error: '上传链接已失效' });
+    }
+
+    const offset = Number(req.headers['x-upload-offset']);
+    if (!Number.isFinite(offset) || offset < 0) {
+        return res.status(400).json({ error: '缺少或无效的 X-Upload-Offset 头' });
+    }
+
+    let session = getUploadSession(token, uploadTask);
+    if (!session) {
+        try {
+            session = await createUploadSession(token, uploadTask);
+        } catch (err) {
+            sftpUploadTokens.delete(token);
+            return res.status(410).json({ error: `创建上传会话失败：${err.message}` });
+        }
+    }
+
+    if (session.settled) {
+        return res.status(410).json({ error: '上传会话已结束' });
+    }
+    if (session.username !== req.session.username) {
+        return res.status(403).json({ error: '上传会话用户不匹配' });
+    }
+
+    // Collect the body (may arrive in multiple data events)
+    const chunks = [];
+    let bodyLength = 0;
     req.on('data', (chunk) => {
-        uploadTask.loaded = (Number(uploadTask.loaded) || 0) + chunk.length;
-        uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
-
-        // Progress broadcast (throttled)
-        const now = Date.now();
-        if (now - lastProgressSentAt > 250 || uploadTask.loaded >= Number(uploadTask.size || 0)) {
-            lastProgressSentAt = now;
-            sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: uploadTask.loaded, size: Number(uploadTask.size) || 0, status: 'active' });
-        }
-
-        const canContinue = writeStream.write(chunk);
-        if (!canContinue) {
-            // SFTP write buffer full — pause HTTP upstream until drain
-            req.pause();
-            pumpPaused = true;
-        }
-    });
-
-    writeStream.on('drain', () => {
-        if (pumpPaused && !settled && !reqEnded) {
-            pumpPaused = false;
-            req.resume();
-        }
+        chunks.push(chunk);
+        bodyLength += chunk.length;
     });
 
     req.on('end', () => {
-        reqEnded = true;
-        // Don't check size mismatch here — let writeStream finish handle it
-        writeStream.end();
-    });
+        const buffer = Buffer.concat(chunks);
 
-    req.on('aborted', () => {
-        if (!settled) fail(499, '浏览器中断了上传');
+        // Write chunk at offset using low-level sftp.write()
+        session.sftp.write(session.fileHandle, buffer, 0, buffer.length, offset, (writeErr) => {
+            if (writeErr || session.settled) {
+                if (writeErr) {
+                    console.warn('[sftp-upload-chunk]', 'write failed', { path: uploadTask.path, offset, size: buffer.length, error: writeErr.message });
+                }
+                if (!res.headersSent) {
+                    return res.status(500).json({ error: writeErr ? `写入分片失败：${writeErr.message}` : '上传会话已结束' });
+                }
+                return;
+            }
+
+            session.totalLoaded = Math.max(session.totalLoaded, offset + buffer.length);
+            uploadTask.loaded = session.totalLoaded;
+            uploadTask.expiresAt = Date.now() + SFTP_UPLOAD_TOKEN_TTL;
+
+            // Broadcast progress
+            sendTransferEvent(uploadTask.username, {
+                transferId: uploadTask.uploadId || token,
+                direction: 'upload',
+                path: uploadTask.path,
+                loaded: session.totalLoaded,
+                size: Number(uploadTask.size) || 0,
+                status: 'active',
+            });
+
+            res.json({
+                ok: true,
+                received: buffer.length,
+                offset,
+                nextOffset: offset + buffer.length,
+                totalLoaded: session.totalLoaded,
+                totalSize: Number(uploadTask.size) || 0,
+            });
+        });
     });
 
     req.on('error', (err) => {
-        if (!settled) fail(500, err.message || '读取上传请求失败');
+        if (!res.headersSent) {
+            res.status(500).json({ error: `读取分片数据失败：${err.message}` });
+        }
     });
+});
 
-    const completeUpload = () => {
-        if (settled) return;
-        settled = true;
-        uploadTask.loaded = Number(uploadTask.size) || uploadTask.loaded;
+// 完成上传：关闭句柄并校验
+app.post('/api/sftp/upload/:token/complete', requireAuth, async (req, res) => {
+    const token = String(req.params.token || '');
+    const uploadTask = sftpUploadTokens.get(token);
+    if (!uploadTask || uploadTask.username !== req.session.username) {
+        sftpUploadTokens.delete(token);
+        destroyUploadSession(token);
+        return res.status(404).json({ error: '上传任务不存在' });
+    }
+
+    const session = sftpUploadSessions.get(token);
+    if (!session) {
+        sftpUploadTokens.delete(token);
+        return res.status(410).json({ error: '上传会话不存在或已过期' });
+    }
+
+    // Close file handle
+    try {
+        await new Promise((resolve, reject) => {
+            session.sftp.close(session.fileHandle, (err) => err ? reject(err) : resolve());
+        });
+    } catch (err) {
+        console.warn('[sftp-upload-complete]', 'close handle failed', { path: uploadTask.path, error: err.message });
+    }
+
+    // Verify via stat
+    try {
+        const stats = await new Promise((resolve, reject) => {
+            session.sftp.stat(uploadTask.path, (err, st) => err ? reject(err) : resolve(st));
+        });
+        const remoteSize = Number(stats.size) || 0;
+        const expectedSize = Number(uploadTask.size) || 0;
+
+        if (expectedSize && remoteSize !== expectedSize) {
+            destroyUploadSession(token);
+            sftpUploadTokens.delete(token);
+            return res.status(500).json({
+                error: `上传文件大小不匹配：期望 ${expectedSize} 字节，远端 ${remoteSize} 字节`,
+                remoteSize,
+                expectedSize,
+            });
+        }
+
+        uploadTask.loaded = remoteSize;
         uploadTask.status = 'done';
         uploadTask.activeStream = null;
-        sendTransferEvent(uploadTask.username, { transferId: uploadTask.uploadId || token, direction: 'upload', path: uploadTask.path, loaded: uploadTask.loaded, size: Number(uploadTask.size) || 0, status: 'done' });
-        stopKeepalive();
-        closeConnection();
+        sendTransferEvent(uploadTask.username, {
+            transferId: uploadTask.uploadId || token,
+            direction: 'upload',
+            path: uploadTask.path,
+            loaded: remoteSize,
+            size: Number(uploadTask.size) || 0,
+            status: 'done',
+        });
+        destroyUploadSession(token);
         sftpUploadTokens.delete(token);
-        if (!res.headersSent) res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, loaded: uploadTask.loaded });
-    };
 
-    writeStream.on('error', (err) => {
-        if (!settled) fail(500, err.message || '写入远端文件失败');
-    });
-
-    writeStream.on('finish', () => {
-        // 'finish' means writeStream.end() was called AND all data written to remote
-        // No check on requestCompleted needed — writeStream.end() was called in req.end,
-        // and 'finish' can only fire after all buffered data has been flushed to SFTP
-        completeUpload();
-    });
-
-    // Safety net: if writeStream never finishes but all data was received, verify via stat
-    req.on('close', () => {
-        if (!settled && reqEnded && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
-            confirmUploadByStat(800);
-        }
-    });
-
-    writeStream.on('close', () => {
-        if (!settled && reqEnded && Number(uploadTask.size) && Number(uploadTask.loaded) === Number(uploadTask.size)) {
-            confirmUploadByStat(500);
-        }
-    });
-
-    const confirmUploadByStat = (delayMs = 800) => {
-        if (statConfirmTimer || settled) return;
-        statConfirmTimer = setTimeout(() => {
-            statConfirmTimer = null;
-            if (settled) return;
-            sftp.stat(uploadTask.path, (err, stats) => {
-                if (settled) return;
-                const expectedSize = Number(uploadTask.size) || 0;
-                const remoteSize = Number(stats?.size) || 0;
-                if (!err && (!expectedSize || remoteSize === expectedSize)) {
-                    completeUpload();
-                    return;
-                }
-                if (!err && expectedSize && remoteSize !== expectedSize) {
-                    fail(500, `上传文件大小不匹配：期望 ${expectedSize} 字节，远端 ${remoteSize} 字节`);
-                    return;
-                }
-                if (err) console.warn('[sftp-upload]', 'stat confirm failed', { path: uploadTask.path, error: err.message });
-            });
-        }, delayMs);
-        statConfirmTimer.unref?.();
-    };
-
-    // Start pumping data from req to writeStream
-    pump();
+        res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, size: remoteSize });
+    } catch (err) {
+        console.warn('[sftp-upload-complete]', 'stat failed', { path: uploadTask.path, error: err.message });
+        destroyUploadSession(token);
+        sftpUploadTokens.delete(token);
+        res.status(500).json({ error: `校验远端文件失败：${err.message}` });
+    }
 });
 
 app.get('/api/sftp/download-progress/:token', requireAuth, (req, res) => {
