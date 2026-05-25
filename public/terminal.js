@@ -1764,30 +1764,110 @@ function markDownloadProgress(id, patch) {
     scheduleTransferRender();
 }
 
-function openNativeDownload(download) {
-    if (embeddedMode && window.parent && window.parent !== window) {
-        window.parent.postMessage({
-            source: 'zephyr-terminal',
-            type: 'download-url',
-            tabId: params?.tabId,
-            url: download.url,
-            name: download.name || 'download',
-        }, '*');
+// 分片下载：通过 HTTP Range 请求逐片获取，避免单次大请求超时，支持进度追踪
+const DOWNLOAD_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk
+
+async function startChunkedDownload(download) {
+    if (!download || !download.url) return;
+    const id = download.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const totalSize = Number(download.size) || 0;
+    const fileName = download.name || (download.path || 'download').split('/').pop() || 'download';
+
+    markDownloadProgress(id, { path: download.path, name: fileName, size: totalSize, loaded: 0, status: 'active', url: download.url });
+
+    if (totalSize <= 0 || totalSize > 1024 * 1024 * 1024) {
+        // Fallback: size unknown or > 1GB — use native <a> download (streams directly to disk)
+        const a = document.createElement('a');
+        a.href = download.url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
+        // Track progress via server polling
+        startProgressPoll(id, totalSize, download.progressUrl || '');
         return;
     }
-    // Use <a> click instead of iframe — iframes buffer large files in renderer memory
-    // causing tab crashes on Chrome for files >~512MB. Anchor download triggers the
-    // browser's native download manager which streams directly to disk.
-    const a = document.createElement('a');
-    a.href = download.url;
-    a.download = download.name || 'download';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
+
+    // Chunked download via Range requests
+    let receivedChunks = [];
+    let loaded = 0;
+    let failedChunks = new Set();
+
+    for (let start = 0; start < totalSize; start += DOWNLOAD_CHUNK_SIZE) {
+        const item = activeSftpDownloads.get(id);
+        if (!item) break; // cancelled
+        if (item.status === 'paused') {
+            // Paused — store state for resume
+            download._chunks = receivedChunks;
+            download._loaded = loaded;
+            download._failedChunks = failedChunks;
+            return;
+        }
+
+        const end = Math.min(start + DOWNLOAD_CHUNK_SIZE - 1, totalSize - 1);
+        let success = false;
+
+        // Try up to 2 times per chunk
+        for (let attempt = 0; attempt < 2 && !success; attempt++) {
+            try {
+                const res = await fetch(download.url, {
+                    headers: { 'Range': `bytes=${start}-${end}` },
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                });
+                if (!res.ok && res.status !== 206) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const buf = await res.arrayBuffer();
+                receivedChunks.push(buf);
+                loaded += buf.byteLength;
+                if (failedChunks.has(start)) failedChunks.delete(start);
+                success = true;
+            } catch (err) {
+                if (attempt === 0) {
+                    failedChunks.add(start);
+                    // Retry once
+                    continue;
+                }
+                // Both attempts failed
+                markDownloadProgress(id, { status: 'error' });
+                window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
+                showToast('下载失败: ' + (err.message || '分片下载错误'), 'error');
+                return;
+            }
+        }
+
+        markDownloadProgress(id, { loaded: Math.min(loaded, totalSize), size: totalSize, status: 'active' });
+    }
+
+    // All chunks received — assemble and trigger download
+    try {
+        const blob = new Blob(receivedChunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        window.setTimeout(() => {
+            try { document.body.removeChild(a); } catch {}
+            URL.revokeObjectURL(url);
+        }, 2000);
+
+        receivedChunks = [];
+        markDownloadProgress(id, { status: 'done', loaded: totalSize, size: totalSize });
+        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
+        showToast('文件下载完成', 'success');
+    } catch (err) {
+        markDownloadProgress(id, { status: 'error' });
+        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
+        showToast('下载文件组装失败: ' + (err.message || '未知错误'), 'error');
+    }
 }
 
-function startDownloadProgressPoll(id, size = 0, progressUrl = '') {
+function startProgressPoll(id, size = 0, progressUrl = '') {
     const total = Number(size) || 0;
     const tick = async () => {
         const item = activeSftpDownloads.get(id);
@@ -1884,7 +1964,7 @@ function resumeDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download?.url) return;
     markDownloadProgress(id, { status: 'active' });
-    openNativeDownload(download);
+    startChunkedDownload(download);
 }
 
 function handleTransferActionClick(e) {
@@ -3645,11 +3725,11 @@ function handleSFTPMessage(msg) {
                 break;
             }
             const downloadId = msg.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            markDownloadProgress(downloadId, { path: msg.path, name: (msg.path || 'download').split('/').pop() || 'download', size: Number(msg.size) || 0, loaded: 0, status: 'active', url: msg.url, progressUrl: msg.progressUrl || '', controlUrl: msg.controlUrl || '' });
+            const download = { downloadId, path: msg.path, name: (msg.path || 'download').split('/').pop() || 'download', size: Number(msg.size) || 0, url: msg.url, progressUrl: msg.progressUrl || '', controlUrl: msg.controlUrl || '' };
+            activeSftpDownloads.set(downloadId, download);
             showTransferPopover({ autoHide: true });
-            startDownloadProgressPoll(downloadId, Number(msg.size) || 0, msg.progressUrl || '');
-            openNativeDownload(activeSftpDownloads.get(downloadId));
             showToast('已开始下载，进度可在传输面板查看', 'success');
+            startChunkedDownload(download);
             break;
         }
         case 'sftp-readfile':
