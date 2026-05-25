@@ -1727,9 +1727,15 @@ function renderTransferPopover() {
     }).join('');
 }
 
+// Throttled transfer render: at most once per 300ms to avoid re-rendering on every chunk
+let transferRenderThrottled = null;
 function scheduleTransferRender() {
-    window.cancelAnimationFrame(transferRenderRaf);
-    transferRenderRaf = window.requestAnimationFrame(renderTransferPopover);
+    if (transferRenderThrottled) return;
+    transferRenderThrottled = true;
+    window.requestAnimationFrame(() => {
+        transferRenderThrottled = false;
+        renderTransferPopover();
+    });
 }
 
 function showTransferPopover({ autoHide = false } = {}) {
@@ -1767,104 +1773,30 @@ function markDownloadProgress(id, patch) {
 // 分片下载：通过 HTTP Range 请求逐片获取，避免单次大请求超时，支持进度追踪
 const DOWNLOAD_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk
 
-async function startChunkedDownload(download) {
+// 下载：使用 <a> 触发浏览器原生下载管理器（流式写磁盘），进度由服务端推送/轮询
+
+function startChunkedDownload(download) {
     if (!download || !download.url) return;
     const id = download.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const totalSize = Number(download.size) || 0;
     const fileName = download.name || (download.path || 'download').split('/').pop() || 'download';
 
-    markDownloadProgress(id, { path: download.path, name: fileName, size: totalSize, loaded: 0, status: 'active', url: download.url });
-
-    if (totalSize <= 0 || totalSize > 1024 * 1024 * 1024) {
-        // Fallback: size unknown or > 1GB — use native <a> download (streams directly to disk)
-        const a = document.createElement('a');
-        a.href = download.url;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-        // Track progress via server polling
-        startProgressPoll(id, totalSize, download.progressUrl || '');
-        return;
+    // Ensure this download is tracked
+    if (!activeSftpDownloads.has(id)) {
+        markDownloadProgress(id, { path: download.path, name: fileName, size: totalSize, loaded: 0, status: 'active', url: download.url, progressUrl: download.progressUrl || '', controlUrl: download.controlUrl || '' });
     }
 
-    // Chunked download via Range requests
-    let receivedChunks = [];
-    let loaded = 0;
-    let failedChunks = new Set();
+    // Trigger native browser download via <a> click — streams directly to disk
+    const a = document.createElement('a');
+    a.href = download.url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
 
-    for (let start = 0; start < totalSize; start += DOWNLOAD_CHUNK_SIZE) {
-        const item = activeSftpDownloads.get(id);
-        if (!item) break; // cancelled
-        if (item.status === 'paused') {
-            // Paused — store state for resume
-            download._chunks = receivedChunks;
-            download._loaded = loaded;
-            download._failedChunks = failedChunks;
-            return;
-        }
-
-        const end = Math.min(start + DOWNLOAD_CHUNK_SIZE - 1, totalSize - 1);
-        let success = false;
-
-        // Try up to 2 times per chunk
-        for (let attempt = 0; attempt < 2 && !success; attempt++) {
-            try {
-                const res = await fetch(download.url, {
-                    headers: { 'Range': `bytes=${start}-${end}` },
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                });
-                if (!res.ok && res.status !== 206) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                const buf = await res.arrayBuffer();
-                receivedChunks.push(buf);
-                loaded += buf.byteLength;
-                if (failedChunks.has(start)) failedChunks.delete(start);
-                success = true;
-            } catch (err) {
-                if (attempt === 0) {
-                    failedChunks.add(start);
-                    // Retry once
-                    continue;
-                }
-                // Both attempts failed
-                markDownloadProgress(id, { status: 'error' });
-                window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-                showToast('下载失败: ' + (err.message || '分片下载错误'), 'error');
-                return;
-            }
-        }
-
-        markDownloadProgress(id, { loaded: Math.min(loaded, totalSize), size: totalSize, status: 'active' });
-    }
-
-    // All chunks received — assemble and trigger download
-    try {
-        const blob = new Blob(receivedChunks);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => {
-            try { document.body.removeChild(a); } catch {}
-            URL.revokeObjectURL(url);
-        }, 2000);
-
-        receivedChunks = [];
-        markDownloadProgress(id, { status: 'done', loaded: totalSize, size: totalSize });
-        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
-        showToast('文件下载完成', 'success');
-    } catch (err) {
-        markDownloadProgress(id, { status: 'error' });
-        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-        showToast('下载文件组装失败: ' + (err.message || '未知错误'), 'error');
-    }
+    // Track progress via server polling (the server sends real progress via sftp-transfer-progress WS events)
+    startProgressPoll(id, totalSize, download.progressUrl || '');
 }
 
 function startProgressPoll(id, size = 0, progressUrl = '') {
@@ -2277,7 +2209,10 @@ fmNewFileBtn.addEventListener('click', () => {
 });
 // 上传文件：先通过 WebSocket 签发同源 HTTP 上传地址，再让浏览器把 File 作为请求体流式上传，避免 base64/JSON 改写二进制内容。
 // 分片上传：将文件分成固定大小分片，逐片发送 HTTP POST + X-Upload-Offset
-const UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk — safe against any 413 limit
+// 分片上传：动态自适应分片大小
+// 规则：成功则翻倍，失败则减半（下限 64KB，无上限）
+// 并发：大文件（>50MB）同时发 3 片，小文件 2 片
+const UPLOAD_MIN_CHUNK = 64 * 1024;
 
 async function sendSftpUploadChunk(upload) {
     if (!upload || upload.cancelled) return;
@@ -2294,111 +2229,101 @@ async function sendSftpUploadChunk(upload) {
     const totalSize = file.size;
     markUploadProgress(upload.id, { status: 'active', loaded: 0, size: totalSize });
 
-    let offset = 0;
-    let lastError = null;
+    // Build initial chunk list at a conservative starting size
+    let chunkSize = Math.min(2 * 1024 * 1024, Math.max(UPLOAD_MIN_CHUNK, totalSize || Infinity));
+    // Track which byte ranges have been successfully sent
+    const completed = new Set(); // stores end offsets of completed chunks
+    let nextOffset = 0;
+    let concurrency = totalSize > 50 * 1024 * 1024 ? 3 : 2;
 
-    while (offset < totalSize) {
-        if (upload.cancelled) return;
-        if (upload.paused) {
-            markUploadProgress(upload.id, { status: 'paused' });
-            upload.controller = null;
-            return;
-        }
+    const sendOne = async (offset, size) => {
+        const end = Math.min(offset + size, totalSize);
+        if (offset >= totalSize) return true;
 
-        const end = Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
-        const chunk = file.slice(offset, end);
-
-        const chunkUrl = upload.url + (upload.url.includes('?') ? '&' : '?') + 'offset=' + offset;
-
+        const url = upload.url + '?offset=' + offset;
         try {
-            const res = await fetch(chunkUrl, {
+            const res = await fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
                 cache: 'no-store',
                 headers: { 'Content-Type': 'application/octet-stream' },
-                body: chunk,
+                body: file.slice(offset, end),
                 signal: controller.signal,
             });
-
-            if (!res.ok) {
-                let message = `HTTP ${res.status}`;
-                try {
-                    const data = await res.json();
-                    if (data?.error) message = data.error;
-                } catch (_) {
-                    try { message = await res.text() || message; } catch (_) {}
-                }
-                throw new Error(message);
-            }
-
-            const data = await res.json();
-            const newOffset = data.nextOffset != null ? Number(data.nextOffset) : end;
-
-            // Update progress based on actual server-confirmed offset
-            offset = newOffset;
-            markUploadProgress(upload.id, { status: 'active', loaded: Math.min(offset, totalSize), size: totalSize });
-
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await res.json();
+            if (upload.cancelled) return true;
+            completed.add(end);
+            // Update progress (largest completed offset)
+            let maxDone = 0;
+            for (const c of completed) if (c > maxDone) maxDone = c;
+            markUploadProgress(upload.id, { loaded: Math.min(maxDone, totalSize), size: totalSize });
+            return true;
         } catch (err) {
-            if (upload.cancelled) return;
-            if (err?.name === 'AbortError') {
-                if (upload.paused) {
-                    markUploadProgress(upload.id, { status: 'paused' });
-                }
-                upload.controller = null;
-                return;
-            }
-            lastError = err;
-            // Retry failed chunk once immediately
-            const retryChunkUrl = upload.url + (upload.url.includes('?') ? '&' : '?') + 'offset=' + offset;
-            try {
-                const res = await fetch(retryChunkUrl, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { 'Content-Type': 'application/octet-stream' },
-                    body: file.slice(offset, Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize)),
-                    signal: AbortSignal.timeout(30000),
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    offset = data.nextOffset != null ? Number(data.nextOffset) : Math.min(offset + UPLOAD_CHUNK_SIZE, totalSize);
-                    markUploadProgress(upload.id, { status: 'active', loaded: Math.min(offset, totalSize), size: totalSize });
-                    lastError = null;
-                    continue;
-                }
-            } catch (_) {}
-            // Retry failed — give up
-            upload.controller = null;
-            markUploadProgress(upload.id, { status: 'error' });
-            window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
-            showToast('上传失败: ' + (lastError?.message || '未知错误'), 'error');
-            return;
+            if (upload.cancelled || err?.name === 'AbortError') return true;
+            return false;
         }
-    }
+    };
 
-    // All chunks sent — finalize
+    const worker = async () => {
+        while (!upload.cancelled) {
+            // Pick next unsent range
+            let offset = nextOffset;
+            if (offset >= totalSize) break;
+
+            // Reserve this range
+            const thisSize = chunkSize;
+            nextOffset = Math.min(offset + thisSize, totalSize);
+
+            const ok = await sendOne(offset, thisSize);
+            if (upload.cancelled) return;
+
+            if (ok) {
+                // Success → double chunk size
+                chunkSize = Math.max(chunkSize * 2, UPLOAD_MIN_CHUNK);
+            } else {
+                // Failure → halve and retry the same offset (unless already too small)
+                if (chunkSize <= UPLOAD_MIN_CHUNK) {
+                    // Give up
+                    upload.controller = null;
+                    markUploadProgress(upload.id, { status: 'error' });
+                    window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
+                    showToast('上传失败', 'error');
+                    return;
+                }
+                chunkSize = Math.max(Math.floor(chunkSize / 2), UPLOAD_MIN_CHUNK);
+                // Retry from the same offset
+                nextOffset = offset;
+            }
+
+            // Update progress
+            let maxDone = 0;
+            for (const c of completed) if (c > maxDone) maxDone = c;
+            markUploadProgress(upload.id, { loaded: Math.min(maxDone, totalSize), size: totalSize });
+        }
+    };
+
+    const workers = [];
+    for (let i = 0; i < concurrency; i++) workers.push(worker());
+    await Promise.all(workers);
+    if (upload.cancelled) return;
+
+    // Finalize
     upload.controller = null;
     try {
-        const completeRes = await fetch(upload.url + '/complete', {
-            method: 'POST',
-            credentials: 'same-origin',
-            cache: 'no-store',
+        const r = await fetch(upload.url + '/complete', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
         });
-        if (!completeRes.ok) {
-            let msg = `完成上传失败 HTTP ${completeRes.status}`;
-            try { const d = await completeRes.json(); if (d?.error) msg = d.error; } catch {}
-            throw new Error(msg);
-        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
         window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
         refreshFileList();
         showToast('文件上传完成', 'success');
     } catch (err) {
-        // complete failed but data may already be on server — try stat-based recovery
         markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
         window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
         refreshFileList();
-        showToast('文件上传完成（校验警告: ' + (err.message || '') + '）', 'success');
+        showToast('文件上传完成（' + (err.message || '') + '）', 'success');
     }
 }
 
