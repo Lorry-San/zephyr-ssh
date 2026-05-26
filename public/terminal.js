@@ -1709,31 +1709,59 @@ function renderTransferPopover() {
     const body = transferPopover.querySelector('.transfer-popover-body');
     if (!body) return;
 
-    // Track rendered items by data-transfer-id to avoid full DOM rebuild
+    // Track rendered items by data-transfer-id — create/remove only, never rebuild
     const existingIds = new Set();
     body.querySelectorAll('[data-transfer-id]').forEach((el) => {
         const id = el.dataset.transferId;
         const item = items.find((it) => it.id === id);
         if (!item) {
-            // Item no longer exists — remove DOM
             el.remove();
             return;
         }
         existingIds.add(id);
-        // Update values in place
-        updateTransferItemElement(el, item);
     });
 
-    // Add new items not yet rendered
+    // Add new items (skip existing — they update independently via updateProgressDisplay)
     for (const item of items) {
         if (existingIds.has(item.id)) continue;
         const el = createTransferItemElement(item);
         body.appendChild(el);
     }
 
-    // Show empty state if no items
-    if (!items.length) {
+    // Empty state (only when truly empty)
+    if (!items.length && !body.querySelector('[data-transfer-id]')) {
         body.innerHTML = '<div class="transfer-empty">暂无上传或下载任务</div>';
+    }
+}
+
+// Update progress display for a single item WITHOUT re-rendering the whole popover
+function updateProgressDisplay(id) {
+    const item = activeSftpUploads.get(id) || activeSftpDownloads.get(id);
+    if (!item) return;
+    if (!transferPopover?.classList.contains('open')) return;
+    const el = transferPopover.querySelector(`[data-transfer-id="${id}"]`);
+    if (!el) return;
+
+    const loaded = Number(item.loaded ?? 0) || 0;
+    const total = Number(item.size ?? 0) || 0;
+    const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
+    const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
+
+    // Only update progress bar width
+    const bar = el.querySelector('.transfer-progress-bar');
+    if (bar) bar.style.width = (activeIndeterminate ? 38 : pct) + '%';
+
+    // Only update percentage text in status
+    const statusEl = el.querySelector('.transfer-status');
+    if (statusEl && item.status === 'active') {
+        statusEl.textContent = total > 0 ? pct.toFixed(0) + '%' : '传输中';
+    }
+
+    // Only update meta text (size + speed)
+    const metaEl = el.querySelector('.transfer-meta-text');
+    if (metaEl) {
+        const speedText = item.speed && item.status === 'active' ? ' · ' + formatTransferSpeed(item.speed) : '';
+        metaEl.textContent = formatTransferSize(loaded) + ' / ' + (total ? formatTransferSize(total) : '未知大小') + speedText;
     }
 }
 
@@ -1842,6 +1870,7 @@ function hideTransferPopover(force = false) {
 function markDownloadProgress(id, patch) {
     const current = activeSftpDownloads.get(id) || { id, loaded: 0, size: 0, status: 'pending', updatedAt: Date.now(), speed: 0 };
     const next = { ...current, ...patch };
+    const statusChanged = patch.status && patch.status !== current.status;
     if (patch.loaded !== undefined) {
         updateTransferMetrics(current, patch.loaded);
         next.loaded = current.loaded;
@@ -1849,7 +1878,8 @@ function markDownloadProgress(id, patch) {
         next.speed = current.speed;
     } else next.updatedAt = Date.now();
     activeSftpDownloads.set(id, next);
-    scheduleTransferRender();
+    if (statusChanged) scheduleTransferRender();
+    else updateProgressDisplay(id);
 }
 
 // 分片下载：顺序发送 Range 请求，成功翻倍失败减半（同上传逻辑）
@@ -1979,6 +2009,7 @@ function startProgressPoll(id, size = 0, progressUrl = '') {
 function markUploadProgress(id, patch) {
     const current = activeSftpUploads.get(id);
     if (!current) return;
+    const statusChanged = patch.status && patch.status !== current.status;
     if (patch.loaded !== undefined) {
         updateTransferMetrics(current, patch.loaded);
         const preservedMetrics = { loaded: current.loaded, updatedAt: current.updatedAt, speed: current.speed };
@@ -1987,7 +2018,8 @@ function markUploadProgress(id, patch) {
         Object.assign(current, patch);
         current.updatedAt = Date.now();
     }
-    scheduleTransferRender();
+    if (statusChanged) scheduleTransferRender();
+    else updateProgressDisplay(id);
 }
 
 function sendDownloadControl(download, action) {
