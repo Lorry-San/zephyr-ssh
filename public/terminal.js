@@ -1656,11 +1656,13 @@ function updateTransferMetrics(item, loaded) {
     const now = Date.now();
     const previousLoaded = Number(item.loaded) || 0;
     const previousAt = Number(item.updatedAt) || now;
-    const deltaTime = Math.max(0.2, (now - previousAt) / 1000);
+    // Use at least 1s window to avoid spike from rapid server updates
+    const deltaTime = Math.max(1, (now - previousAt) / 1000);
     const deltaBytes = Math.max(0, Number(loaded || 0) - previousLoaded);
     const instantSpeed = deltaBytes / deltaTime;
     const currentSpeed = Number(item.speed) || 0;
-    item.speed = instantSpeed > 0 ? (currentSpeed ? currentSpeed * 0.7 + instantSpeed * 0.3 : instantSpeed) : currentSpeed;
+    // Exponential moving average (smoother with longer window)
+    item.speed = instantSpeed > 0 ? (currentSpeed ? currentSpeed * 0.85 + instantSpeed * 0.15 : instantSpeed) : currentSpeed;
     item.loaded = Number(loaded) || 0;
     item.updatedAt = now;
 }
@@ -1706,25 +1708,102 @@ function renderTransferPopover() {
     positionTransferPopover();
     const body = transferPopover.querySelector('.transfer-popover-body');
     if (!body) return;
+
+    // Track rendered items by data-transfer-id to avoid full DOM rebuild
+    const existingIds = new Set();
+    body.querySelectorAll('[data-transfer-id]').forEach((el) => {
+        const id = el.dataset.transferId;
+        const item = items.find((it) => it.id === id);
+        if (!item) {
+            // Item no longer exists — remove DOM
+            el.remove();
+            return;
+        }
+        existingIds.add(id);
+        // Update values in place
+        updateTransferItemElement(el, item);
+    });
+
+    // Add new items not yet rendered
+    for (const item of items) {
+        if (existingIds.has(item.id)) continue;
+        const el = createTransferItemElement(item);
+        body.appendChild(el);
+    }
+
+    // Show empty state if no items
     if (!items.length) {
         body.innerHTML = '<div class="transfer-empty">暂无上传或下载任务</div>';
-        return;
     }
-    body.innerHTML = items.map((item) => {
-        const loaded = Number(item.loaded ?? item.offset ?? 0) || 0;
-        const total = Number(item.size ?? item.total ?? 0) || 0;
-        const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
-        const statusText = item.status === 'done' ? '已完成' : item.status === 'error' ? '失败' : item.status === 'paused' ? '已暂停' : item.status === 'pending' ? '等待中' : `${pct.toFixed(0)}%`;
-        const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
-        const speedText = item.status === 'active' ? formatTransferSpeed(item.speed) : '';
-        const actionButtons = item.status === 'active' || item.status === 'pending'
-            ? `<button type="button" class="transfer-action" data-transfer-action="pause" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">暂停</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`
-            : item.status === 'paused'
-                ? `<button type="button" class="transfer-action" data-transfer-action="resume" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">继续</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`
-                : '';
-        const iconClass = item.direction === 'upload' ? 'upload' : 'download';
-        return `<div class="transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}"><div class="transfer-item-row"><span class="transfer-icon ${iconClass}" aria-hidden="true"></span><span class="transfer-name" title="${escapeHtml(item.path || item.name || '')}">${escapeHtml(item.name || String(item.path || '').split('/').pop() || '文件')}</span><span class="transfer-status">${escapeHtml(statusText)}</span></div><div class="transfer-progress"><span style="width:${activeIndeterminate ? 38 : pct}%"></span></div><div class="transfer-meta"><span>${formatTransferSize(loaded)} / ${total ? formatTransferSize(total) : '未知大小'}${speedText ? ` · ${escapeHtml(speedText)}` : ''}</span><span class="transfer-actions">${actionButtons}</span></div></div>`;
-    }).join('');
+}
+
+function createTransferItemElement(item) {
+    const loaded = Number(item.loaded ?? item.offset ?? 0) || 0;
+    const total = Number(item.size ?? item.total ?? 0) || 0;
+    const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
+    const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
+    const iconClass = item.direction === 'upload' ? 'upload' : 'download';
+    const el = document.createElement('div');
+    el.className = `transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}`;
+    el.dataset.transferId = item.id;
+    el.innerHTML = `<div class="transfer-item-row"><span class="transfer-icon ${iconClass}" aria-hidden="true"></span><span class="transfer-name" title="${escapeHtml(item.path || item.name || '')}">${escapeHtml(item.name || String(item.path || '').split('/').pop() || '文件')}</span><span class="transfer-status">${transferStatusText(item)}</span></div><div class="transfer-progress"><span class="transfer-progress-bar" style="width:${activeIndeterminate ? '38' : pct}%"></span></div><div class="transfer-meta"><span class="transfer-meta-text">${metaText(item)}</span><span class="transfer-actions">${actionButtons(item)}</span></div></div>`;
+    return el;
+}
+
+function updateTransferItemElement(el, item) {
+    const loaded = Number(item.loaded ?? item.offset ?? 0) || 0;
+    const total = Number(item.size ?? item.total ?? 0) || 0;
+    const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
+    const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
+
+    el.className = `transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}`;
+
+    // Update status text
+    const statusEl = el.querySelector('.transfer-status');
+    if (statusEl) statusEl.textContent = transferStatusText(item);
+
+    // Update progress bar width
+    const bar = el.querySelector('.transfer-progress-bar');
+    if (bar) bar.style.width = (activeIndeterminate ? 38 : pct) + '%';
+
+    // Update meta text
+    const metaEl = el.querySelector('.transfer-meta-text');
+    if (metaEl) metaEl.textContent = metaText(item);
+
+    // Update action buttons (only when status changes)
+    const actionsEl = el.querySelector('.transfer-actions');
+    if (actionsEl) {
+        const currentActions = actionsEl.innerHTML.replace(/\s+/g, '');
+        const newActions = actionButtons(item).replace(/\s+/g, '');
+        if (currentActions !== newActions) actionsEl.innerHTML = actionButtons(item);
+    }
+}
+
+function transferStatusText(item) {
+    if (item.status === 'done') return '已完成';
+    if (item.status === 'error') return '失败';
+    if (item.status === 'paused') return '已暂停';
+    if (item.status === 'pending') return '等待中';
+    const loaded = Number(item.loaded ?? 0) || 0;
+    const total = Number(item.size ?? 0) || 0;
+    return total > 0 ? (Math.min(100, (loaded / total) * 100)).toFixed(0) + '%' : '传输中';
+}
+
+function metaText(item) {
+    const loaded = Number(item.loaded ?? 0) || 0;
+    const total = Number(item.size ?? 0) || 0;
+    const speedText = item.status === 'active' && item.speed ? ' · ' + formatTransferSpeed(item.speed) : '';
+    return formatTransferSize(loaded) + ' / ' + (total ? formatTransferSize(total) : '未知大小') + speedText;
+}
+
+function actionButtons(item) {
+    if (item.status === 'active' || item.status === 'pending') {
+        return `<button type="button" class="transfer-action" data-transfer-action="pause" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">暂停</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`;
+    }
+    if (item.status === 'paused') {
+        return `<button type="button" class="transfer-action" data-transfer-action="resume" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">继续</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`;
+    }
+    return '';
 }
 
 // Throttled transfer render: at most once per 300ms to avoid re-rendering on every chunk
@@ -1771,18 +1850,15 @@ function markDownloadProgress(id, patch) {
     scheduleTransferRender();
 }
 
-// 分片下载：自适应分片（同上传逻辑），通过 Range 请求逐片获取
-// 规则：成功翻倍，失败减半（下限 64KB，无上限）
-// 全部收齐后 Blob 组装触发下载；Blob 失败（OOM）时降级为原生 <a> 下载
-const DOWNLOAD_MIN_CHUNK = 64 * 1024;
-
+// 下载：通过 <a> click 触发浏览器原生下载管理器（流式写磁盘，浏览器自动显示进度条）
+// 应用内进度通过服务端 /api/sftp/download-progress/:token 轮询 + WebSocket 事件驱动
 async function startChunkedDownload(download) {
     if (!download || !download.url) return;
     const id = download.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const totalSize = Number(download.size) || 0;
     const fileName = download.name || (download.path || 'download').split('/').pop() || 'download';
 
-    // Ensure tracked in activeSftpDownloads
+    // Track in transfer panel
     if (!activeSftpDownloads.has(id)) {
         markDownloadProgress(id, {
             path: download.path, name: fileName, size: totalSize, loaded: 0,
@@ -1791,114 +1867,17 @@ async function startChunkedDownload(download) {
         });
     }
 
-    // Unknown size — use native download manager
-    if (totalSize <= 0) {
-        const a = document.createElement('a');
-        a.href = download.url;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-        startProgressPoll(id, totalSize, download.progressUrl || '');
-        return;
-    }
+    // Trigger native browser download: browser shows progress bar in download shelf
+    const a = document.createElement('a');
+    a.href = download.url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
 
-    // Adaptive chunked download via Range requests
-    let chunkSize = Math.min(2 * 1024 * 1024, Math.max(DOWNLOAD_MIN_CHUNK, totalSize));
-    let nextOffset = 0;
-    const chunks = []; // array of ArrayBuffer
-    let concurrency = totalSize > 100 * 1024 * 1024 ? 3 : 2;
-
-    const fetchOne = async (offset, size) => {
-        const end = Math.min(offset + size, totalSize) - 1;
-        if (offset >= totalSize) return true;
-        const url = download.url;
-        try {
-            const res = await fetch(url, {
-                headers: { 'Range': `bytes=${offset}-${end}` },
-                credentials: 'same-origin', cache: 'no-store',
-            });
-            if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
-            const buf = await res.arrayBuffer();
-            if (download.cancelled) return true;
-            chunks.push({ offset, data: buf });
-            // Progress: sum of all received bytes
-            let loaded = 0;
-            for (const c of chunks) loaded += c.data.byteLength;
-            markDownloadProgress(id, { loaded: Math.min(loaded, totalSize), size: totalSize, status: 'active' });
-            return true;
-        } catch (err) {
-            if (download.cancelled || err?.name === 'AbortError') return true;
-            return false;
-        }
-    };
-
-    const worker = async () => {
-        while (!download.cancelled) {
-            const offset = nextOffset;
-            if (offset >= totalSize) break;
-            const thisSize = chunkSize;
-            nextOffset = Math.min(offset + thisSize, totalSize);
-
-            const ok = await fetchOne(offset, thisSize);
-            if (download.cancelled) return;
-
-            if (ok) {
-                chunkSize = Math.max(chunkSize * 2, DOWNLOAD_MIN_CHUNK); // double on success
-            } else {
-                if (chunkSize <= DOWNLOAD_MIN_CHUNK) {
-                    // Give up
-                    markDownloadProgress(id, { status: 'error' });
-                    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-                    showToast('下载失败', 'error');
-                    return;
-                }
-                chunkSize = Math.max(Math.floor(chunkSize / 2), DOWNLOAD_MIN_CHUNK); // halve on failure
-                nextOffset = offset; // retry same offset
-            }
-        }
-    };
-
-    const workers = [];
-    for (let i = 0; i < concurrency; i++) workers.push(worker());
-    await Promise.all(workers);
-    if (download.cancelled) return;
-
-    // Sort chunks by offset and concatenate
-    chunks.sort((a, b) => a.offset - b.offset);
-    const blobs = chunks.map(c => c.data);
-    try {
-        const blob = new Blob(blobs, { type: 'application/octet-stream' });
-        // Free chunk memory
-        chunks.length = 0;
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => {
-            try { document.body.removeChild(a); } catch {}
-            URL.revokeObjectURL(blobUrl);
-        }, 2000);
-        markDownloadProgress(id, { status: 'done', loaded: totalSize, size: totalSize });
-        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
-        showToast('文件下载完成', 'success');
-    } catch (err) {
-        // Blob creation failed (likely OOM for huge files) — fall back to native <a> download
-        console.warn('[download]', 'Blob assembly failed, falling back to native download', { file: fileName, size: totalSize, error: err.message });
-        chunks.length = 0;
-        const a = document.createElement('a');
-        a.href = download.url;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-        startProgressPoll(id, totalSize, download.progressUrl || '');
-    }
+    // Track progress via server polling (server reads file in 4MB chunks internally)
+    startProgressPoll(id, totalSize, download.progressUrl || '');
 }
 
 function startProgressPoll(id, size = 0, progressUrl = '') {
