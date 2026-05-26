@@ -2290,9 +2290,8 @@ fmNewFileBtn.addEventListener('click', () => {
 });
 // 上传文件：先通过 WebSocket 签发同源 HTTP 上传地址，再让浏览器把 File 作为请求体流式上传，避免 base64/JSON 改写二进制内容。
 // 分片上传：将文件分成固定大小分片，逐片发送 HTTP POST + X-Upload-Offset
-// 分片上传：动态自适应分片大小
-// 规则：成功则翻倍，失败则减半（下限 64KB，无上限）
-// 并发：大文件（>50MB）同时发 3 片，小文件 2 片
+// 分片上传：顺序发送，成功翻倍失败减半（无上限）
+// 顺序（非并发）确保 chunkSize 在每次成功后正确翻倍
 const UPLOAD_MIN_CHUNK = 64 * 1024;
 
 async function sendSftpUploadChunk(upload) {
@@ -2310,18 +2309,21 @@ async function sendSftpUploadChunk(upload) {
     const totalSize = file.size;
     markUploadProgress(upload.id, { status: 'active', loaded: 0, size: totalSize });
 
-    // Build initial chunk list at a conservative starting size
     let chunkSize = Math.min(2 * 1024 * 1024, Math.max(UPLOAD_MIN_CHUNK, totalSize || Infinity));
-    // Track which byte ranges have been successfully sent
-    const completed = new Set(); // stores end offsets of completed chunks
-    let nextOffset = 0;
-    let concurrency = totalSize > 50 * 1024 * 1024 ? 3 : 2;
+    let offset = 0;
 
-    const sendOne = async (offset, size) => {
-        const end = Math.min(offset + size, totalSize);
-        if (offset >= totalSize) return true;
+    while (offset < totalSize) {
+        // Check pause/cancel before each chunk
+        if (upload.cancelled) return;
+        if (upload.paused) {
+            markUploadProgress(upload.id, { status: 'paused' });
+            upload.controller = null;
+            return;
+        }
 
+        const end = Math.min(offset + chunkSize, totalSize);
         const url = upload.url + '?offset=' + offset;
+
         try {
             const res = await fetch(url, {
                 method: 'POST',
@@ -2333,63 +2335,33 @@ async function sendSftpUploadChunk(upload) {
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await res.json();
-            if (upload.cancelled) return true;
-            completed.add(end);
-            // Update progress (largest completed offset)
-            let maxDone = 0;
-            for (const c of completed) if (c > maxDone) maxDone = c;
-            markUploadProgress(upload.id, { loaded: Math.min(maxDone, totalSize), size: totalSize });
-            return true;
+
+            // Success — advance offset and double chunk size
+            offset = end;
+            chunkSize = chunkSize * 2; // double on success, no cap
+            markUploadProgress(upload.id, { loaded: offset, size: totalSize });
         } catch (err) {
-            if (upload.cancelled || err?.name === 'AbortError') return true;
-            return false;
-        }
-    };
-
-    const worker = async () => {
-        while (!upload.cancelled) {
-            // Pick next unsent range
-            let offset = nextOffset;
-            if (offset >= totalSize) break;
-
-            // Reserve this range
-            const thisSize = chunkSize;
-            nextOffset = Math.min(offset + thisSize, totalSize);
-
-            const ok = await sendOne(offset, thisSize);
             if (upload.cancelled) return;
-
-            if (ok) {
-                // Success → double chunk size
-                chunkSize = Math.max(chunkSize * 2, UPLOAD_MIN_CHUNK);
-            } else {
-                // Failure → halve and retry the same offset (unless already too small)
-                if (chunkSize <= UPLOAD_MIN_CHUNK) {
-                    // Give up
-                    upload.controller = null;
-                    markUploadProgress(upload.id, { status: 'error' });
-                    window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
-                    showToast('上传失败', 'error');
-                    return;
+            if (err?.name === 'AbortError') {
+                if (upload.paused) {
+                    markUploadProgress(upload.id, { status: 'paused' });
                 }
-                chunkSize = Math.max(Math.floor(chunkSize / 2), UPLOAD_MIN_CHUNK);
-                // Retry from the same offset
-                nextOffset = offset;
+                upload.controller = null;
+                return;
             }
-
-            // Update progress
-            let maxDone = 0;
-            for (const c of completed) if (c > maxDone) maxDone = c;
-            markUploadProgress(upload.id, { loaded: Math.min(maxDone, totalSize), size: totalSize });
+            // Failure — halve chunk size and retry same offset
+            if (chunkSize <= UPLOAD_MIN_CHUNK) {
+                upload.controller = null;
+                markUploadProgress(upload.id, { status: 'error' });
+                window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
+                showToast('上传失败', 'error');
+                return;
+            }
+            chunkSize = Math.max(Math.floor(chunkSize / 2), UPLOAD_MIN_CHUNK);
         }
-    };
+    }
 
-    const workers = [];
-    for (let i = 0; i < concurrency; i++) workers.push(worker());
-    await Promise.all(workers);
-    if (upload.cancelled) return;
-
-    // Finalize
+    // All chunks sent — finalize
     upload.controller = null;
     try {
         const r = await fetch(upload.url + '/complete', {
