@@ -1882,9 +1882,12 @@ function markDownloadProgress(id, patch) {
     else updateProgressDisplay(id);
 }
 
-// 分片下载：顺序发送 Range 请求，成功翻倍失败减半（同上传逻辑）
-// 全部收齐后 Blob 组装触发下载；失败时重试当前分片
-const DOWNLOAD_MIN_CHUNK = 64 * 1024;
+// === 流式下载：单线程 fetch ReadableStream ===
+// 避免分片 Range 请求的多次 HTTP 往返 + 内存堆积
+// 通过 response.body.getReader() 逐块接收，实时更新单一进度条
+// 支持断点续传：暂停保存已收字节，断点续传通过 Range 头继续
+// 超大文件(>2GB)降级为浏览器原生下载 + 服务端进度轮询
+const DOWNLOAD_STREAM_CHUNK = 128 * 1024; // 128KB per read from the stream (small = more responsive UI)
 
 async function startChunkedDownload(download) {
     if (!download || !download.url) return;
@@ -1893,87 +1896,135 @@ async function startChunkedDownload(download) {
     const fileName = download.name || (download.path || 'download').split('/').pop() || 'download';
 
     if (!activeSftpDownloads.has(id)) {
-        markDownloadProgress(id, {
+        activeSftpDownloads.set(id, {
             path: download.path, name: fileName, size: totalSize, loaded: 0,
             status: 'active', url: download.url,
             progressUrl: download.progressUrl || '', controlUrl: download.controlUrl || '',
+            speed: 0, updatedAt: Date.now(), _offset: 0,
         });
     }
 
-    // Unknown size — fall back to native <a> download
-    if (totalSize <= 0) {
-        const a = document.createElement('a');
-        a.href = download.url; a.download = fileName;
-        a.style.display = 'none'; document.body.appendChild(a); a.click();
-        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-        startProgressPoll(id, totalSize, download.progressUrl || '');
-        return;
+    // 未知大小 / 超大文件(>2GB) → 浏览器原生下载 + 进度轮询
+    if (totalSize <= 0 || totalSize > 2 * 1024 * 1024 * 1024) {
+        return nativeDownload(id, fileName, download.url, totalSize);
     }
 
-    // Sequential Range-based chunked download with adaptive sizing
-    let chunkSize = Math.min(2 * 1024 * 1024, Math.max(DOWNLOAD_MIN_CHUNK, totalSize));
-    let offset = 0;
-    const chunks = [];
+    // 流式下载
+    return streamDownloadToBlob(id, fileName, download);
+}
 
-    while (offset < totalSize) {
-        const item = activeSftpDownloads.get(id);
-        if (!item || item.status === 'error') return; // cancelled
-        if (item.status === 'paused') return; // paused by user
+async function nativeDownload(id, fileName, url, totalSize) {
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName;
+    a.style.display = 'none'; document.body.appendChild(a); a.click();
+    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
+    const entry = activeSftpDownloads.get(id);
+    // Start polling progress from server
+    if (entry) startProgressPoll(id, totalSize, entry.progressUrl || '');
+}
 
-        const end = Math.min(offset + chunkSize - 1, totalSize - 1);
-        let success = false;
+async function streamDownloadToBlob(id, fileName, download) {
+    const totalSize = Number(download.size) || 0;
+    const entry = activeSftpDownloads.get(id);
+    if (!entry) return;
 
-        try {
-            const res = await fetch(download.url, {
-                headers: { 'Range': `bytes=${offset}-${end}` },
-                credentials: 'same-origin', cache: 'no-store',
-            });
-            if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
-            const buf = await res.arrayBuffer();
-            chunks.push(buf);
-            offset = end + 1;
-            chunkSize = chunkSize * 2; // success → double
-            success = true;
+    // 保存 chunks 到 entry 以支持断点续传（暂停/继续不丢失已下载部分）
+    if (!entry._chunks) entry._chunks = [];
+    const chunks = entry._chunks;
 
-            let loaded = 0;
-            for (const c of chunks) loaded += c.byteLength;
-            markDownloadProgress(id, { loaded: Math.min(loaded, totalSize), size: totalSize, status: 'active' });
-        } catch (err) {
-            if (download.cancelled || err?.name === 'AbortError') return;
-            // Failure → halve and retry same offset
-            if (chunkSize <= DOWNLOAD_MIN_CHUNK) {
-                markDownloadProgress(id, { status: 'error' });
-                window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-                showToast('下载失败', 'error');
+    const startOffset = entry._offset || 0;
+    const useRange = startOffset > 0;
+
+    let controller = null;
+    try {
+        const headers = {};
+        if (useRange) headers['Range'] = `bytes=${startOffset}-`;
+        controller = new AbortController();
+        entry._controller = controller;
+
+        const res = await fetch(download.url, {
+            headers,
+            credentials: 'same-origin', cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        let received = startOffset;
+        let lastProgressUpdate = 0;
+
+        while (true) {
+            // 检查暂停/取消
+            const currentEntry = activeSftpDownloads.get(id);
+            if (!currentEntry || currentEntry.status === 'error') {
+                reader.cancel();
+                // 清理 chunks 避免内存泄漏
+                currentEntry?._chunks?.splice(0);
                 return;
             }
-            chunkSize = Math.max(Math.floor(chunkSize / 2), DOWNLOAD_MIN_CHUNK);
-        }
-    }
+            if (currentEntry.status === 'paused') {
+                reader.cancel();
+                // 保存已接收字节数用于断点续传（chunks 保留在 entry._chunks 中）
+                currentEntry._offset = received;
+                currentEntry._controller = null;
+                markDownloadProgress(id, { status: 'paused', loaded: received });
+                return;
+            }
 
-    // Assemble and trigger download
-    try {
-        const blob = new Blob(chunks, { type: 'application/octet-stream' });
-        chunks.length = 0;
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl; a.download = fileName;
-        a.style.display = 'none'; document.body.appendChild(a); a.click();
-        window.setTimeout(() => {
-            try { document.body.removeChild(a); } catch {}
-            URL.revokeObjectURL(blobUrl);
-        }, 2000);
-        markDownloadProgress(id, { status: 'done', loaded: totalSize, size: totalSize });
-        window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
-        showToast('文件下载完成', 'success');
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            if (value && value.byteLength > 0) {
+                chunks.push(value);
+                received += value.byteLength;
+                // 限流更新进度（最多每 200ms 刷新一次 UI）
+                const now = Date.now();
+                if (now - lastProgressUpdate > 200) {
+                    lastProgressUpdate = now;
+                    markDownloadProgress(id, { loaded: received, size: totalSize, status: 'active' });
+                }
+            }
+        }
+
+        // 全部接收完毕 → 组装 Blob 触发下载
+        try {
+            const blob = new Blob(chunks, { type: 'application/octet-stream' });
+            const finalSize = blob.size;
+            entry._chunks = null; // 释放chunks引用
+
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl; a.download = fileName;
+            a.style.display = 'none'; document.body.appendChild(a); a.click();
+            window.setTimeout(() => {
+                try { document.body.removeChild(a); } catch {}
+                URL.revokeObjectURL(blobUrl);
+            }, 2000);
+
+            markDownloadProgress(id, { status: 'done', loaded: finalSize, size: totalSize || finalSize });
+            window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
+            showToast('文件下载完成', 'success');
+        } catch (blobErr) {
+            console.warn('[download]', 'Blob fail, fallback', { file: fileName, size: totalSize, error: blobErr.message });
+            entry._chunks = null;
+            return nativeDownload(id, fileName, download.url, totalSize);
+        }
     } catch (err) {
-        console.warn('[download]', 'Blob fail, fallback', { file: fileName, size: totalSize, error: err.message });
-        chunks.length = 0;
-        const a = document.createElement('a');
-        a.href = download.url; a.download = fileName;
-        a.style.display = 'none'; document.body.appendChild(a); a.click();
-        window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-        startProgressPoll(id, totalSize, download.progressUrl || '');
+        if (err?.name === 'AbortError') {
+            const currentEntry = activeSftpDownloads.get(id);
+            if (currentEntry?.status === 'paused') return; // pause 已处理
+            return;
+        }
+        // 失败
+        const currentEntry = activeSftpDownloads.get(id);
+        if (currentEntry) {
+            currentEntry.status = 'error';
+            currentEntry._chunks = null;
+            currentEntry._offset = 0; // 重置，下次继续从开头开始
+            markDownloadProgress(id, { status: 'error' });
+            window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
+            showToast('下载失败', 'error');
+        }
     }
 }
 
@@ -2053,8 +2104,15 @@ function pauseUploadTransfer(id) {
 function resumeUploadTransfer(id) {
     const upload = activeSftpUploads.get(id);
     if (!upload) return;
-    showToast('HTTP 流式上传已重新开始', 'info');
-    sendJsonMessage({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: upload.file.name, size: upload.file.size });
+    showToast('继续上传', 'info');
+    // Reuse existing URL and resume from saved offset
+    if (upload.url) {
+        markUploadProgress(id, { status: 'active' });
+        sendSftpUploadChunk(upload, upload._offset || 0);
+    } else {
+        // Fallback: request new token
+        sendJsonMessage({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: upload.file.name, size: upload.file.size });
+    }
 }
 
 function cancelDownloadTransfer(id) {
@@ -2062,6 +2120,8 @@ function cancelDownloadTransfer(id) {
     if (!download) return;
     download.cancelled = true;
     download.status = 'error';
+    download._controller?.abort?.();
+    download._controller = null;
     sendDownloadControl(download, 'cancel');
     markDownloadProgress(id, { status: 'error' });
     window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
@@ -2071,6 +2131,9 @@ function pauseDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download) return;
     download.status = 'paused';
+    download._controller?.abort?.();
+    download._controller = null;
+    // 保存当前已接收字节（streamDownloadToBlob 的循环会在 paused 检查时保存 _offset）
     sendDownloadControl(download, 'pause');
     markDownloadProgress(id, { status: 'paused' });
 }
@@ -2078,7 +2141,9 @@ function pauseDownloadTransfer(id) {
 function resumeDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download?.url) return;
-    markDownloadProgress(id, { status: 'active' });
+    const savedOffset = download._offset || 0;
+    markDownloadProgress(id, { status: 'active', loaded: savedOffset });
+    showToast(savedOffset > 0 ? `从 ${formatTransferSize(savedOffset)} 处继续下载` : '开始下载', 'info');
     startChunkedDownload(download);
 }
 
@@ -2394,25 +2459,26 @@ fmNewFileBtn.addEventListener('click', () => {
 // 分片上传：将文件分成固定大小分片，逐片发送 HTTP POST + X-Upload-Offset
 // 分片上传：顺序发送，成功翻倍失败减半（无上限）
 // 顺序（非并发）确保 chunkSize 在每次成功后正确翻倍
-const UPLOAD_MIN_CHUNK = 64 * 1024;
+const UPLOAD_MIN_CHUNK = 512 * 1024;    // 最小分片 512KB
+const UPLOAD_INIT_CHUNK = 8 * 1024 * 1024; // 初始分片 8MB，避免小分片多轮次拖慢速度
 
-async function sendSftpUploadChunk(upload) {
+async function sendSftpUploadChunk(upload, startOffset) {
     if (!upload || upload.cancelled) return;
     if (!upload.url) {
         showToast(`上传失败：缺少上传地址（${upload.file.name}）`, 'error');
         markUploadProgress(upload.id, { status: 'error' });
         return;
     }
-    if (upload.controller) return;
+    // Reset controller for a fresh run
     const controller = new AbortController();
     upload.controller = controller;
     upload.paused = false;
     const file = upload.file;
     const totalSize = file.size;
-    markUploadProgress(upload.id, { status: 'active', loaded: 0, size: totalSize });
+    markUploadProgress(upload.id, { status: 'active', loaded: startOffset || 0, size: totalSize });
 
-    let chunkSize = Math.min(2 * 1024 * 1024, Math.max(UPLOAD_MIN_CHUNK, totalSize || Infinity));
-    let offset = 0;
+    let chunkSize = upload._chunkSize || Math.min(UPLOAD_INIT_CHUNK, Math.max(UPLOAD_MIN_CHUNK, totalSize || Infinity));
+    let offset = typeof startOffset === 'number' ? startOffset : (upload._offset || 0);
 
     while (offset < totalSize) {
         // Check pause/cancel before each chunk
@@ -2420,6 +2486,9 @@ async function sendSftpUploadChunk(upload) {
         if (upload.paused) {
             markUploadProgress(upload.id, { status: 'paused' });
             upload.controller = null;
+            // Save offset for resume
+            upload._offset = offset;
+            upload._chunkSize = chunkSize;
             return;
         }
 
@@ -2440,13 +2509,17 @@ async function sendSftpUploadChunk(upload) {
 
             // Success — advance offset and double chunk size
             offset = end;
-            chunkSize = chunkSize * 2; // double on success, no cap
+            upload._offset = offset;
+            chunkSize = Math.min(chunkSize * 2, 64 * 1024 * 1024); // double, cap at 64MB
+            upload._chunkSize = chunkSize;
             markUploadProgress(upload.id, { loaded: offset, size: totalSize });
         } catch (err) {
             if (upload.cancelled) return;
             if (err?.name === 'AbortError') {
                 if (upload.paused) {
                     markUploadProgress(upload.id, { status: 'paused' });
+                    upload._offset = offset;
+                    upload._chunkSize = chunkSize;
                 }
                 upload.controller = null;
                 return;
@@ -2496,6 +2569,7 @@ function uploadFile(file) {
         paused: false,
         updatedAt: Date.now(),
         speed: 0,
+        _offset: 0,
     };
     activeSftpUploads.set(upload.id, upload);
     showTransferPopover({ autoHide: true });

@@ -1990,9 +1990,24 @@ async function createUploadSession(token, uploadTask) {
     });
 
     // Open file handle for offset writes
-    const fileHandle = await new Promise((resolve, reject) => {
-        sftp.open(uploadTask.path, 'w', (err, handle) => err ? reject(err) : resolve(handle));
-    });
+    // 断点续传: 如果已有部分数据(offset>0)，用 'r+' 避免 truncate
+    // 首次上传用 'w'（create+truncate）
+    const isResume = (uploadTask.loaded > 0);
+    let fileHandle;
+    try {
+        fileHandle = await new Promise((resolve, reject) => {
+            sftp.open(uploadTask.path, isResume ? 'r+' : 'w', (err, handle) => err ? reject(err) : resolve(handle));
+        });
+    } catch (openErr) {
+        // r+ 失败（文件不存在），降级为 w
+        if (isResume) {
+            fileHandle = await new Promise((resolve, reject) => {
+                sftp.open(uploadTask.path, 'w', (err, handle) => err ? reject(err) : resolve(handle));
+            });
+        } else {
+            throw openErr;
+        }
+    }
 
     if (routed?.client?._sock?.setKeepAlive) {
         try { routed.client._sock.setKeepAlive(true, SFTP_UPLOAD_KEEPALIVE_INTERVAL); } catch {}
@@ -2347,7 +2362,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     // === Fix: Explicit chunked SFTP read (分片读取) using sftp.open() + sftp.read() ===
     // Instead of createReadStream which can silently buffer too much, we read in
     // controlled chunks with keepalive between reads to prevent SSH channel timeout.
-    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per SFTP read chunk
+    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB per SFTP read chunk — larger chunks = higher throughput
 
     try {
         fileHandle = await new Promise((resolve, reject) => {

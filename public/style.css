@@ -6025,7 +6025,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-icon.upload::after { clip-path: polygon(50% 0, 100% 55%, 70% 55%, 70% 100%, 30% 100%, 30% 55%, 0 55%); }
 .transfer-meta { margin-top: 5px; color: var(--text-secondary); font-size: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .transfer-actions { display: inline-flex; gap: 5px; flex-shrink: 0; }
-.transfer-action { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; }
+.transfer-action { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; min-width: 34px; text-align: center; box-sizing: border-box; }
 .transfer-action:hover { border-color: var(--accent); color: var(--accent-hover); }
 .transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
 .transfer-item.paused .transfer-progress span { background: var(--warning); }
