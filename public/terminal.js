@@ -1709,7 +1709,7 @@ function renderTransferPopover() {
     const body = transferPopover.querySelector('.transfer-popover-body');
     if (!body) return;
 
-    // Track rendered items by data-transfer-id — create/remove only, never rebuild
+    // Track rendered items by data-transfer-id — update existing, create new
     const existingIds = new Set();
     body.querySelectorAll('[data-transfer-id]').forEach((el) => {
         const id = el.dataset.transferId;
@@ -1719,9 +1719,11 @@ function renderTransferPopover() {
             return;
         }
         existingIds.add(id);
+        // 更新已存在项的状态/按钮/进度（updateTransferItemElement 只在 status 变化时替换按钮）
+        updateTransferItemElement(el, item);
     });
 
-    // Add new items (skip existing — they update independently via updateProgressDisplay)
+    // Add new items
     for (const item of items) {
         if (existingIds.has(item.id)) continue;
         const el = createTransferItemElement(item);
@@ -1747,21 +1749,31 @@ function updateProgressDisplay(id) {
     const pct = total > 0 ? Math.max(0, Math.min(100, (loaded / total) * 100)) : 0;
     const activeIndeterminate = !total && (item.status === 'active' || item.status === 'pending');
 
-    // Only update progress bar width
+    el.className = `transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}`;
+
+    // Update progress bar width
     const bar = el.querySelector('.transfer-progress-bar');
     if (bar) bar.style.width = (activeIndeterminate ? 38 : pct) + '%';
 
-    // Only update percentage text in status
+    // Update status text (always, not just active)
     const statusEl = el.querySelector('.transfer-status');
-    if (statusEl && item.status === 'active') {
-        statusEl.textContent = total > 0 ? pct.toFixed(0) + '%' : '传输中';
-    }
+    if (statusEl) statusEl.textContent = transferStatusText(item);
 
-    // Only update meta text (size + speed)
+    // Update meta text (size + speed)
     const metaEl = el.querySelector('.transfer-meta-text');
     if (metaEl) {
         const speedText = item.speed && item.status === 'active' ? ' · ' + formatTransferSpeed(item.speed) : '';
         metaEl.textContent = formatTransferSize(loaded) + ' / ' + (total ? formatTransferSize(total) : '未知大小') + speedText;
+    }
+
+    // Update action buttons when status changes
+    const actionsEl = el.querySelector('.transfer-actions');
+    if (actionsEl) {
+        const prevStatus = actionsEl.dataset.itemStatus;
+        if (prevStatus !== item.status) {
+            actionsEl.innerHTML = actionButtons(item);
+            actionsEl.dataset.itemStatus = item.status;
+        }
     }
 }
 
@@ -1882,13 +1894,10 @@ function markDownloadProgress(id, patch) {
     else updateProgressDisplay(id);
 }
 
-// === 流式下载：单线程 fetch ReadableStream ===
-// 避免分片 Range 请求的多次 HTTP 往返 + 内存堆积
-// 通过 response.body.getReader() 逐块接收，实时更新单一进度条
-// 支持断点续传：暂停保存已收字节，断点续传通过 Range 头继续
-// 超大文件(>2GB)降级为浏览器原生下载 + 服务端进度轮询
-const DOWNLOAD_STREAM_CHUNK = 128 * 1024; // 128KB per read from the stream (small = more responsive UI)
-
+// === 浏览器原生下载：<a> 标签触发，浏览器在底部显示原生进度条 ===
+// 传输面板通过服务端进度轮询反映真实进度
+// 暂停：终止服务端流（浏览器会看到下载失败）
+// 继续：重新 <a> 标签下载（从零开始，服务端内部 Range 可断点，但浏览器侧不保存偏移）
 async function startChunkedDownload(download) {
     if (!download || !download.url) return;
     const id = download.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1904,128 +1913,27 @@ async function startChunkedDownload(download) {
         });
     }
 
-    // 未知大小 / 超大文件(>2GB) → 浏览器原生下载 + 进度轮询
-    if (totalSize <= 0 || totalSize > 2 * 1024 * 1024 * 1024) {
-        return nativeDownload(id, fileName, download.url, totalSize);
-    }
-
-    // 流式下载
-    return streamDownloadToBlob(id, fileName, download);
+    // 所有文件走浏览器原生 <a> 下载（底部进度条由 Chrome 管理）
+    nativeDownload(id, fileName, download.url, totalSize);
 }
 
-async function nativeDownload(id, fileName, url, totalSize) {
-    const a = document.createElement('a');
-    a.href = url; a.download = fileName;
-    a.style.display = 'none'; document.body.appendChild(a); a.click();
-    window.setTimeout(() => { try { document.body.removeChild(a); } catch {} }, 1000);
-    const entry = activeSftpDownloads.get(id);
-    // Start polling progress from server
-    if (entry) startProgressPoll(id, totalSize, entry.progressUrl || '');
-}
-
-async function streamDownloadToBlob(id, fileName, download) {
-    const totalSize = Number(download.size) || 0;
+function nativeDownload(id, fileName, url, totalSize) {
     const entry = activeSftpDownloads.get(id);
     if (!entry) return;
+    
+    // 触发浏览器原生下载（底部显示下载进度条）
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => {
+        try { document.body.removeChild(a); } catch {} 
+    }, 1000);
 
-    // 保存 chunks 到 entry 以支持断点续传（暂停/继续不丢失已下载部分）
-    if (!entry._chunks) entry._chunks = [];
-    const chunks = entry._chunks;
-
-    const startOffset = entry._offset || 0;
-    const useRange = startOffset > 0;
-
-    let controller = null;
-    try {
-        const headers = {};
-        if (useRange) headers['Range'] = `bytes=${startOffset}-`;
-        controller = new AbortController();
-        entry._controller = controller;
-
-        const res = await fetch(download.url, {
-            headers,
-            credentials: 'same-origin', cache: 'no-store',
-            signal: controller.signal,
-        });
-        if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
-
-        const reader = res.body.getReader();
-        let received = startOffset;
-        let lastProgressUpdate = 0;
-
-        while (true) {
-            // 检查暂停/取消
-            const currentEntry = activeSftpDownloads.get(id);
-            if (!currentEntry || currentEntry.status === 'error') {
-                reader.cancel();
-                // 清理 chunks 避免内存泄漏
-                currentEntry?._chunks?.splice(0);
-                return;
-            }
-            if (currentEntry.status === 'paused') {
-                reader.cancel();
-                // 保存已接收字节数用于断点续传（chunks 保留在 entry._chunks 中）
-                currentEntry._offset = received;
-                currentEntry._controller = null;
-                markDownloadProgress(id, { status: 'paused', loaded: received });
-                return;
-            }
-
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            if (value && value.byteLength > 0) {
-                chunks.push(value);
-                received += value.byteLength;
-                // 限流更新进度（最多每 200ms 刷新一次 UI）
-                const now = Date.now();
-                if (now - lastProgressUpdate > 200) {
-                    lastProgressUpdate = now;
-                    markDownloadProgress(id, { loaded: received, size: totalSize, status: 'active' });
-                }
-            }
-        }
-
-        // 全部接收完毕 → 组装 Blob 触发下载
-        try {
-            const blob = new Blob(chunks, { type: 'application/octet-stream' });
-            const finalSize = blob.size;
-            entry._chunks = null; // 释放chunks引用
-
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl; a.download = fileName;
-            a.style.display = 'none'; document.body.appendChild(a); a.click();
-            window.setTimeout(() => {
-                try { document.body.removeChild(a); } catch {}
-                URL.revokeObjectURL(blobUrl);
-            }, 2000);
-
-            markDownloadProgress(id, { status: 'done', loaded: finalSize, size: totalSize || finalSize });
-            window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
-            showToast('文件下载完成', 'success');
-        } catch (blobErr) {
-            console.warn('[download]', 'Blob fail, fallback', { file: fileName, size: totalSize, error: blobErr.message });
-            entry._chunks = null;
-            return nativeDownload(id, fileName, download.url, totalSize);
-        }
-    } catch (err) {
-        if (err?.name === 'AbortError') {
-            const currentEntry = activeSftpDownloads.get(id);
-            if (currentEntry?.status === 'paused') return; // pause 已处理
-            return;
-        }
-        // 失败
-        const currentEntry = activeSftpDownloads.get(id);
-        if (currentEntry) {
-            currentEntry.status = 'error';
-            currentEntry._chunks = null;
-            currentEntry._offset = 0; // 重置，下次继续从开头开始
-            markDownloadProgress(id, { status: 'error' });
-            window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 8000);
-            showToast('下载失败', 'error');
-        }
-    }
+    // 开始轮询服务端进度
+    startProgressPoll(id, totalSize, entry.progressUrl || '');
 }
 
 function startProgressPoll(id, size = 0, progressUrl = '') {
@@ -2120,8 +2028,6 @@ function cancelDownloadTransfer(id) {
     if (!download) return;
     download.cancelled = true;
     download.status = 'error';
-    download._controller?.abort?.();
-    download._controller = null;
     sendDownloadControl(download, 'cancel');
     markDownloadProgress(id, { status: 'error' });
     window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
@@ -2130,10 +2036,9 @@ function cancelDownloadTransfer(id) {
 function pauseDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download) return;
+    if (download.status === 'paused') return; // 已暂停
     download.status = 'paused';
-    download._controller?.abort?.();
-    download._controller = null;
-    // 保存当前已接收字节（streamDownloadToBlob 的循环会在 paused 检查时保存 _offset）
+    // 让服务端中止流（浏览器原生下载会显示失败，但面板显示已暂停）
     sendDownloadControl(download, 'pause');
     markDownloadProgress(id, { status: 'paused' });
 }
@@ -2141,9 +2046,9 @@ function pauseDownloadTransfer(id) {
 function resumeDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download?.url) return;
-    const savedOffset = download._offset || 0;
-    markDownloadProgress(id, { status: 'active', loaded: savedOffset });
-    showToast(savedOffset > 0 ? `从 ${formatTransferSize(savedOffset)} 处继续下载` : '开始下载', 'info');
+    // 浏览器原生下载无法从偏移继续 → 重新从头开始 <a> 标签下载
+    markDownloadProgress(id, { status: 'active', loaded: 0 });
+    showToast('重新开始下载', 'info');
     startChunkedDownload(download);
 }
 
