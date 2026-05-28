@@ -1679,10 +1679,11 @@ function ensureTransferPopover() {
     transferPopover.className = 'transfer-popover';
     transferPopover.innerHTML = '<div class="transfer-popover-head"><strong>文件传输</strong><button type="button" class="transfer-popover-close" aria-label="关闭">×</button></div><div class="transfer-popover-body"></div>';
     document.body.appendChild(transferPopover);
-    transferPopover.querySelector('.transfer-popover-close')?.addEventListener('click', () => hideTransferPopover(true));
-    transferPopover.addEventListener('click', handleTransferActionClick);
+    transferPopover.querySelector('.transfer-popover-close')?.addEventListener('click', (e) => { e.stopPropagation(); hideTransferPopover(true); });
     transferPopover.addEventListener('pointerdown', (e) => e.stopPropagation());
     transferPopover.addEventListener('pointerenter', () => window.clearTimeout(transferPopoverHideTimer));
+    // 使用 document 级别委托，避免按钮在 innerHTML 重建后冒泡失效
+    document.addEventListener('click', handleTransferActionClick);
     return transferPopover;
 }
 
@@ -2050,6 +2051,9 @@ function resumeDownloadTransfer(id) {
 }
 
 function handleTransferActionClick(e) {
+    // 只处理 transfer-popover 内的取消按钮
+    if (!transferPopover?.classList.contains('open')) return;
+    if (!e.target.closest('.transfer-popover')) return;
     const btn = e.target.closest('[data-transfer-action]');
     if (!btn) return;
     e.preventDefault();

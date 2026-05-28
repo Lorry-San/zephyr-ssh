@@ -6031,7 +6031,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-cancel-btn { width: 24px; height: 24px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; position: relative; flex: 0 0 auto; opacity: .65; transition: opacity .15s, background .15s; }
 .transfer-cancel-btn:hover { opacity: 1; background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .transfer-cancel-btn::before,
-.transfer-cancel-btn::after { content: ''; position: absolute; top: 50%; left: 50%; width: 12px; height: 1.8px; background: currentColor; border-radius: 1px; }
+.transfer-cancel-btn::after { content: ''; position: absolute; top: 50%; left: 50%; width: 12px; height: 1.8px; background: currentColor; border-radius: 1px; pointer-events: none; }
 .transfer-cancel-btn::before { transform: translate(-50%, -50%) rotate(45deg); }
 .transfer-cancel-btn::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .transfer-item.paused .transfer-progress span { background: var(--warning); }
