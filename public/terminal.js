@@ -89,6 +89,12 @@ const fmUploadInput = $('#fmUploadInput');
 const fmDropOverlay = $('#fmDropOverlay');
 const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
+let selectedFilePaths = new Set();
+let lastFileClick = { path: '', time: 0 };
+let fileContextMenu = null;
+let fileContextOverlay = null;
+let fileLongPressTimer = null;
+let terminalShortcutPlatform = localStorage.getItem('zephyr-shortcut-platform') || 'auto';
 let fmEditorModal = $('#fmEditorModal');
 let fmEditorTitle = $('#fmEditorTitle');
 let fmEditorMain = $('#fmEditorMain');
@@ -1669,7 +1675,7 @@ function updateTransferMetrics(item, loaded) {
 
 function getTransferItems() {
     const uploads = Array.from(activeSftpUploads.entries()).map(([id, item]) => ({ ...item, id: item.id || id, direction: 'upload' }));
-    const downloads = Array.from(activeSftpDownloads.entries()).map(([id, item]) => ({ ...item, id: item.id || item.downloadId || id, direction: 'download' }));
+    const downloads = Array.from(activeSftpDownloads.entries()).map(([id, item]) => ({ ...item, id: item.id || item.downloadId || id, direction: item.direction || 'download' }));
     return [...uploads, ...downloads].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
@@ -1838,6 +1844,8 @@ function transferStatusText(item) {
     if (item.status === 'error') return '失败';
     if (item.status === 'paused') return '已暂停';
     if (item.status === 'pending') return '等待中';
+    if (item.direction === 'copy') return '复制中';
+    if (item.direction === 'move') return '移动中';
     const loaded = Number(item.loaded ?? 0) || 0;
     const total = Number(item.size ?? 0) || 0;
     return total > 0 ? (Math.min(100, (loaded / total) * 100)).toFixed(0) + '%' : '传输中';
@@ -1865,7 +1873,7 @@ function bindCancelBtn(containerEl, id, direction) {
         e.stopPropagation();
         if (!id) return;
         if (direction === 'upload') cancelUploadTransfer(id);
-        else cancelDownloadTransfer(id);
+        else if (direction === 'download') cancelDownloadTransfer(id);
     };
 }
 
@@ -2300,17 +2308,262 @@ function filterFiles(files, query) {
     return files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()));
 }
 
+
+function getShortcutPlatform() {
+    if (terminalShortcutPlatform === 'mac' || terminalShortcutPlatform === 'windows') return terminalShortcutPlatform;
+    return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '') ? 'mac' : 'windows';
+}
+function shortcutLabel(action) {
+    const mac = getShortcutPlatform() === 'mac';
+    const map = {
+        copy: mac ? '⌘C' : 'Ctrl+C', cut: mac ? '⌘X' : 'Ctrl+X', paste: mac ? '⌘V' : 'Ctrl+V',
+        rename: 'F2', delete: mac ? '⌫' : 'Del', properties: mac ? '⌘I' : 'Alt+Enter', refresh: mac ? '⌘R' : 'F5',
+    };
+    return map[action] || '';
+}
+async function loadTerminalSettings() {
+    try {
+        const res = await fetch('/api/settings', { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        terminalShortcutPlatform = data?.terminal?.shortcutPlatform || localStorage.getItem('zephyr-shortcut-platform') || 'auto';
+        localStorage.setItem('zephyr-shortcut-platform', terminalShortcutPlatform);
+    } catch (_) {}
+}
+loadTerminalSettings();
+function fullFilePath(name) { return currentPath.replace(/\/+$/, '') + '/' + name; }
+function getFileByPath(filePath) { return allFiles.find((f) => fullFilePath(f.name) === filePath); }
+function getSelectedFiles() {
+    return [...selectedFilePaths].map((filePath) => {
+        const file = getFileByPath(filePath) || {};
+        return { ...file, path: filePath, name: file.name || filePath.split('/').pop() || filePath, type: file.type || '-' };
+    });
+}
+function clearFileSelection() {
+    selectedFilePaths.clear();
+    updateFileSelectionUI();
+}
+function selectSingleFile(filePath) {
+    selectedFilePaths = new Set([filePath]);
+    updateFileSelectionUI();
+}
+function toggleFileSelection(filePath) {
+    if (selectedFilePaths.has(filePath)) selectedFilePaths.delete(filePath);
+    else selectedFilePaths.add(filePath);
+    updateFileSelectionUI();
+}
+function updateFileSelectionUI() {
+    fmList.querySelectorAll('.fm-item').forEach((item) => {
+        item.classList.toggle('selected', selectedFilePaths.has(item.dataset.filePath));
+    });
+}
+function openFileItem(filePath, fileType) {
+    if (fileType === 'd') navigateTo(filePath);
+    else if (window.ZephyrImagePreview?.isImage?.(filePath)) openImagePreview(filePath);
+    else openEditor(filePath);
+}
+function isTouchLikeDevice() {
+    return window.matchMedia?.('(pointer: coarse)')?.matches || navigator.maxTouchPoints > 0;
+}
 fmList.addEventListener('click', (e) => {
-    if (e.target.closest('.fm-item-actions')) return;
+    if (e.target.closest('.fm-item-actions') || fileContextMenu?.classList.contains('show')) return;
+    const item = e.target.closest('.fm-item');
+    if (!item) { clearFileSelection(); return; }
+    const filePath = item.dataset.filePath;
+    const fileType = item.dataset.fileType;
+    if (!filePath) return;
+    const now = Date.now();
+    if (lastFileClick.path === filePath && now - lastFileClick.time < 360) {
+        lastFileClick = { path: '', time: 0 };
+        openFileItem(filePath, fileType);
+        return;
+    }
+    lastFileClick = { path: filePath, time: now };
+    if (!isTouchLikeDevice() && (e.ctrlKey || e.metaKey)) toggleFileSelection(filePath);
+    else selectSingleFile(filePath);
+});
+fmList.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const item = e.target.closest('.fm-item');
+    if (item?.dataset.filePath && !selectedFilePaths.has(item.dataset.filePath)) selectSingleFile(item.dataset.filePath);
+    else if (!item) clearFileSelection();
+    showFileContextMenu(e.clientX, e.clientY, !!item);
+});
+fmList.addEventListener('touchstart', (e) => {
     const item = e.target.closest('.fm-item');
     if (!item) return;
-    const fileName = item.dataset.fileName;
-    const fileType = item.dataset.fileType;
-    if (!fileName) return;
-    const fullPath = currentPath.replace(/\/+$/, '') + '/' + fileName;
-    if (fileType === 'd') navigateTo(fullPath);
-    else if (window.ZephyrImagePreview?.isImage?.(fullPath)) openImagePreview(fullPath);
-    else openEditor(fullPath);
+    const touch = e.touches?.[0];
+    clearTimeout(fileLongPressTimer);
+    fileLongPressTimer = window.setTimeout(() => {
+        navigator.vibrate?.(10);
+        selectSingleFile(item.dataset.filePath);
+        showFileContextMenu(touch?.clientX || 24, touch?.clientY || 24, true);
+    }, 460);
+}, { passive: true });
+['touchend', 'touchmove', 'touchcancel'].forEach((name) => fmList.addEventListener(name, () => clearTimeout(fileLongPressTimer), { passive: true }));
+
+function svgIcon(name) {
+    const icons = {
+        copy: '<rect x="9" y="4" width="10" height="12" rx="2"></rect><rect x="5" y="8" width="10" height="12" rx="2"></rect>',
+        paste: '<path d="M16 4h-2.18A2 2 0 0 0 12 3a2 2 0 0 0-1.82 1H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"></path><rect x="9" y="8" width="6" height="6" rx="1"></rect>',
+        cut: '<path d="M14.5 9.5L21 3"></path><path d="M3 21l7-7"></path><circle cx="6" cy="6" r="3"></circle><circle cx="15" cy="15" r="3"></circle>',
+        zip: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v6"></path><path d="M12 17V11"></path><path d="M9 14l3 3 3-3"></path>',
+        unzip: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v6"></path><path d="M12 11v6"></path><path d="M9 14l3-3 3 3"></path>',
+        rename: '<path d="M3 21l3-1 11-11a2.5 2.5 0 0 0-3.5-3.5L6.5 16.5 5 20z"></path><path d="M14 7l3 3"></path>',
+        delete: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>',
+        download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
+        info: '<rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M8 9h6"></path><circle cx="8" cy="15" r="1.2"></circle><circle cx="12" cy="12" r="1.2"></circle><circle cx="16" cy="9" r="1.2"></circle>',
+        refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M3 12A9 9 0 0 1 18.5 5.8"></path><path d="M18 2v4h4"></path><path d="M6 22v-4H2"></path>',
+        folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>',
+        file: '<path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v5h5"></path>',
+        open: '<path d="M14 3h7v7"></path><path d="M10 14L21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path>',
+    };
+    return `<span class="fm-menu-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.info}</svg></span>`;
+}
+function ensureFileContextMenu() {
+    if (fileContextMenu) return;
+    fileContextOverlay = document.createElement('div');
+    fileContextOverlay.className = 'fm-context-overlay';
+    fileContextMenu = document.createElement('div');
+    fileContextMenu.className = 'fm-context-menu';
+    document.body.appendChild(fileContextOverlay);
+    document.body.appendChild(fileContextMenu);
+    fileContextOverlay.addEventListener('click', hideFileContextMenu);
+    fileContextMenu.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        hideFileContextMenu();
+        handleFileMenuAction(action);
+    });
+}
+function hideFileContextMenu() {
+    fileContextOverlay?.classList.remove('show');
+    fileContextMenu?.classList.remove('show');
+}
+function menuButton(action, label, icon, shortcut = '', danger = false) {
+    return `<button type="button" class="fm-context-item${danger ? ' danger' : ''}" data-action="${action}"><span class="fm-menu-left">${svgIcon(icon)}<span>${escapeHtml(label)}</span></span>${shortcut ? `<span class="fm-menu-shortcut">${escapeHtml(shortcut)}</span>` : ''}</button>`;
+}
+function isArchiveFile(name = '') { return /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|gz|bz2|xz|7z|rar)$/i.test(name); }
+function showFileContextMenu(x, y, onItem) {
+    ensureFileContextMenu();
+    const selected = getSelectedFiles();
+    const single = selected.length === 1 ? selected[0] : null;
+    let html = '';
+    if (selected.length) {
+        html += menuButton('copy', '复制', 'copy', shortcutLabel('copy'));
+        html += menuButton('cut', '剪切', 'cut', shortcutLabel('cut'));
+        html += menuButton('paste', '粘贴', 'paste', shortcutLabel('paste'));
+        html += '<div class="fm-context-divider"></div>';
+        if (single && single.type !== 'd' && isArchiveFile(single.name)) html += menuButton('extract', '解压', 'unzip');
+        if (!single || single.type === 'd' || !isArchiveFile(single.name)) html += menuButton('compress', '压缩', 'zip');
+        if (single) html += menuButton('rename', '重命名', 'rename', shortcutLabel('rename'));
+        html += menuButton('delete', '删除', 'delete', shortcutLabel('delete'), true);
+        html += '<div class="fm-context-divider"></div>';
+        if (single && single.type !== 'd') html += menuButton('openExternal', '用其他应用打开', 'open');
+        html += menuButton('download', selected.length > 1 ? '打包下载' : '下载', 'download');
+        html += menuButton('properties', '属性', 'info', shortcutLabel('properties'));
+    } else {
+        html += menuButton('refresh', '刷新', 'refresh', shortcutLabel('refresh'));
+        html += menuButton('newFolder', '新建文件夹', 'folder');
+        html += menuButton('newFile', '新建文件', 'file');
+        html += menuButton('paste', '粘贴', 'paste', shortcutLabel('paste'));
+    }
+    fileContextMenu.innerHTML = html;
+    fileContextMenu.style.left = '0px'; fileContextMenu.style.top = '0px';
+    fileContextOverlay.classList.add('show');
+    fileContextMenu.classList.add('show');
+    const rect = fileContextMenu.getBoundingClientRect();
+    x = Math.min(x, window.innerWidth - rect.width - 12);
+    y = Math.min(y, window.innerHeight - rect.height - 12);
+    fileContextMenu.style.left = Math.max(8, x) + 'px';
+    fileContextMenu.style.top = Math.max(8, y) + 'px';
+}
+function requestDownload(file) {
+    const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    markDownloadProgress(downloadId, { name: file.name, path: file.path, size: file.size, loaded: 0, status: 'pending', controlUrl: '', progressUrl: '' });
+    showTransferPopover({ autoHide: true });
+    wsConnection.send(JSON.stringify({ type: 'sftp-download', path: file.path, downloadId }));
+}
+function handleFileMenuAction(action) {
+    const selected = getSelectedFiles();
+    const single = selected[0];
+    if (action === 'refresh') return refreshFileList();
+    if (action === 'newFolder') return fmNewFolderBtn.click();
+    if (action === 'newFile') return fmNewFileBtn.click();
+    if (action === 'copy' || action === 'cut') {
+        if (!selected.length) return;
+        wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-set', mode: action, items: selected }));
+        showToast(`${action === 'copy' ? '已复制' : '已剪切'} ${selected.length} 项`, 'success');
+        return;
+    }
+    if (action === 'paste') {
+        wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-paste', targetDir: currentPath, conflict: 'rename' }));
+        showToast('正在粘贴，进度可在传输面板查看', 'info');
+        return;
+    }
+    if (action === 'rename' && single) {
+        const newName = prompt('新名称:', single.name);
+        if (!newName) return;
+        wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: single.path, newPath: fullFilePath(newName) }));
+        return;
+    }
+    if (action === 'delete') {
+        if (!selected.length || !confirm(`确认删除选中的 ${selected.length} 项?`)) return;
+        selected.forEach((file) => wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: file.path })));
+        return;
+    }
+    if (action === 'compress') {
+        if (!selected.length) return;
+        const defaultName = selected.length === 1 ? `${selected[0].name}.tar.gz` : `archive-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}.tar.gz`;
+        const targetPath = prompt('压缩到:', fullFilePath(defaultName));
+        if (!targetPath) return;
+        wsConnection.send(JSON.stringify({ type: 'sftp-compress', items: selected, targetPath }));
+        showToast('正在压缩...', 'info');
+        return;
+    }
+    if (action === 'extract' && single) {
+        const targetDir = prompt('解压到:', currentPath);
+        if (!targetDir) return;
+        wsConnection.send(JSON.stringify({ type: 'sftp-extract', path: single.path, targetDir }));
+        showToast('正在解压...', 'info');
+        return;
+    }
+    if (action === 'download') {
+        if (selected.length === 1 && selected[0].type !== 'd') return requestDownload(selected[0]);
+        const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const name = `zephyr-download-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}.tar.gz`;
+        markDownloadProgress(downloadId, { name, path: currentPath, size: 0, loaded: 0, status: 'pending', controlUrl: '', progressUrl: '' });
+        showTransferPopover({ autoHide: true });
+        wsConnection.send(JSON.stringify({ type: 'sftp-download-bundle', items: selected, baseDir: currentPath, downloadId, name }));
+        showToast('正在打包下载...', 'info');
+        return;
+    }
+    if (action === 'openExternal' && single) {
+        const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        window.__openExternalDownloadId = downloadId;
+        try { window.__openExternalWindow = window.open('about:blank', '_blank'); } catch (_) { window.__openExternalWindow = null; }
+        wsConnection.send(JSON.stringify({ type: 'sftp-download', path: single.path, downloadId }));
+        return;
+    }
+    if (action === 'properties') {
+        const total = selected.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+        alert(selected.length === 1
+            ? `名称：${single.name}\n路径：${single.path}\n大小：${formatTransferSize(single.size || 0)}\n修改时间：${single.modifyTime ? new Date(single.modifyTime).toLocaleString() : '-'}\n权限：${single.rights || '-'}`
+            : `已选择：${selected.length} 项\n总大小：${formatTransferSize(total)}\n当前路径：${currentPath}`);
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (!fileManager?.classList.contains('open')) return;
+    const mac = getShortcutPlatform() === 'mac';
+    const mod = mac ? e.metaKey : e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); handleFileMenuAction('copy'); }
+    else if (mod && e.key.toLowerCase() === 'x') { e.preventDefault(); handleFileMenuAction('cut'); }
+    else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); handleFileMenuAction('paste'); }
+    else if (e.key === 'F2') { e.preventDefault(); handleFileMenuAction('rename'); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { if (selectedFilePaths.size) { e.preventDefault(); handleFileMenuAction('delete'); } }
+    else if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); handleFileMenuAction('properties'); }
 });
 
 function renderFileList(files) {
@@ -2320,8 +2573,11 @@ function renderFileList(files) {
     filtered.forEach(file => {
         const item = document.createElement('div');
         item.className = 'fm-item';
+        const itemPath = fullFilePath(file.name);
         item.dataset.fileName = file.name;
         item.dataset.fileType = file.type;
+        item.dataset.filePath = itemPath;
+        item.classList.toggle('selected', selectedFilePaths.has(itemPath));
         const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : '📄');
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
@@ -2361,16 +2617,7 @@ function renderFileList(files) {
                 e.stopPropagation();
                 downloadBtn.disabled = true;
                 window.setTimeout(() => { downloadBtn.disabled = false; }, 2400);
-                const targetPath = currentPath.replace(/\/+$/, '') + '/' + file.name;
-                const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                markDownloadProgress(downloadId, { name: file.name, path: targetPath, size: file.size, loaded: 0, status: 'pending', controlUrl: '', progressUrl: '' });
-                showTransferPopover({ autoHide: true });
-                showToast(`准备下载：${file.name}`, 'info');
-                wsConnection.send(JSON.stringify({
-                    type: 'sftp-download',
-                    path: targetPath,
-                    downloadId
-                }));
+                requestDownload({ ...file, path: fullFilePath(file.name) });
             });
             actions.appendChild(downloadBtn);
         }
@@ -3757,7 +4004,7 @@ function handleSFTPMessage(msg) {
         case 'sftp-ready': sftpReady = true; refreshFileList(); flushPendingUploads(); break;
         case 'sftp-list':
             if (msg.error) alert('列出目录失败: ' + msg.error);
-            else { renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; }
+            else { selectedFilePaths.clear(); renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; }
             break;
         case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload':
             if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); }
@@ -3796,6 +4043,10 @@ function handleSFTPMessage(msg) {
             if (msg.direction === 'download') {
                 markDownloadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
+            } else if (msg.direction === 'copy' || msg.direction === 'move') {
+                const label = msg.direction === 'move' ? '移动' : '复制';
+                markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '文件'}`, path: msg.path, direction: msg.direction, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
+                if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             } else if (msg.direction === 'upload') {
                 markUploadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
@@ -3804,10 +4055,20 @@ function handleSFTPMessage(msg) {
         }
         case 'sftp-download':
             if (msg.downloadId) markDownloadProgress(msg.downloadId, { status: 'error' });
+            if (window.__openExternalDownloadId === msg.downloadId) {
+                window.__openExternalDownloadId = '';
+                try { window.__openExternalWindow?.close?.(); } catch {}
+                window.__openExternalWindow = null;
+            }
             if (msg.error) alert('下载失败: ' + msg.error);
             break;
         case 'sftp-download-ready': {
             if (msg.error) {
+                if (window.__openExternalDownloadId === msg.downloadId) {
+                    window.__openExternalDownloadId = '';
+                    try { window.__openExternalWindow?.close?.(); } catch {}
+                    window.__openExternalWindow = null;
+                }
                 alert('下载失败: ' + msg.error);
                 break;
             }
@@ -3822,7 +4083,7 @@ function handleSFTPMessage(msg) {
                 id: downloadId,
                 downloadId,
                 path: msg.path,
-                name: (msg.path || 'download').split('/').pop() || 'download',
+                name: msg.name || (msg.path || 'download').split('/').pop() || 'download',
                 size: Number(msg.size) || 0,
                 loaded: Number(existing.loaded) || 0,
                 status: 'active',
@@ -3832,12 +4093,34 @@ function handleSFTPMessage(msg) {
                 updatedAt: Date.now(),
                 speed: Number(existing.speed) || 0,
             };
+            if (window.__openExternalDownloadId === downloadId) {
+                window.__openExternalDownloadId = '';
+                if (window.__openExternalWindow && !window.__openExternalWindow.closed) window.__openExternalWindow.location.href = msg.url;
+                else window.open(msg.url, '_blank');
+                window.__openExternalWindow = null;
+                break;
+            }
             activeSftpDownloads.set(downloadId, download);
             showTransferPopover({ autoHide: true });
             showToast('已开始下载，进度可在传输面板查看', 'success');
             startChunkedDownload(download);
             break;
         }
+        case 'sftp-clipboard-set':
+            if (!msg.success) alert('剪贴板操作失败: ' + (msg.error || '未知错误'));
+            break;
+        case 'sftp-clipboard-paste':
+            if (msg.success) { showToast('粘贴完成', 'success'); refreshFileList(); }
+            else alert('粘贴失败: ' + (msg.error || '未知错误'));
+            break;
+        case 'sftp-compress':
+            if (msg.success) { showToast('压缩完成', 'success'); refreshFileList(); }
+            else alert('压缩失败: ' + (msg.error || '未知错误'));
+            break;
+        case 'sftp-extract':
+            if (msg.success) { showToast('解压完成', 'success'); refreshFileList(); }
+            else alert('解压失败: ' + (msg.error || '未知错误'));
+            break;
         case 'sftp-readfile':
             if (msg.path && editorPanelsByPath.has(msg.path)) updateActiveEditorRefs(editorPanelsByPath.get(msg.path));
             if (msg.error) {

@@ -64,6 +64,12 @@ function defaultSettings(legacySettings = {}) {
             theme: 'auto',
             autoThemeEnabled: true,
         },
+        terminal: {
+            maxWindows: 3,
+            minimizedKeepAlive: 0,
+            smartbarOrder: 'old-first',
+            shortcutPlatform: 'auto',
+        },
         icp: legacySettings.icp || '',
         policeBeian: legacySettings.policeBeian || '',
         policeBeianUrl: legacySettings.policeBeianUrl || 'https://www.beian.gov.cn/portal/registerSystemInfo',

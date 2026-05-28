@@ -52,6 +52,7 @@ const sshTerminalSessions = new Map();
 const sftpDownloadTokens = new Map();
 const sftpUploadTokens = new Map();
 const sftpPreviewTokens = new Map();
+const sftpClipboardByUser = new Map();
 const previewCache = new Map();
 const PREVIEW_TOKEN_TTL = 10 * 60 * 1000;
 const PREVIEW_CACHE_TTL = 30 * 60 * 1000;
@@ -1839,6 +1840,143 @@ function shellQuote(value) {
     return `'${String(value ?? '').replace(/'/g, `'"'"'`)}'`;
 }
 
+
+function normalizeRemotePath(value) {
+    return String(value || '').replace(/\/+/g, '/') || '/';
+}
+function remoteJoin(dir, name) {
+    const base = normalizeRemotePath(dir || '/').replace(/\/+$/, '') || '/';
+    return base === '/' ? `/${name}` : `${base}/${name}`;
+}
+function isDangerousRemotePath(value) {
+    const p = normalizeRemotePath(value).trim();
+    return !p || p === '/' || p === '.' || p === '..';
+}
+function basenameRemote(value) {
+    return path.posix.basename(normalizeRemotePath(value));
+}
+function dirnameRemote(value) {
+    return path.posix.dirname(normalizeRemotePath(value));
+}
+function sftpStat(sftp, targetPath) {
+    return new Promise((resolve, reject) => sftp.stat(targetPath, (err, stats) => err ? reject(err) : resolve(stats)));
+}
+function sftpMkdir(sftp, targetPath) {
+    return new Promise((resolve, reject) => sftp.mkdir(targetPath, (err) => err && err.code !== 4 ? reject(err) : resolve()));
+}
+function sftpReaddir(sftp, targetPath) {
+    return new Promise((resolve, reject) => sftp.readdir(targetPath, (err, list) => err ? reject(err) : resolve(list || [])));
+}
+function sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress) {
+    return new Promise((resolve, reject) => {
+        const rs = sourceSftp.createReadStream(sourcePath, { highWaterMark: 512 * 1024 });
+        const ws = targetSftp.createWriteStream(targetPath, { highWaterMark: 512 * 1024 });
+        let settled = false;
+        const fail = (err) => {
+            if (settled) return;
+            settled = true;
+            try { rs.destroy?.(); } catch {}
+            try { ws.destroy?.(); } catch {}
+            reject(err);
+        };
+        rs.on('data', (chunk) => { try { onProgress?.(chunk.length); } catch {} });
+        rs.on('error', fail);
+        ws.on('error', fail);
+        ws.on('finish', () => { if (!settled) { settled = true; resolve(); } });
+        rs.pipe(ws);
+    });
+}
+async function ensureRemoteDirRecursive(sftp, dirPath) {
+    const normalized = normalizeRemotePath(dirPath);
+    if (!normalized || normalized === '/') return;
+    const parts = normalized.split('/').filter(Boolean);
+    let cur = normalized.startsWith('/') ? '/' : '';
+    for (const part of parts) {
+        cur = cur === '/' ? `/${part}` : (cur ? `${cur}/${part}` : part);
+        try { await sftpMkdir(sftp, cur); } catch {}
+    }
+}
+async function copyRemoteTree(sourceSftp, sourcePath, targetSftp, targetPath, onProgress) {
+    const stats = await sftpStat(sourceSftp, sourcePath);
+    if (stats.isDirectory?.()) {
+        await ensureRemoteDirRecursive(targetSftp, targetPath);
+        const list = await sftpReaddir(sourceSftp, sourcePath);
+        for (const entry of list) {
+            if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
+            await copyRemoteTree(sourceSftp, remoteJoin(sourcePath, entry.filename), targetSftp, remoteJoin(targetPath, entry.filename), onProgress);
+        }
+        return;
+    }
+    await ensureRemoteDirRecursive(targetSftp, dirnameRemote(targetPath));
+    await sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress);
+}
+async function removeRemotePath(connectionConfig, targetPath) {
+    if (isDangerousRemotePath(targetPath)) throw new Error('拒绝删除空路径或根目录');
+    const routed = await createRoutedSSHConnection(connectionConfig, 10000);
+    try { await execRemoteCommand(routed.client, `rm -rf -- ${shellQuote(targetPath)}`); }
+    finally { [...(routed.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} }); }
+}
+async function cleanupRemoteTempFile(connectionConfig, targetPath) {
+    if (!connectionConfig || !targetPath || !String(targetPath).startsWith('/tmp/zephyr-sftp-')) return;
+    try { await removeRemotePath(connectionConfig, targetPath); } catch (err) { console.warn('[sftp-temp-cleanup]', 'failed', { path: targetPath, error: err.message }); }
+}
+async function withRoutedSftp(connectionConfig, callback) {
+    const routed = await createRoutedSSHConnection(connectionConfig, 10000);
+    let sftp = null;
+    try {
+        sftp = await new Promise((resolve, reject) => routed.client.sftp((err, nextSftp) => err ? reject(err) : resolve(nextSftp)));
+        return await callback({ routed, sftp });
+    } finally {
+        try { sftp?.end?.(); } catch {}
+        [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
+    }
+}
+async function pasteSftpClipboard({ username, targetSession, targetDir, mode, conflict = 'rename', sendProgress }) {
+    const clip = sftpClipboardByUser.get(username);
+    if (!clip || !Array.isArray(clip.items) || !clip.items.length) throw new Error('剪贴板为空');
+    const targetConnectionConfig = targetSession?.connectionConfig;
+    if (!targetConnectionConfig) throw new Error('目标 SSH 连接已失效');
+    const sameConnection = String(clip.sourceConnectionId || '') && String(clip.sourceConnectionId) === String(targetSession.connectionId || '');
+    const opId = crypto.randomUUID();
+    const total = clip.items.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    let loaded = 0;
+    const bump = (n, currentPath = '') => {
+        loaded += Number(n) || 0;
+        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: currentPath || targetDir, loaded, size: total, status: 'active' });
+    };
+    if (sameConnection) {
+        const commands = [];
+        for (const item of clip.items) {
+            const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+            const command = [
+                `src=${shellQuote(item.path)}`,
+                `dst=${shellQuote(targetPath)}`,
+                conflict === 'cancel' ? `[ ! -e "$dst" ] || exit 3` : '',
+                conflict === 'rename' ? `if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); n=${'${b%.*}'}; e=${'${b##*.}'}; i=1; while :; do if [ "$n" != "$e" ]; then c="$d/$n ($i).$e"; else c="$d/$b ($i)"; fi; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi` : '',
+                mode === 'cut' ? `mv -- "$src" "$dst"` : `cp -a -- "$src" "$dst"`,
+            ].filter(Boolean).join('; ');
+            commands.push(command);
+        }
+        await execRemoteCommand(targetSession.sshClient, commands.join(' && '));
+        loaded = total;
+        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded, size: total, status: 'done' });
+    } else {
+        await withRoutedSftp(clip.sourceConnectionConfig, async ({ sftp: sourceSftp }) => {
+            await withRoutedSftp(targetConnectionConfig, async ({ sftp: targetSftp }) => {
+                for (const item of clip.items) {
+                    const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+                    await copyRemoteTree(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path));
+                }
+            });
+        });
+        if (mode === 'cut') {
+            for (const item of clip.items) await removeRemotePath(clip.sourceConnectionConfig, item.path);
+        }
+        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded: total || loaded, size: total, status: 'done' });
+    }
+    if (mode === 'cut') sftpClipboardByUser.delete(username);
+}
+
 function parseJSONLines(raw) {
     return String(raw || '')
         .split('\n')
@@ -2252,6 +2390,7 @@ app.post('/api/sftp/download-control/:token', requireAuth, (req, res) => {
         download.activeFileHandle = null;
         download.activeSftp = null;
         download.activeRouted = null;
+        if (download.cleanupAfterDownload) cleanupRemoteTempFile(download.connectionConfig, download.path);
         sftpDownloadTokens.delete(token);
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size: Number(download.size) || 0, status: 'error' });
         return res.json({ ok: true, status: 'cancelled' });
@@ -2285,7 +2424,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         sftpDownloadTokens.delete(token);
         return res.status(410).send(`下载专用 SFTP 连接失败：${err.message}`);
     }
-    const fileName = path.basename(download.path || 'download') || 'download';
+    const fileName = String(download.displayName || path.basename(download.path || 'download') || 'download');
     const size = Number(download.size) || 0;
     const range = String(req.headers.range || '');
     let start = 0;
@@ -2357,6 +2496,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         stopKeepalive();
         closeDownloadConnection();
         try { if (fileHandle) sftp.close(fileHandle, () => {}); } catch {}
+        if (download.cleanupAfterDownload) cleanupRemoteTempFile(connectionConfig, download.path);
         if (!partial || end >= size - 1) setTimeout(() => sftpDownloadTokens.delete(token), 10000);
     };
 
@@ -3388,6 +3528,134 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 });
                 sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, size: Number(stats.size) || 0 });
             });
+            return;
+        }
+
+
+        if (msg.type === 'sftp-clipboard-set') {
+            const username = currentSession(req)?.username || '';
+            const items = Array.isArray(msg.items) ? msg.items.map((item) => ({
+                path: normalizeRemotePath(item.path),
+                name: String(item.name || basenameRemote(item.path || '')).slice(0, 255),
+                type: item.type === 'd' ? 'd' : '-',
+                size: Number(item.size) || 0,
+                modifyTime: Number(item.modifyTime) || 0,
+            })).filter((item) => item.path && item.path !== '/') : [];
+            if (!username || !items.length) {
+                sendJSON({ type: 'sftp-clipboard-set', success: false, error: '没有可复制的项目' });
+                return;
+            }
+            const mode = msg.mode === 'cut' ? 'cut' : 'copy';
+            sftpClipboardByUser.set(username, {
+                mode,
+                username,
+                sourceSessionId: attachedSshSession?.id || '',
+                sourceConnectionId: attachedSshSession?.connectionId || '',
+                sourceConnectionConfig: attachedSshSession?.connectionConfig || conn,
+                items,
+                createdAt: Date.now(),
+            });
+            sendJSON({ type: 'sftp-clipboard-set', success: true, mode, count: items.length });
+            return;
+        }
+
+        if (msg.type === 'sftp-clipboard-paste') {
+            const username = currentSession(req)?.username || '';
+            const targetDir = normalizeRemotePath(msg.targetDir || msg.path || '.');
+            const clip = sftpClipboardByUser.get(username);
+            if (!clip) {
+                sendJSON({ type: 'sftp-clipboard-paste', success: false, error: '剪贴板为空' });
+                return;
+            }
+            pasteSftpClipboard({
+                username,
+                targetSession: attachedSshSession,
+                targetDir,
+                mode: clip.mode,
+                conflict: msg.conflict || 'rename',
+                sendProgress: (payload) => sendTransferEvent(username, payload),
+            }).then(() => {
+                sendJSON({ type: 'sftp-clipboard-paste', success: true, path: targetDir });
+            }).catch((err) => {
+                console.warn('[sftp-clipboard-paste]', 'failed', { targetDir, error: err.message });
+                sendJSON({ type: 'sftp-clipboard-paste', success: false, error: err.message });
+            });
+            return;
+        }
+
+        if (msg.type === 'sftp-compress') {
+            const items = Array.isArray(msg.items) ? msg.items.map((item) => normalizeRemotePath(item.path)).filter((p) => p && p !== '/') : [];
+            const targetPath = normalizeRemotePath(msg.targetPath || '');
+            if (!items.length || !targetPath) {
+                sendJSON({ type: 'sftp-compress', success: false, error: '缺少压缩项目或目标路径' });
+                return;
+            }
+            const parent = dirnameRemote(items[0]);
+            const names = items.map((p) => basenameRemote(p));
+            const cmd = `mkdir -p -- ${shellQuote(dirnameRemote(targetPath))} && tar -czf ${shellQuote(targetPath)} -C ${shellQuote(parent)} -- ${names.map(shellQuote).join(' ')}`;
+            execRemoteCommand(sshClient, cmd).then(() => {
+                sendJSON({ type: 'sftp-compress', success: true, path: targetPath });
+            }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
+            return;
+        }
+
+        if (msg.type === 'sftp-extract') {
+            const archivePath = normalizeRemotePath(msg.path || '');
+            const targetDir = normalizeRemotePath(msg.targetDir || dirnameRemote(archivePath));
+            if (!archivePath || !targetDir) {
+                sendJSON({ type: 'sftp-extract', success: false, error: '缺少压缩包或解压路径' });
+                return;
+            }
+            const lower = archivePath.toLowerCase();
+            let cmd = `mkdir -p -- ${shellQuote(targetDir)} && `;
+            if (lower.endsWith('.zip')) cmd += `unzip -o -- ${shellQuote(archivePath)} -d ${shellQuote(targetDir)}`;
+            else if (/\.(tar\.gz|tgz)$/.test(lower)) cmd += `tar -xzf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+            else if (/\.(tar\.bz2|tbz2)$/.test(lower)) cmd += `tar -xjf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+            else if (/\.(tar\.xz|txz)$/.test(lower)) cmd += `tar -xJf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+            else if (lower.endsWith('.tar')) cmd += `tar -xf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+            else if (lower.endsWith('.7z')) cmd += `(command -v 7z >/dev/null && 7z x -y -o${shellQuote(targetDir)} ${shellQuote(archivePath)} || command -v 7za >/dev/null && 7za x -y -o${shellQuote(targetDir)} ${shellQuote(archivePath)})`;
+            else if (lower.endsWith('.rar')) cmd += `unrar x -o+ ${shellQuote(archivePath)} ${shellQuote(targetDir + '/')}`;
+            else { sendJSON({ type: 'sftp-extract', success: false, error: '暂不支持该压缩格式' }); return; }
+            execRemoteCommand(sshClient, cmd).then(() => {
+                sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir });
+            }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
+            return;
+        }
+
+        if (msg.type === 'sftp-download-bundle') {
+            const items = Array.isArray(msg.items) ? msg.items.map((item) => normalizeRemotePath(item.path)).filter((p) => p && p !== '/') : [];
+            if (!items.length) {
+                sendJSON({ type: 'sftp-download', downloadId: msg.downloadId || '', error: '没有可下载的项目' });
+                return;
+            }
+            const tmpName = `zephyr-sftp-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.tar.gz`;
+            const tmpPath = `/tmp/${tmpName}`;
+            const parent = dirnameRemote(items[0]);
+            const names = items.map((p) => basenameRemote(p));
+            const cmd = `tar -czf ${shellQuote(tmpPath)} -C ${shellQuote(parent)} -- ${names.map(shellQuote).join(' ')}`;
+            execRemoteCommand(sshClient, cmd).then(() => {
+                sftpStream.stat(tmpPath, (err, stats) => {
+                    if (err) {
+                        sendJSON({ type: 'sftp-download', downloadId: msg.downloadId || '', error: err.message });
+                        return;
+                    }
+                    const token = crypto.randomBytes(24).toString('hex');
+                    sftpDownloadTokens.set(token, {
+                        sessionId: attachedSshSession?.id || '',
+                        username: currentSession(req)?.username || '',
+                        connectionConfig: attachedSshSession?.connectionConfig || conn,
+                        downloadId: msg.downloadId || '',
+                        path: tmpPath,
+                        displayName: msg.name || tmpName,
+                        size: Number(stats.size) || 0,
+                        loaded: 0,
+                        status: 'pending',
+                        cleanupAfterDownload: true,
+                        expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
+                    });
+                    sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: tmpPath, name: msg.name || tmpName, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, size: Number(stats.size) || 0 });
+                });
+            }).catch((err) => sendJSON({ type: 'sftp-download', downloadId: msg.downloadId || '', error: err.message }));
             return;
         }
 

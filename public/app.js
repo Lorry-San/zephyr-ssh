@@ -874,6 +874,11 @@ function getTerminalSmartbarOrder() {
     if (value === 'new-left' || value === 'new-first') return 'new-first';
     return 'old-first';
 }
+
+function getTerminalShortcutPlatform() {
+    const value = settings?.terminal?.shortcutPlatform || localStorage.getItem('zephyr-shortcut-platform') || 'auto';
+    return ['auto', 'windows', 'mac'].includes(value) ? value : 'auto';
+}
 function getEffectiveTerminalMaxWindows() { return isCompactTerminalWorkspace() ? 1 : getConfiguredTerminalMaxWindows(); }
 function getTerminalSession(id) { return terminalTabs.find((t) => t.id === id); }
 function visibleTerminalTabs() { return terminalTabs.filter((t) => !t.minimized && !closingTerminalTabs.has(t.id)); }
@@ -2010,6 +2015,7 @@ async function loadSettings() {
     $('#terminalMaxWindows').value = String(getConfiguredTerminalMaxWindows());
     $('#terminalMinimizedKeepAlive').value = String(getConfiguredMinimizedKeepAlive());
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
+    $('#terminalShortcutPlatform').value = getTerminalShortcutPlatform();
     settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(settings.appearance || {}) };
     applyAppearance(settings.appearance);
     applyTheme(getPreferredTheme());
@@ -2092,10 +2098,13 @@ async function saveTerminalLayout(e) {
     const rawKeepAlive = Number($('#terminalMinimizedKeepAlive').value);
     const minimizedKeepAlive = rawKeepAlive === -1 ? -1 : Math.max(0, Math.floor(Number.isFinite(rawKeepAlive) ? rawKeepAlive : 0));
     const smartbarOrder = $('#terminalSmartbarOrder').value === 'new-first' ? 'new-first' : 'old-first';
+    const shortcutPlatformRaw = $('#terminalShortcutPlatform').value;
+    const shortcutPlatform = ['auto', 'windows', 'mac'].includes(shortcutPlatformRaw) ? shortcutPlatformRaw : 'auto';
     localStorage.setItem('zephyr-terminal-max-windows', String(maxWindows));
     localStorage.setItem('zephyr-terminal-minimized-keepalive', String(minimizedKeepAlive));
     localStorage.setItem('zephyr-terminal-smartbar-order', smartbarOrder);
-    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows, minimizedKeepAlive, smartbarOrder } }) });
+    localStorage.setItem('zephyr-shortcut-platform', shortcutPlatform);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ terminal: { ...(settings.terminal || {}), maxWindows, minimizedKeepAlive, smartbarOrder, shortcutPlatform } }) });
     enforceTerminalWorkspaceLimit(activeTerminalTab);
     renderTerminalTabs();
     const keepAliveText = minimizedKeepAlive === -1 ? '最小化无限保活' : `最小化保活 ${minimizedKeepAlive} 个`;
