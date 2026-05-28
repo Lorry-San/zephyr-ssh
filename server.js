@@ -1948,15 +1948,16 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
         const commands = [];
         for (const item of clip.items) {
             const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+            const sourceArg = shellQuote(item.path);
             const command = [
-                `src=${shellQuote(item.path)}`,
                 `dst=${shellQuote(targetPath)}`,
                 conflict === 'cancel' ? `[ ! -e "$dst" ] || exit 3` : '',
-                conflict === 'rename' ? `if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); n=${'${b%.*}'}; e=${'${b##*.}'}; i=1; while :; do if [ "$n" != "$e" ]; then c="$d/$n ($i).$e"; else c="$d/$b ($i)"; fi; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi` : '',
-                mode === 'cut' ? `mv -- "$src" "$dst"` : `cp -a -- "$src" "$dst"`,
+                conflict === 'rename' ? `if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); n="${'${b%.*}'}"; e="${'${b##*.}'}"; i=1; while :; do if [ "$n" != "$e" ]; then c="$d/$n ($i).$e"; else c="$d/$b ($i)"; fi; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi` : '',
+                mode === 'cut' ? `mv -- ${sourceArg} "$dst"` : `cp -a -- ${sourceArg} "$dst"`,
             ].filter(Boolean).join('; ');
             commands.push(command);
         }
+        console.info('[sftp-clipboard-paste]', 'same connection paste', { count: clip.items.length, targetDir, mode });
         await execRemoteCommand(targetSession.sshClient, commands.join(' && '));
         loaded = total;
         sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded, size: total, status: 'done' });
@@ -3535,7 +3536,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         if (msg.type === 'sftp-clipboard-set') {
             const username = currentSession(req)?.username || '';
             const items = Array.isArray(msg.items) ? msg.items.map((item) => ({
-                path: normalizeRemotePath(item.path),
+                path: String(item.path || ''),
                 name: String(item.name || basenameRemote(item.path || '')).slice(0, 255),
                 type: item.type === 'd' ? 'd' : '-',
                 size: Number(item.size) || 0,
@@ -3561,7 +3562,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         if (msg.type === 'sftp-clipboard-paste') {
             const username = currentSession(req)?.username || '';
-            const targetDir = normalizeRemotePath(msg.targetDir || msg.path || '.');
+            const targetDir = String(msg.targetDir || msg.path || '.');
             const clip = sftpClipboardByUser.get(username);
             if (!clip) {
                 sendJSON({ type: 'sftp-clipboard-paste', success: false, error: '剪贴板为空' });

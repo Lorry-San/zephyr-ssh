@@ -3397,6 +3397,8 @@ html.keyboard-open .terminal-page {
 .fm-search-input { flex: 1; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-sans); margin: 0 12px 4px; }
 .fm-toolbar { display: flex; gap: 6px; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--border); flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .fm-upload-label { cursor: pointer; }
+.fm-select-btn.active { color: #fff; background: var(--accent); border-color: var(--accent); }
+.fm-paste-btn { color: #fff; background: var(--accent); border-color: var(--accent); }
 .fm-drop-overlay {
     position: absolute;
     inset: 126px 12px 12px;

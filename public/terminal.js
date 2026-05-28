@@ -85,6 +85,8 @@ const fmRefreshBtn = $('#fmRefreshBtn');
 const fmCloseBtn = $('#fmCloseBtn');
 const fmNewFolderBtn = $('#fmNewFolderBtn');
 const fmNewFileBtn = $('#fmNewFileBtn');
+const fmSelectBtn = $('#fmSelectBtn');
+const fmPasteBtn = $('#fmPasteBtn');
 const fmUploadInput = $('#fmUploadInput');
 const fmDropOverlay = $('#fmDropOverlay');
 const fmSearchInput = $('#fmSearchInput');
@@ -94,6 +96,8 @@ let lastFileClick = { path: '', time: 0 };
 let fileContextMenu = null;
 let fileContextOverlay = null;
 let fileLongPressTimer = null;
+let mobileFileSelectMode = false;
+let sftpClipboardAvailable = false;
 let terminalShortcutPlatform = localStorage.getItem('zephyr-shortcut-platform') || 'auto';
 let fmEditorModal = $('#fmEditorModal');
 let fmEditorTitle = $('#fmEditorTitle');
@@ -2165,6 +2169,7 @@ function showFileManager() {
     ensureFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
     fileManager.classList.add('open');
     fileBtn.classList.add('active');
+    updateMobileFileActions();
     bringPanelToFront(fileManager);
     requestAnimationFrame(() => animatePanelFromButton(fileManager, fileBtn, true));
     if (!sftpReady) {
@@ -2178,6 +2183,8 @@ function hideFileManager() {
     animatePanelFromButton(fileManager, fileBtn, false);
     fileManager.classList.remove('open');
     fileBtn.classList.remove('active');
+    mobileFileSelectMode = false;
+    updateMobileFileActions();
     window.setTimeout(() => clearPanelMotion(fileManager), 320);
 }
 fileBtn.addEventListener('click', () => {
@@ -2275,6 +2282,8 @@ function navigateTo(path) {
     currentPath = path;
     searchQuery = '';
     fmSearchInput.value = '';
+    mobileFileSelectMode = false;
+    updateMobileFileActions();
     refreshFileList();
 }
 fmGoBtn.addEventListener('click', () => {
@@ -2342,15 +2351,18 @@ function getSelectedFiles() {
 function clearFileSelection() {
     selectedFilePaths.clear();
     updateFileSelectionUI();
+    updateMobileFileActions();
 }
 function selectSingleFile(filePath) {
     selectedFilePaths = new Set([filePath]);
     updateFileSelectionUI();
+    updateMobileFileActions();
 }
 function toggleFileSelection(filePath) {
     if (selectedFilePaths.has(filePath)) selectedFilePaths.delete(filePath);
     else selectedFilePaths.add(filePath);
     updateFileSelectionUI();
+    updateMobileFileActions();
 }
 function updateFileSelectionUI() {
     fmList.querySelectorAll('.fm-item').forEach((item) => {
@@ -2365,6 +2377,28 @@ function openFileItem(filePath, fileType) {
 function isTouchLikeDevice() {
     return window.matchMedia?.('(pointer: coarse)')?.matches || navigator.maxTouchPoints > 0;
 }
+function updateMobileFileActions() {
+    const touch = isTouchLikeDevice();
+    if (fmSelectBtn) {
+        fmSelectBtn.style.display = touch ? 'inline-flex' : 'none';
+        fmSelectBtn.classList.toggle('active', mobileFileSelectMode);
+        fmSelectBtn.textContent = mobileFileSelectMode ? `完成${selectedFilePaths.size ? `(${selectedFilePaths.size})` : ''}` : '选择';
+    }
+    if (fmPasteBtn) {
+        fmPasteBtn.style.display = touch && sftpClipboardAvailable ? 'inline-flex' : 'none';
+    }
+}
+fmSelectBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    mobileFileSelectMode = !mobileFileSelectMode;
+    if (!mobileFileSelectMode) clearFileSelection();
+    updateMobileFileActions();
+});
+fmPasteBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleFileMenuAction('paste');
+});
+window.addEventListener('resize', updateMobileFileActions);
 fmList.addEventListener('click', (e) => {
     if (e.target.closest('.fm-item-actions') || fileContextMenu?.classList.contains('show')) return;
     const item = e.target.closest('.fm-item');
@@ -2380,6 +2414,7 @@ fmList.addEventListener('click', (e) => {
     }
     lastFileClick = { path: filePath, time: now };
     if (!isTouchLikeDevice() && (e.ctrlKey || e.metaKey)) toggleFileSelection(filePath);
+    else if (isTouchLikeDevice() && mobileFileSelectMode) toggleFileSelection(filePath);
     else selectSingleFile(filePath);
 });
 fmList.addEventListener('contextmenu', (e) => {
@@ -2398,7 +2433,7 @@ fmList.addEventListener('touchstart', (e) => {
         navigator.vibrate?.(10);
         selectSingleFile(item.dataset.filePath);
         showFileContextMenu(touch?.clientX || 24, touch?.clientY || 24, true);
-    }, 460);
+    }, mobileFileSelectMode ? 900 : 460);
 }, { passive: true });
 ['touchend', 'touchmove', 'touchcancel'].forEach((name) => fmList.addEventListener(name, () => clearTimeout(fileLongPressTimer), { passive: true }));
 
@@ -2414,8 +2449,8 @@ function svgIcon(name) {
         download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
         info: '<rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M8 9h6"></path><circle cx="8" cy="15" r="1.2"></circle><circle cx="12" cy="12" r="1.2"></circle><circle cx="16" cy="9" r="1.2"></circle>',
         refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M3 12A9 9 0 0 1 18.5 5.8"></path><path d="M18 2v4h4"></path><path d="M6 22v-4H2"></path>',
-        newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 11v6"></path><path d="M9 14h6"></path>',
-        newFile: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M12 11v6"></path><path d="M9 14h6"></path>',
+        newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 9.8v6"></path><path d="M9 12.8h6"></path>',
+        newFile: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M12 9.8v6"></path><path d="M9 12.8h6"></path>',
         folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>',
         file: '<path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v5h5"></path>',
         open: '<path d="M14 3h7v7"></path><path d="M10 14L21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path>',
@@ -2462,7 +2497,6 @@ function showFileContextMenu(x, y, onItem) {
         if (single) html += menuButton('rename', '重命名', 'rename', shortcutLabel('rename'));
         html += menuButton('delete', '删除', 'delete', shortcutLabel('delete'), true);
         html += '<div class="fm-context-divider"></div>';
-        if (single && single.type !== 'd') html += menuButton('openExternal', '用其他应用打开', 'open');
         html += menuButton('download', selected.length > 1 ? '打包下载' : '下载', 'download');
         html += menuButton('properties', '属性', 'info', shortcutLabel('properties'));
     } else {
@@ -2496,6 +2530,8 @@ function handleFileMenuAction(action) {
     if (action === 'copy' || action === 'cut') {
         if (!selected.length) return;
         wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-set', mode: action, items: selected }));
+        sftpClipboardAvailable = true;
+        updateMobileFileActions();
         showToast(`${action === 'copy' ? '已复制' : '已剪切'} ${selected.length} 项`, 'success');
         return;
     }
@@ -2539,13 +2575,6 @@ function handleFileMenuAction(action) {
         showTransferPopover({ autoHide: true });
         wsConnection.send(JSON.stringify({ type: 'sftp-download-bundle', items: selected, baseDir: currentPath, downloadId, name }));
         showToast('正在打包下载...', 'info');
-        return;
-    }
-    if (action === 'openExternal' && single) {
-        const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        window.__openExternalDownloadId = downloadId;
-        try { window.__openExternalWindow = window.open('about:blank', '_blank'); } catch (_) { window.__openExternalWindow = null; }
-        wsConnection.send(JSON.stringify({ type: 'sftp-download', path: single.path, downloadId }));
         return;
     }
     if (action === 'properties') {
@@ -4006,7 +4035,7 @@ function handleSFTPMessage(msg) {
         case 'sftp-ready': sftpReady = true; refreshFileList(); flushPendingUploads(); break;
         case 'sftp-list':
             if (msg.error) alert('列出目录失败: ' + msg.error);
-            else { selectedFilePaths.clear(); renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; }
+            else { selectedFilePaths.clear(); renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; updateMobileFileActions(); }
             break;
         case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload':
             if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); }
@@ -4057,20 +4086,10 @@ function handleSFTPMessage(msg) {
         }
         case 'sftp-download':
             if (msg.downloadId) markDownloadProgress(msg.downloadId, { status: 'error' });
-            if (window.__openExternalDownloadId === msg.downloadId) {
-                window.__openExternalDownloadId = '';
-                try { window.__openExternalWindow?.close?.(); } catch {}
-                window.__openExternalWindow = null;
-            }
             if (msg.error) alert('下载失败: ' + msg.error);
             break;
         case 'sftp-download-ready': {
             if (msg.error) {
-                if (window.__openExternalDownloadId === msg.downloadId) {
-                    window.__openExternalDownloadId = '';
-                    try { window.__openExternalWindow?.close?.(); } catch {}
-                    window.__openExternalWindow = null;
-                }
                 alert('下载失败: ' + msg.error);
                 break;
             }
@@ -4095,13 +4114,6 @@ function handleSFTPMessage(msg) {
                 updatedAt: Date.now(),
                 speed: Number(existing.speed) || 0,
             };
-            if (window.__openExternalDownloadId === downloadId) {
-                window.__openExternalDownloadId = '';
-                if (window.__openExternalWindow && !window.__openExternalWindow.closed) window.__openExternalWindow.location.href = msg.url;
-                else window.open(msg.url, '_blank');
-                window.__openExternalWindow = null;
-                break;
-            }
             activeSftpDownloads.set(downloadId, download);
             showTransferPopover({ autoHide: true });
             showToast('已开始下载，进度可在传输面板查看', 'success');
@@ -4109,7 +4121,11 @@ function handleSFTPMessage(msg) {
             break;
         }
         case 'sftp-clipboard-set':
-            if (!msg.success) alert('剪贴板操作失败: ' + (msg.error || '未知错误'));
+            if (!msg.success) {
+                sftpClipboardAvailable = false;
+                updateMobileFileActions();
+                alert('剪贴板操作失败: ' + (msg.error || '未知错误'));
+            }
             break;
         case 'sftp-clipboard-paste':
             if (msg.success) { showToast('粘贴完成', 'success'); refreshFileList(); }
