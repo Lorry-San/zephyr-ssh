@@ -1786,7 +1786,7 @@ function createTransferItemElement(item) {
     const el = document.createElement('div');
     el.className = `transfer-item ${item.status || 'active'} ${activeIndeterminate ? 'indeterminate' : ''}`;
     el.dataset.transferId = item.id;
-    el.innerHTML = `<div class="transfer-item-row"><span class="transfer-icon ${iconClass}" aria-hidden="true"></span><span class="transfer-name" title="${escapeHtml(item.path || item.name || '')}">${escapeHtml(item.name || String(item.path || '').split('/').pop() || '文件')}</span><span class="transfer-status">${transferStatusText(item)}</span></div><div class="transfer-progress"><span class="transfer-progress-bar" style="width:${activeIndeterminate ? '38' : pct}%"></span></div><div class="transfer-meta"><span class="transfer-meta-text">${metaText(item)}</span><span class="transfer-actions">${actionButtons(item)}</span></div></div>`;
+    el.innerHTML = `<div class="transfer-item-row"><span class="transfer-icon ${iconClass}" aria-hidden="true"></span><span class="transfer-name" title="${escapeHtml(item.path || item.name || '')}">${escapeHtml(item.name || String(item.path || '').split('/').pop() || '文件')}</span><span class="transfer-status">${transferStatusText(item)}</span><span class="transfer-actions">${actionButtons(item)}</span></div><div class="transfer-progress"><span class="transfer-progress-bar" style="width:${activeIndeterminate ? '38' : pct}%"></span></div><div class="transfer-meta"><span class="transfer-meta-text">${metaText(item)}</span></div></div>`;
     return el;
 }
 
@@ -1823,6 +1823,7 @@ function updateTransferItemElement(el, item) {
 
 function transferStatusText(item) {
     if (item.status === 'done') return '已完成';
+    if (item.status === 'done') return '已完成';
     if (item.status === 'error') return '失败';
     if (item.status === 'paused') return '已暂停';
     if (item.status === 'pending') return '等待中';
@@ -1839,13 +1840,9 @@ function metaText(item) {
 }
 
 function actionButtons(item) {
-    if (item.status === 'active' || item.status === 'pending') {
-        return `<button type="button" class="transfer-action" data-transfer-action="pause" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">暂停</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`;
-    }
-    if (item.status === 'paused') {
-        return `<button type="button" class="transfer-action" data-transfer-action="resume" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">继续</button><button type="button" class="transfer-action danger" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}">取消</button>`;
-    }
-    return '';
+    // 所有非完成/失败的状态都显示取消 ❌
+    if (item.status === 'done' || item.status === 'error') return '';
+    return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id)}" data-transfer-direction="${item.direction}" title="取消" aria-label="取消"></button>`;
 }
 
 // Throttled transfer render: at most once per 300ms to avoid re-rendering on every chunk
@@ -2059,15 +2056,10 @@ function handleTransferActionClick(e) {
     e.stopPropagation();
     const id = btn.dataset.transferId;
     const direction = btn.dataset.transferDirection;
-    const action = btn.dataset.transferAction;
     if (direction === 'upload') {
-        if (action === 'pause') pauseUploadTransfer(id);
-        else if (action === 'resume') resumeUploadTransfer(id);
-        else if (action === 'cancel') cancelUploadTransfer(id);
+        cancelUploadTransfer(id);
     } else if (direction === 'download') {
-        if (action === 'pause') pauseDownloadTransfer(id);
-        else if (action === 'resume') resumeDownloadTransfer(id);
-        else if (action === 'cancel') cancelDownloadTransfer(id);
+        cancelDownloadTransfer(id);
     }
 }
 
