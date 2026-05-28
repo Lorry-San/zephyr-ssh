@@ -1668,8 +1668,8 @@ function updateTransferMetrics(item, loaded) {
 }
 
 function getTransferItems() {
-    const uploads = Array.from(activeSftpUploads.values()).map((item) => ({ ...item, direction: 'upload' }));
-    const downloads = Array.from(activeSftpDownloads.values()).map((item) => ({ ...item, direction: 'download' }));
+    const uploads = Array.from(activeSftpUploads.entries()).map(([id, item]) => ({ ...item, id: item.id || id, direction: 'upload' }));
+    const downloads = Array.from(activeSftpDownloads.entries()).map(([id, item]) => ({ ...item, id: item.id || item.downloadId || id, direction: 'download' }));
     return [...uploads, ...downloads].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
@@ -1854,7 +1854,9 @@ function bindCancelBtn(containerEl, id, direction) {
     const btn = containerEl.querySelector('.transfer-cancel-btn');
     if (!btn) return;
     btn.onclick = function(e) {
+        e.preventDefault();
         e.stopPropagation();
+        if (!id) return;
         if (direction === 'upload') cancelUploadTransfer(id);
         else cancelDownloadTransfer(id);
     };
@@ -1918,10 +1920,24 @@ async function startChunkedDownload(download) {
 
     if (!activeSftpDownloads.has(id)) {
         activeSftpDownloads.set(id, {
+            id, downloadId: id,
             path: download.path, name: fileName, size: totalSize, loaded: 0,
             status: 'active', url: download.url,
             progressUrl: download.progressUrl || '', controlUrl: download.controlUrl || '',
             speed: 0, updatedAt: Date.now(), _offset: 0,
+        });
+    } else {
+        const entry = activeSftpDownloads.get(id);
+        Object.assign(entry, {
+            id, downloadId: id,
+            path: download.path || entry.path,
+            name: fileName,
+            size: totalSize || entry.size || 0,
+            status: 'active',
+            url: download.url || entry.url,
+            progressUrl: download.progressUrl || entry.progressUrl || '',
+            controlUrl: download.controlUrl || entry.controlUrl || '',
+            updatedAt: Date.now(),
         });
     }
 
@@ -2010,6 +2026,7 @@ function cancelUploadTransfer(id) {
     upload.controller?.abort?.();
     markUploadProgress(id, { status: 'error' });
     sendJsonMessage({ type: 'sftp-upload-cancel', uploadId: id });
+    showToast('已取消上传', 'info');
     window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, 1200);
 }
 
@@ -2040,8 +2057,9 @@ function cancelDownloadTransfer(id) {
     if (!download) return;
     download.cancelled = true;
     download.status = 'error';
-    sendDownloadControl(download, 'cancel');
     markDownloadProgress(id, { status: 'error' });
+    sendDownloadControl(download, 'cancel');
+    showToast('已取消下载', 'info');
     window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
 }
 
@@ -3791,7 +3809,22 @@ function handleSFTPMessage(msg) {
                 break;
             }
             const downloadId = msg.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const download = { downloadId, path: msg.path, name: (msg.path || 'download').split('/').pop() || 'download', size: Number(msg.size) || 0, url: msg.url, progressUrl: msg.progressUrl || '', controlUrl: msg.controlUrl || '' };
+            const existing = activeSftpDownloads.get(downloadId) || {};
+            const download = {
+                ...existing,
+                id: downloadId,
+                downloadId,
+                path: msg.path,
+                name: (msg.path || 'download').split('/').pop() || 'download',
+                size: Number(msg.size) || 0,
+                loaded: Number(existing.loaded) || 0,
+                status: 'active',
+                url: msg.url,
+                progressUrl: msg.progressUrl || '',
+                controlUrl: msg.controlUrl || '',
+                updatedAt: Date.now(),
+                speed: Number(existing.speed) || 0,
+            };
             activeSftpDownloads.set(downloadId, download);
             showTransferPopover({ autoHide: true });
             showToast('已开始下载，进度可在传输面板查看', 'success');

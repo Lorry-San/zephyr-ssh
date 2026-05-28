@@ -2240,7 +2240,18 @@ app.post('/api/sftp/download-control/:token', requireAuth, (req, res) => {
     }
     if (action === 'cancel') {
         download.status = 'error';
+        // fileHandle 不是 stream，destroy() 对它无效；必须直接销毁 HTTP response，
+        // 并关闭底层 SFTP/SSH 连接，才能真正终止浏览器原生下载任务。
+        try { download.activeResponse?.destroy?.(new Error('download cancelled')); } catch {}
         try { download.activeStream?.destroy?.(); } catch {}
+        try { if (download.activeSftp && download.activeFileHandle) download.activeSftp.close(download.activeFileHandle, () => {}); } catch {}
+        try { download.activeSftp?.end?.(); } catch {}
+        try { [...(download.activeRouted?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} }); } catch {}
+        download.activeResponse = null;
+        download.activeStream = null;
+        download.activeFileHandle = null;
+        download.activeSftp = null;
+        download.activeRouted = null;
         sftpDownloadTokens.delete(token);
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size: Number(download.size) || 0, status: 'error' });
         return res.json({ ok: true, status: 'cancelled' });
@@ -2338,6 +2349,10 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         download.loaded = size || download.loaded;
         download.status = 'done';
         download.activeStream = null;
+        download.activeFileHandle = null;
+        download.activeResponse = null;
+        download.activeSftp = null;
+        download.activeRouted = null;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: download.loaded, size, status: 'done' });
         stopKeepalive();
         closeDownloadConnection();
@@ -2350,6 +2365,10 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         settled = true;
         download.status = 'error';
         download.activeStream = null;
+        download.activeFileHandle = null;
+        download.activeResponse = null;
+        download.activeSftp = null;
+        download.activeRouted = null;
         sendTransferEvent(download.username, { transferId: download.downloadId || token, direction: 'download', path: download.path, loaded: Number(download.loaded) || 0, size, status: 'error' });
         stopKeepalive();
         closeDownloadConnection();
@@ -2373,6 +2392,10 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     }
 
     download.activeStream = fileHandle;
+    download.activeFileHandle = fileHandle;
+    download.activeResponse = res;
+    download.activeSftp = sftp;
+    download.activeRouted = routed;
     download.status = 'active';
     download.loaded = start;
 
@@ -2467,6 +2490,10 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
         stopKeepalive();
         try { if (fileHandle) sftp.close(fileHandle, () => {}); } catch {}
         if (download.activeStream === fileHandle) download.activeStream = null;
+        if (download.activeFileHandle === fileHandle) download.activeFileHandle = null;
+        if (download.activeResponse === res) download.activeResponse = null;
+        if (download.activeSftp === sftp) download.activeSftp = null;
+        if (download.activeRouted === routed) download.activeRouted = null;
         closeDownloadConnection();
         if (!settled) download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
     });
