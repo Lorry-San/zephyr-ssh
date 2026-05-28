@@ -2414,6 +2414,8 @@ function svgIcon(name) {
         download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
         info: '<rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M8 9h6"></path><circle cx="8" cy="15" r="1.2"></circle><circle cx="12" cy="12" r="1.2"></circle><circle cx="16" cy="9" r="1.2"></circle>',
         refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M3 12A9 9 0 0 1 18.5 5.8"></path><path d="M18 2v4h4"></path><path d="M6 22v-4H2"></path>',
+        newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 11v6"></path><path d="M9 14h6"></path>',
+        newFile: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M12 11v6"></path><path d="M9 14h6"></path>',
         folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>',
         file: '<path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v5h5"></path>',
         open: '<path d="M14 3h7v7"></path><path d="M10 14L21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path>',
@@ -2465,8 +2467,8 @@ function showFileContextMenu(x, y, onItem) {
         html += menuButton('properties', '属性', 'info', shortcutLabel('properties'));
     } else {
         html += menuButton('refresh', '刷新', 'refresh', shortcutLabel('refresh'));
-        html += menuButton('newFolder', '新建文件夹', 'folder');
-        html += menuButton('newFile', '新建文件', 'file');
+        html += menuButton('newFolder', '新建文件夹', 'newFolder');
+        html += menuButton('newFile', '新建文件', 'newFile');
         html += menuButton('paste', '粘贴', 'paste', shortcutLabel('paste'));
     }
     fileContextMenu.innerHTML = html;
