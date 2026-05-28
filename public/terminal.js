@@ -1708,6 +1708,11 @@ function renderTransferPopover() {
     const body = transferPopover.querySelector('.transfer-popover-body');
     if (!body) return;
 
+    // 有任务时必须移除上一次留下的空状态，否则新任务会被 append 到空状态后面，形成顶部空行
+    if (items.length) {
+        body.querySelector('.transfer-empty')?.remove();
+    }
+
     // Track rendered items by data-transfer-id — update existing, create new
     const existingIds = new Set();
     body.querySelectorAll('[data-transfer-id]').forEach((el) => {
@@ -1730,8 +1735,10 @@ function renderTransferPopover() {
     }
 
     // Empty state (only when truly empty)
-    if (!items.length && !body.querySelector('[data-transfer-id]')) {
-        body.innerHTML = '<div class="transfer-empty">暂无上传或下载任务</div>';
+    if (!items.length) {
+        if (!body.querySelector('.transfer-empty')) {
+            body.innerHTML = '<div class="transfer-empty">暂无上传或下载任务</div>';
+        }
     }
 }
 
