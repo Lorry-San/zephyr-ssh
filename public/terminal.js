@@ -4381,7 +4381,7 @@ function ensureMediaPreviewModule() {
             window.__zephyrMediaPreviewLoading = null;
             resolve(false);
         }, { once: true });
-        script.src = `preview/media/media-preview.js?v=${Date.now()}`;
+        script.src = `preview/media/media-preview.js?v=20260529-media-fix-${Date.now()}`;
         document.body.appendChild(script);
     });
     return window.__zephyrMediaPreviewLoading;
@@ -7062,14 +7062,14 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     return;
                 }
                 if (msg.type?.startsWith('sftp-')) {
-                    const imagePanel = msg.path
-                        ? (imagePreviewPanelsByPath.get(msg.path) || Array.from(imagePreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
-                        : activeImagePreview;
-                    if (imagePanel?.handleMessage?.(msg)) return;
                     const mediaPanel = msg.path
                         ? (mediaPreviewPanelsByPath.get(msg.path) || Array.from(mediaPreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
                         : activeMediaPreview;
                     if (mediaPanel?.handleMessage?.(msg)) return;
+                    const imagePanel = msg.path
+                        ? (imagePreviewPanelsByPath.get(msg.path) || Array.from(imagePreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
+                        : activeImagePreview;
+                    if (imagePanel?.handleMessage?.(msg)) return;
                     handleSFTPMessage(msg);
                     return;
                 }

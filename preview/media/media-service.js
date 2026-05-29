@@ -19,8 +19,6 @@ const DIRECT_MIME = new Map([
     ['ogg', 'audio/ogg'], ['oga', 'audio/ogg'], ['opus', 'audio/ogg'], ['weba', 'audio/webm']
 ]);
 const MP4_CONTAINERS = new Set(['mp4', 'mov', 'm4v', '3gp', '3g2']);
-const BROWSER_VIDEO_CODECS = new Set(['h264', 'avc1', 'vp8', 'vp9', 'av1']);
-const BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le', 'pcm_s24le']);
 
 function extname(filePath = '') {
     const base = String(filePath || '').split(/[\\/]/).pop() || '';
@@ -122,14 +120,16 @@ function decidePlayMode(info, ext, capabilities = {}) {
     const isVideo = !!info?.video || isVideoExt(ext);
     const videoCodec = normalizeCodec(info?.video?.codec || '');
     const audioCodec = normalizeCodec(info?.audio?.codec || '');
+    const videoKey = videoCodec === 'h264' ? 'h264' : videoCodec;
+    const audioKey = audioCodec === 'aac' ? 'aac' : audioCodec;
     const container = String(info?.container || ext || '').toLowerCase();
     const browserVideo = capabilities?.video || {};
     const browserAudio = capabilities?.audio || {};
-    const videoSupported = !isVideo || browserVideo[videoCodec] === true || BROWSER_VIDEO_CODECS.has(videoCodec);
-    const audioSupported = !audioCodec || browserAudio[audioCodec] === true || BROWSER_AUDIO_CODECS.has(audioCodec);
+    const videoSupported = !isVideo || browserVideo[videoKey] === true;
+    const audioSupported = !audioCodec || browserAudio[audioKey] === true;
     const mp4Like = MP4_CONTAINERS.has(ext) || MP4_CONTAINERS.has(container);
     if (!isVideo && DIRECT_AUDIO_EXTENSIONS.has(ext) && audioSupported) return 'DIRECT';
-    if (isVideo && mp4Like && videoCodec === 'h264' && (!audioCodec || audioCodec === 'aac')) return 'DIRECT';
+    if (isVideo && mp4Like && videoCodec === 'h264' && (!audioCodec || audioCodec === 'aac') && videoSupported && audioSupported) return 'DIRECT';
     if (isVideo && DIRECT_VIDEO_EXTENSIONS.has(ext) && videoSupported && audioSupported) return 'DIRECT';
     if (isVideo && videoSupported && !audioSupported) return 'AUDIO_TRANSCODE';
     if (isVideo && videoSupported) return 'REMUX';

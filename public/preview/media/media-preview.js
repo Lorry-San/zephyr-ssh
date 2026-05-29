@@ -45,6 +45,7 @@
             this.manualSubtitles = [];
             this.remoteSubtitles = [];
             this.currentToken = '';
+            this.modal = this.createModal();
             this.modal._mediaPreviewInstance = this;
             (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
         }
@@ -224,26 +225,33 @@
         getCapabilities(filePath) {
             const video = document.createElement('video');
             const audio = document.createElement('audio');
+            const canPlay = (el, mime) => {
+                const result = String(el.canPlayType(mime) || '').toLowerCase();
+                return result === 'probably' || result === 'maybe';
+            };
             return {
                 ext: extname(filePath),
                 video: {
-                    h264: !!video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
-                    hevc: !!video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'),
-                    vp9: !!video.canPlayType('video/webm; codecs="vp9"'),
-                    av1: !!video.canPlayType('video/mp4; codecs="av01.0.05M.08"'),
+                    h264: canPlay(video, 'video/mp4; codecs="avc1.42E01E"'),
+                    hevc: canPlay(video, 'video/mp4; codecs="hvc1.1.6.L93.B0"'),
+                    vp8: canPlay(video, 'video/webm; codecs="vp8"'),
+                    vp9: canPlay(video, 'video/webm; codecs="vp9"'),
+                    av1: canPlay(video, 'video/mp4; codecs="av01.0.05M.08"'),
                 },
                 audio: {
-                    aac: !!audio.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
-                    mp3: !!audio.canPlayType('audio/mpeg'),
-                    opus: !!audio.canPlayType('audio/ogg; codecs="opus"'),
-                    vorbis: !!audio.canPlayType('audio/ogg; codecs="vorbis"'),
-                    flac: !!audio.canPlayType('audio/flac'),
+                    aac: canPlay(audio, 'audio/mp4; codecs="mp4a.40.2"'),
+                    mp3: canPlay(audio, 'audio/mpeg'),
+                    opus: canPlay(audio, 'audio/ogg; codecs="opus"') || canPlay(audio, 'audio/webm; codecs="opus"'),
+                    vorbis: canPlay(audio, 'audio/ogg; codecs="vorbis"'),
+                    flac: canPlay(audio, 'audio/flac'),
+                    pcm_s16le: canPlay(audio, 'audio/wav; codecs="1"') || canPlay(audio, 'audio/wav'),
+                    pcm_s24le: canPlay(audio, 'audio/wav'),
                 },
             };
         }
         handleMessage(message) {
-            if (message?.type === 'sftp-media-preview-ready') { this.renderPlayer(message); return true; }
-            if (message?.type === 'sftp-media-preview') {
+            if (message?.type === 'sftp-media-preview-ready' && (!message.path || message.path === this.currentPath || this.pending.has(message.path))) { this.renderPlayer(message); return true; }
+            if (message?.type === 'sftp-media-preview' && (!message.path || message.path === this.currentPath || this.pending.has(message.path))) {
                 this.pending.delete(message.path);
                 if (message.error) this.setState(message.error, 'error');
                 return true;
@@ -323,10 +331,11 @@
             stage.innerHTML = '';
             const media = document.createElement(message.kind === 'audio' ? 'audio' : 'video');
             media.controls = true;
-            media.autoplay = true;
+            media.autoplay = false;
             media.playsInline = true;
             media.preload = 'metadata';
             media.src = message.streamUrl;
+            media.load?.();
             media.addEventListener('error', () => {
                 const err = media.error;
                 this.notify(`媒体播放失败${err?.message ? `：${err.message}` : ''}，可点刷新尝试转码`, 'error');
@@ -348,7 +357,6 @@
                 ].filter(Boolean);
                 meta.innerHTML = parts.join('');
             }
-            media.play?.().catch(() => {});
         }
         revokeTrackObjects() { this.objectTracks.splice(0).forEach((url) => URL.revokeObjectURL(url)); }
         close() {

@@ -2547,15 +2547,17 @@ function closeMediaRouted(routed, sftp) {
 }
 
 function mediaRangeFromRequest(req, size) {
+    const total = Number(size) || 0;
     const raw = String(req.headers.range || '');
-    if (!raw || !/^bytes=/.test(raw)) return { start: 0, end: Math.max(0, size - 1), partial: false };
+    if (!total) return { start: 0, end: 0, partial: false, empty: true };
+    if (!raw || !/^bytes=/.test(raw)) return { start: 0, end: total - 1, partial: false };
     const match = raw.match(/bytes=(\d*)-(\d*)/);
     if (!match) return null;
     let start = match[1] === '' ? 0 : Number(match[1]);
-    let end = match[2] === '' ? size - 1 : Number(match[2]);
-    if (match[1] === '' && Number.isFinite(end)) start = Math.max(0, size - end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= size) return null;
-    end = Math.min(end, size - 1);
+    let end = match[2] === '' ? total - 1 : Number(match[2]);
+    if (match[1] === '' && Number.isFinite(end)) start = Math.max(0, total - end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= total) return null;
+    end = Math.min(end, total - 1);
     return { start, end, partial: true };
 }
 
@@ -2590,7 +2592,7 @@ app.get('/api/sftp/media/stream/:token', requireAuth, async (req, res) => {
                 res.setHeader('Content-Length', String(range.end - range.start + 1));
                 if (range.partial) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${size}`);
             }
-            const readStream = sftp.createReadStream(mediaTask.path, size ? { start: range.start, end: range.end } : undefined);
+            const readStream = sftp.createReadStream(mediaTask.path, range.empty ? undefined : { start: range.start, end: range.end });
             readStream.on('error', (err) => {
                 closeMediaRouted(routed, sftp);
                 if (!res.headersSent) res.status(500).end(err.message || '媒体读取失败');
