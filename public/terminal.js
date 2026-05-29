@@ -2459,10 +2459,10 @@ function updateFileSelectionUI() {
     });
 }
 function openFileItem(filePath, fileType) {
-    if (fileType === 'd') navigateTo(filePath);
-    else if (window.ZephyrImagePreview?.isImage?.(filePath)) openImagePreview(filePath);
-    else if (isSftpMediaFile(filePath)) openMediaPreview(filePath);
-    else openEditor(filePath);
+    if (fileType === 'd') { navigateTo(filePath); return; }
+    if (window.ZephyrImagePreview?.isImage?.(filePath)) { openImagePreview(filePath); return; }
+    if (isSftpMediaFile(filePath)) { openMediaPreview(filePath); return; }
+    openEditor(filePath);
 }
 function isTouchLikeDevice() {
     return window.matchMedia?.('(pointer: coarse)')?.matches || navigator.maxTouchPoints > 0;
@@ -2496,6 +2496,11 @@ fmList.addEventListener('click', (e) => {
     const filePath = item.dataset.filePath;
     const fileType = item.dataset.fileType;
     if (!filePath) return;
+    if (fileType !== 'd' && isSftpMediaFile(filePath)) {
+        e.preventDefault();
+        openMediaPreview(filePath);
+        return;
+    }
     const now = Date.now();
     if (lastFileClick.path === filePath && now - lastFileClick.time < 360) {
         lastFileClick = { path: '', time: 0 };
@@ -2920,6 +2925,14 @@ function renderFileList(files) {
             e.stopPropagation();
             openFileItem(itemPath, file.type);
         });
+        if (file.type !== 'd' && isSftpMediaFile(itemPath)) {
+            item.addEventListener('dblclick', (e) => {
+                if (e.target.closest('.fm-item-actions')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                openMediaPreview(itemPath);
+            });
+        }
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
@@ -4359,12 +4372,34 @@ function openImagePreview(filePath) {
     preview.open(filePath);
 }
 
-function openMediaPreview(filePath) {
+function ensureMediaPreviewModule() {
+    if (window.ZephyrMediaPreview) return Promise.resolve(true);
+    if (window.__zephyrMediaPreviewLoading) return window.__zephyrMediaPreviewLoading;
+    window.__zephyrMediaPreviewLoading = new Promise((resolve) => {
+        const existing = document.querySelector('script[src*="preview/media/media-preview.js"]');
+        const script = existing || document.createElement('script');
+        const done = () => resolve(!!window.ZephyrMediaPreview);
+        script.addEventListener('load', done, { once: true });
+        script.addEventListener('error', () => resolve(false), { once: true });
+        if (!existing) {
+            script.src = `preview/media/media-preview.js?v=${Date.now()}`;
+            document.body.appendChild(script);
+        } else {
+            window.setTimeout(done, 0);
+        }
+    });
+    return window.__zephyrMediaPreviewLoading;
+}
+
+async function openMediaPreview(filePath) {
     if (!window.ZephyrMediaPreview) {
-        const script = document.querySelector('script[src*="preview/media/media-preview.js"]');
-        showToast(`媒体预览模块未加载${script ? '，请强制刷新页面后重试' : '，当前页面缺少 media-preview.js'}`, 'error');
-        console.error('[SFTP-MEDIA]', 'ZephyrMediaPreview missing', { filePath, scriptPresent: !!script });
-        return;
+        const loaded = await ensureMediaPreviewModule();
+        if (!loaded || !window.ZephyrMediaPreview) {
+            const script = document.querySelector('script[src*="preview/media/media-preview.js"]');
+            showToast(`媒体预览模块未加载${script ? '，请强制刷新页面后重试' : '，当前页面缺少 media-preview.js'}`, 'error');
+            console.error('[SFTP-MEDIA]', 'ZephyrMediaPreview missing', { filePath, scriptPresent: !!script });
+            return;
+        }
     }
     const existingEntry = Array.from(mediaPreviewPanelsByPath.entries()).find(([path, instance]) => path === filePath || instance.currentPath === filePath);
     let preview = existingEntry?.[1];
@@ -4375,8 +4410,10 @@ function openMediaPreview(filePath) {
             send: (payload) => {
                 if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
                     showToast('SSH 尚未连接，无法预览媒体', 'error');
+                    console.error('[SFTP-MEDIA]', 'websocket not open', { path: payload?.path, readyState: wsConnection?.readyState });
                     return;
                 }
+                console.info('[SFTP-MEDIA]', 'send preview request', payload);
                 wsConnection.send(JSON.stringify(payload));
             },
             notify: showToast,

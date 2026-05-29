@@ -4469,6 +4469,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         if (msg.type === 'sftp-media-preview') {
             const targetPath = String(msg.path || '').trim();
             const ext = getMediaExt(targetPath);
+            console.info('[sftp-media-preview]', 'request', { path: targetPath, ext });
             if (!targetPath) {
                 sendJSON({ type: 'sftp-media-preview', path: targetPath, error: '缺少媒体路径' });
                 return;
@@ -4543,6 +4544,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                         subtitles,
                         expiresAt: Date.now() + MEDIA_TOKEN_TTL,
                     });
+                    console.info('[sftp-media-preview]', 'ready', { path: targetPath, mode, subtitles: subtitles.length, size });
                     sendJSON({
                         type: 'sftp-media-preview-ready',
                         path: targetPath,
