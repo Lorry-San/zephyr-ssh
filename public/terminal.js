@@ -354,6 +354,9 @@ let terminalFitSnapshot = null;
 let terminalStableResizeTimer = 0;
 let terminalViewportFreezeUntil = 0;
 let terminalKeyboardSettlingTimer = 0;
+let terminalVisualHistory = [];
+let terminalLastNonEmptyText = '';
+let terminalLastNonEmptyTextAt = 0;
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
 const TERMINAL_OVERSIZED_ROWS_RATIO = 1.18;
 let terminalAutoFollowEnabled = true;
@@ -907,7 +910,7 @@ function getStableTerminalSurfaceRect() {
 
 function repairWTermLayoutAfterVisibilityChange(reason = 'layout-repair', { sendResize = true, follow = null } = {}) {
     if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return false;
-    if (shouldSuppressTerminalGridResize(reason)) {
+    if (isTouchKeyboardDevice() && isMobileKeyboardActiveOrSettling() && !String(reason).includes(':settled-fit')) {
         stabilizeWTermAfterViewportOnlyChange(`repair-suppressed:${reason}`);
         return false;
     }
@@ -943,7 +946,8 @@ function repairWTermLayoutAfterVisibilityChange(reason = 'layout-repair', { send
 
 function repairOversizedWTermRows(reason = 'oversized-rows-repair', { force = false } = {}) {
     if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return false;
-    if (shouldSuppressTerminalGridResize(reason)) return false;
+    const forceStableFit = String(reason).includes(':settled-fit');
+    if (!forceStableFit && shouldSuppressTerminalGridResize(reason)) return false;
     normalizeWTermContainerLayout(`${reason}:normalize`);
     const measured = getMeasuredTerminalSize();
     const currentRows = Number(term.rows ?? term._rows ?? term.options?.rows ?? 0);
@@ -1002,6 +1006,7 @@ function resizeWTermSafely(cols, rows, reason = 'safe-resize') {
         }
         try { term.refresh?.(); } catch (_) {}
         rememberTerminalFitSnapshot(`${reason}:resizeWTermSafely`);
+        scheduleWTermTextIntegrityCheck(`${reason}:resizeWTermSafely`);
         normalizeWTermContainerLayout(`${reason}:resizeWTermSafely`);
         logTerminalLayoutDiagnostics('wterm-layout:safe-resized', {
             reason,
@@ -1292,9 +1297,138 @@ function scheduleStableTerminalGridResize(reason = 'stable-terminal-grid-resize'
             requestInitialMobileRenderFlush(`${reason}:same-fit`);
             return;
         }
+        // 根因规避：@wterm/core 当前 resize 会把被裁掉的底部行按错误顺序写入 scrollback。
+        // xterm 的 FitAddon 只在稳定容器上调用 resize，但不会牺牲历史可视文本；这里在移动端键盘/按钮扰动后的稳定 fit 阶段，
+        // 如果真实行数会变小，仅同步外层尺寸与后端 PTY，保持 WTerm buffer rows 不变，避免 ping 等输出少一行或乱序。
+        const currentRows = Number(term?.bridge?.getRows?.() || term?.rows || 0);
+        if (forceStableFit && measured.rows < currentRows) {
+            sendTerminalResize(measured.cols, measured.rows, { reason: `${reason}:pty-only`, force: true });
+            rememberTerminalFitSnapshot(`${reason}:pty-only-remember`);
+            requestInitialMobileRenderFlush(`${reason}:pty-only-render`);
+            return;
+        }
         repairWTermLayoutAfterVisibilityChange(`${reason}:fit`, { sendResize: true, follow: terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) });
         rememberTerminalFitSnapshot(`${reason}:remember`);
+        scheduleWTermTextIntegrityCheck(`${reason}:after-fit`);
     }, delay);
+}
+
+function collectWTermBufferLines() {
+    if (!term?.bridge) return [];
+    const bridge = term.bridge;
+    const cols = Math.max(1, Number(bridge.getCols?.() || term.cols || 0));
+    const rows = Math.max(0, Number(bridge.getRows?.() || term.rows || 0));
+    const readCellLine = (getter) => {
+        let text = '';
+        for (let col = 0; col < cols; col += 1) {
+            const cp = getter(col)?.char || 0;
+            text += cp >= 32 ? String.fromCodePoint(cp) : ' ';
+        }
+        return cleanTerminalRowText(text);
+    };
+    const lines = [];
+    try {
+        const scrollbackCount = Math.max(0, Number(bridge.getScrollbackCount?.() || 0));
+        for (let offset = scrollbackCount - 1; offset >= 0; offset -= 1) {
+            lines.push(readCellLine((col) => bridge.getScrollbackCell(offset, col)));
+        }
+        for (let row = 0; row < rows; row += 1) {
+            lines.push(readCellLine((col) => bridge.getCell(row, col)));
+        }
+    } catch (_) {
+        return [];
+    }
+    return lines;
+}
+
+function snapshotWTermVisualLines(reason = 'snapshot-visual-lines') {
+    if (!term || !wtermWrapper) return null;
+    const bufferLines = collectWTermBufferLines();
+    const domRows = Array.from(wtermWrapper.querySelectorAll('.term-row, .term-scrollback-row'));
+    const domLines = domRows.map((row) => cleanTerminalRowText(row.textContent || ''));
+    const bufferText = bufferLines.join('\n').replace(/[\s\n]+$/g, '');
+    const domText = domLines.join('\n').replace(/[\s\n]+$/g, '');
+    const lines = bufferText.trim().length >= domText.trim().length ? bufferLines : domLines;
+    const nonEmptyCount = lines.filter((line) => line.trim()).length;
+    const text = lines.join('\n').replace(/[\s\n]+$/g, '');
+    if (!text.trim() || nonEmptyCount < 2) return null;
+    const snapshot = {
+        reason,
+        lines,
+        text,
+        lineCount: nonEmptyCount,
+        seqCount: (text.match(/icmp_seq=/g) || []).length,
+        at: performance.now(),
+    };
+    terminalVisualHistory.push(snapshot);
+    if (terminalVisualHistory.length > 12) terminalVisualHistory.shift();
+    terminalLastNonEmptyText = text;
+    terminalLastNonEmptyTextAt = snapshot.at;
+    return snapshot;
+}
+
+function hasTerminalTextRegression(previous = '', next = '') {
+    const prev = String(previous || '').trim();
+    const cur = String(next || '').trim();
+    if (!prev || !cur) return false;
+    const prevSeq = (prev.match(/icmp_seq=/g) || []).length;
+    const curSeq = (cur.match(/icmp_seq=/g) || []).length;
+    if (prevSeq >= 2 && curSeq < prevSeq) return true;
+    const prevLinesArray = prev.split('\n').filter((line) => line.trim());
+    const curLinesArray = cur.split('\n').filter((line) => line.trim());
+    const orderMap = new Map();
+    prevLinesArray.forEach((line, index) => { if (!orderMap.has(line)) orderMap.set(line, index); });
+    let last = -1;
+    let inversions = 0;
+    curLinesArray.forEach((line) => {
+        if (!orderMap.has(line)) return;
+        const index = orderMap.get(line);
+        if (index < last) inversions += 1;
+        last = Math.max(last, index);
+    });
+    if (inversions > 0 && curLinesArray.length >= Math.min(prevLinesArray.length, 4)) return true;
+    if (cur.length >= prev.length || cur === prev) return false;
+    const prevLines = prevLinesArray.length;
+    const curLines = curLinesArray.length;
+    return prevLines >= 4 && curLines + 1 < prevLines && prev.includes(curLinesArray[0] || cur);
+}
+
+function restoreWTermVisualSnapshot(snapshot, reason = 'restore-visual-snapshot') {
+    if (!snapshot?.lines?.length || !term || !term.bridge) return false;
+    const cols = Math.max(20, Number(term.bridge.getCols?.() || term.cols || lastSentTerminalSize.cols || 80));
+    const rows = Math.max(2, Number(term.bridge.getRows?.() || term.rows || lastSentTerminalSize.rows || 24));
+    const normalized = snapshot.lines.map((line) => String(line || '').slice(0, cols)).join('\r\n');
+    runWithSuppressedWTermResizeEvent(() => {
+        term.bridge.init(cols, rows);
+        if (normalized) term.bridge.writeString(normalized);
+        term.cols = cols;
+        term.rows = rows;
+        term.renderer?.setup?.(cols, rows);
+        term._scheduleRender?.();
+    });
+    requestAnimationFrame(() => requestTerminalAutoFollow(`${reason}:follow`));
+    logTerminalLayoutDiagnostics('wterm-layout:visual-snapshot-restored', { reason, rows, cols, lineCount: snapshot.lines.length, seqCount: snapshot.seqCount });
+    return true;
+}
+
+function detectAndRepairWTermTextRegression(reason = 'text-regression-check') {
+    if (!term || !wtermWrapper || document.visibilityState !== 'visible') return false;
+    const current = snapshotWTermVisualLines(`${reason}:current`);
+    const candidates = current
+        ? terminalVisualHistory.slice(0, -1)
+        : terminalVisualHistory.slice();
+    const previous = candidates.reverse().find((item) => item?.text && item.text !== current?.text);
+    if (!previous || !current) return false;
+    if (!hasTerminalTextRegression(previous.text, current.text)) return false;
+    const restored = restoreWTermVisualSnapshot(previous, reason);
+    if (restored) terminalVisualHistory = [previous];
+    return restored;
+}
+
+function scheduleWTermTextIntegrityCheck(reason = 'text-integrity-check') {
+    [0, 80, 220].forEach((delay) => {
+        window.setTimeout(() => detectAndRepairWTermTextRegression(`${reason}:phase-${delay}`), delay);
+    });
 }
 
 function runWithSuppressedWTermResizeEvent(callback) {
@@ -1321,6 +1455,7 @@ function updateWTermLocalGridSize(cols, rows, reason = 'local-grid-size') {
         term.renderer.setup(nextCols, nextRows);
         term._scheduleRender?.();
     });
+    scheduleWTermTextIntegrityCheck(`${reason}:local-grid-resize`);
     normalizeWTermContainerLayout(`${reason}:local-grid`);
     logTerminalLayoutDiagnostics('wterm-layout:local-grid-resized', { reason, cols: nextCols, rows: nextRows, previousCols: currentCols, previousRows: currentRows });
     return true;
@@ -6239,6 +6374,7 @@ function patchWTermScrollBehavior() {
             const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
             term._zephyrShouldFollowAfterRender = shouldFollow;
             const result = originalWrite(data);
+            requestAnimationFrame(() => snapshotWTermVisualLines('write-after-render'));
             if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('write-follow'));
             else scheduleTerminalScrollbarUpdate();
             return result;
@@ -6254,9 +6390,11 @@ function patchWTermScrollBehavior() {
                 return updateWTermLocalGridSize(keepCols, keepRows, 'suppressed-wterm-resize');
             }
             const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            snapshotWTermVisualLines('before-wterm-resize');
             term._zephyrShouldFollowAfterRender = shouldFollow;
             const result = originalResize(cols, rows);
             rememberTerminalFitSnapshot('wterm-resize');
+            scheduleWTermTextIntegrityCheck('after-wterm-resize');
             if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('resize-follow'));
             else scheduleTerminalScrollbarUpdate();
             return result;
@@ -6275,6 +6413,7 @@ function patchWTermScrollBehavior() {
                 if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('render-follow'));
                 else scheduleTerminalScrollbarUpdate();
                 updateTerminalWebLinks();
+                snapshotWTermVisualLines('render-after');
             }
         };
     }
@@ -6286,6 +6425,7 @@ function patchWTermScrollBehavior() {
                 if (terminalAutoFollowEnabled) requestTerminalAutoFollow('scheduled-render-follow');
                 scheduleTerminalScrollbarUpdate();
                 updateTerminalWebLinks();
+                snapshotWTermVisualLines('scheduled-render-after');
             }));
         };
     }
