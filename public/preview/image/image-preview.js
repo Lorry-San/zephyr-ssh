@@ -377,7 +377,11 @@
             const current = images.findIndex((item) => item.path === this.currentPath);
             const index = current >= 0 ? current : 0;
             const next = images[(index + delta + images.length) % images.length];
-            if (next?.path) this.open(next.path);
+            if (next?.path) {
+                try { this.viewer?.hide?.(); } catch {}
+                this.destroyViewer();
+                this.open(next.path);
+            }
         }
 
         destroyViewer() {

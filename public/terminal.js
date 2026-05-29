@@ -2674,6 +2674,30 @@ function requestPasteConflictChoice() {
     });
 }
 
+function requestEditorCloseChoice() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'fm-conflict-overlay show';
+        const modal = document.createElement('div');
+        modal.className = 'fm-conflict-modal show';
+        modal.innerHTML = `
+            <div class="fm-conflict-head"><strong>文件有未保存修改</strong><button type="button" class="fm-conflict-close" data-editor-close-choice="cancel">×</button></div>
+            <div class="fm-conflict-body">
+                <button type="button" class="fm-conflict-choice primary" data-editor-close-choice="save"><b>保存并关闭</b><span>先保存当前内容，然后关闭编辑窗口</span></button>
+                <button type="button" class="fm-conflict-choice" data-editor-close-choice="discard"><b>放弃修改</b><span>不保存本次修改，直接关闭窗口</span></button>
+                <button type="button" class="fm-conflict-choice" data-editor-close-choice="cancel"><b>取消关闭</b><span>返回编辑器继续编辑</span></button>
+            </div>`;
+        const cleanup = (choice) => { overlay.remove(); modal.remove(); resolve(choice || 'cancel'); };
+        overlay.addEventListener('click', () => cleanup('cancel'));
+        modal.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-editor-close-choice]');
+            if (btn) cleanup(btn.dataset.editorCloseChoice || 'cancel');
+        });
+        document.body.appendChild(overlay);
+        document.body.appendChild(modal);
+    });
+}
+
 function rightsToMode(rights = '') {
     const text = String(rights || '');
     if (text.length < 10) return '';
@@ -2882,6 +2906,12 @@ function renderFileList(files) {
         const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : '📄');
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
+        nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
+        nameSpan.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openFileItem(itemPath, file.type);
+        });
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
@@ -3964,13 +3994,12 @@ function refreshCodeMirrorLayout() {
     window.requestAnimationFrame(() => getEditorInstance()?.view?.requestMeasure?.());
 }
 
-function closeEditor({ animated = true, force = false } = {}) {
+async function closeEditor({ animated = true, force = false } = {}) {
     const panel = fmEditorModal;
     if (!force && window.ZephyrCodeEditor?.dirty?.(panel?._codeEditor)) {
-        const choice = prompt('文件有未保存修改，请选择：\n1 保存并关闭\n2 放弃修改\n3 取消关闭', '1');
-        if (!choice || String(choice).trim().startsWith('3')) return;
-        if (String(choice).trim().startsWith('1')) { saveActiveEditor({ closeAfterSave: true, forceClose: true }); return; }
-        if (!String(choice).trim().startsWith('2')) return;
+        const choice = await requestEditorCloseChoice();
+        if (choice === 'save') { saveActiveEditor({ closeAfterSave: true, forceClose: true }); return; }
+        if (choice !== 'discard') return;
     }
     const closingPath = panel?.dataset.editorPath || editorFilePath;
     const closingId = panel?.dataset.editorId || '';
@@ -4303,7 +4332,10 @@ function openImagePreview(filePath) {
             allocateZIndex: allocateFloatingPanelZIndex,
             layoutMenu: { open: openPanelLayoutMenu, close: closePanelLayoutMenu },
             formatSize: formatTransferSize,
-            getImages: () => allFiles.filter((file) => file.type !== 'd' && window.ZephyrImagePreview?.isImage?.(file.name)).map((file) => ({ ...file, path: fullFilePath(file.name) })),
+            getImages: (currentImagePath = '') => {
+                const dir = String(currentImagePath || currentPath).replace(/\/[^/]*$/, '') || currentPath;
+                return allFiles.filter((file) => file.type !== 'd' && window.ZephyrImagePreview?.isImage?.(file.name)).map((file) => ({ ...file, path: (dir.replace(/\/+$/, '') || '/') + '/' + file.name }));
+            },
             onFocus: (instance) => { activeImagePreview = instance; },
             onClose: (instance) => {
                 if (activeImagePreview === instance) activeImagePreview = null;
@@ -6948,7 +6980,9 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     return;
                 }
                 if (msg.type?.startsWith('sftp-')) {
-                    const imagePanel = msg.path ? imagePreviewPanelsByPath.get(msg.path) : activeImagePreview;
+                    const imagePanel = msg.path
+                        ? (imagePreviewPanelsByPath.get(msg.path) || Array.from(imagePreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
+                        : activeImagePreview;
                     if (imagePanel?.handleMessage?.(msg)) return;
                     handleSFTPMessage(msg);
                     return;

@@ -2918,7 +2918,9 @@ html.keyboard-open .terminal-page {
 .info-modal.layout-animating,
 .docker-panel.layout-animating,
 .snippet-panel.layout-animating,
-.shortcut-panel.layout-animating {
+.shortcut-panel.layout-animating,
+.fm-editor-modal.editor-window.layout-animating,
+.image-preview-modal.layout-animating {
     transition:
         left .62s var(--ios-open),
         top .62s var(--ios-open),
@@ -6341,4 +6343,19 @@ body.smartbar-trash-hover .smartbar-trash-target {
     background: var(--accent);
     border-color: var(--accent);
     box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Editor close is handled by the file-manager-style layout menu; hide the extra top-right X. */
+.fm-editor-close-icon { display: none !important; }
+.fm-editor-modal.editor-window.layout-animating,
+.image-preview-modal.layout-animating {
+    transition:
+        left .62s var(--ios-open),
+        top .62s var(--ios-open),
+        width .62s var(--ios-open),
+        height .62s var(--ios-open),
+        border-radius .42s ease,
+        transform .72s var(--ios-bounce),
+        opacity 0.28s ease,
+        filter 0.32s ease;
 }
