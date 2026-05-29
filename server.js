@@ -4549,6 +4549,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                         kind: isVideoExt(ext) ? 'video' : 'audio',
                         mode,
                         streamUrl: `/api/sftp/media/stream/${token}`,
+                        token,
                         subtitles: subtitles.map((sub, index) => ({
                             index,
                             language: sub.language || '',

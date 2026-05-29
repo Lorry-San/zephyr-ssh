@@ -42,7 +42,9 @@
             this.pending = new Set();
             this.closed = false;
             this.objectTracks = [];
-            this.modal = this.createModal();
+            this.manualSubtitles = [];
+            this.remoteSubtitles = [];
+            this.currentToken = '';
             this.modal._mediaPreviewInstance = this;
             (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
         }
@@ -65,6 +67,7 @@
                 <div class="media-preview-header">
                     <div class="media-preview-title" data-role="title">媒体预览</div>
                     <div class="media-preview-actions">
+                        <label class="tool-btn" data-action="subtitle-label" title="手动挂载本地字幕">字幕<input type="file" data-role="subtitle-input" accept=".vtt,.srt,.ass,.ssa,.sub,text/vtt,text/plain" style="display:none;"></label>
                         <button class="tool-btn" type="button" data-action="refresh" title="重新加载播放">刷新</button>
                     </div>
                 </div>
@@ -77,6 +80,7 @@
                 <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
             modal.addEventListener('pointerdown', () => this.focus());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
+            modal.querySelector('[data-role="subtitle-input"]')?.addEventListener('change', (event) => this.mountManualSubtitle(event.target.files?.[0], event.target));
             this.setupTitlebarDrag(modal);
             this.setupLayoutButton(modal);
             this.setupDrag(modal);
@@ -197,6 +201,8 @@
         open(filePath, options = {}) {
             if (!filePath || !ZephyrMediaPreview.isMedia(filePath)) return false;
             this.currentPath = filePath;
+            this.manualSubtitles = [];
+            this.remoteSubtitles = [];
             this.pending.add(filePath);
             this.closed = false;
             const title = this.modal.querySelector('[data-role="title"]');
@@ -240,10 +246,73 @@
             }
             return false;
         }
+        async mountManualSubtitle(file, input) {
+            if (!file) return;
+            try {
+                const name = file.name || '字幕';
+                const ext = extname(name);
+                if (!['vtt', 'srt', 'ass', 'ssa', 'sub'].includes(ext)) throw new Error('仅支持 .vtt/.srt/.ass/.ssa/.sub 字幕');
+                let text = await file.text();
+                if (ext !== 'vtt') text = this.convertSubtitleTextToVtt(text, ext);
+                else if (!/^WEBVTT/i.test(text.trim())) text = `WEBVTT\n\n${text}`;
+                const url = URL.createObjectURL(new Blob([text], { type: 'text/vtt;charset=utf-8' }));
+                this.objectTracks.push(url);
+                this.manualSubtitles.push({ url, language: name.replace(/\.[^.]+$/, ''), manual: true });
+                this.applySubtitles();
+                this.notify(`已挂载字幕：${name}`, 'success');
+            } catch (err) {
+                this.notify(err.message || '字幕挂载失败', 'error');
+            } finally {
+                if (input) input.value = '';
+            }
+        }
+        convertSubtitleTextToVtt(text, ext) {
+            let raw = String(text || '').replace(/^\uFEFF/, '').replace(/\r/g, '');
+            if (ext === 'ass' || ext === 'ssa') {
+                const eventsIndex = raw.search(/^\[Events\]/mi);
+                if (eventsIndex >= 0) raw = raw.slice(eventsIndex);
+                const lines = raw.split('\n').filter((line) => /^Dialogue:/i.test(line)).map((line, index) => {
+                    const parts = line.replace(/^Dialogue:\s*/i, '').split(',');
+                    if (parts.length < 10) return '';
+                    const start = this.assTimeToVtt(parts[1]);
+                    const end = this.assTimeToVtt(parts[2]);
+                    const body = parts.slice(9).join(',').replace(/\{[^}]*\}/g, '').replace(/\\N/g, '\n');
+                    return `${index + 1}\n${start} --> ${end}\n${body}\n`;
+                }).filter(Boolean);
+                return `WEBVTT\n\n${lines.join('\n')}`;
+            }
+            raw = raw.replace(/(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g, (_, hms, ms) => `${hms}.${String(ms).padEnd(3, '0')}`);
+            return /^WEBVTT/i.test(raw.trim()) ? raw : `WEBVTT\n\n${raw}`;
+        }
+        assTimeToVtt(value) {
+            const match = String(value || '').trim().match(/^(\d+):(\d{2}):(\d{2})[.](\d{1,2})/);
+            if (!match) return '00:00:00.000';
+            return `${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3]}.${String(match[4]).padEnd(3, '0')}`;
+        }
+        applySubtitles() {
+            const media = this.modal.querySelector('video,audio');
+            if (!media) return;
+            media.querySelectorAll('track').forEach((track) => track.remove());
+            [...(this.remoteSubtitles || []), ...(this.manualSubtitles || [])].forEach((sub, index) => {
+                const track = document.createElement('track');
+                track.kind = 'subtitles';
+                track.src = sub.url;
+                track.label = sub.language || `字幕 ${index + 1}`;
+                track.srclang = sub.language || 'und';
+                if (index === 0 || sub.manual) track.default = true;
+                media.appendChild(track);
+                if (sub.manual) window.setTimeout(() => {
+                    try { if (media.textTracks?.[index]) media.textTracks[index].mode = 'showing'; } catch {}
+                }, 80);
+            });
+        }
         renderPlayer(message) {
             this.pending.delete(message.path);
             if (message.path !== this.currentPath) return;
-            this.revokeTrackObjects();
+            this.currentToken = message.token || '';
+            this.remoteSubtitles = message.subtitles || [];
+            const previousManualSubtitles = [...(this.manualSubtitles || [])];
+            this.manualSubtitles = previousManualSubtitles;
             const stage = this.modal.querySelector('[data-role="stage"]');
             const state = this.modal.querySelector('[data-role="state"]');
             if (!stage) return;
@@ -258,16 +327,8 @@
                 const err = media.error;
                 this.notify(`媒体播放失败${err?.message ? `：${err.message}` : ''}，可点刷新尝试转码`, 'error');
             });
-            (message.subtitles || []).forEach((sub, index) => {
-                const track = document.createElement('track');
-                track.kind = 'subtitles';
-                track.src = sub.url;
-                track.label = sub.language || `字幕 ${index + 1}`;
-                track.srclang = sub.language || 'und';
-                if (index === 0) track.default = true;
-                media.appendChild(track);
-            });
             stage.appendChild(media);
+            this.applySubtitles();
             if (state) state.style.display = 'none';
             stage.style.display = 'grid';
             const meta = this.modal.querySelector('[data-role="meta"]');

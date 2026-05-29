@@ -6202,8 +6202,8 @@ function setupPanelLayoutMenu() {
 
 function bringPanelToFront(panel) {
     if (!panel) return;
-    if (panel.classList?.contains('editor-window') || panel.classList?.contains('image-preview-modal')) {
-        document.querySelectorAll('.fm-editor-modal.editor-window, .image-preview-modal').forEach((p) => {
+    if (panel.classList?.contains('editor-window') || panel.classList?.contains('image-preview-modal') || panel.classList?.contains('media-preview-modal')) {
+        document.querySelectorAll('.fm-editor-modal.editor-window, .image-preview-modal, .media-preview-modal').forEach((p) => {
             if (p !== panel) p.classList.remove('front-switching');
         });
         panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));

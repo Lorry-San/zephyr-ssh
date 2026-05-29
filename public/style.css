@@ -2920,7 +2920,8 @@ html.keyboard-open .terminal-page {
 .snippet-panel.layout-animating,
 .shortcut-panel.layout-animating,
 .fm-editor-modal.editor-window.layout-animating,
-.image-preview-modal.layout-animating {
+.image-preview-modal.layout-animating,
+.media-preview-modal.layout-animating {
     transition:
         left .62s var(--ios-open),
         top .62s var(--ios-open),
@@ -6348,7 +6349,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
 /* Editor close is handled by the file-manager-style layout menu; hide the extra top-right X. */
 .fm-editor-close-icon { display: none !important; }
 .fm-editor-modal.editor-window.layout-animating,
-.image-preview-modal.layout-animating {
+.image-preview-modal.layout-animating,
+.media-preview-modal.layout-animating {
     transition:
         left .62s var(--ios-open),
         top .62s var(--ios-open),

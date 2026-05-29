@@ -49,6 +49,8 @@
     color: var(--text);
 }
 .media-preview-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.media-preview-actions label.tool-btn { cursor: pointer; }
+.media-preview-actions [data-action="subtitle-label"] { max-width: 76px; }
 .media-preview-body {
     position: relative;
     flex: 1;
