@@ -1942,6 +1942,13 @@ function markDownloadProgress(id, patch) {
     else updateProgressDisplay(id);
 }
 
+async function sha256HexFromBlob(blob) {
+    if (!window.crypto?.subtle) throw new Error('当前浏览器不支持 SHA-256 校验');
+    const buffer = await blob.arrayBuffer();
+    const digest = await window.crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 // === 浏览器原生下载：<a> 标签触发，浏览器在底部显示原生进度条 ===
 // 传输面板通过服务端进度轮询反映真实进度
 // 暂停：终止服务端流（浏览器会看到下载失败）
@@ -1957,7 +1964,7 @@ async function startChunkedDownload(download) {
             id, downloadId: id,
             path: download.path, name: fileName, size: totalSize, loaded: 0,
             status: 'active', url: download.url,
-            progressUrl: download.progressUrl || '', controlUrl: download.controlUrl || '',
+            progressUrl: download.progressUrl || '', controlUrl: download.controlUrl || '', hashUrl: download.hashUrl || '',
             speed: 0, updatedAt: Date.now(), _offset: 0,
         });
     } else {
@@ -1971,12 +1978,54 @@ async function startChunkedDownload(download) {
             url: download.url || entry.url,
             progressUrl: download.progressUrl || entry.progressUrl || '',
             controlUrl: download.controlUrl || entry.controlUrl || '',
+            hashUrl: download.hashUrl || entry.hashUrl || '',
             updatedAt: Date.now(),
         });
     }
 
-    // 所有文件走浏览器原生 <a> 下载（底部进度条由 Chrome 管理）
+    // <=1GB 使用 fetch 分片下载并在浏览器端做 SHA-256 校验；更大的文件走浏览器原生下载，避免网页内存压力。
+    if (totalSize > 0 && totalSize <= 1024 * 1024 * 1024 && download.hashUrl) {
+        verifiedChunkedDownload(id, fileName, download.url, totalSize, download.hashUrl).catch((err) => {
+            markDownloadProgress(id, { status: 'error' });
+            showToast('下载校验失败: ' + (err.message || '未知错误'), 'error');
+        });
+        return;
+    }
     nativeDownload(id, fileName, download.url, totalSize);
+}
+
+async function verifiedChunkedDownload(id, fileName, url, totalSize, hashUrl) {
+    const hashRes = await fetch(hashUrl, { credentials: 'same-origin', cache: 'no-store' });
+    if (!hashRes.ok) throw new Error(`获取远端 SHA-256 失败：HTTP ${hashRes.status}`);
+    const hashData = await hashRes.json();
+    const expectedHash = String(hashData.sha256 || '').toLowerCase();
+    if (!expectedHash) throw new Error('远端 SHA-256 为空');
+    const chunkSize = 8 * 1024 * 1024;
+    const chunks = [];
+    let loaded = 0;
+    for (let start = 0; start < totalSize; start += chunkSize) {
+        const end = Math.min(totalSize - 1, start + chunkSize - 1);
+        const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Range: `bytes=${start}-${end}` } });
+        if (!(res.ok || res.status === 206)) throw new Error(`下载分片失败：HTTP ${res.status}`);
+        const blob = await res.blob();
+        chunks.push(blob);
+        loaded += blob.size;
+        markDownloadProgress(id, { loaded, size: totalSize, status: 'active' });
+    }
+    const finalBlob = new Blob(chunks);
+    const actualHash = await sha256HexFromBlob(finalBlob);
+    if (actualHash !== expectedHash) throw new Error(`SHA-256 不一致（远端 ${expectedHash}，本地 ${actualHash}）`);
+    const objectUrl = URL.createObjectURL(finalBlob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { try { URL.revokeObjectURL(objectUrl); a.remove(); } catch {} }, 2000);
+    markDownloadProgress(id, { loaded: totalSize, size: totalSize, status: 'done' });
+    showToast('下载完成，SHA-256 校验通过', 'success');
+    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 5000);
 }
 
 function nativeDownload(id, fileName, url, totalSize) {
@@ -2082,7 +2131,7 @@ function resumeUploadTransfer(id) {
         sendSftpUploadChunk(upload, upload._offset || 0);
     } else {
         // Fallback: request new token
-        sendJsonMessage({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: upload.file.name, size: upload.file.size });
+        sendJsonMessage({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: upload.file.name, size: upload.file.size, sha256: upload.sha256 || '' });
     }
 }
 
@@ -2947,16 +2996,19 @@ async function sendSftpUploadChunk(upload, startOffset) {
         const r = await fetch(upload.url + '/complete', {
             method: 'POST', credentials: 'same-origin', cache: 'no-store',
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+            let errorText = `HTTP ${r.status}`;
+            try { const data = await r.json(); errorText = data.error || errorText; } catch {}
+            throw new Error(errorText);
+        }
         markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
         window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
         refreshFileList();
         showToast('文件上传完成', 'success');
     } catch (err) {
-        markUploadProgress(upload.id, { status: 'done', loaded: totalSize, size: totalSize });
-        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 5000);
-        refreshFileList();
-        showToast('文件上传完成（' + (err.message || '') + '）', 'success');
+        markUploadProgress(upload.id, { status: 'error', loaded: totalSize, size: totalSize });
+        window.setTimeout(() => { activeSftpUploads.delete(upload.id); scheduleTransferRender(); }, 8000);
+        showToast('上传校验失败：' + (err.message || '未知错误'), 'error');
     }
 }
 
@@ -2979,7 +3031,14 @@ function uploadFile(file) {
     activeSftpUploads.set(upload.id, upload);
     showTransferPopover({ autoHide: true });
     scheduleTransferRender();
-    wsConnection.send(JSON.stringify({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: file.name, size: file.size }));
+    sha256HexFromBlob(file).then((sha256) => {
+        upload.sha256 = sha256;
+        wsConnection.send(JSON.stringify({ type: 'sftp-upload-start', uploadId: upload.id, path: upload.path, name: file.name, size: file.size, sha256 }));
+    }).catch((err) => {
+        activeSftpUploads.delete(upload.id);
+        scheduleTransferRender();
+        showToast('上传失败：无法计算本地 SHA-256（' + (err.message || '未知错误') + '）', 'error');
+    });
 }
 
 function uploadFiles(fileList) {

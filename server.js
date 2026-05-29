@@ -2673,22 +2673,24 @@ app.post('/api/sftp/upload/:token/complete', requireAuth, async (req, res) => {
         console.warn('[sftp-upload-complete]', 'close handle failed', { path: uploadTask.path, error: err.message });
     }
 
-    // Verify via stat
+    // Verify via SHA-256 when the browser provided a local digest.
     try {
         const stats = await new Promise((resolve, reject) => {
             session.sftp.stat(uploadTask.path, (err, st) => err ? reject(err) : resolve(st));
         });
         const remoteSize = Number(stats.size) || 0;
-        const expectedSize = Number(uploadTask.size) || 0;
-
-        if (expectedSize && remoteSize !== expectedSize) {
-            destroyUploadSession(token);
-            sftpUploadTokens.delete(token);
-            return res.status(500).json({
-                error: `上传文件大小不匹配：期望 ${expectedSize} 字节，远端 ${remoteSize} 字节`,
-                remoteSize,
-                expectedSize,
-            });
+        const expectedHash = String(uploadTask.sha256 || '').toLowerCase();
+        if (expectedHash) {
+            const remoteHash = await sftpHashFile(session.sftp, uploadTask.path);
+            if (remoteHash !== expectedHash) {
+                destroyUploadSession(token);
+                sftpUploadTokens.delete(token);
+                return res.status(500).json({
+                    error: `上传校验失败：SHA-256 不一致（本地 ${expectedHash}，远端 ${remoteHash}）`,
+                    remoteHash,
+                    expectedHash,
+                });
+            }
         }
 
         uploadTask.loaded = remoteSize;
@@ -2705,12 +2707,31 @@ app.post('/api/sftp/upload/:token/complete', requireAuth, async (req, res) => {
         destroyUploadSession(token);
         sftpUploadTokens.delete(token);
 
-        res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, size: remoteSize });
+        res.json({ ok: true, uploadId: uploadTask.uploadId || '', path: uploadTask.path, size: remoteSize, sha256: uploadTask.sha256 || '' });
     } catch (err) {
         console.warn('[sftp-upload-complete]', 'stat failed', { path: uploadTask.path, error: err.message });
         destroyUploadSession(token);
         sftpUploadTokens.delete(token);
         res.status(500).json({ error: `校验远端文件失败：${err.message}` });
+    }
+});
+
+app.get('/api/sftp/hash/:token', requireAuth, async (req, res) => {
+    const token = String(req.params.token || '');
+    const download = sftpDownloadTokens.get(token);
+    if (!download || download.username !== req.session.username || download.expiresAt < Date.now()) {
+        return res.status(404).json({ error: '下载任务不存在' });
+    }
+    const session = sshTerminalSessions.get(download.sessionId);
+    const connectionConfig = download.connectionConfig || session?.connectionConfig;
+    if (!connectionConfig) return res.status(410).json({ error: '下载连接配置已失效' });
+    try {
+        const sha256 = await withRoutedSftp(connectionConfig, async ({ sftp }) => sftpHashFile(sftp, download.path));
+        download.sha256 = sha256;
+        download.expiresAt = Date.now() + SFTP_DOWNLOAD_TOKEN_TTL;
+        res.json({ ok: true, path: download.path, size: Number(download.size) || 0, sha256 });
+    } catch (err) {
+        res.status(500).json({ error: `计算 SHA-256 失败：${err.message}` });
     }
 });
 
@@ -2823,6 +2844,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/["\\\r\n]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     if (size > 0) res.setHeader('Content-Length', String(contentLength));
+    if (download.sha256 && !partial) res.setHeader('X-Zephyr-SHA256', download.sha256);
     if (partial) res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
     let keepaliveTimer = null;
     const stopKeepalive = () => {
@@ -3905,7 +3927,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     status: 'pending',
                     expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
                 });
-                sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, size: Number(stats.size) || 0 });
+                sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: targetPath, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, hashUrl: `/api/sftp/hash/${token}`, size: Number(stats.size) || 0 });
             });
             return;
         }
@@ -4060,7 +4082,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                         cleanupAfterDownload: true,
                         expiresAt: Date.now() + SFTP_DOWNLOAD_TOKEN_TTL,
                     });
-                    sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: tmpPath, name: msg.name || tmpName, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, size: Number(stats.size) || 0 });
+                    sendJSON({ type: 'sftp-download-ready', downloadId: msg.downloadId || '', path: tmpPath, name: msg.name || tmpName, url: `/api/sftp/download/${token}`, progressUrl: `/api/sftp/download-progress/${token}`, controlUrl: `/api/sftp/download-control/${token}`, hashUrl: `/api/sftp/hash/${token}`, size: Number(stats.size) || 0 });
                 });
             }).catch((err) => sendJSON({ type: 'sftp-download', downloadId: msg.downloadId || '', error: err.message }));
             return;
@@ -4103,6 +4125,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 uploadId,
                 path: targetPath,
                 size: Number(msg.size) || 0,
+                sha256: String(msg.sha256 || '').toLowerCase(),
                 loaded: 0,
                 status: 'pending',
                 expiresAt: Date.now() + SFTP_UPLOAD_TOKEN_TTL,
