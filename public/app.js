@@ -1493,7 +1493,8 @@ function animateTerminalWindowLayoutFrom(beforeRects, { reason = 'layout-change'
 
 function resetTerminalWorkspaceKeyboard() {
     const workspace = $('#terminalWorkspace');
-    if (!workspace) return;
+    if (!workspace || (!appKeyboardOpen && !workspace.classList.contains('keyboard-open') && !workspace.classList.contains('keyboard-settling'))) return;
+    const wasOpen = appKeyboardOpen;
     appKeyboardOpen = false;
     appKeyboardBaseline = 0;
     appKeyboardPendingMetrics = null;
@@ -1512,7 +1513,7 @@ function resetTerminalWorkspaceKeyboard() {
     postTerminalKeyboardFreeze(true, 'parent-keyboard-reset-start', { settleMs: 900 });
     window.clearTimeout(appKeyboardFreezeReleaseTimer);
     appKeyboardFreezeReleaseTimer = window.setTimeout(() => postTerminalKeyboardFreeze(false, 'parent-keyboard-reset-settled'), 900);
-    console.info('[TerminalLayoutDiagnostics]', { event: 'parent:keyboard-reset' });
+    console.info('[TerminalLayoutDiagnostics]', { event: 'parent:keyboard-reset', wasOpen });
     scheduleTerminalLayoutStabilize('parent-keyboard-reset', { focus: false });
 }
 
@@ -1526,6 +1527,7 @@ function commitTerminalWorkspaceKeyboard(metrics = {}) {
     appKeyboardOpen = true;
     workspace.classList.add('keyboard-open');
     workspace.classList.remove('keyboard-settling');
+    postTerminalKeyboardFreeze(true, 'parent-keyboard-commit-lock', { settleMs: 900 });
     document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
     document.documentElement.style.setProperty('--app-visual-vh', `${height}px`);
     document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
