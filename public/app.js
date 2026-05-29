@@ -14,6 +14,7 @@ let terminalSmartbarPickerOpen = false;
 let terminalSmartbarTimer = 0;
 let terminalSmartbarClosing = false;
 let smartbarDragState = null;
+let smartbarPressState = null;
 let suppressSmartbarClick = false;
 let smartbarHoverWindowId = null;
 let smartbarTrashHover = false;
@@ -33,6 +34,8 @@ let minimizingTerminalTabs = new Set();
 let securityStatus = { user: {}, passkeys: [] }, ipBans = [], loginEvents = [];
 
 const SMARTBAR_AUTO_HIDE_MS = 30000;
+const SMARTBAR_TOUCH_DRAG_HOLD_MS = 2000;
+const SMARTBAR_TOUCH_TAP_MAX_MS = 1999;
 const TERMINAL_EDGE_SNAP_PX = 56;
 const DEFAULT_BRAND_NAME = 'Zephyr';
 const DEFAULT_BRAND_ICON = '🌬️';
@@ -1729,11 +1732,14 @@ function snapTerminalWindowToEdge(tabId, clientX, clientY) {
 }
 function reorderTerminalOrder(dragId, targetId) {
     if (!dragId || !targetId || dragId === targetId) return;
-    const from = openOrderStack.indexOf(dragId);
-    const to = openOrderStack.indexOf(targetId);
+    const order = getTerminalSmartbarOrder();
+    const stack = order === 'new-first' ? [...openOrderStack].reverse() : [...openOrderStack];
+    const from = stack.indexOf(dragId);
+    const to = stack.indexOf(targetId);
     if (from < 0 || to < 0) return;
-    const [id] = openOrderStack.splice(from, 1);
-    openOrderStack.splice(to, 0, id);
+    const [id] = stack.splice(from, 1);
+    stack.splice(to, 0, id);
+    openOrderStack = order === 'new-first' ? stack.reverse() : stack;
 }
 function resetDockMagnification(dock = document.querySelector('.smartbar-dock')) {
     dock?.querySelectorAll('.smartbar-session, .smartbar-add').forEach((item) => {
@@ -1741,22 +1747,26 @@ function resetDockMagnification(dock = document.querySelector('.smartbar-dock'))
         item.style.removeProperty('--dock-lift');
         item.style.removeProperty('--dock-shift');
         item.style.removeProperty('--dock-blur');
+        item.style.removeProperty('--dock-rotate');
     });
 }
-function updateDockMagnification(clientX, dock = document.querySelector('.smartbar-dock')) {
+function updateDockMagnification(clientX, dock = document.querySelector('.smartbar-dock'), clientY = null) {
     if (!dock) return;
-    const influence = 132;
+    const verticalDock = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
+    const influence = verticalDock ? 118 : 142;
+    const pointerCoord = verticalDock ? (clientY ?? smartbarDragState?.currentY ?? 0) : clientX;
     dock.querySelectorAll('.smartbar-session, .smartbar-add').forEach((item) => {
         const rect = item.getBoundingClientRect();
-        const center = rect.left + rect.width / 2;
-        const d = Math.abs(clientX - center);
+        const center = verticalDock ? rect.top + rect.height / 2 : rect.left + rect.width / 2;
+        const d = Math.abs(pointerCoord - center);
         const t = Math.max(0, 1 - d / influence);
-        const eased = t * t * (3 - 2 * t);
-        const direction = Math.sign(center - clientX);
-        item.style.setProperty('--dock-scale', (1 + eased * 0.22).toFixed(3));
-        item.style.setProperty('--dock-lift', `${(-eased * 13).toFixed(2)}px`);
-        item.style.setProperty('--dock-shift', `${(direction * eased * 7).toFixed(2)}px`);
-        item.style.setProperty('--dock-blur', `${((1 - eased) * 0.2).toFixed(2)}px`);
+        const eased = 1 - Math.pow(1 - t, 3);
+        const direction = Math.sign(center - pointerCoord);
+        item.style.setProperty('--dock-scale', (1 + eased * 0.26).toFixed(3));
+        item.style.setProperty('--dock-lift', `${(-eased * (verticalDock ? 6 : 15)).toFixed(2)}px`);
+        item.style.setProperty('--dock-shift', `${(direction * eased * (verticalDock ? 9 : 8)).toFixed(2)}px`);
+        item.style.setProperty('--dock-blur', `${((1 - eased) * 0.14).toFixed(2)}px`);
+        item.style.setProperty('--dock-rotate', `${(direction * eased * (verticalDock ? -1.1 : -0.7)).toFixed(2)}deg`);
     });
 }
 function animateWindowFromDock(tabId, sourceRect, { swap = false } = {}) {
@@ -1846,23 +1856,49 @@ function startSmartbarIconDrag(e, tabId) {
     document.body.classList.add('smartbar-dragging-dock');
     document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = 'none');
     const sourceRect = btn.getBoundingClientRect();
-    smartbarDragState = { tabId, startX: e.clientX, startY: e.clientY, moved: false, ghost, sourceRect };
+    const dock = btn.closest('.smartbar-dock');
+    const fullscreenDock = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
+    smartbarDragState = {
+        tabId,
+        startX: e.clientX,
+        startY: e.clientY,
+        currentX: e.clientX,
+        currentY: e.clientY,
+        moved: false,
+        ghost,
+        sourceRect,
+        dock,
+        originCenterX: sourceRect.left + sourceRect.width / 2,
+        originCenterY: sourceRect.top + sourceRect.height / 2,
+        raf: 0,
+    };
     btn.classList.add('dragging');
-    const moveGhost = (ev) => {
-        const dx = ev.clientX - smartbarDragState.startX;
-        const dy = ev.clientY - smartbarDragState.startY;
-        ghost.style.left = `${ev.clientX}px`;
-        ghost.style.top = `${ev.clientY}px`;
-        ghost.style.transform = `translate(-50%, -50%) scale(${smartbarDragState.moved ? 1.12 : 1.04}) rotate(${Math.max(-8, Math.min(8, dx * 0.035))}deg)`;
+    const paintGhost = () => {
+        const state = smartbarDragState;
+        if (!state) return;
+        state.raf = 0;
+        const dx = state.currentX - state.startX;
+        const dy = state.currentY - state.startY;
+        ghost.style.left = `${state.currentX}px`;
+        ghost.style.top = `${state.currentY}px`;
+        ghost.style.transform = `translate(-50%, -50%) scale(${state.moved ? 1.11 : 1.035}) rotate(${Math.max(-6, Math.min(6, dx * 0.018))}deg)`;
         ghost.style.setProperty('--ghost-dx', `${dx}px`);
         ghost.style.setProperty('--ghost-dy', `${dy}px`);
+        if (state.dock) updateDockMagnification(state.currentX, state.dock, state.currentY);
     };
-    moveGhost(e);
+    const schedulePaint = () => {
+        if (smartbarDragState?.raf) return;
+        smartbarDragState.raf = requestAnimationFrame(paintGhost);
+    };
+    paintGhost();
     const onMove = (ev) => {
+        if (!smartbarDragState) return;
+        smartbarDragState.currentX = ev.clientX;
+        smartbarDragState.currentY = ev.clientY;
         const dx = ev.clientX - smartbarDragState.startX;
         const dy = ev.clientY - smartbarDragState.startY;
-        if (Math.hypot(dx, dy) > 8) smartbarDragState.moved = true;
-        moveGhost(ev);
+        if (Math.hypot(dx, dy) > 5) smartbarDragState.moved = true;
+        schedulePaint();
         ghost.style.pointerEvents = 'none';
         const trashRect = trash.getBoundingClientRect();
         smartbarTrashHover = isPointInRect(ev.clientX, ev.clientY, trashRect, 18);
@@ -1873,17 +1909,29 @@ function startSmartbarIconDrag(e, tabId) {
             smartbarHoverWindowId = hoverWin;
             document.querySelectorAll('.terminal-window').forEach((el) => el.classList.toggle('dock-drop-target', !!hoverWin && el.dataset.window === hoverWin && hoverWin !== tabId));
         }
+        const targetDock = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
+        document.querySelectorAll('[data-smartbar-tab]').forEach((el) => {
+            el.classList.toggle('dock-reorder-target', !!targetDock && el.dataset.smartbarTab === targetDock && targetDock !== tabId);
+        });
     };
     const cleanup = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        btn.classList.remove('dragging');
+        window.removeEventListener('pointercancel', onCancel);
+        if (smartbarDragState?.raf) cancelAnimationFrame(smartbarDragState.raf);
+        resetDockMagnification(dock);
+        btn.classList.remove('dragging', 'dock-press-armed');
         document.body.classList.remove('smartbar-dragging-dock');
         document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
         document.querySelectorAll('.terminal-window.dock-drop-target').forEach((el) => el.classList.remove('dock-drop-target'));
+        document.querySelectorAll('[data-smartbar-tab].dock-reorder-target').forEach((el) => el.classList.remove('dock-reorder-target'));
         smartbarHoverWindowId = null;
         window.setTimeout(removeSmartbarTrashTarget, 180);
         smartbarDragState = null;
+    };
+    const onCancel = () => {
+        cleanup();
+        ghost.remove();
     };
     const onUp = (ev) => {
         const moved = smartbarDragState?.moved;
@@ -1892,7 +1940,7 @@ function startSmartbarIconDrag(e, tabId) {
         const targetDock = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('[data-smartbar-tab]')?.dataset.smartbarTab;
         const dropToTrash = smartbarTrashHover;
         cleanup();
-        if (moved) {
+        if (moved || fullscreenDock) {
             suppressSmartbarClick = true;
             if (dropToTrash) {
                 ghost.classList.add('smartbar-drag-ghost-closing');
@@ -1906,16 +1954,16 @@ function startSmartbarIconDrag(e, tabId) {
                 ghost.remove();
                 return;
             }
-            if (!targetWin && !targetDock) {
-                showTerminalSessionInWorkspace(tabId);
-                renderTerminalTabs();
-                animateWindowFromDock(tabId, source, { swap: true });
-                ghost.remove();
-                return;
-            }
             if (targetDock && targetDock !== tabId) {
                 reorderTerminalOrder(tabId, targetDock);
                 renderTerminalSmartbar();
+                ghost.remove();
+                return;
+            }
+            if (!fullscreenDock && !targetWin && !targetDock) {
+                showTerminalSessionInWorkspace(tabId);
+                renderTerminalTabs();
+                animateWindowFromDock(tabId, source, { swap: true });
                 ghost.remove();
                 return;
             }
@@ -1927,6 +1975,87 @@ function startSmartbarIconDrag(e, tabId) {
     };
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onCancel, { once: true });
+}
+
+function startSmartbarPress(e, tabBtn) {
+    if (!tabBtn || e.button === 2) return;
+    const tabId = tabBtn.dataset.smartbarTab;
+    if (!tabId) return;
+    const isDesktopLike = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
+    const holdMs = isDesktopLike && e.pointerType !== 'touch' ? 260 : SMARTBAR_TOUCH_DRAG_HOLD_MS;
+    window.clearTimeout(smartbarPressState?.timer);
+    smartbarPressState = {
+        tabId,
+        tabBtn,
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.pointerId,
+        startedAt: performance.now(),
+        dragStarted: false,
+        cancelled: false,
+        originalEvent: e,
+        timer: 0,
+    };
+    tabBtn.classList.add('dock-press-armed');
+    const cleanup = ({ keepClick = false } = {}) => {
+        if (!smartbarPressState) return;
+        window.clearTimeout(smartbarPressState.timer);
+        smartbarPressState.tabBtn?.classList.remove('dock-press-armed');
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+        if (!keepClick) smartbarPressState = null;
+    };
+    const beginDrag = (ev = e) => {
+        if (!smartbarPressState || smartbarPressState.dragStarted || smartbarPressState.cancelled) return;
+        smartbarPressState.dragStarted = true;
+        if (navigator.vibrate) navigator.vibrate(12);
+        smartbarPressState.tabBtn?.setPointerCapture?.(smartbarPressState.pointerId);
+        const dragEvent = {
+            ...smartbarPressState.originalEvent,
+            target: smartbarPressState.tabBtn,
+            currentTarget: smartbarPressState.tabBtn,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+            button: smartbarPressState.originalEvent.button,
+            pointerType: smartbarPressState.originalEvent.pointerType,
+            preventDefault: () => {},
+        };
+        startSmartbarIconDrag(dragEvent, smartbarPressState.tabId);
+    };
+    smartbarPressState.timer = window.setTimeout(() => beginDrag(), holdMs);
+    const onMove = (ev) => {
+        if (!smartbarPressState || ev.pointerId !== smartbarPressState.pointerId) return;
+        const dx = ev.clientX - smartbarPressState.startX;
+        const dy = ev.clientY - smartbarPressState.startY;
+        if (!smartbarPressState.dragStarted && Math.hypot(dx, dy) > 24) {
+            // <2s 时移动只当作用户想滚动/点按，不提前进入拖拽。
+            return;
+        }
+    };
+    const onUp = () => {
+        if (!smartbarPressState) return;
+        const state = smartbarPressState;
+        const elapsed = performance.now() - state.startedAt;
+        const wasDragging = state.dragStarted;
+        state.cancelled = true;
+        cleanup();
+        if (wasDragging) return;
+        if (elapsed <= SMARTBAR_TOUCH_TAP_MAX_MS || holdMs < SMARTBAR_TOUCH_DRAG_HOLD_MS) {
+            suppressSmartbarClick = true;
+            if (navigator.vibrate) navigator.vibrate(6);
+            activateTerminalFromDock(state.tabId, state.tabBtn);
+        }
+    };
+    const onCancel = () => {
+        if (smartbarPressState) smartbarPressState.cancelled = true;
+        smartbarPressState?.tabBtn?.classList.remove('dock-press-armed');
+        cleanup();
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onCancel, { once: true });
 }
 
 function startTerminalWindowDrag(e, tabId) {
@@ -2331,41 +2460,11 @@ function bindEvents() {
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
         if (!tabBtn) return;
-        const isDesktopLike = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
-        if (isDesktopLike && e.pointerType !== 'touch') {
-            startSmartbarIconDrag(e, tabBtn.dataset.smartbarTab);
-            return;
-        }
-        const tabId = tabBtn.dataset.smartbarTab;
-        const startX = e.clientX;
-        const startY = e.clientY;
-        let dragStarted = false;
-        const cleanup = () => {
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onCancel);
-        };
-        const onMove = (ev) => {
-            if (dragStarted) return;
-            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 12) return;
-            dragStarted = true;
-            cleanup();
-            startSmartbarIconDrag(e, tabId);
-        };
-        const onUp = (ev) => {
-            cleanup();
-            if (dragStarted) return;
-            suppressSmartbarClick = true;
-            activateTerminalFromDock(tabId, tabBtn);
-        };
-        const onCancel = () => cleanup();
-        window.addEventListener('pointermove', onMove, { passive: true });
-        window.addEventListener('pointerup', onUp, { once: true });
-        window.addEventListener('pointercancel', onCancel, { once: true });
+        startSmartbarPress(e, tabBtn);
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');
-        if (dock) updateDockMagnification(e.clientX, dock);
+        if (dock) updateDockMagnification(e.clientX, dock, e.clientY);
     });
     $('#sessionTabs').addEventListener('pointerleave', (e) => {
         resetDockMagnification(e.currentTarget.querySelector('.smartbar-dock'));
