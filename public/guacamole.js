@@ -1,4 +1,6 @@
 const $ = (sel) => document.querySelector(sel);
+const GUAC_CLIENT_VERSION = '2026-05-29.2-standard-ws-tunnel';
+console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');

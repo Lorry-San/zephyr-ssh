@@ -3343,6 +3343,7 @@ guacWss.on('connection', async (ws, req) => {
     const started = Date.now();
     let session = null;
     let closed = false;
+    let guacdClosed = false;
     const closeGuac = (reason = 'cleanup') => {
         if (closed) return;
         closed = true;
@@ -3387,8 +3388,9 @@ guacWss.on('connection', async (ws, req) => {
             if (ws.readyState === ws.OPEN) ws.close(1011, 'guacd error');
         });
         session.socket.on('close', () => {
+            guacdClosed = true;
             console.info('[guacamole-ws]', 'guacd socket closed', { uuid: session?.uuid || '-' });
-            if (ws.readyState === ws.OPEN) ws.close();
+            closeGuac('guacd-close');
         });
 
         ws.on('message', (raw) => {
@@ -3400,7 +3402,7 @@ guacWss.on('connection', async (ws, req) => {
             console.debug('[guacamole-ws]', 'browser -> guacd', { bytes: Buffer.byteLength(data, 'utf8'), uuid: session?.uuid || '-' });
             if (session?.socket?.writable) session.socket.write(data);
         });
-        ws.on('close', () => closeGuac('browser-close'));
+        ws.on('close', () => closeGuac(guacdClosed ? 'guacd-close' : 'browser-close'));
         ws.on('error', (err) => {
             console.error('[guacamole-ws]', 'browser websocket error', { error: err.message });
             closeGuac('browser-error');
