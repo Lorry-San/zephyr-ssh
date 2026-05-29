@@ -184,6 +184,7 @@ let editorZIndexSeed = 260;
 const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal, .media-preview-modal';
 const editorPanelsByPath = new Map();
 const pendingEditorReads = new Map();
+const pendingRemoteSubtitleReads = new Map();
 const SFTP_VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'f4v', 'mpeg', 'mpg', 'mpe', 'ts', 'mts', 'm2ts', 'vob', 'ogv', '3gp', '3g2', 'asf', 'rm', 'rmvb', 'divx', 'mxf']);
 const SFTP_AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'weba', 'wma', 'alac', 'aiff', 'aif', 'ape', 'amr', 'mid', 'midi', 'mka', 'caf', 'ac3', 'dts', 'm4b']);
 function sftpFileExt(filePath = '') { const base = String(filePath || '').split(/[\\/]/).pop() || ''; const idx = base.lastIndexOf('.'); return idx > -1 ? base.slice(idx + 1).toLowerCase() : ''; }
@@ -4381,7 +4382,7 @@ function ensureMediaPreviewModule() {
             window.__zephyrMediaPreviewLoading = null;
             resolve(false);
         }, { once: true });
-        script.src = `preview/media/media-preview.js?v=20260529-media-ui-fix-${Date.now()}`;
+        script.src = `preview/media/media-preview.js?v=20260529-subtitle-path-fix-${Date.now()}`;
         document.body.appendChild(script);
     });
     return window.__zephyrMediaPreviewLoading;
@@ -4417,6 +4418,7 @@ async function openMediaPreview(filePath) {
             allocateZIndex: allocateFloatingPanelZIndex,
             layoutMenu: { open: openPanelLayoutMenu, close: closePanelLayoutMenu },
             formatSize: formatTransferSize,
+            remoteSubtitlePicker: pickRemoteSubtitleForMedia,
             onFocus: (instance) => { activeMediaPreview = instance; },
             onClose: (instance) => {
                 if (activeMediaPreview === instance) activeMediaPreview = null;
@@ -4430,6 +4432,41 @@ async function openMediaPreview(filePath) {
     }
     activeMediaPreview = preview;
     preview.open(filePath);
+}
+
+function promptRemoteSubtitlePath(mediaPath = '') {
+    const mediaDir = String(mediaPath || currentPath).replace(/\/[^/]*$/, '') || currentPath || '.';
+    const mediaBase = String(mediaPath || '').split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+    const selected = getSelectedFiles().find((file) => file.type !== 'd' && /\.(vtt|srt|ass|ssa|sub)$/i.test(file.name || file.path || ''));
+    const guess = selected?.path || (mediaBase ? `${mediaDir.replace(/\/+$/, '')}/${mediaBase}.srt` : mediaDir);
+    return prompt('输入远程字幕路径（也可以先在文件列表选中字幕文件）:', guess);
+}
+
+function readRemoteSubtitleFile(filePath) {
+    return new Promise((resolve, reject) => {
+        if (!filePath) { resolve(null); return; }
+        if (!/\.(vtt|srt|ass|ssa|sub)$/i.test(filePath)) {
+            reject(new Error('仅支持 .vtt/.srt/.ass/.ssa/.sub 字幕'));
+            return;
+        }
+        if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+            reject(new Error('SSH 尚未连接，无法读取路径字幕'));
+            return;
+        }
+        const requestId = `subtitle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const timer = window.setTimeout(() => {
+            pendingRemoteSubtitleReads.delete(requestId);
+            reject(new Error('读取路径字幕超时'));
+        }, 15000);
+        pendingRemoteSubtitleReads.set(requestId, { resolve, reject, timer, path: filePath });
+        wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath, requestId, purpose: 'subtitle' }));
+    });
+}
+
+async function pickRemoteSubtitleForMedia(mediaPath = '') {
+    const filePath = promptRemoteSubtitlePath(mediaPath);
+    if (!filePath) return null;
+    return readRemoteSubtitleFile(filePath.trim());
 }
 
 function openEditor(filePath) {
@@ -4658,6 +4695,18 @@ function handleSFTPMessage(msg) {
             else alert('解压失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-readfile': {
+            const pendingSubtitle = msg.requestId ? pendingRemoteSubtitleReads.get(msg.requestId) : null;
+            if (pendingSubtitle) {
+                pendingRemoteSubtitleReads.delete(msg.requestId);
+                window.clearTimeout(pendingSubtitle.timer);
+                if (msg.error) pendingSubtitle.reject(new Error(msg.error));
+                else {
+                    const bytes = msg.encoding === 'base64' ? base64ToBytes(msg.data) : new TextEncoder().encode(msg.data || '');
+                    const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+                    pendingSubtitle.resolve({ path: msg.path || pendingSubtitle.path, name: String(msg.path || pendingSubtitle.path || '').split('/').pop() || '路径字幕', text });
+                }
+                break;
+            }
             const panel = pendingEditorReads.get(msg.requestId) || (msg.editorId ? editorPanelsByPath.get(msg.editorId) : null) || Array.from(editorPanelsByPath.values()).reverse().find((p) => p.dataset.editorPath === msg.path);
             if (msg.requestId) pendingEditorReads.delete(msg.requestId);
             if (panel) updateActiveEditorRefs(panel);

@@ -45,6 +45,7 @@
             this.manualSubtitles = [];
             this.remoteSubtitles = [];
             this.currentToken = '';
+            this.remoteSubtitlePicker = options.remoteSubtitlePicker || null;
             this.modal = this.createModal();
             this.modal._mediaPreviewInstance = this;
             (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
@@ -68,7 +69,8 @@
                 <div class="media-preview-header">
                     <div class="media-preview-title" data-role="title">媒体预览</div>
                     <div class="media-preview-actions">
-                        <label class="tool-btn" data-action="subtitle-label" title="手动挂载本地字幕">字幕<input type="file" data-role="subtitle-input" accept=".vtt,.srt,.ass,.ssa,.sub,text/vtt,text/plain" style="display:none;"></label>
+                        <button class="tool-btn" type="button" data-action="remote-subtitle" title="从当前终端/SFTP 路径选择字幕">路径字幕</button>
+                        <label class="tool-btn" data-action="subtitle-label" title="上传本地字幕文件">本地字幕<input type="file" data-role="subtitle-input" accept=".vtt,.srt,.ass,.ssa,.sub,text/vtt,text/plain" style="display:none;"></label>
                         <button class="tool-btn" type="button" data-action="refresh" title="重新加载播放">刷新</button>
                     </div>
                 </div>
@@ -81,6 +83,7 @@
                 <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整窗口大小"></div>`;
             modal.addEventListener('pointerdown', () => this.focus());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
+            modal.querySelector('[data-action="remote-subtitle"]')?.addEventListener('click', () => this.pickRemoteSubtitle());
             modal.querySelector('[data-role="subtitle-input"]')?.addEventListener('change', (event) => this.mountManualSubtitle(event.target.files?.[0], event.target));
             this.setupTitlebarDrag(modal);
             this.setupLayoutButton(modal);
@@ -265,6 +268,26 @@
             }
             return false;
         }
+        async pickRemoteSubtitle() {
+            try {
+                if (!this.remoteSubtitlePicker) throw new Error('当前页面不支持从终端路径选择字幕');
+                const item = await this.remoteSubtitlePicker(this.currentPath);
+                if (!item) return;
+                const name = item.name || String(item.path || '').split(/[\\/]/).pop() || '远程字幕';
+                const ext = extname(name);
+                if (!['vtt', 'srt', 'ass', 'ssa', 'sub'].includes(ext)) throw new Error('仅支持 .vtt/.srt/.ass/.ssa/.sub 字幕');
+                let text = String(item.text || '');
+                if (ext !== 'vtt') text = this.convertSubtitleTextToVtt(text, ext);
+                else if (!/^WEBVTT/i.test(text.trim())) text = `WEBVTT\n\n${text}`;
+                const url = URL.createObjectURL(new Blob([text], { type: 'text/vtt;charset=utf-8' }));
+                this.objectTracks.push(url);
+                this.manualSubtitles.push({ url, language: name.replace(/\.[^.]+$/, ''), manual: true, remotePath: item.path || '' });
+                this.applySubtitles();
+                this.notify(`已挂载路径字幕：${name}`, 'success');
+            } catch (err) {
+                this.notify(err.message || '路径字幕挂载失败', 'error');
+            }
+        }
         async mountManualSubtitle(file, input) {
             if (!file) return;
             try {
@@ -351,7 +374,6 @@
                 const audioWrap = document.createElement('div');
                 audioWrap.className = 'media-audio-card';
                 audioWrap.innerHTML = `
-                    <div class="media-audio-art" aria-hidden="true"><span></span></div>
                     <div class="media-audio-info">
                         <div class="media-audio-name">${escapeHtml((message.path || '').split(/[\\/]/).pop() || '音频')}</div>
                         <div class="media-audio-hint">点击下方控件播放 / 暂停</div>
