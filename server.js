@@ -4293,13 +4293,15 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         }
 
         if (msg.type === 'sftp-readfile') {
+            const requestId = String(msg.requestId || '');
             sftpStream.readFile(msg.path, (err, data) => {
                 if (err) {
-                    sendJSON({ type: 'sftp-readfile', path: msg.path, error: err.message });
+                    sendJSON({ type: 'sftp-readfile', requestId, path: msg.path, error: err.message });
                     return;
                 }
                 sendJSON({
                     type: 'sftp-readfile',
+                    requestId,
                     path: msg.path,
                     data: Buffer.isBuffer(data) ? data.toString('base64') : '',
                     encoding: 'base64',
@@ -4313,13 +4315,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         if (msg.type === 'sftp-writefile') {
             const writeStream = sftpStream.createWriteStream(msg.path);
             writeStream.on('error', (err) => {
-                sendJSON({ type: 'sftp-writefile', path: msg.path, success: false, error: err.message });
+                sendJSON({ type: 'sftp-writefile', editorId: String(msg.editorId || ''), path: msg.path, success: false, error: err.message });
             });
             const buffer = msg.encoding === 'base64'
                 ? Buffer.from(msg.data || '', 'base64')
                 : Buffer.from(msg.data || '', 'utf8');
             writeStream.end(buffer, () => {
-                sendJSON({ type: 'sftp-writefile', path: msg.path, success: true });
+                sendJSON({ type: 'sftp-writefile', editorId: String(msg.editorId || ''), path: msg.path, success: true });
             });
             return;
         }

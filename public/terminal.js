@@ -181,6 +181,7 @@ let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
 const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal';
 const editorPanelsByPath = new Map();
+const pendingEditorReads = new Map();
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
@@ -3966,12 +3967,18 @@ function refreshCodeMirrorLayout() {
 function closeEditor({ animated = true } = {}) {
     const panel = fmEditorModal;
     const closingPath = panel?.dataset.editorPath || editorFilePath;
+    const closingId = panel?.dataset.editorId || '';
     const removePanel = () => {
         window.ZephyrCodeEditor?.destroy?.(panel._codeEditor);
         panel._codeEditor = null;
         panel.style.display = 'none';
         panel.classList.remove('open', 'closing');
-        if (closingPath) editorPanelsByPath.delete(closingPath);
+        if (closingId) editorPanelsByPath.delete(closingId);
+        else if (closingPath) {
+            for (const [key, value] of editorPanelsByPath.entries()) {
+                if (value === panel || value.dataset.editorPath === closingPath) editorPanelsByPath.delete(key);
+            }
+        }
         delete panel.dataset.editorPath;
         panel._editorRawBytes = null;
         panel._editorLanguage = null;
@@ -3980,8 +3987,8 @@ function closeEditor({ animated = true } = {}) {
     if (!animated) { removePanel(); return; }
     panel.classList.remove('open');
     panel.classList.add('closing');
-    window.clearTimeout(closeEditor._timer);
-    closeEditor._timer = window.setTimeout(removePanel, 260);
+    panel._closeTimer && window.clearTimeout(panel._closeTimer);
+    panel._closeTimer = window.setTimeout(removePanel, 260);
 }
 
 function applyEditorOptions() {
@@ -4143,14 +4150,10 @@ function setupEditorPanel(panel) {
 function createEditorPanel(filePath) {
     const template = document.getElementById('fmEditorModal') || fmEditorModal;
     markEditorRoles(template);
-    const canReuseTemplate = !template.dataset.editorPath
-        && editorPanelsByPath.size === 0;
-    const panel = canReuseTemplate ? template : template.cloneNode(true);
-    if (panel !== template) {
-        panel.removeAttribute('id');
-        panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
-        dockEditorPanel(panel);
-    }
+    const panel = template.cloneNode(true);
+    panel.removeAttribute('id');
+    panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    dockEditorPanel(panel);
     panel.dataset.editorPath = filePath;
     panel.style.display = 'flex';
     if (panel.parentElement === document.querySelector('.terminal-page') && !panel.style.left && !panel.style.top) {
@@ -4177,7 +4180,9 @@ function createEditorPanel(filePath) {
     panel.style.height = panel.style.height || '';
     setupEditorPanel(panel);
     setupClonedEditorEvents(panel);
-    editorPanelsByPath.set(filePath, panel);
+    const key = `${filePath}#${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    panel.dataset.editorId = key;
+    editorPanelsByPath.set(key, panel);
     return panel;
 }
 
@@ -4219,7 +4224,7 @@ function openImagePreview(filePath) {
 }
 
 function openEditor(filePath) {
-    const panel = editorPanelsByPath.get(filePath) || createEditorPanel(filePath);
+    const panel = createEditorPanel(filePath);
     updateActiveEditorRefs(panel);
     editorFilePath = filePath;
     editorLanguage = detectEditorLanguage(filePath);
@@ -4232,7 +4237,9 @@ function openEditor(filePath) {
     if (fmEditorMain) fmEditorMain.innerHTML = '';
     updateEditorZIndex(panel);
     bringPanelToFront(panel);
-    wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath }));
+    const requestId = panel.dataset.editorId || `${filePath}#${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingEditorReads.set(requestId, panel);
+    wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath, requestId }));
 }
 
 function saveActiveEditor({ closeAfterSave = true } = {}) {
@@ -4240,7 +4247,7 @@ function saveActiveEditor({ closeAfterSave = true } = {}) {
     const panel = fmEditorModal;
     const text = normalizeLineEnding(getEditorText(panel), fmEditorLineEnding?.value || 'lf');
     const bytes = encodeText(text, fmEditorEncoding?.value || 'utf-8');
-    wsConnection.send(JSON.stringify({ type: 'sftp-writefile', path: editorFilePath, data: bytesToBase64(bytes), encoding: 'base64' }));
+    wsConnection.send(JSON.stringify({ type: 'sftp-writefile', editorId: panel?.dataset.editorId || '', path: editorFilePath, data: bytesToBase64(bytes), encoding: 'base64' }));
     if (panel?._codeEditor) {
         panel._codeEditor.originalText = text;
         panel._codeEditor.dirty = false;
@@ -4442,8 +4449,10 @@ function handleSFTPMessage(msg) {
             if (msg.success) { showToast('解压完成', 'success'); refreshFileList(); }
             else alert('解压失败: ' + (msg.error || '未知错误'));
             break;
-        case 'sftp-readfile':
-            if (msg.path && editorPanelsByPath.has(msg.path)) updateActiveEditorRefs(editorPanelsByPath.get(msg.path));
+        case 'sftp-readfile': {
+            const panel = pendingEditorReads.get(msg.requestId) || (msg.editorId ? editorPanelsByPath.get(msg.editorId) : null) || Array.from(editorPanelsByPath.values()).reverse().find((p) => p.dataset.editorPath === msg.path);
+            if (msg.requestId) pendingEditorReads.delete(msg.requestId);
+            if (panel) updateActiveEditorRefs(panel);
             if (msg.error) {
                 alert('读取失败: ' + msg.error);
                 fmEditorStatus.textContent = '读取失败';
@@ -4453,10 +4462,13 @@ function handleSFTPMessage(msg) {
                 loadEditorFromBytes(bytes, fmEditorEncoding.value);
             }
             break;
-        case 'sftp-writefile':
-            if (msg.path && editorPanelsByPath.has(msg.path)) updateActiveEditorRefs(editorPanelsByPath.get(msg.path));
+        }
+        case 'sftp-writefile': {
+            const panel = msg.editorId ? editorPanelsByPath.get(msg.editorId) : Array.from(editorPanelsByPath.values()).reverse().find((p) => p.dataset.editorPath === msg.path);
+            if (panel) updateActiveEditorRefs(panel);
             if (msg.success) { refreshFileList(); } else alert('保存失败: ' + (msg.error || '未知错误'));
             break;
+        }
         case 'sftp-error': alert('SFTP 错误: ' + msg.message); sftpReady = false; break;
     }
 }
