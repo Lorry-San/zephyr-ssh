@@ -1901,7 +1901,10 @@ function createSftpClipboardTransfer({ username, opId, mode, targetDir, sendProg
         sftps: new Set(),
         handles: new Set(),
         chunkSize: 512 * 1024,
-        maxChunkSize: 8 * 1024 * 1024,
+        maxChunkSize: Math.max(16 * 1024 * 1024, Math.min(256 * 1024 * 1024, Math.floor((os.freemem?.() || 512 * 1024 * 1024) / 16))),
+        minChunkSize: 256 * 1024,
+        targetChunkMs: 900,
+        lastChunkMs: 0,
         successfulChunks: 0,
         sendProgress,
     };
@@ -1998,11 +2001,40 @@ function sftpWriteChunk(sftp, handle, buffer, length, position) {
         sftp.write(handle, buffer, 0, length, position, (err) => err ? reject(err) : resolve());
     });
 }
-function tuneClipboardChunkSize(transfer, bytes) {
+function configureClipboardChunkLimits(transfer, fileSize = 0) {
+    if (!transfer) return;
+    const size = Number(fileSize) || 0;
+    const memoryLimit = Math.max(16 * 1024 * 1024, Math.min(256 * 1024 * 1024, Math.floor((os.freemem?.() || 512 * 1024 * 1024) / 16)));
+    const sizeLimit = size >= 8 * 1024 * 1024 * 1024 ? 256 * 1024 * 1024
+        : size >= 2 * 1024 * 1024 * 1024 ? 128 * 1024 * 1024
+        : size >= 512 * 1024 * 1024 ? 64 * 1024 * 1024
+        : size >= 128 * 1024 * 1024 ? 32 * 1024 * 1024
+        : 16 * 1024 * 1024;
+    transfer.maxChunkSize = Math.max(transfer.minChunkSize || 256 * 1024, Math.min(memoryLimit, sizeLimit));
+    transfer.chunkSize = Math.min(Math.max(Number(transfer.chunkSize) || 512 * 1024, transfer.minChunkSize || 256 * 1024), transfer.maxChunkSize);
+}
+function tuneClipboardChunkSize(transfer, bytes, elapsedMs = 0) {
     if (!transfer || !bytes) return;
+    const minChunk = Number(transfer.minChunkSize) || 256 * 1024;
+    const maxChunk = Number(transfer.maxChunkSize) || 16 * 1024 * 1024;
+    const current = Math.max(minChunk, Math.min(Number(transfer.chunkSize) || 512 * 1024, maxChunk));
+    const elapsed = Number(elapsedMs) || 0;
+    transfer.lastChunkMs = elapsed;
+    if (elapsed > 0) {
+        if (elapsed < 350 && current < maxChunk) {
+            transfer.chunkSize = Math.min(maxChunk, current * 2);
+            transfer.successfulChunks = 0;
+            return;
+        }
+        if (elapsed > 4500 && current > minChunk) {
+            transfer.chunkSize = Math.max(minChunk, Math.floor(current / 2));
+            transfer.successfulChunks = 0;
+            return;
+        }
+    }
     transfer.successfulChunks = (Number(transfer.successfulChunks) || 0) + 1;
-    if (transfer.successfulChunks >= 2 && transfer.chunkSize < transfer.maxChunkSize) {
-        transfer.chunkSize = Math.min(transfer.maxChunkSize, transfer.chunkSize * 2);
+    if (transfer.successfulChunks >= 2 && current < maxChunk) {
+        transfer.chunkSize = Math.min(maxChunk, current * 2);
         transfer.successfulChunks = 0;
     }
 }
@@ -2022,9 +2054,12 @@ async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPa
         transfer?.handles?.add?.(writeRef);
         let position = 0;
         const size = Number(stats?.size) || 0;
+        configureClipboardChunkLimits(transfer, size);
         while (true) {
             throwIfClipboardTransferCancelled(transfer);
-            const chunkSize = Math.max(64 * 1024, Math.min(Number(transfer?.chunkSize) || 512 * 1024, size ? Math.max(1, size - position) : Number(transfer?.chunkSize) || 512 * 1024));
+            const currentChunk = Number(transfer?.chunkSize) || 512 * 1024;
+            const chunkSize = Math.max(64 * 1024, Math.min(currentChunk, size ? Math.max(1, size - position) : currentChunk));
+            const startedAt = Date.now();
             const buffer = Buffer.allocUnsafe(chunkSize);
             const { bytesRead, buffer: readBuffer } = await sftpReadChunk(sourceSftp, readHandle, buffer, chunkSize, position);
             throwIfClipboardTransferCancelled(transfer);
@@ -2037,7 +2072,7 @@ async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPa
                 written += slice.length;
             }
             position += bytesRead;
-            tuneClipboardChunkSize(transfer, bytesRead);
+            tuneClipboardChunkSize(transfer, bytesRead, Date.now() - startedAt);
             onProgress?.(bytesRead);
             if (size && position >= size) break;
         }
@@ -2114,7 +2149,7 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
     const sendStatus = (status, currentPath = targetDir, extra = {}) => {
         transfer.loaded = loaded;
         transfer.total = total;
-        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: currentPath || targetDir, loaded, size: total, status, cancellable: true, chunkSize: transfer.chunkSize, ...extra });
+        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: currentPath || targetDir, loaded, size: total, status, cancellable: true, chunkSize: transfer.chunkSize, maxChunkSize: transfer.maxChunkSize, chunkMs: transfer.lastChunkMs, ...extra });
     };
     const bump = (n, currentPath = '') => {
         throwIfClipboardTransferCancelled(transfer);
