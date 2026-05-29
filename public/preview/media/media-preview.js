@@ -1,0 +1,304 @@
+(function () {
+    'use strict';
+
+    const VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'f4v', 'mpeg', 'mpg', 'mpe', 'ts', 'mts', 'm2ts', 'vob', 'ogv', '3gp', '3g2', 'asf', 'rm', 'rmvb', 'divx', 'mxf']);
+    const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'weba', 'wma', 'alac', 'aiff', 'aif', 'ape', 'amr', 'mid', 'midi', 'mka', 'caf', 'ac3', 'dts', 'm4b']);
+
+    function extname(filePath) {
+        const base = String(filePath || '').split(/[\\/]/).pop() || '';
+        const idx = base.lastIndexOf('.');
+        return idx > -1 ? base.slice(idx + 1).toLowerCase() : '';
+    }
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+    function formatSize(bytes) {
+        const value = Number(bytes) || 0;
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = value;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+        return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+    }
+    function formatDuration(seconds) {
+        const total = Math.max(0, Math.floor(Number(seconds) || 0));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    class ZephyrMediaPreview {
+        constructor(options = {}) {
+            this.send = options.send || (() => {});
+            this.notify = options.notify || (() => {});
+            this.bringToFront = options.bringToFront || (() => {});
+            this.layoutMenu = options.layoutMenu || null;
+            this.formatSize = options.formatSize || formatSize;
+            this.onFocus = options.onFocus || (() => {});
+            this.onClose = options.onClose || (() => {});
+            this.index = Number(options.index) || 0;
+            this.currentPath = options.path || '';
+            this.pending = new Set();
+            this.closed = false;
+            this.objectTracks = [];
+            this.modal = this.createModal();
+            this.modal._mediaPreviewInstance = this;
+            (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
+        }
+
+        static isMedia(filePath) {
+            const ext = extname(filePath);
+            return VIDEO_EXTENSIONS.has(ext) || AUDIO_EXTENSIONS.has(ext);
+        }
+        static isVideo(filePath) { return VIDEO_EXTENSIONS.has(extname(filePath)); }
+        static isAudio(filePath) { return AUDIO_EXTENSIONS.has(extname(filePath)); }
+
+        createModal() {
+            const modal = document.createElement('div');
+            modal.className = 'media-preview-modal';
+            modal.style.display = 'none';
+            modal.innerHTML = `
+                <div class="media-preview-titlebar panel-titlebar">
+                    <button class="panel-traffic-btn" type="button" data-action="layout" title="窗口布局"><span></span></button>
+                </div>
+                <div class="media-preview-header">
+                    <div class="media-preview-title" data-role="title">媒体预览</div>
+                    <div class="media-preview-actions">
+                        <button class="tool-btn" type="button" data-action="refresh" title="重新加载播放">刷新</button>
+                    </div>
+                </div>
+                <div class="media-preview-body" data-role="body">
+                    <div class="media-preview-state" data-role="state">准备播放...</div>
+                    <div class="media-preview-stage" data-role="stage" style="display:none;"></div>
+                </div>
+                <div class="media-preview-meta" data-role="meta"></div>
+                <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
+            modal.addEventListener('pointerdown', () => this.focus());
+            modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
+            this.setupTitlebarDrag(modal);
+            this.setupLayoutButton(modal);
+            this.setupDrag(modal);
+            this.setupResize(modal);
+            return modal;
+        }
+        focus() { this.onFocus(this); this.bringToFront(this.modal); }
+
+        setupTitlebarDrag(modal) {
+            const titlebar = modal.querySelector('.media-preview-titlebar');
+            if (!titlebar) return;
+            titlebar.addEventListener('pointerdown', (event) => this.startPanelDrag(event, modal, titlebar));
+        }
+        setupDrag(modal) {
+            const header = modal.querySelector('.media-preview-header');
+            header?.addEventListener('pointerdown', (event) => this.startPanelDrag(event, modal, modal));
+        }
+        startPanelDrag(event, modal, captureTarget) {
+            if (event.target.closest('button,input,select,textarea,label')) return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.focus();
+            modal.classList.add('dragging');
+            captureTarget.setPointerCapture?.(event.pointerId);
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const startLeft = modal.offsetLeft;
+            const startTop = modal.offsetTop;
+            const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+            const clamp = (left, top) => ({ left: Math.min(Math.max(0, left), Math.max(0, parentRect.width - 80)), top: Math.min(Math.max(0, top), Math.max(0, parentRect.height - 80)) });
+            const onMove = (ev) => {
+                ev.preventDefault();
+                const next = clamp(startLeft + ev.clientX - startX, startTop + ev.clientY - startY);
+                modal.style.left = `${next.left}px`;
+                modal.style.top = `${next.top}px`;
+                modal.style.right = 'auto';
+                modal.style.bottom = 'auto';
+            };
+            const onUp = () => {
+                modal.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                window.removeEventListener('pointercancel', onUp);
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+            window.addEventListener('pointercancel', onUp, { once: true });
+        }
+        setupLayoutButton(modal) {
+            const button = modal.querySelector('[data-action="layout"]');
+            if (!button) return;
+            button.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.focus();
+                button.classList.add('pressing');
+                button.setPointerCapture?.(event.pointerId);
+                const startX = event.clientX, startY = event.clientY, startLeft = modal.offsetLeft, startTop = modal.offsetTop;
+                let moved = false;
+                const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+                const clamp = (left, top) => ({ left: Math.min(Math.max(0, left), Math.max(0, parentRect.width - 80)), top: Math.min(Math.max(0, top), Math.max(0, parentRect.height - 80)) });
+                const onMove = (ev) => {
+                    ev.preventDefault();
+                    const dx = ev.clientX - startX, dy = ev.clientY - startY;
+                    if (!moved && Math.hypot(dx, dy) > 7) { moved = true; this.layoutMenu?.close?.({ instant: true }); modal.classList.add('dragging'); }
+                    if (!moved) return;
+                    const next = clamp(startLeft + dx, startTop + dy);
+                    modal.style.left = `${next.left}px`; modal.style.top = `${next.top}px`; modal.style.right = 'auto'; modal.style.bottom = 'auto';
+                };
+                const onUp = () => {
+                    modal.classList.remove('dragging'); button.classList.remove('pressing'); this.suppressLayoutClick = moved;
+                    window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp);
+                };
+                window.addEventListener('pointermove', onMove, { passive: false });
+                window.addEventListener('pointerup', onUp, { once: true });
+                window.addEventListener('pointercancel', onUp, { once: true });
+            });
+            button.addEventListener('click', (event) => {
+                event.preventDefault(); event.stopPropagation();
+                if (this.suppressLayoutClick) { this.suppressLayoutClick = false; return; }
+                this.focus();
+                if (navigator.vibrate) navigator.vibrate(8);
+                this.layoutMenu?.open?.(button, modal);
+            });
+        }
+        setupResize(modal) {
+            const handles = modal.querySelectorAll('[data-role="resize-left"], [data-role="resize-right"]');
+            handles.forEach((handle) => {
+                handle.addEventListener('pointerdown', (event) => {
+                    event.preventDefault(); event.stopPropagation(); this.focus();
+                    modal.classList.add('resizing'); handle.setPointerCapture?.(event.pointerId);
+                    const side = handle.dataset.role === 'resize-left' ? 'left' : 'right';
+                    const startX = event.clientX, startWidth = modal.offsetWidth, startLeft = modal.offsetLeft;
+                    const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+                    const minWidth = 300, maxWidth = Math.max(minWidth, parentRect.width - 12);
+                    const onMove = (ev) => {
+                        ev.preventDefault();
+                        const dx = ev.clientX - startX;
+                        let nextWidth = side === 'left' ? startWidth - dx : startWidth + dx;
+                        nextWidth = Math.min(Math.max(minWidth, nextWidth), maxWidth);
+                        modal.style.width = `${nextWidth}px`;
+                        if (side === 'left') modal.style.left = `${Math.min(Math.max(0, startLeft + (startWidth - nextWidth)), Math.max(0, parentRect.width - 80))}px`;
+                        modal.style.right = 'auto';
+                    };
+                    const onUp = () => { modal.classList.remove('resizing'); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); };
+                    window.addEventListener('pointermove', onMove, { passive: false });
+                    window.addEventListener('pointerup', onUp, { once: true });
+                    window.addEventListener('pointercancel', onUp, { once: true });
+                });
+            });
+        }
+        setState(text, type = '') {
+            const state = this.modal.querySelector('[data-role="state"]');
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            if (state) { state.style.display = 'grid'; state.className = `media-preview-state ${type}`.trim(); state.innerHTML = escapeHtml(text); }
+            if (stage) { stage.style.display = 'none'; stage.innerHTML = ''; }
+        }
+        open(filePath, options = {}) {
+            if (!filePath || !ZephyrMediaPreview.isMedia(filePath)) return false;
+            this.currentPath = filePath;
+            this.pending.add(filePath);
+            this.closed = false;
+            const title = this.modal.querySelector('[data-role="title"]');
+            if (title) title.textContent = filePath;
+            const meta = this.modal.querySelector('[data-role="meta"]');
+            if (meta) meta.textContent = '';
+            this.setState('正在准备媒体流...', 'loading');
+            this.modal.style.display = 'flex';
+            this.modal.classList.remove('closing');
+            requestAnimationFrame(() => this.modal.classList.add('open'));
+            this.focus();
+            this.send({ type: 'sftp-media-preview', path: filePath, force: !!options.force, capabilities: this.getCapabilities(filePath) });
+            return true;
+        }
+        getCapabilities(filePath) {
+            const video = document.createElement('video');
+            const audio = document.createElement('audio');
+            return {
+                ext: extname(filePath),
+                video: {
+                    h264: !!video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+                    hevc: !!video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"'),
+                    vp9: !!video.canPlayType('video/webm; codecs="vp9"'),
+                    av1: !!video.canPlayType('video/mp4; codecs="av01.0.05M.08"'),
+                },
+                audio: {
+                    aac: !!audio.canPlayType('audio/mp4; codecs="mp4a.40.2"'),
+                    mp3: !!audio.canPlayType('audio/mpeg'),
+                    opus: !!audio.canPlayType('audio/ogg; codecs="opus"'),
+                    vorbis: !!audio.canPlayType('audio/ogg; codecs="vorbis"'),
+                    flac: !!audio.canPlayType('audio/flac'),
+                },
+            };
+        }
+        handleMessage(message) {
+            if (message?.type === 'sftp-media-preview-ready') { this.renderPlayer(message); return true; }
+            if (message?.type === 'sftp-media-preview') {
+                this.pending.delete(message.path);
+                if (message.error) this.setState(message.error, 'error');
+                return true;
+            }
+            return false;
+        }
+        renderPlayer(message) {
+            this.pending.delete(message.path);
+            if (message.path !== this.currentPath) return;
+            this.revokeTrackObjects();
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            const state = this.modal.querySelector('[data-role="state"]');
+            if (!stage) return;
+            stage.innerHTML = '';
+            const media = document.createElement(message.kind === 'audio' ? 'audio' : 'video');
+            media.controls = true;
+            media.autoplay = true;
+            media.playsInline = true;
+            media.preload = 'metadata';
+            media.src = message.streamUrl;
+            media.addEventListener('error', () => {
+                const err = media.error;
+                this.notify(`媒体播放失败${err?.message ? `：${err.message}` : ''}，可点刷新尝试转码`, 'error');
+            });
+            (message.subtitles || []).forEach((sub, index) => {
+                const track = document.createElement('track');
+                track.kind = 'subtitles';
+                track.src = sub.url;
+                track.label = sub.language || `字幕 ${index + 1}`;
+                track.srclang = sub.language || 'und';
+                if (index === 0) track.default = true;
+                media.appendChild(track);
+            });
+            stage.appendChild(media);
+            if (state) state.style.display = 'none';
+            stage.style.display = 'grid';
+            const meta = this.modal.querySelector('[data-role="meta"]');
+            if (meta) {
+                const info = message.info || {};
+                const parts = [
+                    `<span>${escapeHtml(message.path)}</span>`,
+                    `<b>${escapeHtml(message.mode || '')}</b>`,
+                    message.size ? `<em>${escapeHtml(this.formatSize(message.size))}</em>` : '',
+                    info.duration ? `<em>${escapeHtml(formatDuration(info.duration))}</em>` : '',
+                    info.video ? `<em>${escapeHtml(`${info.video.codec || '?'} ${info.video.width || ''}x${info.video.height || ''}`)}</em>` : '',
+                    info.audio ? `<em>${escapeHtml(`${info.audio.codec || '?'} ${info.audio.channels || ''}ch`)}</em>` : '',
+                ].filter(Boolean);
+                meta.innerHTML = parts.join('');
+            }
+            media.play?.().catch(() => {});
+        }
+        revokeTrackObjects() { this.objectTracks.splice(0).forEach((url) => URL.revokeObjectURL(url)); }
+        close() {
+            if (this.closed) return;
+            this.closed = true;
+            this.revokeTrackObjects();
+            const stage = this.modal.querySelector('[data-role="stage"]');
+            stage?.querySelectorAll('video,audio').forEach((media) => { try { media.pause(); media.removeAttribute('src'); media.load?.(); } catch {} });
+            this.modal.classList.add('closing');
+            window.setTimeout(() => {
+                this.modal.remove();
+                this.onClose(this);
+            }, 180);
+        }
+    }
+
+    window.ZephyrMediaPreview = ZephyrMediaPreview;
+})();

@@ -167,6 +167,8 @@ const activeSftpUploads = new Map();
 const activeSftpDownloads = new Map();
 const imagePreviewPanelsByPath = new Map();
 let activeImagePreview = null;
+const mediaPreviewPanelsByPath = new Map();
+let activeMediaPreview = null;
 let transferPopover = null;
 let transferPopoverHideTimer = 0;
 let transferRenderRaf = 0;
@@ -179,7 +181,7 @@ let editorMinimapHidden = localStorage.getItem('zephyr-editor-minimap-hidden') =
 let activeEditorPanel = null;
 let floatingPanelZIndexSeed = 260;
 let editorZIndexSeed = 260;
-const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal';
+const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal, .media-preview-modal';
 const editorPanelsByPath = new Map();
 const pendingEditorReads = new Map();
 let reconnectAttempts = 0;
@@ -2454,6 +2456,7 @@ function updateFileSelectionUI() {
 function openFileItem(filePath, fileType) {
     if (fileType === 'd') navigateTo(filePath);
     else if (window.ZephyrImagePreview?.isImage?.(filePath)) openImagePreview(filePath);
+    else if (window.ZephyrMediaPreview?.isMedia?.(filePath)) openMediaPreview(filePath);
     else openEditor(filePath);
 }
 function isTouchLikeDevice() {
@@ -2903,7 +2906,7 @@ function renderFileList(files) {
         item.dataset.fileType = file.type;
         item.dataset.filePath = itemPath;
         item.classList.toggle('selected', selectedFilePaths.has(itemPath));
-        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : '📄');
+        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (window.ZephyrMediaPreview?.isMedia?.(file.name) ? (window.ZephyrMediaPreview?.isVideo?.(file.name) ? '🎬' : '🎵') : '📄'));
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
         nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
@@ -4348,6 +4351,44 @@ function openImagePreview(filePath) {
         imagePreviewPanelsByPath.set(filePath, preview);
     }
     activeImagePreview = preview;
+    preview.open(filePath);
+}
+
+function openMediaPreview(filePath) {
+    if (!window.ZephyrMediaPreview) {
+        showToast('媒体预览模块未加载', 'error');
+        return;
+    }
+    const existingEntry = Array.from(mediaPreviewPanelsByPath.entries()).find(([path, instance]) => path === filePath || instance.currentPath === filePath);
+    let preview = existingEntry?.[1];
+    if (!preview) {
+        preview = new window.ZephyrMediaPreview({
+            path: filePath,
+            index: mediaPreviewPanelsByPath.size,
+            send: (payload) => {
+                if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+                    showToast('SSH 尚未连接，无法预览媒体', 'error');
+                    return;
+                }
+                wsConnection.send(JSON.stringify(payload));
+            },
+            notify: showToast,
+            bringToFront: bringPanelToFront,
+            allocateZIndex: allocateFloatingPanelZIndex,
+            layoutMenu: { open: openPanelLayoutMenu, close: closePanelLayoutMenu },
+            formatSize: formatTransferSize,
+            onFocus: (instance) => { activeMediaPreview = instance; },
+            onClose: (instance) => {
+                if (activeMediaPreview === instance) activeMediaPreview = null;
+                if (instance?.currentPath) mediaPreviewPanelsByPath.delete(instance.currentPath);
+                for (const [path, previewInstance] of mediaPreviewPanelsByPath.entries()) {
+                    if (previewInstance === instance) mediaPreviewPanelsByPath.delete(path);
+                }
+            },
+        });
+        mediaPreviewPanelsByPath.set(filePath, preview);
+    }
+    activeMediaPreview = preview;
     preview.open(filePath);
 }
 
@@ -5973,6 +6014,7 @@ function hidePanelByElement(panel) {
     else if (panel === shortcutPanel) hideShortcutPanel();
     else if (panel?.classList?.contains('fm-editor-modal')) { updateActiveEditorRefs(panel); closeEditor(); }
     else if (panel?.classList?.contains('image-preview-modal')) panel._imagePreviewInstance?.close?.();
+    else if (panel?.classList?.contains('media-preview-modal')) panel._mediaPreviewInstance?.close?.();
 }
 
 let panelLayoutMenu = null;
@@ -6300,7 +6342,7 @@ setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
-    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, ...Array.from(imagePreviewPanelsByPath.values(), (preview) => preview.modal)].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, ...Array.from(imagePreviewPanelsByPath.values(), (preview) => preview.modal), ...Array.from(mediaPreviewPanelsByPath.values(), (preview) => preview.modal)].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
     if (!isTouchKeyboardDevice()) requestStableTerminalLayout('window-resize', { includeResize: true });
@@ -6984,6 +7026,10 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                         ? (imagePreviewPanelsByPath.get(msg.path) || Array.from(imagePreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
                         : activeImagePreview;
                     if (imagePanel?.handleMessage?.(msg)) return;
+                    const mediaPanel = msg.path
+                        ? (mediaPreviewPanelsByPath.get(msg.path) || Array.from(mediaPreviewPanelsByPath.values()).find((instance) => instance?.currentPath === msg.path || instance?.pending?.has?.(msg.path)))
+                        : activeMediaPreview;
+                    if (mediaPanel?.handleMessage?.(msg)) return;
                     handleSFTPMessage(msg);
                     return;
                 }
