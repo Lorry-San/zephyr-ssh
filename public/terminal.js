@@ -2517,6 +2517,7 @@ function menuButton(action, label, icon, shortcut = '', danger = false) {
 function isArchiveFile(name = '') { return /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|gz|bz2|xz|7z|rar)$/i.test(name); }
 const SFTP_ARCHIVE_EXTENSIONS = ['.zip', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar', '.7z', '.gz', '.bz2', '.xz'];
 let sftpPasteConflictMemory = null;
+const pendingSftpConflictChecks = new Map();
 function showFileContextMenu(x, y, onItem) {
     ensureFileContextMenu();
     const selected = getSelectedFiles();
@@ -2572,6 +2573,22 @@ function chooseArchiveTargetPath(defaultName) {
     if (archiveExtensionOf(input)) return input;
     return withArchiveExtension(input, '.tar.gz');
 }
+function checkPasteTargetConflicts(targetDir) {
+    return new Promise((resolve) => {
+        if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return resolve({ success: false, error: '连接未就绪' });
+        const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const timer = window.setTimeout(() => {
+            pendingSftpConflictChecks.delete(requestId);
+            resolve({ success: false, error: '同名检查超时' });
+        }, 12000);
+        pendingSftpConflictChecks.set(requestId, (msg) => {
+            window.clearTimeout(timer);
+            resolve(msg);
+        });
+        wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-check-conflicts', requestId, targetDir }));
+    });
+}
+
 function requestPasteConflictChoice() {
     if (sftpPasteConflictMemory) return Promise.resolve(sftpPasteConflictMemory);
     return new Promise((resolve) => {
@@ -2700,11 +2717,15 @@ function handleFileMenuAction(action) {
         return;
     }
     if (action === 'paste') {
-        requestPasteConflictChoice().then((choice) => {
-            if (!choice) return;
-            wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-paste', targetDir: currentPath, conflict: choice.mode }));
-            const label = choice.mode === 'overwrite' ? '覆盖' : choice.mode === 'skip' ? '跳过' : '兼容命名';
-            showToast(`正在粘贴（同名：${label}），进度可在传输面板查看`, 'info');
+        checkPasteTargetConflicts(currentPath).then((result) => {
+            if (!result.success) { showToast('同名检查失败: ' + (result.error || '未知错误'), 'error'); return; }
+            const choose = result.hasConflict ? requestPasteConflictChoice() : Promise.resolve({ mode: 'compatible', remember: false });
+            choose.then((choice) => {
+                if (!choice) return;
+                wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-paste', targetDir: currentPath, conflict: choice.mode }));
+                const label = choice.mode === 'overwrite' ? '覆盖' : choice.mode === 'skip' ? '跳过' : result.hasConflict ? '兼容命名' : '无同名';
+                showToast(`正在粘贴（同名：${label}），进度可在传输面板查看`, 'info');
+            });
         });
         return;
     }
@@ -4302,6 +4323,14 @@ function handleSFTPMessage(msg) {
                 alert('剪贴板操作失败: ' + (msg.error || '未知错误'));
             }
             break;
+        case 'sftp-clipboard-conflicts': {
+            const handler = pendingSftpConflictChecks.get(msg.requestId);
+            if (handler) {
+                pendingSftpConflictChecks.delete(msg.requestId);
+                handler(msg);
+            }
+            break;
+        }
         case 'sftp-clipboard-paste':
             if (msg.success) { showToast('粘贴完成', 'success'); refreshFileList(); }
             else alert('粘贴失败: ' + (msg.error || '未知错误'));

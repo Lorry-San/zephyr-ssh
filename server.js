@@ -2195,6 +2195,29 @@ async function withRoutedSftp(connectionConfig, callback, transfer) {
         [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
     }
 }
+async function checkSftpClipboardTargetConflicts({ username, targetSession, targetDir }) {
+    const clip = sftpClipboardByUser.get(username);
+    if (!clip || !Array.isArray(clip.items) || !clip.items.length) throw new Error('剪贴板为空');
+    const targetConnectionConfig = targetSession?.connectionConfig;
+    if (!targetConnectionConfig) throw new Error('目标 SSH 连接已失效');
+    const conflicts = [];
+    const checkWithSftp = async (targetSftp) => {
+        for (const item of clip.items) {
+            const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+            try {
+                const stats = await sftpStat(targetSftp, targetPath);
+                conflicts.push({ path: targetPath, name: basenameRemote(targetPath), type: stats.isDirectory?.() ? 'd' : '-' });
+            } catch {}
+        }
+    };
+    if (targetSession?.sftpStream) {
+        await checkWithSftp(targetSession.sftpStream);
+    } else {
+        await withRoutedSftp(targetConnectionConfig, async ({ sftp }) => checkWithSftp(sftp));
+    }
+    return { hasConflict: conflicts.length > 0, conflicts, count: conflicts.length };
+}
+
 async function pasteSftpClipboard({ username, targetSession, targetDir, mode, conflict = 'ask', sendProgress }) {
     const clip = sftpClipboardByUser.get(username);
     if (!clip || !Array.isArray(clip.items) || !clip.items.length) throw new Error('剪贴板为空');
@@ -3869,6 +3892,18 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 createdAt: Date.now(),
             });
             sendJSON({ type: 'sftp-clipboard-set', success: true, mode, count: items.length });
+            return;
+        }
+
+        if (msg.type === 'sftp-clipboard-check-conflicts') {
+            const username = currentSession(req)?.username || '';
+            const targetDir = String(msg.targetDir || msg.path || '.');
+            const requestId = String(msg.requestId || '');
+            checkSftpClipboardTargetConflicts({ username, targetSession: attachedSshSession, targetDir }).then((result) => {
+                sendJSON({ type: 'sftp-clipboard-conflicts', requestId, success: true, targetDir, ...result });
+            }).catch((err) => {
+                sendJSON({ type: 'sftp-clipboard-conflicts', requestId, success: false, targetDir, error: err.message });
+            });
             return;
         }
 
