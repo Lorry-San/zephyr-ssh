@@ -3372,7 +3372,7 @@ guacWss.on('connection', async (ws, req) => {
         console.info('[guacamole-ws]', 'opening browser tunnel', { connectionId, name: conn.name, protocol, target: `${conn.host}:${Number(conn.port) || guacamoleDefaultPort(protocol)}`, width, height, dpi, user: sessionUser.username });
         session = await openGuacdSession(conn, { width, height, dpi }, 15000);
         if (ws.readyState === ws.OPEN) {
-            ws.send(guacInstruction('ready', session.uuid));
+            ws.send(guacInstruction('', session.uuid));
             console.info('[guacamole-ws]', 'browser tunnel ready', { uuid: session.uuid, connectionId });
         }
 
@@ -3393,6 +3393,10 @@ guacWss.on('connection', async (ws, req) => {
 
         ws.on('message', (raw) => {
             const data = raw.toString('utf8');
+            if (data.startsWith('0.,')) {
+                if (ws.readyState === ws.OPEN) ws.send(data);
+                return;
+            }
             console.debug('[guacamole-ws]', 'browser -> guacd', { bytes: Buffer.byteLength(data, 'utf8'), uuid: session?.uuid || '-' });
             if (session?.socket?.writable) session.socket.write(data);
         });

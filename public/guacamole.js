@@ -311,8 +311,12 @@ async function loadGuacamole() {
     throw new Error(`无法加载 guacamole-common-js：${lastError?.message || '未知错误'}`);
 }
 
-function wsUrl() {
+function guacamoleTunnelBaseUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}/guacamole`;
+}
+
+function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
     const width = Math.max(320, Math.round(rect.width || innerWidth || 1280));
     const height = Math.max(240, Math.round((rect.height || innerHeight || 720) - 2));
@@ -323,7 +327,11 @@ function wsUrl() {
         height: String(height),
         dpi: String(dpi),
     });
-    return `${proto}//${location.host}/guacamole?${query.toString()}`;
+    return query.toString();
+}
+
+function wsUrl() {
+    return `${guacamoleTunnelBaseUrl()}?${guacamoleConnectQuery()}`;
 }
 
 function updateInfo() {
@@ -484,7 +492,9 @@ async function connect() {
         setStatus('connecting', `正在连接 guacd/${label}...`);
 
         displayRoot.innerHTML = '';
-        tunnel = new RawGuacWebSocketTunnel(wsUrl());
+        tunnel = new G.WebSocketTunnel(guacamoleTunnelBaseUrl());
+        tunnel.receiveTimeout = 30000;
+        tunnel.unstableThreshold = 7000;
         client = new G.Client(tunnel);
 
         const displayEl = client.getDisplay().getElement();
@@ -536,7 +546,7 @@ async function connect() {
         };
 
         stage?.focus?.({ preventScroll: true });
-        client.connect();
+        client.connect(guacamoleConnectQuery());
         installLocalClipboardBridge();
         syncLocalClipboardToRemote({ paste: false, source: 'connect-initial' }).catch(() => {});
     } catch (err) {
