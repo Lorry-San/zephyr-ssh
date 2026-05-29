@@ -3964,8 +3964,14 @@ function refreshCodeMirrorLayout() {
     window.requestAnimationFrame(() => getEditorInstance()?.view?.requestMeasure?.());
 }
 
-function closeEditor({ animated = true } = {}) {
+function closeEditor({ animated = true, force = false } = {}) {
     const panel = fmEditorModal;
+    if (!force && window.ZephyrCodeEditor?.dirty?.(panel?._codeEditor)) {
+        const choice = prompt('文件有未保存修改，请选择：\n1 保存并关闭\n2 放弃修改\n3 取消关闭', '1');
+        if (!choice || String(choice).trim().startsWith('3')) return;
+        if (String(choice).trim().startsWith('1')) { saveActiveEditor({ closeAfterSave: true, forceClose: true }); return; }
+        if (!String(choice).trim().startsWith('2')) return;
+    }
     const closingPath = panel?.dataset.editorPath || editorFilePath;
     const closingId = panel?.dataset.editorId || '';
     const removePanel = () => {
@@ -4091,6 +4097,58 @@ function setupEditorPanel(panel) {
         window.addEventListener('pointermove', onMove, { passive: false });
         window.addEventListener('pointerup', onUp, { once: true });
     });
+    const editorLayoutButton = panel.querySelector('[data-layout-panel="editor"]');
+    if (editorLayoutButton && !editorLayoutButton._editorLayoutReady) {
+        editorLayoutButton._editorLayoutReady = true;
+        editorLayoutButton.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            updateActiveEditorRefs(panel);
+            bringPanelToFront(panel);
+            editorLayoutButton.classList.add('pressing');
+            editorLayoutButton.setPointerCapture?.(e.pointerId);
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+            let moved = false;
+            const onMove = (ev) => {
+                ev.preventDefault();
+                const dx = ev.clientX - startX;
+                const dy = ev.clientY - startY;
+                if (!moved && Math.hypot(dx, dy) > 7) { moved = true; closePanelLayoutMenu({ instant: true }); panel.classList.add('dragging'); }
+                if (!moved) return;
+                panel.style.left = `${startLeft + dx}px`;
+                panel.style.top = `${startTop + dy}px`;
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                panel.dataset.editorMoved = '1';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                editorLayoutButton.classList.remove('pressing');
+                suppressNextLayoutClick = moved;
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                window.removeEventListener('pointercancel', onUp);
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+            window.addEventListener('pointercancel', onUp, { once: true });
+        });
+        editorLayoutButton.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (suppressNextLayoutClick) { suppressNextLayoutClick = false; return; }
+            updateActiveEditorRefs(panel);
+            bringPanelToFront(panel);
+            if (navigator.vibrate) navigator.vibrate(8);
+            if (panelLayoutMenu && panelLayoutButton === editorLayoutButton) closePanelLayoutMenu();
+            else openPanelLayoutMenu(editorLayoutButton, panel);
+        });
+    }
+
     panel.querySelectorAll('[data-editor-resize-edge]').forEach((handle) => {
         handle.addEventListener('pointerdown', (e) => {
             e.preventDefault();
@@ -4242,7 +4300,7 @@ function openEditor(filePath) {
     wsConnection.send(JSON.stringify({ type: 'sftp-readfile', path: filePath, requestId }));
 }
 
-function saveActiveEditor({ closeAfterSave = true } = {}) {
+function saveActiveEditor({ closeAfterSave = true, forceClose = false } = {}) {
     if (!editorFilePath) return;
     const panel = fmEditorModal;
     const text = normalizeLineEnding(getEditorText(panel), fmEditorLineEnding?.value || 'lf');
@@ -4253,11 +4311,10 @@ function saveActiveEditor({ closeAfterSave = true } = {}) {
         panel._codeEditor.dirty = false;
         updateEditorStatus();
     }
-    if (closeAfterSave) closeEditor();
+    if (closeAfterSave) closeEditor({ force: forceClose });
 }
 
 fmEditorCloseBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCloseBtn.closest('.fm-editor-modal')); closeEditor(); });
-fmEditorCancelBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCancelBtn.closest('.fm-editor-modal')); closeEditor(); });
 fmEditorUndoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorUndoBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.undo?.(getEditorInstance()); });
 fmEditorRedoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorRedoBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.redo?.(getEditorInstance()); });
 fmEditorMinimapToggle?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorMinimapToggle.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); });
@@ -4289,7 +4346,7 @@ function setupClonedEditorEvents(panel) {
         e.stopPropagation();
         updateActiveEditorRefs(panel);
         bringPanelToFront(panel);
-        if (action === 'close' || action === 'cancel') closeEditor();
+        if (action === 'close') closeEditor();
         else if (action === 'minimap') { window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); }
         else if (action === 'compact') { window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); }
         else if (action === 'palette') { const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); }
@@ -5844,6 +5901,7 @@ function hidePanelByElement(panel) {
     else if (panel === dockerPanel) hideDockerPanel();
     else if (panel === snippetPanel) hideSnippetPanel();
     else if (panel === shortcutPanel) hideShortcutPanel();
+    else if (panel?.classList?.contains('fm-editor-modal')) { updateActiveEditorRefs(panel); closeEditor(); }
 }
 
 let panelLayoutMenu = null;
@@ -5955,7 +6013,8 @@ function openPanelLayoutMenu(button, panel) {
 
 function setupPanelLayoutMenu() {
     document.querySelectorAll('[data-layout-panel]').forEach((button) => {
-        const panel = document.getElementById(button.dataset.layoutPanel);
+        const getPanel = () => button.dataset.layoutPanel === 'editor' ? button.closest('.fm-editor-modal') : document.getElementById(button.dataset.layoutPanel);
+        const panel = getPanel();
         if (!panel) return;
         button.addEventListener('pointerdown', (e) => {
             e.preventDefault();

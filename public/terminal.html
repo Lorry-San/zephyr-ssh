@@ -73,6 +73,9 @@
             <div class="fm-drop-overlay" id="fmDropOverlay">将文件拖放到此处上传到当前目录</div>
             <div class="fm-list" id="fmList"></div>
             <div class="fm-editor-modal" id="fmEditorModal" style="display:none;">
+                <div class="fm-editor-window-titlebar panel-titlebar">
+                    <button class="panel-traffic-btn" data-layout-panel="editor" title="窗口布局"><span></span></button>
+                </div>
                 <div class="fm-editor-header">
                     <span id="fmEditorTitle">编辑文件</span>
                     <div class="fm-editor-header-actions">
@@ -82,7 +85,8 @@
                         <button class="tool-btn fm-editor-format-btn" id="fmEditorFormatBtn" title="格式化 YAML/JSON/JS">格式化</button>
                         <button class="tool-btn" id="fmEditorUndoBtn" title="撤回">↶</button>
                         <button class="tool-btn" id="fmEditorRedoBtn" title="前进">↷</button>
-                        <button class="tool-btn" id="fmEditorCloseBtn">关闭</button>
+                        <button class="tool-btn fm-editor-save-icon" id="fmEditorSaveBtn" title="保存" aria-label="保存"><span></span></button>
+                        <button class="tool-btn fm-editor-close-icon" id="fmEditorCloseBtn" title="关闭" aria-label="关闭">×</button>
                     </div>
                 </div>
                 <div class="fm-editor-toolbar">
@@ -113,10 +117,7 @@
                 <div class="fm-editor-code-shell cm-ide-shell">
                     <div class="fm-editor-main cm-editor-host wrap-enabled" id="fmEditorMain"></div>
                 </div>
-                <div class="fm-editor-actions">
-                    <button class="btn btn-primary" id="fmEditorSaveBtn">保存</button>
-                    <button class="btn btn-secondary" id="fmEditorCancelBtn">取消</button>
-                </div>
+                <div class="fm-editor-actions" hidden></div>
             </div>
             <div class="panel-resize-handle left" data-resize-panel="fileManager" data-resize-edge="left" title="拖动调整大小"></div>
             <div class="panel-resize-handle right" data-resize-panel="fileManager" data-resize-edge="right" title="拖动调整大小"></div>

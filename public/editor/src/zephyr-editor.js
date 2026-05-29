@@ -66,6 +66,10 @@ const schemaHints = {
   'clash': 'Mihomo/Clash Schema',
 };
 
+function escapeHtml(value = '') {
+  return String(value).replace(/[&<>"']/g, (ch) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+}
+
 function extensionFor(language) {
   switch (language) {
     case 'yaml': return yaml();
@@ -268,10 +272,10 @@ const zephyrMinimapPlugin = ViewPlugin.fromClass(class {
     const doc = this.view.state.doc;
     const lines = [];
     for (let lineNo = 1; lineNo <= doc.lines; lineNo++) {
-      const line = doc.line(lineNo).text;
-      const indent = Math.min(7, Math.floor((line.match(/^\s*/)?.[0]?.length || 0) / 2));
-      const width = Math.max(12, Math.min(96, Math.round((line.trim().length || 1) * 2.1)));
-      lines.push(`<i style="--mm-i:${indent};--mm-w:${width}%"></i>`);
+      const raw = doc.line(lineNo).text;
+      const text = raw.trim() || ' ';
+      const indent = Math.min(7, Math.floor((raw.match(/^\s*/)?.[0]?.length || 0) / 2));
+      lines.push(`<i style="--mm-i:${indent}" title="${escapeHtml(text)}">${escapeHtml(text)}</i>`);
     }
     this.content.innerHTML = lines.join('');
     const scroll = this.view.scrollDOM;
@@ -504,7 +508,7 @@ function createMobileToolbar(instance, parent) {
     ['TAB', () => insertSnippet(instance, ' '.repeat(instance.tabSize || 4))], ['{}', () => insertSnippet(instance, '{}')],
     ['[]', () => insertSnippet(instance, '[]')], ['()', () => insertSnippet(instance, '()')], ['<>', () => insertSnippet(instance, '<>')],
     [':', () => insertSnippet(instance, ':')], [';', () => insertSnippet(instance, ';')], ['$', () => insertSnippet(instance, '$')],
-    ['/', () => insertSnippet(instance, '/')], ['命令', () => toggleCommandPalette(instance)],
+    ['/', () => insertSnippet(instance, '/')],
   ];
   items.forEach(([label, run]) => {
     const button = document.createElement('button');

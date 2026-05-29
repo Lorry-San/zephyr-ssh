@@ -6224,3 +6224,66 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .fm-conflict-choice:hover { border-color: var(--accent); transform: translateY(-1px); }
 .fm-conflict-remember { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; color: var(--text-secondary); font-size: 13px; }
 .fm-conflict-remember input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+.fm-editor-window-titlebar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 32px;
+    margin: -4px -4px 6px;
+    flex: 0 0 auto;
+}
+.fm-editor-window-titlebar .panel-traffic-btn {
+    position: static;
+    transform: none;
+}
+.fm-editor-save-icon {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    position: relative;
+}
+.fm-editor-save-icon span,
+.fm-editor-save-icon::before,
+.fm-editor-save-icon::after {
+    content: '';
+    position: absolute;
+    box-sizing: border-box;
+}
+.fm-editor-save-icon span {
+    left: 8px;
+    top: 6px;
+    width: 18px;
+    height: 20px;
+    border: 2px solid currentColor;
+    border-radius: 3px;
+}
+.fm-editor-save-icon span::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    right: 3px;
+    bottom: 2px;
+    height: 6px;
+    border: 1.6px solid currentColor;
+    border-radius: 2px;
+}
+.fm-editor-save-icon span::after {
+    content: '';
+    position: absolute;
+    right: 2px;
+    top: -2px;
+    width: 6px;
+    height: 7px;
+    background: currentColor;
+    border-radius: 0 0 1px 1px;
+}
+.fm-editor-close-icon {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    font-size: 22px;
+    line-height: 1;
+    font-weight: 800;
+}
+.fm-editor-actions[hidden] { display: none !important; }
