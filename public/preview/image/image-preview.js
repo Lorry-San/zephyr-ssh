@@ -33,6 +33,7 @@
     class ZephyrImagePreview {
         constructor(options = {}) {
             this.send = options.send || (() => {});
+            this.getImages = options.getImages || (() => []);
             this.notify = options.notify || (() => {});
             this.bringToFront = options.bringToFront || (() => {});
             this.formatSize = options.formatSize || formatSize;
@@ -44,6 +45,7 @@
             this.viewer = null;
             this.closed = false;
             this.modal = this.createModal();
+            this.modal._imagePreviewInstance = this;
             (document.querySelector('.terminal-page') || document.body).appendChild(this.modal);
         }
 
@@ -56,12 +58,14 @@
             modal.className = 'image-preview-modal';
             modal.style.display = 'none';
             modal.innerHTML = `
-                <div class="image-preview-header panel-titlebar">
+                <div class="image-preview-titlebar panel-titlebar">
+                    <button class="panel-traffic-btn" type="button" data-action="layout" title="窗口布局"><span></span></button>
+                </div>
+                <div class="image-preview-header">
                     <div class="image-preview-title" data-role="title">图片预览</div>
                     <div class="image-preview-actions">
                         <button class="tool-btn" type="button" data-action="refresh" title="重新加载预览">刷新</button>
                         <button class="tool-btn" type="button" data-action="open-viewer" title="打开 Viewer.js 查看器">查看</button>
-                        <button class="tool-btn" type="button" data-action="close" title="关闭">✕</button>
                     </div>
                 </div>
                 <div class="image-preview-body" data-role="body">
@@ -72,9 +76,9 @@
                 <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整大小"></div>
                 <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
             modal.addEventListener('pointerdown', () => this.focus());
-            modal.querySelector('[data-action="close"]')?.addEventListener('click', () => this.close());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
             modal.querySelector('[data-action="open-viewer"]')?.addEventListener('click', () => this.showViewer());
+            this.setupLayoutButton(modal);
             this.setupDrag(modal);
             this.setupResize(modal);
             return modal;
@@ -83,6 +87,55 @@
         focus() {
             this.onFocus(this);
             this.bringToFront(this.modal);
+        }
+
+        setupLayoutButton(modal) {
+            const button = modal.querySelector('[data-action="layout"]');
+            if (!button) return;
+            button.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.focus();
+                button.classList.add('pressing');
+                button.setPointerCapture?.(event.pointerId);
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const startLeft = modal.offsetLeft;
+                const startTop = modal.offsetTop;
+                let moved = false;
+                const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+                const clamp = (left, top) => ({
+                    left: Math.min(Math.max(0, left), Math.max(0, parentRect.width - 80)),
+                    top: Math.min(Math.max(0, top), Math.max(0, parentRect.height - 80)),
+                });
+                const onMove = (ev) => {
+                    ev.preventDefault();
+                    const dx = ev.clientX - startX;
+                    const dy = ev.clientY - startY;
+                    if (!moved && Math.hypot(dx, dy) > 7) { moved = true; modal.classList.add('dragging'); }
+                    if (!moved) return;
+                    const next = clamp(startLeft + dx, startTop + dy);
+                    modal.style.left = `${next.left}px`;
+                    modal.style.top = `${next.top}px`;
+                    modal.style.right = 'auto';
+                    modal.style.bottom = 'auto';
+                };
+                const onUp = () => {
+                    modal.classList.remove('dragging');
+                    button.classList.remove('pressing');
+                    this.suppressLayoutClick = moved;
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                };
+                window.addEventListener('pointermove', onMove, { passive: false });
+                window.addEventListener('pointerup', onUp, { once: true });
+            });
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (this.suppressLayoutClick) { this.suppressLayoutClick = false; return; }
+                this.close();
+            });
         }
 
         setupDrag(modal) {
@@ -245,8 +298,20 @@
             this.viewer = new window.Viewer(image, {
                 inline: false,
                 navbar: false,
-                toolbar: true,
+                fullscreen: false,
                 title: [1, () => this.currentPath.split('/').pop() || '图片预览'],
+                toolbar: {
+                    zoomIn: 1,
+                    zoomOut: 1,
+                    oneToOne: 1,
+                    reset: 1,
+                    prev: () => this.openSibling(-1),
+                    next: () => this.openSibling(1),
+                    rotateLeft: 1,
+                    rotateRight: 1,
+                    flipHorizontal: 1,
+                    flipVertical: 1,
+                },
                 viewed() { this.viewer.zoomTo(1); },
             });
         }
@@ -255,6 +320,15 @@
             this.focus();
             if (this.viewer) this.viewer.show();
             else this.modal.querySelector('[data-role="image"]')?.click();
+        }
+
+        openSibling(delta) {
+            const images = this.getImages(this.currentPath) || [];
+            if (!images.length) return;
+            const current = images.findIndex((item) => item.path === this.currentPath);
+            const index = current >= 0 ? current : 0;
+            const next = images[(index + delta + images.length) % images.length];
+            if (next?.path) this.open(next.path);
         }
 
         destroyViewer() {

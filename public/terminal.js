@@ -4266,6 +4266,7 @@ function openImagePreview(filePath) {
             bringToFront: bringPanelToFront,
             allocateZIndex: allocateFloatingPanelZIndex,
             formatSize: formatTransferSize,
+            getImages: () => allFiles.filter((file) => file.type !== 'd' && window.ZephyrImagePreview?.isImage?.(file.name)).map((file) => ({ ...file, path: fullFilePath(file.name) })),
             onFocus: (instance) => { activeImagePreview = instance; },
             onClose: (instance) => {
                 if (activeImagePreview === instance) activeImagePreview = null;
@@ -5902,6 +5903,7 @@ function hidePanelByElement(panel) {
     else if (panel === snippetPanel) hideSnippetPanel();
     else if (panel === shortcutPanel) hideShortcutPanel();
     else if (panel?.classList?.contains('fm-editor-modal')) { updateActiveEditorRefs(panel); closeEditor(); }
+    else if (panel?.classList?.contains('image-preview-modal')) panel._imagePreviewInstance?.close?.();
 }
 
 let panelLayoutMenu = null;

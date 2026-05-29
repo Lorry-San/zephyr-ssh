@@ -160,3 +160,17 @@
         padding-inline: 8px;
     }
 }
+
+.image-preview-titlebar {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 32px;
+    flex: 0 0 auto;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.image-preview-titlebar .panel-traffic-btn {
+    position: static;
+    transform: none;
+}
+.image-preview-actions [data-action="close"] { display: none !important; }
