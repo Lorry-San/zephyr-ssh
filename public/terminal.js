@@ -2567,6 +2567,7 @@ function isArchiveFile(name = '') { return /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2
 const SFTP_ARCHIVE_EXTENSIONS = ['.zip', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar', '.7z', '.gz', '.bz2', '.xz'];
 let sftpPasteConflictMemory = null;
 const pendingSftpConflictChecks = new Map();
+const pendingSftpProperties = new Map();
 function showFileContextMenu(x, y, onItem) {
     ensureFileContextMenu();
     const selected = getSelectedFiles();
@@ -2721,19 +2722,25 @@ function hideFilePropertiesModal() {
     filePropertiesOverlay?.classList.remove('show');
     filePropertiesModal?.classList.remove('show');
 }
-function showFilePropertiesModal(selected) {
+function renderFilePropertiesModal(selected, extra = null) {
     ensureFilePropertiesModal();
-    const total = selected.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+    const fallbackTotal = selected.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
     const single = selected.length === 1 ? selected[0] : null;
+    const remoteSingle = extra?.items?.length === 1 ? extra.items[0] : null;
+    const totalSize = Number(extra?.totalSize ?? remoteSingle?.size ?? fallbackTotal) || 0;
+    const fileCount = Number(extra?.fileCount ?? remoteSingle?.fileCount ?? 0) || 0;
+    const dirCount = Number(extra?.dirCount ?? remoteSingle?.dirCount ?? 0) || 0;
     const rows = single ? [
         ['名称', single.name || '-'],
         ['路径', single.path || '-'],
-        ['大小', formatTransferSize(single.size || 0)],
+        ['大小', extra ? formatTransferSize(totalSize) : `${formatTransferSize(single.size || 0)}（正在统计真实大小...）`],
+        ...(single.type === 'd' && extra ? [['内容', `${fileCount} 个文件，${Math.max(0, dirCount - 1)} 个子文件夹`]] : []),
         ['修改时间', single.modifyTime ? new Date(single.modifyTime).toLocaleString() : '-'],
         ['权限', single.rights || '-'],
     ] : [
         ['已选择', `${selected.length} 项`],
-        ['总大小', formatTransferSize(total)],
+        ['总大小', extra ? formatTransferSize(totalSize) : `${formatTransferSize(fallbackTotal)}（正在统计真实大小...）`],
+        ...(extra ? [['内容', `${fileCount} 个文件，${dirCount} 个文件夹`]] : []),
         ['当前路径', currentPath],
     ];
     const mode = single ? rightsToMode(single.rights) : '';
@@ -2744,8 +2751,19 @@ function showFilePropertiesModal(selected) {
             ${single ? `<button type="button" class="tool-btn fm-props-action" data-props-copy-path data-path="${escapeHtml(single.path || '')}">${svgIcon('copy')}复制路径</button><button type="button" class="tool-btn fm-props-action" data-props-chmod data-path="${escapeHtml(single.path || '')}" data-mode="${escapeHtml(mode)}">${svgIcon('chmod')}修改权限</button>` : ''}
             <button type="button" class="tool-btn fm-props-action primary" data-props-close>确定</button>
         </div>`;
+}
+function requestRemoteProperties(selected) {
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingSftpProperties.set(requestId, { selected });
+    wsConnection.send(JSON.stringify({ type: 'sftp-properties', requestId, items: selected.map((item) => ({ path: item.path })) }));
+}
+function showFilePropertiesModal(selected) {
+    ensureFilePropertiesModal();
+    renderFilePropertiesModal(selected, null);
     filePropertiesOverlay.classList.add('show');
     filePropertiesModal.classList.add('show');
+    requestRemoteProperties(selected);
 }
 function requestDownload(file) {
     const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -4382,6 +4400,13 @@ function handleSFTPMessage(msg) {
                 alert('剪贴板操作失败: ' + (msg.error || '未知错误'));
             }
             break;
+        case 'sftp-properties': {
+            const pending = pendingSftpProperties.get(msg.requestId);
+            if (pending) pendingSftpProperties.delete(msg.requestId);
+            if (msg.success && pending) renderFilePropertiesModal(pending.selected, msg);
+            else if (!msg.success) showToast('统计属性失败: ' + (msg.error || '未知错误'), 'error');
+            break;
+        }
         case 'sftp-clipboard-conflicts': {
             const handler = pendingSftpConflictChecks.get(msg.requestId);
             if (handler) {

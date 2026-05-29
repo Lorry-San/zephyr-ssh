@@ -2195,6 +2195,32 @@ async function resolveCompatibleRemotePath(sftp, targetPath) {
     return candidate;
 }
 
+async function calculateRemoteTreeProperties(sftp, targetPath, stats = null) {
+    const currentStats = stats || await sftpStat(sftp, targetPath);
+    if (!currentStats.isDirectory?.()) {
+        return { path: targetPath, size: Number(currentStats.size) || 0, fileCount: 1, dirCount: 0 };
+    }
+    let totalSize = 0;
+    let fileCount = 0;
+    let dirCount = 1;
+    const list = await sftpReaddir(sftp, targetPath);
+    for (const entry of list) {
+        if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
+        const childPath = remoteJoin(targetPath, entry.filename);
+        const isDir = entry.longname?.startsWith?.('d') || entry.attrs?.isDirectory?.();
+        if (isDir) {
+            const child = await calculateRemoteTreeProperties(sftp, childPath, entry.attrs);
+            totalSize += child.size;
+            fileCount += child.fileCount;
+            dirCount += child.dirCount;
+        } else {
+            totalSize += Number(entry.attrs?.size) || 0;
+            fileCount += 1;
+        }
+    }
+    return { path: targetPath, size: totalSize, fileCount, dirCount };
+}
+
 async function ensureRemoteDirRecursive(sftp, dirPath) {
     const normalized = normalizeRemotePath(dirPath);
     if (!normalized || normalized === '/') return;
@@ -3819,6 +3845,44 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 }));
                 sendJSON({ type: 'sftp-list', path: dir, files });
             });
+            return;
+        }
+
+        if (msg.type === 'sftp-properties') {
+            const requestId = String(msg.requestId || '');
+            const rawItems = Array.isArray(msg.items) ? msg.items : [];
+            const items = rawItems.map((item) => normalizeRemotePath(item.path || '')).filter((p) => p && p !== '/');
+            if (!items.length) {
+                sendJSON({ type: 'sftp-properties', requestId, success: false, error: '缺少属性路径' });
+                return;
+            }
+            try {
+                const results = [];
+                for (const itemPath of items) {
+                    const stats = await sftpStat(sftpStream, itemPath);
+                    const tree = await calculateRemoteTreeProperties(sftpStream, itemPath, stats);
+                    results.push({
+                        path: itemPath,
+                        name: basenameRemote(itemPath),
+                        type: stats.isDirectory?.() ? 'd' : '-',
+                        size: tree.size,
+                        fileCount: tree.fileCount,
+                        dirCount: tree.dirCount,
+                        modifyTime: (Number(stats.mtime) || Number(stats.modifyTime) || 0) * 1000,
+                    });
+                }
+                sendJSON({
+                    type: 'sftp-properties',
+                    requestId,
+                    success: true,
+                    items: results,
+                    totalSize: results.reduce((sum, item) => sum + (Number(item.size) || 0), 0),
+                    fileCount: results.reduce((sum, item) => sum + (Number(item.fileCount) || 0), 0),
+                    dirCount: results.reduce((sum, item) => sum + (Number(item.dirCount) || 0), 0),
+                });
+            } catch (err) {
+                sendJSON({ type: 'sftp-properties', requestId, success: false, error: err.message });
+            }
             return;
         }
 
