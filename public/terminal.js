@@ -95,6 +95,8 @@ let selectedFilePaths = new Set();
 let lastFileClick = { path: '', time: 0 };
 let fileContextMenu = null;
 let fileContextOverlay = null;
+let filePropertiesModal = null;
+let filePropertiesOverlay = null;
 let fileLongPressTimer = null;
 let mobileFileSelectMode = false;
 let sftpClipboardAvailable = false;
@@ -2448,6 +2450,7 @@ function svgIcon(name) {
         delete: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>',
         download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>',
         info: '<rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M8 9h6"></path><circle cx="8" cy="15" r="1.2"></circle><circle cx="12" cy="12" r="1.2"></circle><circle cx="16" cy="9" r="1.2"></circle>',
+        chmod: '<rect x="4" y="10" width="16" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 7.5-2"></path><path d="M12 14v2"></path><circle cx="12" cy="14" r="1"></circle>',
         refresh: '<path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M3 12A9 9 0 0 1 18.5 5.8"></path><path d="M18 2v4h4"></path><path d="M6 22v-4H2"></path>',
         newFolder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><path d="M12 9.8v6"></path><path d="M9 12.8h6"></path>',
         newFile: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path><path d="M12 9.8v6"></path><path d="M9 12.8h6"></path>',
@@ -2506,14 +2509,93 @@ function showFileContextMenu(x, y, onItem) {
         html += menuButton('paste', '粘贴', 'paste', shortcutLabel('paste'));
     }
     fileContextMenu.innerHTML = html;
-    fileContextMenu.style.left = '0px'; fileContextMenu.style.top = '0px';
+    fileContextMenu.style.left = '0px';
+    fileContextMenu.style.top = '0px';
+    fileContextMenu.style.maxHeight = Math.max(180, window.innerHeight - 24) + 'px';
     fileContextOverlay.classList.add('show');
     fileContextMenu.classList.add('show');
     const rect = fileContextMenu.getBoundingClientRect();
-    x = Math.min(x, window.innerWidth - rect.width - 12);
-    y = Math.min(y, window.innerHeight - rect.height - 12);
+    const menuWidth = rect.width || 260;
+    const menuHeight = Math.min(rect.height || 420, window.innerHeight - 24);
+    x = Math.min(x, window.innerWidth - menuWidth - 12);
+    if (y + menuHeight > window.innerHeight - 12) y = window.innerHeight - menuHeight - 12;
     fileContextMenu.style.left = Math.max(8, x) + 'px';
     fileContextMenu.style.top = Math.max(8, y) + 'px';
+}
+function rightsToMode(rights = '') {
+    const text = String(rights || '');
+    if (text.length < 10) return '';
+    const bits = [text.slice(1, 4), text.slice(4, 7), text.slice(7, 10)].map((part) =>
+        (part[0] === 'r' ? 4 : 0) + (part[1] === 'w' ? 2 : 0) + ((part[2] === 'x' || part[2] === 's' || part[2] === 't') ? 1 : 0)
+    );
+    return bits.join('');
+}
+function ensureFilePropertiesModal() {
+    if (filePropertiesModal) return;
+    filePropertiesOverlay = document.createElement('div');
+    filePropertiesOverlay.className = 'fm-props-overlay';
+    filePropertiesModal = document.createElement('div');
+    filePropertiesModal.className = 'fm-props-modal';
+    document.body.appendChild(filePropertiesOverlay);
+    document.body.appendChild(filePropertiesModal);
+    filePropertiesOverlay.addEventListener('click', hideFilePropertiesModal);
+    filePropertiesModal.addEventListener('click', (e) => {
+        const closeBtn = e.target.closest('[data-props-close]');
+        if (closeBtn) { hideFilePropertiesModal(); return; }
+        const copyBtn = e.target.closest('[data-props-copy-path]');
+        if (copyBtn) {
+            const pathText = copyBtn.dataset.path || '';
+            navigator.clipboard?.writeText(pathText).then(() => showToast('路径已复制', 'success')).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = pathText;
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); showToast('路径已复制', 'success'); } catch { showToast('复制失败', 'error'); }
+                ta.remove();
+            });
+            return;
+        }
+        const chmodBtn = e.target.closest('[data-props-chmod]');
+        if (chmodBtn) {
+            const targetPath = chmodBtn.dataset.path || '';
+            const currentMode = chmodBtn.dataset.mode || '';
+            const mode = prompt('输入权限模式（例如 644 / 755）:', currentMode || '644');
+            if (!mode) return;
+            if (!/^[0-7]{3,4}$/.test(mode.trim())) { showToast('权限格式不正确，请输入 644 或 0755', 'error'); return; }
+            wsConnection.send(JSON.stringify({ type: 'sftp-chmod', path: targetPath, mode: mode.trim() }));
+            showToast('正在修改权限...', 'info');
+        }
+    });
+}
+function hideFilePropertiesModal() {
+    filePropertiesOverlay?.classList.remove('show');
+    filePropertiesModal?.classList.remove('show');
+}
+function showFilePropertiesModal(selected) {
+    ensureFilePropertiesModal();
+    const total = selected.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+    const single = selected.length === 1 ? selected[0] : null;
+    const rows = single ? [
+        ['名称', single.name || '-'],
+        ['路径', single.path || '-'],
+        ['大小', formatTransferSize(single.size || 0)],
+        ['修改时间', single.modifyTime ? new Date(single.modifyTime).toLocaleString() : '-'],
+        ['权限', single.rights || '-'],
+    ] : [
+        ['已选择', `${selected.length} 项`],
+        ['总大小', formatTransferSize(total)],
+        ['当前路径', currentPath],
+    ];
+    const mode = single ? rightsToMode(single.rights) : '';
+    filePropertiesModal.innerHTML = `
+        <div class="fm-props-head"><strong>属性</strong><button type="button" class="fm-props-close" data-props-close>×</button></div>
+        <div class="fm-props-body">${rows.map(([label, value]) => `<div class="fm-props-row"><span>${escapeHtml(label)}</span><code title="${escapeHtml(value)}">${escapeHtml(value)}</code></div>`).join('')}</div>
+        <div class="fm-props-actions">
+            ${single ? `<button type="button" class="tool-btn fm-props-action" data-props-copy-path data-path="${escapeHtml(single.path || '')}">${svgIcon('copy')}复制路径</button><button type="button" class="tool-btn fm-props-action" data-props-chmod data-path="${escapeHtml(single.path || '')}" data-mode="${escapeHtml(mode)}">${svgIcon('chmod')}修改权限</button>` : ''}
+            <button type="button" class="tool-btn fm-props-action primary" data-props-close>确定</button>
+        </div>`;
+    filePropertiesOverlay.classList.add('show');
+    filePropertiesModal.classList.add('show');
 }
 function requestDownload(file) {
     const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2578,10 +2660,8 @@ function handleFileMenuAction(action) {
         return;
     }
     if (action === 'properties') {
-        const total = selected.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
-        alert(selected.length === 1
-            ? `名称：${single.name}\n路径：${single.path}\n大小：${formatTransferSize(single.size || 0)}\n修改时间：${single.modifyTime ? new Date(single.modifyTime).toLocaleString() : '-'}\n权限：${single.rights || '-'}`
-            : `已选择：${selected.length} 项\n总大小：${formatTransferSize(total)}\n当前路径：${currentPath}`);
+        if (!selected.length) return;
+        showFilePropertiesModal(selected);
     }
 }
 
@@ -4037,8 +4117,8 @@ function handleSFTPMessage(msg) {
             if (msg.error) alert('列出目录失败: ' + msg.error);
             else { selectedFilePaths.clear(); renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; updateMobileFileActions(); }
             break;
-        case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload':
-            if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); }
+        case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload': case 'sftp-chmod':
+            if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); if (msg.type === 'sftp-chmod') { hideFilePropertiesModal(); showToast('权限已修改', 'success'); } }
             else showToast('操作失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-upload-ready': {

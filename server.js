@@ -3499,6 +3499,20 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
             return;
         }
 
+        // 修改权限
+        if (msg.type === 'sftp-chmod') {
+            const targetPath = String(msg.path || '');
+            const modeText = String(msg.mode || '').trim();
+            if (!targetPath || !/^[0-7]{3,4}$/.test(modeText)) {
+                sendJSON({ type: 'sftp-chmod', path: targetPath, success: false, error: '权限格式不正确' });
+                return;
+            }
+            sftpStream.chmod(targetPath, parseInt(modeText, 8), (err) => {
+                sendJSON({ type: 'sftp-chmod', path: targetPath, mode: modeText, success: !err, error: err ? err.message : null });
+            });
+            return;
+        }
+
         // 下载文件：签发一次性 HTTP 下载地址，由浏览器通过响应流直接落盘，避免在 WebSocket/JS 内存中拼接大文件。
         if (msg.type === 'sftp-download') {
             const targetPath = String(msg.path || '');
