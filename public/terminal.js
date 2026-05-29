@@ -355,8 +355,6 @@ let terminalStableResizeTimer = 0;
 let terminalViewportFreezeUntil = 0;
 let terminalKeyboardSettlingTimer = 0;
 let terminalVisualHistory = [];
-let terminalLastNonEmptyText = '';
-let terminalLastNonEmptyTextAt = 0;
 const TERMINAL_STABLE_LAYOUT_DELAYS = [0, 60, 160, 360, 720];
 const TERMINAL_OVERSIZED_ROWS_RATIO = 1.18;
 let terminalAutoFollowEnabled = true;
@@ -1341,6 +1339,49 @@ function collectWTermBufferLines() {
     return lines;
 }
 
+function normalizeTerminalSnapshotLines(lines = []) {
+    return lines.map((line) => String(line || '').replace(/\s+$/g, ''));
+}
+
+function nonEmptyTerminalLines(text = '') {
+    return String(text || '').split('\n').map((line) => line.trimEnd()).filter((line) => line.trim());
+}
+
+function terminalLineMultiset(lines = []) {
+    const map = new Map();
+    lines.forEach((line) => map.set(line, (map.get(line) || 0) + 1));
+    return map;
+}
+
+function terminalMultisetMissingCount(previousLines = [], currentLines = []) {
+    const current = terminalLineMultiset(currentLines);
+    let missing = 0;
+    previousLines.forEach((line) => {
+        const count = current.get(line) || 0;
+        if (count > 0) current.set(line, count - 1);
+        else missing += 1;
+    });
+    return missing;
+}
+
+function terminalOrderInversionCount(previousLines = [], currentLines = []) {
+    const queues = new Map();
+    previousLines.forEach((line, index) => {
+        if (!queues.has(line)) queues.set(line, []);
+        queues.get(line).push(index);
+    });
+    let last = -1;
+    let inversions = 0;
+    currentLines.forEach((line) => {
+        const queue = queues.get(line);
+        if (!queue?.length) return;
+        const index = queue.shift();
+        if (index < last) inversions += 1;
+        last = Math.max(last, index);
+    });
+    return inversions;
+}
+
 function snapshotWTermVisualLines(reason = 'snapshot-visual-lines') {
     if (!term || !wtermWrapper) return null;
     const bufferLines = collectWTermBufferLines();
@@ -1354,43 +1395,32 @@ function snapshotWTermVisualLines(reason = 'snapshot-visual-lines') {
     if (!text.trim() || nonEmptyCount < 2) return null;
     const snapshot = {
         reason,
-        lines,
+        lines: normalizeTerminalSnapshotLines(lines),
         text,
         lineCount: nonEmptyCount,
-        seqCount: (text.match(/icmp_seq=/g) || []).length,
         at: performance.now(),
     };
     terminalVisualHistory.push(snapshot);
     if (terminalVisualHistory.length > 12) terminalVisualHistory.shift();
-    terminalLastNonEmptyText = text;
-    terminalLastNonEmptyTextAt = snapshot.at;
     return snapshot;
 }
 
 function hasTerminalTextRegression(previous = '', next = '') {
-    const prev = String(previous || '').trim();
-    const cur = String(next || '').trim();
-    if (!prev || !cur) return false;
-    const prevSeq = (prev.match(/icmp_seq=/g) || []).length;
-    const curSeq = (cur.match(/icmp_seq=/g) || []).length;
-    if (prevSeq >= 2 && curSeq < prevSeq) return true;
-    const prevLinesArray = prev.split('\n').filter((line) => line.trim());
-    const curLinesArray = cur.split('\n').filter((line) => line.trim());
-    const orderMap = new Map();
-    prevLinesArray.forEach((line, index) => { if (!orderMap.has(line)) orderMap.set(line, index); });
-    let last = -1;
-    let inversions = 0;
-    curLinesArray.forEach((line) => {
-        if (!orderMap.has(line)) return;
-        const index = orderMap.get(line);
-        if (index < last) inversions += 1;
-        last = Math.max(last, index);
-    });
-    if (inversions > 0 && curLinesArray.length >= Math.min(prevLinesArray.length, 4)) return true;
-    if (cur.length >= prev.length || cur === prev) return false;
-    const prevLines = prevLinesArray.length;
-    const curLines = curLinesArray.length;
-    return prevLines >= 4 && curLines + 1 < prevLines && prev.includes(curLinesArray[0] || cur);
+    const prev = String(previous || '').replace(/[\s\n]+$/g, '');
+    const cur = String(next || '').replace(/[\s\n]+$/g, '');
+    if (!prev || !cur || prev === cur) return false;
+    const prevLines = nonEmptyTerminalLines(prev);
+    const curLines = nonEmptyTerminalLines(cur);
+    if (prevLines.length < 2 || curLines.length < 1) return false;
+
+    const missing = terminalMultisetMissingCount(prevLines, curLines);
+    if (missing > 0 && curLines.length < prevLines.length) return true;
+
+    const inversions = terminalOrderInversionCount(prevLines, curLines);
+    if (inversions > 0 && curLines.length >= Math.min(prevLines.length, 3)) return true;
+
+    if (cur.length < prev.length && prevLines.length >= 4 && curLines.length + 1 < prevLines.length) return true;
+    return false;
 }
 
 function restoreWTermVisualSnapshot(snapshot, reason = 'restore-visual-snapshot') {
@@ -1407,7 +1437,7 @@ function restoreWTermVisualSnapshot(snapshot, reason = 'restore-visual-snapshot'
         term._scheduleRender?.();
     });
     requestAnimationFrame(() => requestTerminalAutoFollow(`${reason}:follow`));
-    logTerminalLayoutDiagnostics('wterm-layout:visual-snapshot-restored', { reason, rows, cols, lineCount: snapshot.lines.length, seqCount: snapshot.seqCount });
+    logTerminalLayoutDiagnostics('wterm-layout:visual-snapshot-restored', { reason, rows, cols, lineCount: snapshot.lines.length });
     return true;
 }
 
