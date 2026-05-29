@@ -2902,7 +2902,7 @@ html.keyboard-open .terminal-page {
 .docker-panel.front,
 .info-modal.front,
 .snippet-panel.front,
-.shortcut-panel.front { z-index: 47; }
+.shortcut-panel.front { z-index: var(--panel-z, 47); }
 .fm-editor-modal.editor-window.front { z-index: 520; }
 .file-manager.front-switching,
 .info-modal.front-switching,

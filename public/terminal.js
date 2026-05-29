@@ -6871,7 +6871,9 @@ function bringPanelToFront(panel) {
         document.querySelectorAll('.fm-editor-modal.editor-window, .image-preview-modal, .media-preview-modal').forEach((p) => {
             if (p !== panel) p.classList.remove('front-switching');
         });
-        panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
+        const nextZ = allocateFloatingPanelZIndex(panel);
+        panel.style.zIndex = String(nextZ);
+        panel.style.setProperty('--panel-z', String(nextZ));
         panel.classList.add('front');
         return;
     }
@@ -6880,7 +6882,9 @@ function bringPanelToFront(panel) {
         if (p !== panel) p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
-    panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
+    const nextZ = allocateFloatingPanelZIndex(panel);
+    panel.style.zIndex = String(nextZ);
+    panel.style.setProperty('--panel-z', String(nextZ));
     panel.classList.add('front');
     if (!wasFront) {
         panel.classList.remove('front-switching');
