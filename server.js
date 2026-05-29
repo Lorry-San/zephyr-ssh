@@ -53,6 +53,8 @@ const GUACD_PORT = Number(process.env.GUACD_PORT) || 4822;
 const GUACD_EMBEDDED = process.env.GUACD_EMBEDDED !== 'false';
 const GUACD_BIN = process.env.GUACD_BIN || 'guacd';
 const GUACD_LOG_LEVEL = process.env.GUACD_LOG_LEVEL || 'info';
+const GUACD_TRAFFIC_LOG_LEVEL = String(process.env.GUACD_TRAFFIC_LOG_LEVEL || 'info').toLowerCase();
+const GUACD_TRAFFIC_HEXDUMP = process.env.GUACD_TRAFFIC_HEXDUMP === 'true';
 const SSH_STATS_ENABLED = process.env.SSH_STATS_ENABLED !== 'false';
 const app = express();
 
@@ -756,6 +758,48 @@ function guacInstruction(opcode, ...args) {
         const text = String(value ?? '');
         return `${text.length}.${text}`;
     }).join(',') + ';';
+}
+
+function decodeGuacInstructions(data, limit = 6) {
+    const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data || '');
+    const out = [];
+    let offset = 0;
+    let elements = [];
+
+    try {
+        while (offset < text.length && out.length < limit) {
+            const lengthEnd = text.indexOf('.', offset);
+            if (lengthEnd === -1) break;
+            const lengthText = text.slice(offset, lengthEnd);
+            if (!/^\d+$/.test(lengthText)) break;
+            const length = Number.parseInt(lengthText, 10);
+            const elementStart = lengthEnd + 1;
+            const elementEnd = elementStart + length;
+            if (text.length <= elementEnd) break;
+            const terminator = text[elementEnd];
+            if (terminator !== ',' && terminator !== ';') break;
+            elements.push(text.slice(elementStart, elementEnd));
+            offset = elementEnd + 1;
+            if (terminator === ';') {
+                const opcode = elements.shift() || '';
+                out.push({ opcode, argCount: elements.length, args: elements.slice(0, 3).map((arg) => String(arg).slice(0, 48)) });
+                elements = [];
+            }
+        }
+    } catch {}
+
+    return out;
+}
+
+function logGuacdTraffic(direction, chunk, uuid = '-') {
+    const bytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk || ''), 'utf8');
+    const decoded = decodeGuacInstructions(chunk);
+    const meta = { bytes, uuid };
+    if (decoded.length) meta.instructions = decoded;
+    if (GUACD_TRAFFIC_HEXDUMP) meta.headHex = Buffer.from(String(chunk || ''), 'utf8').subarray(0, 64).toString('hex');
+
+    if (GUACD_TRAFFIC_LOG_LEVEL === 'debug') console.debug('[guacamole-ws]', direction, meta);
+    else console.info('[guacamole-ws]', direction, meta);
 }
 
 class GuacParser {
@@ -3385,8 +3429,8 @@ guacWss.on('connection', async (ws, req) => {
 
         session.socket.on('data', (chunk) => {
             if (ws.readyState === ws.OPEN) {
-                console.debug('[guacamole-ws]', 'guacd -> browser', { bytes: Buffer.byteLength(String(chunk || ''), 'utf8'), uuid: session.uuid });
-                ws.send(String(chunk));
+                logGuacdTraffic('guacd -> browser', chunk, session.uuid);
+                ws.send(chunk);
             }
         });
         session.socket.on('error', (err) => {
@@ -3405,7 +3449,7 @@ guacWss.on('connection', async (ws, req) => {
                 if (ws.readyState === ws.OPEN) ws.send(data);
                 return;
             }
-            console.debug('[guacamole-ws]', 'browser -> guacd', { bytes: Buffer.byteLength(data, 'utf8'), uuid: session?.uuid || '-' });
+            logGuacdTraffic('browser -> guacd', data, session?.uuid || '-');
             if (session?.socket?.writable) session.socket.write(data);
         });
         ws.on('close', () => closeGuac(guacdClosed ? 'guacd-close' : 'browser-close'));

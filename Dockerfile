@@ -55,6 +55,8 @@ WORKDIR /app
 # 与最终镜像内旧运行库不一致，表现为 RDP 会话 ready 后 guacd 子进程很快退出。
 # 从 Alpine 版 Node 官方镜像复制 Node.js 运行时，避免 glibc/musl 不兼容。
 # 同步复制构建阶段的 C++ 运行库，避免 guacd 镜像内旧 libstdc++ 导致 better-sqlite3 符号缺失。
+# 运行层还需显式保留 FreeRDP 客户端插件目录；RDPDR/CLIPRDR/显示更新等虚拟通道会在连接后动态加载，
+# 不能只依赖 -dev 包的链接库，否则部分镜像平台会出现 ready 后子进程退出或通道能力缺失。
 ENV PATH="/opt/guacamole/sbin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/guacamole/lib:/usr/lib/freerdp2"
 COPY --from=app-build /usr/local/bin/node /usr/local/bin/node
@@ -62,7 +64,7 @@ COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=app-build /tmp/native-runtime-libs/libstdc++.so.6 /usr/lib/libstdc++.so.6
 COPY --from=app-build /tmp/native-runtime-libs/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 COPY --from=app-build /app /app
-RUN apk add --no-cache imagemagick ffmpeg && \
+RUN apk add --no-cache imagemagick ffmpeg freerdp-libs && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     echo "=== runtime diagnostics ===" && \
@@ -70,6 +72,7 @@ RUN apk add --no-cache imagemagick ffmpeg && \
     echo "PATH=${PATH}" && \
     echo "guacd=$(command -v guacd)" && \
     guacd -v && \
+    find /usr/lib/freerdp2 -maxdepth 1 \( -type f -o -type l \) | sort | head -40 && \
     node --version && \
     npm --version && \
     test -f /app/node_modules/better-sqlite3/build/Release/better_sqlite3.node && \
