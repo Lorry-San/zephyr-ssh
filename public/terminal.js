@@ -2494,23 +2494,21 @@ fmList.addEventListener('click', (e) => {
     const item = e.target.closest('.fm-item');
     if (!item) { clearFileSelection(); return; }
     const filePath = item.dataset.filePath;
-    const fileType = item.dataset.fileType;
     if (!filePath) return;
-    if (fileType !== 'd' && isSftpMediaFile(filePath)) {
-        e.preventDefault();
-        openMediaPreview(filePath);
-        return;
-    }
-    const now = Date.now();
-    if (lastFileClick.path === filePath && now - lastFileClick.time < 360) {
-        lastFileClick = { path: '', time: 0 };
-        openFileItem(filePath, fileType);
-        return;
-    }
-    lastFileClick = { path: filePath, time: now };
     if (!isTouchLikeDevice() && (e.ctrlKey || e.metaKey)) toggleFileSelection(filePath);
     else if (isTouchLikeDevice() && mobileFileSelectMode) toggleFileSelection(filePath);
     else selectSingleFile(filePath);
+});
+fmList.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.fm-item-actions') || fileContextMenu?.classList.contains('show')) return;
+    const item = e.target.closest('.fm-item');
+    if (!item) return;
+    const filePath = item.dataset.filePath;
+    const fileType = item.dataset.fileType;
+    if (!filePath) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openFileItem(filePath, fileType);
 });
 fmList.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -2923,16 +2921,13 @@ function renderFileList(files) {
         nameSpan.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            selectSingleFile(itemPath);
+        });
+        nameSpan.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             openFileItem(itemPath, file.type);
         });
-        if (file.type !== 'd' && isSftpMediaFile(itemPath)) {
-            item.addEventListener('dblclick', (e) => {
-                if (e.target.closest('.fm-item-actions')) return;
-                e.preventDefault();
-                e.stopPropagation();
-                openMediaPreview(itemPath);
-            });
-        }
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
@@ -4376,17 +4371,18 @@ function ensureMediaPreviewModule() {
     if (window.ZephyrMediaPreview) return Promise.resolve(true);
     if (window.__zephyrMediaPreviewLoading) return window.__zephyrMediaPreviewLoading;
     window.__zephyrMediaPreviewLoading = new Promise((resolve) => {
-        const existing = document.querySelector('script[src*="preview/media/media-preview.js"]');
-        const script = existing || document.createElement('script');
-        const done = () => resolve(!!window.ZephyrMediaPreview);
+        const script = document.createElement('script');
+        const done = () => {
+            window.__zephyrMediaPreviewLoading = null;
+            resolve(!!window.ZephyrMediaPreview);
+        };
         script.addEventListener('load', done, { once: true });
-        script.addEventListener('error', () => resolve(false), { once: true });
-        if (!existing) {
-            script.src = `preview/media/media-preview.js?v=${Date.now()}`;
-            document.body.appendChild(script);
-        } else {
-            window.setTimeout(done, 0);
-        }
+        script.addEventListener('error', () => {
+            window.__zephyrMediaPreviewLoading = null;
+            resolve(false);
+        }, { once: true });
+        script.src = `preview/media/media-preview.js?v=${Date.now()}`;
+        document.body.appendChild(script);
     });
     return window.__zephyrMediaPreviewLoading;
 }
