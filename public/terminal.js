@@ -1854,6 +1854,7 @@ function transferStatusText(item) {
     if (item.direction === 'move') return '移动中';
     const loaded = Number(item.loaded ?? 0) || 0;
     const total = Number(item.size ?? 0) || 0;
+    if (!total && (item.status === 'active' || item.status === 'pending')) return '准备中';
     return total > 0 ? (Math.min(100, (loaded / total) * 100)).toFixed(0) + '%' : '传输中';
 }
 
@@ -1867,19 +1868,23 @@ function metaText(item) {
 function actionButtons(item) {
     // 所有非完成/失败的状态都显示取消 ❌
     if (item.status === 'done' || item.status === 'error') return '';
-    return `<button type="button" class="transfer-cancel-btn" title="取消" aria-label="取消"></button>`;
+    return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id || '')}" data-transfer-direction="${escapeHtml(item.direction || '')}" title="取消" aria-label="取消"></button>`;
 }
 
 // 直接给取消按钮绑 onclick（不依赖任何事件委托/冒泡）
 function bindCancelBtn(containerEl, id, direction) {
     const btn = containerEl.querySelector('.transfer-cancel-btn');
     if (!btn) return;
+    btn.dataset.transferAction = 'cancel';
+    btn.dataset.transferId = id || '';
+    btn.dataset.transferDirection = direction || '';
     btn.onclick = function(e) {
         e.preventDefault();
         e.stopPropagation();
         if (!id) return;
         if (direction === 'upload') cancelUploadTransfer(id);
         else if (direction === 'download') cancelDownloadTransfer(id);
+        else if (direction === 'copy' || direction === 'move') cancelClipboardTransfer(id);
     };
 }
 
@@ -2084,6 +2089,16 @@ function cancelDownloadTransfer(id) {
     window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
 }
 
+function cancelClipboardTransfer(id) {
+    const item = activeSftpDownloads.get(id);
+    if (!item) return;
+    item.cancelled = true;
+    markDownloadProgress(id, { status: 'error' });
+    sendJsonMessage({ type: 'sftp-clipboard-cancel', transferId: id });
+    showToast('已取消复制任务', 'info');
+    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
+}
+
 function pauseDownloadTransfer(id) {
     const download = activeSftpDownloads.get(id);
     if (!download) return;
@@ -2117,6 +2132,8 @@ function handleTransferActionClick(e) {
         cancelUploadTransfer(id);
     } else if (direction === 'download') {
         cancelDownloadTransfer(id);
+    } else if (direction === 'copy' || direction === 'move') {
+        cancelClipboardTransfer(id);
     }
 }
 
@@ -4154,7 +4171,7 @@ function handleSFTPMessage(msg) {
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             } else if (msg.direction === 'copy' || msg.direction === 'move') {
                 const label = msg.direction === 'move' ? '移动' : '复制';
-                markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '文件'}`, path: msg.path, direction: msg.direction, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
+                markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '文件'}`, path: msg.path, direction: msg.direction, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active', cancellable: msg.cancellable !== false });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             } else if (msg.direction === 'upload') {
                 markUploadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });

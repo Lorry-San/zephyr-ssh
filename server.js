@@ -53,6 +53,7 @@ const sftpDownloadTokens = new Map();
 const sftpUploadTokens = new Map();
 const sftpPreviewTokens = new Map();
 const sftpClipboardByUser = new Map();
+const sftpClipboardTransfers = new Map();
 const previewCache = new Map();
 const PREVIEW_TOKEN_TTL = 10 * 60 * 1000;
 const PREVIEW_CACHE_TTL = 30 * 60 * 1000;
@@ -1888,22 +1889,85 @@ function sftpMkdir(sftp, targetPath) {
 function sftpReaddir(sftp, targetPath) {
     return new Promise((resolve, reject) => sftp.readdir(targetPath, (err, list) => err ? reject(err) : resolve(list || [])));
 }
-function sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress) {
+function createSftpClipboardTransfer({ username, opId, mode, targetDir, sendProgress }) {
+    const transfer = {
+        id: opId,
+        username,
+        mode,
+        targetDir,
+        cancelled: false,
+        streams: new Set(),
+        sendProgress,
+    };
+    sftpClipboardTransfers.set(opId, transfer);
+    return transfer;
+}
+
+function finishSftpClipboardTransfer(opId) {
+    sftpClipboardTransfers.delete(opId);
+}
+
+function cancelSftpClipboardTransfer(opId, reason = '用户已取消') {
+    const transfer = sftpClipboardTransfers.get(opId);
+    if (!transfer) return false;
+    transfer.cancelled = true;
+    for (const stream of [...transfer.streams]) {
+        try { stream.destroy?.(new Error(reason)); } catch {}
+        try { stream.close?.(); } catch {}
+        try { stream.end?.(); } catch {}
+    }
+    transfer.sendProgress?.({
+        transferId: opId,
+        direction: transfer.mode === 'cut' ? 'move' : 'copy',
+        path: transfer.targetDir,
+        loaded: transfer.loaded || 0,
+        size: transfer.total || 0,
+        status: 'error',
+        error: reason,
+        cancellable: true,
+    });
+    finishSftpClipboardTransfer(opId);
+    return true;
+}
+
+function throwIfClipboardTransferCancelled(transfer) {
+    if (transfer?.cancelled) throw new Error('复制已取消');
+}
+
+function sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer) {
     return new Promise((resolve, reject) => {
+        throwIfClipboardTransferCancelled(transfer);
         const rs = sourceSftp.createReadStream(sourcePath, { highWaterMark: 512 * 1024 });
         const ws = targetSftp.createWriteStream(targetPath, { highWaterMark: 512 * 1024 });
+        transfer?.streams?.add?.(rs);
+        transfer?.streams?.add?.(ws);
         let settled = false;
-        const fail = (err) => {
+        const settle = (fn, value) => {
             if (settled) return;
             settled = true;
+            transfer?.streams?.delete?.(rs);
+            transfer?.streams?.delete?.(ws);
+            fn(value);
+        };
+        const fail = (err) => {
+            if (settled) return;
             try { rs.destroy?.(); } catch {}
             try { ws.destroy?.(); } catch {}
-            reject(err);
+            settle(reject, err);
         };
-        rs.on('data', (chunk) => { try { onProgress?.(chunk.length); } catch {} });
+        rs.on('data', (chunk) => {
+            try {
+                throwIfClipboardTransferCancelled(transfer);
+                onProgress?.(chunk.length);
+            } catch (err) { fail(err); }
+        });
         rs.on('error', fail);
         ws.on('error', fail);
-        ws.on('finish', () => { if (!settled) { settled = true; resolve(); } });
+        ws.on('finish', () => settle(resolve));
+        ws.on('close', () => {
+            if (!transfer?.cancelled) settle(resolve);
+        });
+        if (transfer?.cancelled) return fail(new Error('复制已取消'));
         rs.pipe(ws);
     });
 }
@@ -1917,19 +1981,22 @@ async function ensureRemoteDirRecursive(sftp, dirPath) {
         try { await sftpMkdir(sftp, cur); } catch {}
     }
 }
-async function copyRemoteTree(sourceSftp, sourcePath, targetSftp, targetPath, onProgress) {
+async function copyRemoteTree(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer) {
+    throwIfClipboardTransferCancelled(transfer);
     const stats = await sftpStat(sourceSftp, sourcePath);
+    throwIfClipboardTransferCancelled(transfer);
     if (stats.isDirectory?.()) {
         await ensureRemoteDirRecursive(targetSftp, targetPath);
         const list = await sftpReaddir(sourceSftp, sourcePath);
         for (const entry of list) {
+            throwIfClipboardTransferCancelled(transfer);
             if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
-            await copyRemoteTree(sourceSftp, remoteJoin(sourcePath, entry.filename), targetSftp, remoteJoin(targetPath, entry.filename), onProgress);
+            await copyRemoteTree(sourceSftp, remoteJoin(sourcePath, entry.filename), targetSftp, remoteJoin(targetPath, entry.filename), onProgress, transfer);
         }
         return;
     }
     await ensureRemoteDirRecursive(targetSftp, dirnameRemote(targetPath));
-    await sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress);
+    await sftpFastGetStream(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer);
 }
 async function removeRemotePath(connectionConfig, targetPath) {
     if (isDangerousRemotePath(targetPath)) throw new Error('拒绝删除空路径或根目录');
@@ -1959,38 +2026,60 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
     if (!targetConnectionConfig) throw new Error('目标 SSH 连接已失效');
     const sameConnection = String(clip.sourceConnectionId || '') && String(clip.sourceConnectionId) === String(targetSession.connectionId || '');
     const opId = crypto.randomUUID();
+    const transfer = createSftpClipboardTransfer({ username, opId, mode, targetDir, sendProgress });
     const total = clip.items.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+    transfer.total = total;
     let loaded = 0;
-    const bump = (n, currentPath = '') => {
-        loaded += Number(n) || 0;
-        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: currentPath || targetDir, loaded, size: total, status: 'active' });
+    const sendStatus = (status, currentPath = targetDir, extra = {}) => {
+        transfer.loaded = loaded;
+        transfer.total = total;
+        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: currentPath || targetDir, loaded, size: total, status, cancellable: true, ...extra });
     };
-    if (sameConnection) {
-        const commands = [];
-        for (const item of clip.items) {
-            const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
-            const command = remoteSameFileSafeCopyCommand(item.path, targetPath, { move: mode === 'cut', conflict });
-            commands.push(command);
-        }
-        console.info('[sftp-clipboard-paste]', 'same connection paste', { count: clip.items.length, targetDir, mode });
-        for (const command of commands) await execRemoteCommand(targetSession.sshClient, command);
-        loaded = total;
-        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded, size: total, status: 'done' });
-    } else {
-        await withRoutedSftp(clip.sourceConnectionConfig, async ({ sftp: sourceSftp }) => {
-            await withRoutedSftp(targetConnectionConfig, async ({ sftp: targetSftp }) => {
-                for (const item of clip.items) {
-                    const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
-                    await copyRemoteTree(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path));
-                }
+    const bump = (n, currentPath = '') => {
+        throwIfClipboardTransferCancelled(transfer);
+        loaded += Number(n) || 0;
+        sendStatus('active', currentPath || targetDir);
+    };
+    try {
+        if (sameConnection) {
+            const commands = [];
+            for (const item of clip.items) {
+                const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+                const command = remoteSameFileSafeCopyCommand(item.path, targetPath, { move: mode === 'cut', conflict });
+                commands.push(command);
+            }
+            console.info('[sftp-clipboard-paste]', 'same connection paste', { count: clip.items.length, targetDir, mode });
+            for (const command of commands) await execRemoteCommand(targetSession.sshClient, command);
+            loaded = total;
+            sendStatus('done', targetDir);
+        } else {
+            await withRoutedSftp(clip.sourceConnectionConfig, async ({ sftp: sourceSftp }) => {
+                await withRoutedSftp(targetConnectionConfig, async ({ sftp: targetSftp }) => {
+                    for (const item of clip.items) {
+                        throwIfClipboardTransferCancelled(transfer);
+                        const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+                        await copyRemoteTree(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path), transfer);
+                    }
+                });
             });
-        });
-        if (mode === 'cut') {
-            for (const item of clip.items) await removeRemotePath(clip.sourceConnectionConfig, item.path);
+            loaded = Math.max(total, loaded);
+            if (mode === 'cut') {
+                for (const item of clip.items) {
+                    throwIfClipboardTransferCancelled(transfer);
+                    await removeRemotePath(clip.sourceConnectionConfig, item.path);
+                }
+            }
+            sendStatus('done', targetDir);
         }
-        sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded: total || loaded, size: total, status: 'done' });
+        if (mode === 'cut') sftpClipboardByUser.delete(username);
+    } catch (err) {
+        const message = transfer.cancelled ? '复制已取消' : (err.message || '复制失败');
+        sendStatus('error', targetDir, { error: message });
+        if (transfer.cancelled) throw new Error(message);
+        throw err;
+    } finally {
+        finishSftpClipboardTransfer(opId);
     }
-    if (mode === 'cut') sftpClipboardByUser.delete(username);
 }
 
 function parseJSONLines(raw) {
@@ -3619,6 +3708,13 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 console.warn('[sftp-clipboard-paste]', 'failed', { targetDir, error: err.message });
                 sendJSON({ type: 'sftp-clipboard-paste', success: false, error: err.message });
             });
+            return;
+        }
+
+        if (msg.type === 'sftp-clipboard-cancel') {
+            const transferId = String(msg.transferId || msg.id || '');
+            const ok = transferId ? cancelSftpClipboardTransfer(transferId, '用户已取消') : false;
+            sendJSON({ type: 'sftp-clipboard-cancel', success: ok, transferId });
             return;
         }
 
