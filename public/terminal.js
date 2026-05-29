@@ -2839,8 +2839,23 @@ function handleFileMenuAction(action) {
     }
 }
 
+function isFileManagerShortcutBlocked(e) {
+    const target = e?.target;
+    const active = document.activeElement;
+    const isEditable = (el) => {
+        if (!el) return false;
+        const tag = el.tagName?.toLowerCase();
+        return tag === 'textarea'
+            || (tag === 'input' && !['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'range', 'color'].includes((el.type || '').toLowerCase()))
+            || el.isContentEditable
+            || !!el.closest?.('.cm-editor, .cm-content, .fm-editor-modal');
+    };
+    return isEditable(target) || isEditable(active) || !!document.querySelector('.fm-editor-modal.open .cm-focused');
+}
+
 document.addEventListener('keydown', (e) => {
     if (!fileManager?.classList.contains('open')) return;
+    if (isFileManagerShortcutBlocked(e)) return;
     const mac = getShortcutPlatform() === 'mac';
     const mod = mac ? e.metaKey : e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); handleFileMenuAction('copy'); }
