@@ -2583,7 +2583,7 @@ function refreshAllOpenFileManagers() {
     refreshExtraFileManagerWindows();
 }
 function getNextFileManagerOffset() {
-    const n = fileManagerWindowSeq;
+    const n = Math.max(0, fileManagerWindowSeq - 1);
     return { dx: 28 * (n % 8), dy: 24 * (n % 8) };
 }
 function createFileManagerWindow({ path = currentPath } = {}) {
@@ -2599,7 +2599,8 @@ function createFileManagerWindow({ path = currentPath } = {}) {
     panel.querySelectorAll('[data-resize-panel]').forEach((el) => el.removeAttribute('data-resize-panel'));
     panel.classList.remove('open', 'front', 'front-switching', 'panel-opening', 'panel-closing', 'dragging', 'resizing', 'drag-over');
     panel.style.display = 'flex';
-    terminalContainer.appendChild(panel);
+    const mount = fileManager.parentElement || terminalContainer.parentElement || document.querySelector('.terminal-page') || document.body;
+    mount.appendChild(panel);
 
     const backBtn = panel.querySelector('.fm-back-btn');
     const transferBtn = panel.querySelector('.fm-transfer-btn');
