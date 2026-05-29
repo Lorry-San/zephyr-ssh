@@ -2043,6 +2043,30 @@ function sftpWriteChunk(sftp, handle, buffer, length, position) {
         sftp.write(handle, buffer, 0, length, position, (err) => err ? reject(err) : resolve());
     });
 }
+async function sftpHashFile(sftp, filePath, { algorithm = 'sha256', chunkSize = 4 * 1024 * 1024, transfer = null } = {}) {
+    const hash = crypto.createHash(algorithm);
+    let handle = null;
+    const handleRef = { sftp, handle: null };
+    try {
+        handle = await sftpOpen(sftp, filePath, 'r');
+        handleRef.handle = handle;
+        transfer?.handles?.add?.(handleRef);
+        let position = 0;
+        while (true) {
+            throwIfClipboardTransferCancelled(transfer);
+            const buffer = Buffer.allocUnsafe(chunkSize);
+            const { bytesRead, buffer: readBuffer } = await sftpReadChunk(sftp, handle, buffer, chunkSize, position);
+            if (!bytesRead) break;
+            hash.update(readBuffer.subarray(0, bytesRead));
+            position += bytesRead;
+        }
+        return hash.digest('hex');
+    } finally {
+        transfer?.handles?.delete?.(handleRef);
+        await sftpClose(sftp, handle);
+    }
+}
+
 function configureClipboardChunkLimits(transfer, fileSize = 0) {
     if (!transfer) return;
     const size = Number(fileSize) || 0;
@@ -2141,9 +2165,9 @@ async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPa
         await sftpClose(targetSftp, writeHandle);
         writeRef.handle = null;
         writeHandle = null;
-        const targetStats = await sftpStat(targetSftp, targetPath);
-        const targetSize = Number(targetStats?.size) || 0;
-        if (targetSize !== size) throw new Error(`复制校验失败：目标文件大小 ${targetSize} 与源文件大小 ${size} 不一致`);
+        const sourceHash = await sftpHashFile(sourceSftp, sourcePath, { transfer });
+        const targetHash = await sftpHashFile(targetSftp, targetPath, { transfer });
+        if (sourceHash !== targetHash) throw new Error(`复制校验失败：SHA-256 不一致（源 ${sourceHash}，目标 ${targetHash}）`);
     } finally {
         transfer?.handles?.delete?.(readRef);
         transfer?.handles?.delete?.(writeRef);
