@@ -196,7 +196,11 @@
             const state = this.modal.querySelector('[data-role="state"]');
             const stage = this.modal.querySelector('[data-role="stage"]');
             if (state) { state.style.display = 'grid'; state.className = `media-preview-state ${type}`.trim(); state.innerHTML = escapeHtml(text); }
-            if (stage) { stage.style.display = 'none'; stage.innerHTML = ''; }
+            if (stage) {
+                stage.querySelectorAll?.('video,audio')?.forEach?.((media) => { try { media.pause(); media.removeAttribute('src'); media.load?.(); } catch {} });
+                stage.style.display = 'none';
+                stage.innerHTML = '';
+            }
         }
         open(filePath, options = {}) {
             if (!filePath || !ZephyrMediaPreview.isMedia(filePath)) return false;

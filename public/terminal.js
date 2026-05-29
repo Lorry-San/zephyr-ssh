@@ -184,6 +184,11 @@ let editorZIndexSeed = 260;
 const FLOATING_PANEL_SELECTOR = '.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel, .fm-editor-modal.editor-window, .image-preview-modal, .media-preview-modal';
 const editorPanelsByPath = new Map();
 const pendingEditorReads = new Map();
+const SFTP_VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'flv', 'f4v', 'mpeg', 'mpg', 'mpe', 'ts', 'mts', 'm2ts', 'vob', 'ogv', '3gp', '3g2', 'asf', 'rm', 'rmvb', 'divx', 'mxf']);
+const SFTP_AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus', 'weba', 'wma', 'alac', 'aiff', 'aif', 'ape', 'amr', 'mid', 'midi', 'mka', 'caf', 'ac3', 'dts', 'm4b']);
+function sftpFileExt(filePath = '') { const base = String(filePath || '').split(/[\\/]/).pop() || ''; const idx = base.lastIndexOf('.'); return idx > -1 ? base.slice(idx + 1).toLowerCase() : ''; }
+function isSftpMediaFile(filePath = '') { const ext = sftpFileExt(filePath); return SFTP_VIDEO_EXTENSIONS.has(ext) || SFTP_AUDIO_EXTENSIONS.has(ext); }
+function isSftpVideoFile(filePath = '') { return SFTP_VIDEO_EXTENSIONS.has(sftpFileExt(filePath)); }
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
@@ -2456,7 +2461,7 @@ function updateFileSelectionUI() {
 function openFileItem(filePath, fileType) {
     if (fileType === 'd') navigateTo(filePath);
     else if (window.ZephyrImagePreview?.isImage?.(filePath)) openImagePreview(filePath);
-    else if (window.ZephyrMediaPreview?.isMedia?.(filePath)) openMediaPreview(filePath);
+    else if (isSftpMediaFile(filePath)) openMediaPreview(filePath);
     else openEditor(filePath);
 }
 function isTouchLikeDevice() {
@@ -2906,7 +2911,7 @@ function renderFileList(files) {
         item.dataset.fileType = file.type;
         item.dataset.filePath = itemPath;
         item.classList.toggle('selected', selectedFilePaths.has(itemPath));
-        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (window.ZephyrMediaPreview?.isMedia?.(file.name) ? (window.ZephyrMediaPreview?.isVideo?.(file.name) ? '🎬' : '🎵') : '📄'));
+        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
         const nameSpan = document.createElement('span');
         nameSpan.textContent = `${icon} ${file.name}`;
         nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
@@ -4356,7 +4361,9 @@ function openImagePreview(filePath) {
 
 function openMediaPreview(filePath) {
     if (!window.ZephyrMediaPreview) {
-        showToast('媒体预览模块未加载', 'error');
+        const script = document.querySelector('script[src*="preview/media/media-preview.js"]');
+        showToast(`媒体预览模块未加载${script ? '，请强制刷新页面后重试' : '，当前页面缺少 media-preview.js'}`, 'error');
+        console.error('[SFTP-MEDIA]', 'ZephyrMediaPreview missing', { filePath, scriptPresent: !!script });
         return;
     }
     const existingEntry = Array.from(mediaPreviewPanelsByPath.entries()).find(([path, instance]) => path === filePath || instance.currentPath === filePath);
