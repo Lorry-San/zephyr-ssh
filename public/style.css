@@ -6287,3 +6287,58 @@ body.smartbar-trash-hover .smartbar-trash-target {
     font-weight: 800;
 }
 .fm-editor-actions[hidden] { display: none !important; }
+
+/* Refined editor titlebar and save icon */
+.fm-editor-window-titlebar {
+    margin: -4px -4px 8px;
+    height: 34px;
+    cursor: grab;
+    touch-action: none;
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255,255,255,.22), transparent 42%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, rgba(255,255,255,.10)), color-mix(in srgb, var(--surface) 74%, transparent));
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+.fm-editor-modal.dragging .fm-editor-window-titlebar { cursor: grabbing; }
+.fm-editor-window-titlebar .panel-traffic-btn {
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.18),
+        0 10px 24px rgba(0,0,0,.18),
+        0 0 0 1px color-mix(in srgb, var(--border) 36%, transparent);
+}
+.fm-editor-save-icon {
+    color: var(--accent-hover);
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+    overflow: hidden;
+}
+.fm-editor-save-icon::before {
+    left: 50%;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    border: 2px solid currentColor;
+    border-radius: 5px;
+    transform: translate(-50%, -50%);
+    background:
+        linear-gradient(currentColor, currentColor) 10px 0 / 4px 6px no-repeat,
+        linear-gradient(currentColor, currentColor) 4px 12px / 10px 2px no-repeat,
+        linear-gradient(currentColor, currentColor) 4px 15px / 10px 2px no-repeat;
+    box-shadow: inset 0 -7px 0 color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.fm-editor-save-icon::after {
+    left: 7px;
+    top: 6px;
+    width: 8px;
+    height: 5px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--surface) 82%, white);
+    opacity: .95;
+}
+.fm-editor-save-icon span { display: none; }
+.fm-editor-save-icon:hover {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 28%, transparent);
+}

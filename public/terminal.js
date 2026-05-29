@@ -4149,6 +4149,42 @@ function setupEditorPanel(panel) {
         });
     }
 
+    const titlebar = panel.querySelector('.fm-editor-window-titlebar');
+    if (titlebar && !titlebar._editorTitlebarDragReady) {
+        titlebar._editorTitlebarDragReady = true;
+        titlebar.addEventListener('pointerdown', (e) => {
+            if (e.target.closest('button,input,select,textarea,label')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            updateActiveEditorRefs(panel);
+            bringPanelToFront(panel);
+            panel.classList.add('dragging');
+            titlebar.setPointerCapture?.(e.pointerId);
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startLeft = panel.offsetLeft;
+            const startTop = panel.offsetTop;
+            const onMove = (ev) => {
+                ev.preventDefault();
+                panel.style.left = `${startLeft + ev.clientX - startX}px`;
+                panel.style.top = `${startTop + ev.clientY - startY}px`;
+                panel.dataset.editorMoved = '1';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                clampPanel(panel);
+            };
+            const onUp = () => {
+                panel.classList.remove('dragging');
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+                window.removeEventListener('pointercancel', onUp);
+            };
+            window.addEventListener('pointermove', onMove, { passive: false });
+            window.addEventListener('pointerup', onUp, { once: true });
+            window.addEventListener('pointercancel', onUp, { once: true });
+        });
+    }
+
     panel.querySelectorAll('[data-editor-resize-edge]').forEach((handle) => {
         handle.addEventListener('pointerdown', (e) => {
             e.preventDefault();
@@ -4321,7 +4357,7 @@ fmEditorRedoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPr
 fmEditorMinimapToggle?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorMinimapToggle.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); });
 fmEditorCompactBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCompactBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); });
 fmEditorPaletteBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorPaletteBtn.closest('.fm-editor-modal')); const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); });
-fmEditorSaveBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorSaveBtn.closest('.fm-editor-modal')); saveActiveEditor(); });
+fmEditorSaveBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorSaveBtn.closest('.fm-editor-modal')); saveActiveEditor({ closeAfterSave: false }); });
 fmEditorEncoding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorEncoding.closest('.fm-editor-modal')); if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value); });
 fmEditorLineEnding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorLineEnding.closest('.fm-editor-modal')); updateEditorStatus(); });
 fmEditorTabSize?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorTabSize.closest('.fm-editor-modal')); applyEditorOptions(); });
@@ -4353,7 +4389,7 @@ function setupClonedEditorEvents(panel) {
         else if (action === 'palette') { const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); }
         else if (action === 'undo') window.ZephyrCodeEditor?.undo?.(getEditorInstance());
         else if (action === 'redo') window.ZephyrCodeEditor?.redo?.(getEditorInstance());
-        else if (action === 'save') saveActiveEditor();
+        else if (action === 'save') saveActiveEditor({ closeAfterSave: false });
         else if (action === 'format') {
             const ok = await window.ZephyrCodeEditor?.format?.(getEditorInstance());
             if (ok) showToast('格式化完成', 'success');
