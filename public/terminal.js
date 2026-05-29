@@ -2515,6 +2515,8 @@ function menuButton(action, label, icon, shortcut = '', danger = false) {
     return `<button type="button" class="fm-context-item${danger ? ' danger' : ''}" data-action="${action}"><span class="fm-menu-left">${svgIcon(icon)}<span>${escapeHtml(label)}</span></span>${shortcut ? `<span class="fm-menu-shortcut">${escapeHtml(shortcut)}</span>` : ''}</button>`;
 }
 function isArchiveFile(name = '') { return /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz|gz|bz2|xz|7z|rar)$/i.test(name); }
+const SFTP_ARCHIVE_EXTENSIONS = ['.zip', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz', '.tar', '.7z', '.gz', '.bz2', '.xz'];
+let sftpPasteConflictMemory = null;
 function showFileContextMenu(x, y, onItem) {
     ensureFileContextMenu();
     const selected = getSelectedFiles();
@@ -2552,6 +2554,58 @@ function showFileContextMenu(x, y, onItem) {
     fileContextMenu.style.left = Math.max(8, x) + 'px';
     fileContextMenu.style.top = Math.max(8, y) + 'px';
 }
+function archiveExtensionOf(name = '') {
+    const lower = String(name || '').toLowerCase();
+    return SFTP_ARCHIVE_EXTENSIONS.find((ext) => lower.endsWith(ext)) || '';
+}
+function withArchiveExtension(name, ext) {
+    let text = String(name || '').trim();
+    if (!text) return text;
+    const current = archiveExtensionOf(text);
+    if (current) text = text.slice(0, -current.length);
+    return `${text}${ext || '.tar.gz'}`;
+}
+function chooseArchiveTargetPath(defaultName) {
+    const extList = SFTP_ARCHIVE_EXTENSIONS.join(' / ');
+    const input = prompt(`压缩到（支持 ${extList}）：`, fullFilePath(defaultName));
+    if (!input) return '';
+    if (archiveExtensionOf(input)) return input;
+    return withArchiveExtension(input, '.tar.gz');
+}
+function requestPasteConflictChoice() {
+    if (sftpPasteConflictMemory) return Promise.resolve(sftpPasteConflictMemory);
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'fm-conflict-overlay show';
+        const modal = document.createElement('div');
+        modal.className = 'fm-conflict-modal show';
+        modal.innerHTML = `
+            <div class="fm-conflict-head"><strong>目标已存在同名项目</strong><button type="button" class="fm-conflict-close" data-conflict-cancel>×</button></div>
+            <div class="fm-conflict-body">
+                <button type="button" class="fm-conflict-choice" data-conflict-mode="overwrite"><b>覆盖</b><span>删除目标同名文件/文件夹后粘贴</span></button>
+                <button type="button" class="fm-conflict-choice" data-conflict-mode="skip"><b>跳过</b><span>保留目标已有项目，只粘贴未冲突项目</span></button>
+                <button type="button" class="fm-conflict-choice primary" data-conflict-mode="compatible"><b>兼容</b><span>自动追加“-复制”“-复制2”…，可重复粘贴</span></button>
+                <label class="fm-conflict-remember"><input type="checkbox" data-conflict-remember> <span>记住选择（仅本次网页连接有效）</span></label>
+            </div>`;
+        const cleanup = (choice) => {
+            overlay.remove();
+            modal.remove();
+            resolve(choice || null);
+        };
+        overlay.addEventListener('click', () => cleanup(null));
+        modal.addEventListener('click', (e) => {
+            if (e.target.closest('[data-conflict-cancel]')) return cleanup(null);
+            const btn = e.target.closest('[data-conflict-mode]');
+            if (!btn) return;
+            const choice = { mode: btn.dataset.conflictMode, remember: !!modal.querySelector('[data-conflict-remember]')?.checked };
+            if (choice.remember) sftpPasteConflictMemory = choice;
+            cleanup(choice);
+        });
+        document.body.appendChild(overlay);
+        document.body.appendChild(modal);
+    });
+}
+
 function rightsToMode(rights = '') {
     const text = String(rights || '');
     if (text.length < 10) return '';
@@ -2646,8 +2700,12 @@ function handleFileMenuAction(action) {
         return;
     }
     if (action === 'paste') {
-        wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-paste', targetDir: currentPath, conflict: 'rename' }));
-        showToast('正在粘贴，进度可在传输面板查看', 'info');
+        requestPasteConflictChoice().then((choice) => {
+            if (!choice) return;
+            wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-paste', targetDir: currentPath, conflict: choice.mode }));
+            const label = choice.mode === 'overwrite' ? '覆盖' : choice.mode === 'skip' ? '跳过' : '兼容命名';
+            showToast(`正在粘贴（同名：${label}），进度可在传输面板查看`, 'info');
+        });
         return;
     }
     if (action === 'rename' && single) {
@@ -2663,8 +2721,8 @@ function handleFileMenuAction(action) {
     }
     if (action === 'compress') {
         if (!selected.length) return;
-        const defaultName = selected.length === 1 ? `${selected[0].name}.tar.gz` : `archive-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}.tar.gz`;
-        const targetPath = prompt('压缩到:', fullFilePath(defaultName));
+        const defaultName = selected.length === 1 ? `${selected[0].name}.zip` : `archive-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}.zip`;
+        const targetPath = chooseArchiveTargetPath(defaultName);
         if (!targetPath) return;
         wsConnection.send(JSON.stringify({ type: 'sftp-compress', items: selected, targetPath }));
         showToast('正在压缩...', 'info');

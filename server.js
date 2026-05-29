@@ -1849,18 +1849,58 @@ function buildRemoteScript(lines) {
     return (Array.isArray(lines) ? lines : [lines]).filter(Boolean).join('\n');
 }
 
-function remoteSameFileSafeCopyCommand(sourcePath, targetPath, { move = false, conflict = 'rename' } = {}) {
+function normalizeClipboardConflictMode(value) {
+    const mode = String(value || '').toLowerCase();
+    if (mode === 'overwrite' || mode === 'replace') return 'overwrite';
+    if (mode === 'skip') return 'skip';
+    if (mode === 'compatible' || mode === 'compat' || mode === 'rename') return 'compatible';
+    if (mode === 'cancel') return 'cancel';
+    return 'ask';
+}
+
+function remoteCompatibleNameScript() {
+    return 'if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); case "$b" in *.*) n=${b%.*}; e=.${b##*.};; *) n=$b; e=;; esac; dst="$d/$n-复制$e"; i=2; while [ -e "$dst" ]; do dst="$d/$n-复制$i$e"; i=$((i+1)); done; fi';
+}
+
+function remoteSameFileSafeCopyCommand(sourcePath, targetPath, { move = false, conflict = 'compatible' } = {}) {
     const sourceArg = remoteCommandArg(sourcePath);
     const targetArg = remoteCommandArg(targetPath);
+    const conflictMode = normalizeClipboardConflictMode(conflict);
     return buildRemoteScript([
         'set -e',
         `src=${sourceArg}`,
         `dst=${targetArg}`,
         '[ -e "$src" ] || { echo "源文件不存在: $src" >&2; exit 2; }',
-        conflict === 'cancel' ? '[ ! -e "$dst" ] || { echo "目标已存在: $dst" >&2; exit 3; }' : '',
-        conflict === 'rename' ? 'if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); case "$b" in *.*) n=${b%.*}; e=.${b##*.};; *) n=$b; e=;; esac; i=1; while :; do c="$d/$n ($i)$e"; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi' : '',
+        conflictMode === 'cancel' || conflictMode === 'ask' ? '[ ! -e "$dst" ] || { echo "目标已存在: $dst" >&2; exit 3; }' : '',
+        conflictMode === 'skip' ? '[ ! -e "$dst" ] || exit 0' : '',
+        conflictMode === 'compatible' ? remoteCompatibleNameScript() : '',
+        conflictMode === 'overwrite' ? '[ ! -e "$dst" ] || rm -rf -- "$dst"' : '',
         move ? 'mv -- "$src" "$dst"' : 'cp -a -- "$src" "$dst"',
     ]);
+}
+
+function remoteArchiveCommand(items, targetPath) {
+    const parent = dirnameRemote(items[0]);
+    const names = items.map((p) => basenameRemote(p));
+    const quotedNames = names.map(shellQuote).join(' ');
+    const target = shellQuote(targetPath);
+    const targetDir = shellQuote(dirnameRemote(targetPath));
+    const parentArg = shellQuote(parent);
+    const lower = String(targetPath || '').toLowerCase();
+    const ensureDir = `mkdir -p -- ${targetDir}`;
+    const needSingle = (fmt) => `test ${items.length} -eq 1 || { echo '${fmt} 只支持单个文件，请改用 .tar.*、.zip 或 .7z' >&2; exit 2; }`;
+    let body = '';
+    if (lower.endsWith('.zip')) body = `(command -v zip >/dev/null 2>&1 || { echo '远端未安装 zip，无法创建 .zip' >&2; exit 127; }; cd ${parentArg} && zip -r ${target} -- ${quotedNames})`;
+    else if (/\.(tar\.gz|tgz)$/.test(lower)) body = `tar -czf ${target} -C ${parentArg} -- ${quotedNames}`;
+    else if (/\.(tar\.bz2|tbz2)$/.test(lower)) body = `tar -cjf ${target} -C ${parentArg} -- ${quotedNames}`;
+    else if (/\.(tar\.xz|txz)$/.test(lower)) body = `tar -cJf ${target} -C ${parentArg} -- ${quotedNames}`;
+    else if (lower.endsWith('.tar')) body = `tar -cf ${target} -C ${parentArg} -- ${quotedNames}`;
+    else if (lower.endsWith('.7z')) body = `(command -v 7z >/dev/null 2>&1 && cd ${parentArg} && 7z a -y ${target} -- ${quotedNames} || command -v 7za >/dev/null 2>&1 && cd ${parentArg} && 7za a -y ${target} -- ${quotedNames} || { echo '远端未安装 7z/7za，无法创建 .7z' >&2; exit 127; })`;
+    else if (lower.endsWith('.gz')) body = `${needSingle('gzip')} && gzip -c -- ${shellQuote(items[0])} > ${target}`;
+    else if (lower.endsWith('.bz2')) body = `${needSingle('bzip2')} && bzip2 -c -- ${shellQuote(items[0])} > ${target}`;
+    else if (lower.endsWith('.xz')) body = `${needSingle('xz')} && xz -c -- ${shellQuote(items[0])} > ${target}`;
+    else throw new Error('暂不支持该压缩格式，请使用 .zip、.tar、.tar.gz、.tgz、.tar.bz2、.tbz2、.tar.xz、.txz、.7z、.gz、.bz2 或 .xz');
+    return `${ensureDir} && ${body}`;
 }
 
 function normalizeRemotePath(value) {
@@ -2083,6 +2123,26 @@ async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPa
         await sftpClose(targetSftp, writeHandle);
     }
 }
+async function remotePathExists(sftp, targetPath) {
+    try { await sftpStat(sftp, targetPath); return true; } catch { return false; }
+}
+async function resolveCompatibleRemotePath(sftp, targetPath) {
+    if (!(await remotePathExists(sftp, targetPath))) return targetPath;
+    const dir = dirnameRemote(targetPath);
+    const base = basenameRemote(targetPath);
+    const dot = base.lastIndexOf('.');
+    const hasExt = dot > 0;
+    const name = hasExt ? base.slice(0, dot) : base;
+    const ext = hasExt ? base.slice(dot) : '';
+    let candidate = remoteJoin(dir, `${name}-复制${ext}`);
+    let index = 2;
+    while (await remotePathExists(sftp, candidate)) {
+        candidate = remoteJoin(dir, `${name}-复制${index}${ext}`);
+        index += 1;
+    }
+    return candidate;
+}
+
 async function ensureRemoteDirRecursive(sftp, dirPath) {
     const normalized = normalizeRemotePath(dirPath);
     if (!normalized || normalized === '/') return;
@@ -2135,12 +2195,14 @@ async function withRoutedSftp(connectionConfig, callback, transfer) {
         [...(routed?.clients || [])].reverse().forEach((client) => { try { client.end?.(); } catch {} });
     }
 }
-async function pasteSftpClipboard({ username, targetSession, targetDir, mode, conflict = 'rename', sendProgress }) {
+async function pasteSftpClipboard({ username, targetSession, targetDir, mode, conflict = 'ask', sendProgress }) {
     const clip = sftpClipboardByUser.get(username);
     if (!clip || !Array.isArray(clip.items) || !clip.items.length) throw new Error('剪贴板为空');
     const targetConnectionConfig = targetSession?.connectionConfig;
     if (!targetConnectionConfig) throw new Error('目标 SSH 连接已失效');
     const sameConnection = String(clip.sourceConnectionId || '') && String(clip.sourceConnectionId) === String(targetSession.connectionId || '');
+    const conflictMode = normalizeClipboardConflictMode(conflict);
+    if (conflictMode === 'ask') throw new Error('目标存在同名项目，请选择覆盖、跳过或兼容');
     const opId = crypto.randomUUID();
     const transfer = createSftpClipboardTransfer({ username, opId, mode, targetDir, sendProgress });
     const total = clip.items.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
@@ -2173,7 +2235,14 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
                 await withRoutedSftp(targetConnectionConfig, async ({ sftp: targetSftp }) => {
                     for (const item of clip.items) {
                         throwIfClipboardTransferCancelled(transfer);
-                        const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+                        let targetPath = remoteJoin(targetDir, basenameRemote(item.path));
+                        if (conflictMode === 'skip') {
+                            try { await sftpStat(targetSftp, targetPath); continue; } catch {}
+                        } else if (conflictMode === 'compatible') {
+                            targetPath = await resolveCompatibleRemotePath(targetSftp, targetPath);
+                        } else if (conflictMode === 'overwrite') {
+                            try { await removeRemotePath(targetConnectionConfig, targetPath); } catch {}
+                        }
                         await copyRemoteTree(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path), transfer);
                     }
                 }, transfer);
@@ -3816,7 +3885,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 targetSession: attachedSshSession,
                 targetDir,
                 mode: clip.mode,
-                conflict: msg.conflict || 'rename',
+                conflict: msg.conflict || 'ask',
                 sendProgress: (payload) => sendTransferEvent(username, payload),
             }).then(() => {
                 sendJSON({ type: 'sftp-clipboard-paste', success: true, path: targetDir });
@@ -3841,9 +3910,9 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 sendJSON({ type: 'sftp-compress', success: false, error: '缺少压缩项目或目标路径' });
                 return;
             }
-            const parent = dirnameRemote(items[0]);
-            const names = items.map((p) => basenameRemote(p));
-            const cmd = `mkdir -p -- ${shellQuote(dirnameRemote(targetPath))} && tar -czf ${shellQuote(targetPath)} -C ${shellQuote(parent)} -- ${names.map(shellQuote).join(' ')}`;
+            let cmd = '';
+            try { cmd = remoteArchiveCommand(items, targetPath); }
+            catch (err) { sendJSON({ type: 'sftp-compress', success: false, error: err.message }); return; }
             execRemoteCommand(sshClient, cmd).then(() => {
                 sendJSON({ type: 'sftp-compress', success: true, path: targetPath });
             }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
