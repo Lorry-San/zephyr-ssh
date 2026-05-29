@@ -1910,8 +1910,10 @@ function finishSftpClipboardTransfer(opId) {
 function cancelSftpClipboardTransfer(opId, reason = '用户已取消') {
     const transfer = sftpClipboardTransfers.get(opId);
     if (!transfer) return false;
+    if (transfer.cancelled) return true;
     transfer.cancelled = true;
-    for (const stream of [...transfer.streams]) {
+    const streams = [...transfer.streams];
+    for (const stream of streams) {
         try { stream.destroy?.(new Error(reason)); } catch {}
         try { stream.close?.(); } catch {}
         try { stream.end?.(); } catch {}
@@ -1927,6 +1929,13 @@ function cancelSftpClipboardTransfer(opId, reason = '用户已取消') {
         cancellable: true,
     });
     finishSftpClipboardTransfer(opId);
+    setImmediate(() => {
+        for (const stream of streams) {
+            try { stream.destroy?.(new Error(reason)); } catch {}
+            try { stream.close?.(); } catch {}
+            try { stream.end?.(); } catch {}
+        }
+    });
     return true;
 }
 
@@ -3714,7 +3723,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         if (msg.type === 'sftp-clipboard-cancel') {
             const transferId = String(msg.transferId || msg.id || '');
             const ok = transferId ? cancelSftpClipboardTransfer(transferId, '用户已取消') : false;
-            sendJSON({ type: 'sftp-clipboard-cancel', success: ok, transferId });
+            sendJSON({ type: 'sftp-clipboard-cancel', success: true, cancelled: ok, transferId });
             return;
         }
 

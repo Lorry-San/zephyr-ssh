@@ -1692,7 +1692,10 @@ function ensureTransferPopover() {
     transferPopover.innerHTML = '<div class="transfer-popover-head"><strong>文件传输</strong><button type="button" class="transfer-popover-close" aria-label="关闭">×</button></div><div class="transfer-popover-body"></div>';
     document.body.appendChild(transferPopover);
     transferPopover.querySelector('.transfer-popover-close')?.addEventListener('click', (e) => { e.stopPropagation(); hideTransferPopover(true); });
-    transferPopover.addEventListener('pointerdown', (e) => e.stopPropagation());
+    transferPopover.addEventListener('pointerdown', (e) => {
+        if (e.target.closest?.('[data-transfer-action]')) return;
+        e.stopPropagation();
+    });
     transferPopover.addEventListener('pointerenter', () => window.clearTimeout(transferPopoverHideTimer));
     return transferPopover;
 }
@@ -1711,7 +1714,7 @@ function positionTransferPopover() {
 
 function renderTransferPopover() {
     const items = getTransferItems();
-    const hasActive = items.some((item) => item.status === 'active' || item.status === 'pending');
+    const hasActive = items.some((item) => item.status === 'active' || item.status === 'pending' || item.status === 'cancelling');
     fmTransferBtn?.classList.toggle('active', items.length > 0);
     fmTransferBtn?.classList.toggle('transfer-active', hasActive);
     fmTransferBtn?.setAttribute('data-count', String(items.length || ''));
@@ -1847,7 +1850,8 @@ function updateTransferItemElement(el, item) {
 
 function transferStatusText(item) {
     if (item.status === 'done') return '已完成';
-    if (item.status === 'error') return '失败';
+    if (item.status === 'error') return item.cancelled ? '已取消' : '失败';
+    if (item.status === 'cancelling') return '取消中';
     if (item.status === 'paused') return '已暂停';
     if (item.status === 'pending') return '等待中';
     if (item.direction === 'copy') return '复制中';
@@ -1867,7 +1871,7 @@ function metaText(item) {
 
 function actionButtons(item) {
     // 所有非完成/失败的状态都显示取消 ❌
-    if (item.status === 'done' || item.status === 'error') return '';
+    if (item.status === 'done' || item.status === 'error' || item.status === 'cancelling') return '';
     return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id || '')}" data-transfer-direction="${escapeHtml(item.direction || '')}" title="取消" aria-label="取消"></button>`;
 }
 
@@ -1913,7 +1917,7 @@ function showTransferPopover({ autoHide = false } = {}) {
 function hideTransferPopover(force = false) {
     if (!transferPopover) return;
     // Allow explicit close (X button) even with active transfers
-    if (!force && getTransferItems().some((item) => item.status === 'active' || item.status === 'pending')) return;
+    if (!force && getTransferItems().some((item) => item.status === 'active' || item.status === 'pending' || item.status === 'cancelling')) return;
     window.clearTimeout(transferPopoverHideTimer);
     transferPopover.classList.remove('open');
     fmTransferBtn?.setAttribute('aria-expanded', 'false');
@@ -1921,14 +1925,18 @@ function hideTransferPopover(force = false) {
 
 function markDownloadProgress(id, patch) {
     const current = activeSftpDownloads.get(id) || { id, loaded: 0, size: 0, status: 'pending', updatedAt: Date.now(), speed: 0 };
+    if (current._ignoreRemote && patch.status && patch.status !== 'error') return;
+    if (current.status === 'cancelling' && (!patch.status || patch.status === 'active' || patch.status === 'pending')) return;
     const next = { ...current, ...patch };
     const statusChanged = patch.status && patch.status !== current.status;
+    const wasIgnored = current._ignoreRemote;
     if (patch.loaded !== undefined) {
         updateTransferMetrics(current, patch.loaded);
         next.loaded = current.loaded;
         next.updatedAt = current.updatedAt;
         next.speed = current.speed;
     } else next.updatedAt = Date.now();
+    if (wasIgnored) next._ignoreRemote = true;
     activeSftpDownloads.set(id, next);
     if (statusChanged) scheduleTransferRender();
     else updateProgressDisplay(id);
@@ -2091,12 +2099,17 @@ function cancelDownloadTransfer(id) {
 
 function cancelClipboardTransfer(id) {
     const item = activeSftpDownloads.get(id);
-    if (!item) return;
+    if (!item || item.status === 'cancelling' || item.status === 'error' || item.status === 'done') return;
     item.cancelled = true;
-    markDownloadProgress(id, { status: 'error' });
+    item._ignoreRemote = true;
+    markDownloadProgress(id, { status: 'cancelling', cancelled: true });
     sendJsonMessage({ type: 'sftp-clipboard-cancel', transferId: id });
-    showToast('已取消复制任务', 'info');
-    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 1200);
+    showToast('正在取消复制任务...', 'info');
+    window.setTimeout(() => {
+        const latest = activeSftpDownloads.get(id);
+        if (latest?.status === 'cancelling') markDownloadProgress(id, { status: 'error', cancelled: true });
+    }, 1800);
+    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 4200);
 }
 
 function pauseDownloadTransfer(id) {
@@ -4170,6 +4183,11 @@ function handleSFTPMessage(msg) {
                 markDownloadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             } else if (msg.direction === 'copy' || msg.direction === 'move') {
+                const existing = activeSftpDownloads.get(id);
+                if (existing?.cancelled || existing?.status === 'cancelling') {
+                    if (msg.status === 'error') markDownloadProgress(id, { status: 'error', cancelled: true });
+                    break;
+                }
                 const label = msg.direction === 'move' ? '移动' : '复制';
                 markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '文件'}`, path: msg.path, direction: msg.direction, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active', cancellable: msg.cancellable !== false });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
