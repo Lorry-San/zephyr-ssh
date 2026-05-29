@@ -1818,7 +1818,7 @@ app.delete('/api/jump-hosts/:id', requireAuth, (req, res) => { storage.deleteJum
 function execRemoteCommand(sshClient, command) {
     return new Promise((resolve, reject) => {
         if (!sshClient) return reject(new Error('SSH 未连接'));
-        sshClient.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
+        sshClient.exec(`sh -lc ${shellQuote(command)}`, (err, stream) => {
             if (err) return reject(err);
             let stdout = '';
             let stderr = '';
@@ -1973,7 +1973,7 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
             commands.push(command);
         }
         console.info('[sftp-clipboard-paste]', 'same connection paste', { count: clip.items.length, targetDir, mode });
-        await execRemoteCommand(targetSession.sshClient, commands.join(' && '));
+        for (const command of commands) await execRemoteCommand(targetSession.sshClient, command);
         loaded = total;
         sendProgress?.({ transferId: opId, direction: mode === 'cut' ? 'move' : 'copy', path: targetDir, loaded, size: total, status: 'done' });
     } else {
