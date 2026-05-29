@@ -2137,6 +2137,13 @@ async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPa
             }
         };
         await Promise.all(Array.from({ length: workers }, () => workerLoop()));
+        throwIfClipboardTransferCancelled(transfer);
+        await sftpClose(targetSftp, writeHandle);
+        writeRef.handle = null;
+        writeHandle = null;
+        const targetStats = await sftpStat(targetSftp, targetPath);
+        const targetSize = Number(targetStats?.size) || 0;
+        if (targetSize !== size) throw new Error(`复制校验失败：目标文件大小 ${targetSize} 与源文件大小 ${size} 不一致`);
     } finally {
         transfer?.handles?.delete?.(readRef);
         transfer?.handles?.delete?.(writeRef);
