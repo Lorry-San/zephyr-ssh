@@ -2595,7 +2595,6 @@ function createFileManagerWindow({ path = currentPath } = {}) {
     panel.id = `fileManagerWindow${seq}`;
     panel.querySelectorAll('[id]').forEach((el) => { el.removeAttribute('id'); });
     panel.querySelector('.fm-editor-modal')?.remove();
-    panel.querySelectorAll('[data-layout-panel]').forEach((btn) => btn.removeAttribute('data-layout-panel'));
     panel.querySelectorAll('[data-drag-panel]').forEach((el) => el.removeAttribute('data-drag-panel'));
     panel.querySelectorAll('[data-resize-panel]').forEach((el) => el.removeAttribute('data-resize-panel'));
     panel.classList.remove('open', 'front', 'front-switching', 'panel-opening', 'panel-closing', 'dragging', 'resizing', 'drag-over');
@@ -2618,6 +2617,10 @@ function createFileManagerWindow({ path = currentPath } = {}) {
     const dropOverlay = panel.querySelector('.fm-drop-overlay');
     const listEl = panel.querySelector('.fm-list');
     const layoutBtn = panel.querySelector('.panel-traffic-btn');
+    if (layoutBtn) {
+        layoutBtn.dataset.layoutPanel = panel.id;
+        layoutBtn.dataset.extraFileManagerLayout = requestPrefix;
+    }
     const dragHandles = [panel.querySelector('.panel-drag-handle'), panel.querySelector('.panel-titlebar')].filter(Boolean);
     const resizeHandles = panel.querySelectorAll('.panel-resize-handle');
     const uploadInputId = `fmUploadInputWindow${seq}`;
@@ -2713,6 +2716,7 @@ function createFileManagerWindow({ path = currentPath } = {}) {
         try { uploadFiles(fileList); }
         finally { currentPath = previous; }
     }
+    state.close = close;
 
     refreshBtn?.addEventListener('click', refresh);
     closeBtn?.addEventListener('click', close);
@@ -6664,6 +6668,11 @@ function applyPanelLayout(panel, layout) {
 
 function hidePanelByElement(panel) {
     if (panel === fileManager) hideFileManager();
+    else if (panel?.classList?.contains('file-manager')) {
+        const owner = Array.from(extraFileManagerWindows).find((entry) => entry?.panel === panel);
+        if (owner?.close) owner.close();
+        else panel.remove();
+    }
     else if (panel === infoModal) hideInfoModal();
     else if (panel === dockerPanel) hideDockerPanel();
     else if (panel === snippetPanel) hideSnippetPanel();
@@ -6868,7 +6877,7 @@ function bringPanelToFront(panel) {
     }
     const wasFront = panel.classList.contains('front');
     document.querySelectorAll('.file-manager, .info-modal, .docker-panel, .snippet-panel, .shortcut-panel').forEach((p) => {
-        p.classList.remove('front');
+        if (p !== panel) p.classList.remove('front');
         if (p !== panel) p.classList.remove('front-switching');
     });
     panel.style.zIndex = String(allocateFloatingPanelZIndex(panel));
