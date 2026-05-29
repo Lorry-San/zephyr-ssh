@@ -1872,7 +1872,7 @@ function metaText(item) {
 function actionButtons(item) {
     // 所有非完成/失败的状态都显示取消 ❌
     if (item.status === 'done' || item.status === 'error' || item.status === 'cancelling') return '';
-    return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id || '')}" data-transfer-direction="${escapeHtml(item.direction || '')}" title="取消" aria-label="取消"></button>`;
+    return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id || '')}" data-transfer-direction="${escapeHtml(item.direction || '')}" title="取消" aria-label="取消"><span aria-hidden="true">×</span></button>`;
 }
 
 // 直接给取消按钮绑 onclick（不依赖任何事件委托/冒泡）

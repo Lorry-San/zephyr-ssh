@@ -6102,10 +6102,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .transfer-action { border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text-secondary); font-size: 11px; line-height: 1; padding: 4px 7px; cursor: pointer; min-width: 34px; text-align: center; box-sizing: border-box; }
 .transfer-action:hover { border-color: var(--accent); color: var(--accent-hover); }
 .transfer-action.danger:hover { border-color: var(--danger); color: var(--danger); }
-.transfer-cancel-btn { width: 24px; height: 24px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; position: relative; flex: 0 0 auto; opacity: .65; transition: opacity .15s, background .15s; }
-.transfer-cancel-btn:hover { opacity: 1; background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.transfer-cancel-btn { width: 24px; height: 24px; border: 0; border-radius: 50%; background: transparent; color: var(--text-secondary); cursor: pointer; position: relative; flex: 0 0 auto; opacity: .75; transition: opacity .15s, background .15s, color .15s; display: inline-flex; align-items: center; justify-content: center; font-size: 24px; line-height: 1; font-weight: 700; -webkit-appearance: none; appearance: none; }
+.transfer-cancel-btn:hover { opacity: 1; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.transfer-cancel-btn span { display: block; transform: translateY(-1px); pointer-events: none; }
 .transfer-cancel-btn::before,
-.transfer-cancel-btn::after { content: ''; position: absolute; top: 50%; left: 50%; width: 12px; height: 1.8px; background: currentColor; border-radius: 1px; pointer-events: none; }
+.transfer-cancel-btn::after { content: none; }
+.transfer-cancel-btn:not(:has(span))::before,
+.transfer-cancel-btn:not(:has(span))::after { content: ''; position: absolute; top: 50%; left: 50%; width: 12px; height: 1.8px; background: currentColor; border-radius: 1px; pointer-events: none; }
 .transfer-cancel-btn::before { transform: translate(-50%, -50%) rotate(45deg); }
 .transfer-cancel-btn::after { transform: translate(-50%, -50%) rotate(-45deg); }
 .transfer-item.paused .transfer-progress span { background: var(--warning); }
