@@ -4061,9 +4061,10 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
         // 列出目录
         if (msg.type === 'sftp-list') {
             const dir = msg.path || '.';
+            const requestId = String(msg.requestId || '');
             sftpStream.readdir(dir, (err, list) => {
                 if (err) {
-                    sendJSON({ type: 'sftp-list', path: dir, error: err.message, files: [] });
+                    sendJSON({ type: 'sftp-list', requestId, path: dir, error: err.message, files: [] });
                     return;
                 }
                 const files = list.map(entry => ({
@@ -4073,7 +4074,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     modifyTime: entry.attrs.mtime * 1000,
                     rights: entry.longname.substr(0, 10),
                 }));
-                sendJSON({ type: 'sftp-list', path: dir, files });
+                sendJSON({ type: 'sftp-list', requestId, path: dir, files });
             });
             return;
         }

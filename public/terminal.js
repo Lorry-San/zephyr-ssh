@@ -92,6 +92,9 @@ const fmDropOverlay = $('#fmDropOverlay');
 const fmSearchInput = $('#fmSearchInput');
 const fmList = $('#fmList');
 let selectedFilePaths = new Set();
+let fileManagerWindowSeq = 0;
+const fileManagerWindowsByRequestId = new Map();
+const extraFileManagerWindows = new Set();
 let lastFileClick = { path: '', time: 0 };
 let fileContextMenu = null;
 let fileContextOverlay = null;
@@ -2254,11 +2257,246 @@ function clearPanelMotion(panel) {
     panel.classList.remove('panel-opening', 'panel-closing');
 }
 
+
+function updateFileButtonActiveState() {
+    fileBtn?.classList.toggle('active', fileManager.classList.contains('open') || extraFileManagerWindows.size > 0);
+}
+function refreshExtraFileManagerWindows() {
+    extraFileManagerWindows.forEach((state) => state?.refresh?.());
+}
+function refreshAllOpenFileManagers() {
+    refreshFileList();
+    refreshExtraFileManagerWindows();
+}
+function getNextFileManagerOffset() {
+    const n = fileManagerWindowSeq;
+    return { dx: 28 * (n % 8), dy: 24 * (n % 8) };
+}
+function createFileManagerWindow({ path = currentPath } = {}) {
+    const panel = fileManager.cloneNode(true);
+    const seq = ++fileManagerWindowSeq;
+    const requestPrefix = `fmw-${seq}-${Date.now().toString(36)}`;
+    const state = { panel, requestPrefix, currentPath: path || '.', allFiles: [], selectedFilePaths: new Set(), searchQuery: '', mobileSelectMode: false };
+    state.refresh = refresh;
+    panel.id = `fileManagerWindow${seq}`;
+    panel.querySelectorAll('[id]').forEach((el) => { el.removeAttribute('id'); });
+    panel.querySelector('.fm-editor-modal')?.remove();
+    panel.querySelectorAll('[data-layout-panel]').forEach((btn) => btn.removeAttribute('data-layout-panel'));
+    panel.querySelectorAll('[data-drag-panel]').forEach((el) => el.removeAttribute('data-drag-panel'));
+    panel.querySelectorAll('[data-resize-panel]').forEach((el) => el.removeAttribute('data-resize-panel'));
+    panel.classList.remove('open', 'front', 'front-switching', 'panel-opening', 'panel-closing', 'dragging', 'resizing', 'drag-over');
+    panel.style.display = 'flex';
+    terminalContainer.appendChild(panel);
+
+    const backBtn = panel.querySelector('.fm-back-btn');
+    const transferBtn = panel.querySelector('.fm-transfer-btn');
+    const pathInput = panel.querySelector('.fm-path-input');
+    const goBtn = panel.querySelector('.fm-path-box .tool-btn');
+    const refreshBtn = panel.querySelector('.fm-refresh-btn');
+    const closeBtn = panel.querySelector('.fm-close-btn');
+    const searchInput = panel.querySelector('.fm-search-input');
+    const newFolderBtn = Array.from(panel.querySelectorAll('.fm-toolbar .tool-btn')).find((btn) => btn.textContent.includes('新建文件夹'));
+    const newFileBtn = Array.from(panel.querySelectorAll('.fm-toolbar .tool-btn')).find((btn) => btn.textContent.includes('新建文件'));
+    const uploadInput = panel.querySelector('input[type="file"]');
+    const uploadLabel = panel.querySelector('.fm-upload-label');
+    const selectBtn = panel.querySelector('.fm-select-btn');
+    const pasteBtn = panel.querySelector('.fm-paste-btn');
+    const dropOverlay = panel.querySelector('.fm-drop-overlay');
+    const listEl = panel.querySelector('.fm-list');
+    const layoutBtn = panel.querySelector('.panel-traffic-btn');
+    const dragHandles = [panel.querySelector('.panel-drag-handle'), panel.querySelector('.panel-titlebar')].filter(Boolean);
+    const resizeHandles = panel.querySelectorAll('.panel-resize-handle');
+    const uploadInputId = `fmUploadInputWindow${seq}`;
+    if (uploadInput) uploadInput.id = uploadInputId;
+    if (uploadLabel) uploadLabel.setAttribute('for', uploadInputId);
+
+    function fullPath(name) { return state.currentPath.replace(/\/+$/, '') + '/' + name; }
+    function selectedFiles() { return [...state.selectedFilePaths].map((filePath) => { const file = state.allFiles.find((f) => fullPath(f.name) === filePath) || {}; return { ...file, path: filePath, name: file.name || filePath.split('/').pop() || filePath, type: file.type || '-' }; }); }
+    function updateSelectionUI() { listEl?.querySelectorAll('.fm-item').forEach((item) => item.classList.toggle('selected', state.selectedFilePaths.has(item.dataset.filePath))); updateMobileActions(); }
+    function selectSingle(filePath) { state.selectedFilePaths = new Set([filePath]); updateSelectionUI(); }
+    function toggleSelection(filePath) { if (state.selectedFilePaths.has(filePath)) state.selectedFilePaths.delete(filePath); else state.selectedFilePaths.add(filePath); updateSelectionUI(); }
+    function clearSelection() { state.selectedFilePaths.clear(); updateSelectionUI(); }
+    function syncGlobalFileContext() {
+        currentPath = state.currentPath;
+        allFiles = state.allFiles;
+        selectedFilePaths = new Set(state.selectedFilePaths);
+        if (fmPathInput) fmPathInput.value = currentPath;
+    }
+    function updateMobileActions() {
+        const touch = isTouchLikeDevice();
+        if (selectBtn) { selectBtn.style.display = touch ? 'inline-flex' : 'none'; selectBtn.classList.toggle('active', state.mobileSelectMode); selectBtn.textContent = state.mobileSelectMode ? `完成${state.selectedFilePaths.size ? `(${state.selectedFilePaths.size})` : ''}` : '选择'; }
+        if (pasteBtn) pasteBtn.style.display = touch && sftpClipboardAvailable ? 'inline-flex' : 'none';
+    }
+    function refresh() {
+        syncGlobalFileContext();
+        if (!sftpReady || !wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+        const requestId = `${requestPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        fileManagerWindowsByRequestId.set(requestId, state);
+        wsConnection.send(JSON.stringify({ type: 'sftp-list', requestId, path: state.currentPath }));
+        if (pathInput) pathInput.value = state.currentPath;
+    }
+    function navigate(path) { state.currentPath = path; state.searchQuery = ''; if (searchInput) searchInput.value = ''; state.mobileSelectMode = false; updateMobileActions(); refresh(); }
+    function render(files) {
+        state.allFiles = sortFiles(files || []);
+        const filtered = filterFiles(state.allFiles, state.searchQuery);
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        filtered.forEach((file) => {
+            const item = document.createElement('div');
+            item.className = 'fm-item';
+            const itemPath = fullPath(file.name);
+            item.dataset.fileName = file.name;
+            item.dataset.fileType = file.type;
+            item.dataset.filePath = itemPath;
+            item.classList.toggle('selected', state.selectedFilePaths.has(itemPath));
+            const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = `${icon} ${file.name}`;
+            nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
+            nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); selectSingle(itemPath); });
+            nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); openItem(itemPath, file.type); });
+            const actions = document.createElement('div');
+            actions.className = 'fm-item-actions';
+            if (file.type !== 'd') {
+                const downloadBtn = document.createElement('button');
+                downloadBtn.textContent = '⬇️';
+                downloadBtn.title = '下载';
+                downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadBtn.disabled = true; window.setTimeout(() => { downloadBtn.disabled = false; }, 2400); requestDownload({ ...file, path: itemPath }); });
+                actions.appendChild(downloadBtn);
+            }
+            const renameBtn = document.createElement('button');
+            renameBtn.textContent = '✏️';
+            renameBtn.title = '重命名';
+            renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (!newName) return; wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: fullPath(newName) })); });
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = '🗑️';
+            deleteBtn.title = '删除';
+            deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
+            actions.appendChild(renameBtn); actions.appendChild(deleteBtn);
+            item.appendChild(nameSpan); item.appendChild(actions); listEl.appendChild(item);
+        });
+    }
+    function openItem(filePath, fileType) {
+        if (fileType === 'd') { navigate(filePath); return; }
+        if (window.ZephyrImagePreview?.isImage?.(filePath)) { openImagePreview(filePath); return; }
+        if (isSftpMediaFile(filePath)) { openMediaPreview(filePath); return; }
+        openEditor(filePath);
+    }
+    function close() {
+        if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
+        animatePanelFromButton(panel, fileBtn, false);
+        panel.classList.remove('open');
+        extraFileManagerWindows.delete(state);
+        for (const [requestId, owner] of fileManagerWindowsByRequestId.entries()) if (owner === state) fileManagerWindowsByRequestId.delete(requestId);
+        updateFileButtonActiveState();
+        window.setTimeout(() => panel.remove(), 320);
+    }
+    function newFolder() { const name = prompt('请输入文件夹名称:'); if (name) wsConnection.send(JSON.stringify({ type: 'sftp-mkdir', path: fullPath(name) })); }
+    function newFile() { const name = prompt('请输入文件名:'); if (name) wsConnection.send(JSON.stringify({ type: 'sftp-touch', path: fullPath(name) })); }
+    function uploadLocalFiles(fileList) {
+        const previous = currentPath;
+        currentPath = state.currentPath;
+        try { uploadFiles(fileList); }
+        finally { currentPath = previous; }
+    }
+
+    refreshBtn?.addEventListener('click', refresh);
+    closeBtn?.addEventListener('click', close);
+    goBtn?.addEventListener('click', () => { const p = pathInput?.value.trim(); if (p) navigate(p); });
+    pathInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const p = pathInput.value.trim(); if (p) navigate(p); } });
+    backBtn?.addEventListener('click', () => { const parts = state.currentPath.replace(/\/+$/, '').split('/'); parts.pop(); navigate(parts.join('/') || '/'); });
+    searchInput?.addEventListener('input', () => { state.searchQuery = searchInput.value.trim(); render(state.allFiles); });
+    newFolderBtn?.addEventListener('click', newFolder);
+    newFileBtn?.addEventListener('click', newFile);
+    selectBtn?.addEventListener('click', (e) => { e.preventDefault(); state.mobileSelectMode = !state.mobileSelectMode; if (!state.mobileSelectMode) clearSelection(); updateMobileActions(); });
+    pasteBtn?.addEventListener('click', (e) => { e.preventDefault(); syncGlobalFileContext(); handleFileMenuAction('paste'); });
+    transferBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (transferPopover?.classList.contains('open')) hideTransferPopover(true); else showTransferPopover(); });
+    uploadInput?.addEventListener('change', (e) => { uploadLocalFiles(e.target.files); uploadInput.value = ''; });
+    listEl?.addEventListener('click', (e) => { if (e.target.closest('.fm-item-actions') || fileContextMenu?.classList.contains('show')) return; const item = e.target.closest('.fm-item'); if (!item) { clearSelection(); return; } const filePath = item.dataset.filePath; if (!filePath) return; if (!isTouchLikeDevice() && (e.ctrlKey || e.metaKey)) toggleSelection(filePath); else if (isTouchLikeDevice() && state.mobileSelectMode) toggleSelection(filePath); else selectSingle(filePath); });
+    listEl?.addEventListener('dblclick', (e) => { if (e.target.closest('.fm-item-actions') || fileContextMenu?.classList.contains('show')) return; const item = e.target.closest('.fm-item'); if (!item) return; const filePath = item.dataset.filePath; if (!filePath) return; e.preventDefault(); e.stopPropagation(); openItem(filePath, item.dataset.fileType); });
+    listEl?.addEventListener('contextmenu', (e) => { e.preventDefault(); syncGlobalFileContext(); const item = e.target.closest('.fm-item'); if (item?.dataset.filePath) { selectSingle(item.dataset.filePath); selectedFilePaths = new Set(state.selectedFilePaths); } showFileContextMenu(e.clientX, e.clientY, !!item); });
+    [dropOverlay, listEl].filter(Boolean).forEach((target) => {
+        target.addEventListener('dragenter', (e) => { if (!hasDraggedFiles(e)) return; e.preventDefault(); panel.classList.add('drag-over'); }, { passive: false });
+        target.addEventListener('dragover', (e) => { if (!hasDraggedFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; panel.classList.add('drag-over'); }, { passive: false });
+        target.addEventListener('dragleave', () => panel.classList.remove('drag-over'), { passive: true });
+        target.addEventListener('drop', (e) => { if (!hasDraggedFiles(e)) return; e.preventDefault(); panel.classList.remove('drag-over'); uploadLocalFiles(e.dataTransfer?.files); }, { passive: false });
+    });
+    layoutBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); bringPanelToFront(panel); if (navigator.vibrate) navigator.vibrate(8); if (panelLayoutMenu && panelLayoutButton === layoutBtn) closePanelLayoutMenu(); else openPanelLayoutMenu(layoutBtn, panel); });
+    dragHandles.forEach((handle) => handle.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button,input,select,textarea,label')) return;
+        e.preventDefault(); bringPanelToFront(panel); panel.classList.add('dragging'); handle.setPointerCapture?.(e.pointerId);
+        const startX = e.clientX, startY = e.clientY, startLeft = panel.offsetLeft, startTop = panel.offsetTop;
+        const onMove = (ev) => { ev.preventDefault(); panel.style.left = `${startLeft + ev.clientX - startX}px`; panel.style.top = `${startTop + ev.clientY - startY}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampPanel(panel); };
+        const onUp = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+        window.addEventListener('pointermove', onMove, { passive: false }); window.addEventListener('pointerup', onUp, { once: true });
+    }));
+    resizeHandles.forEach((handle) => handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); bringPanelToFront(panel); panel.classList.add('resizing'); handle.setPointerCapture?.(e.pointerId);
+        const startX = e.clientX, startY = e.clientY, startWidth = panel.offsetWidth, startHeight = panel.offsetHeight, startLeft = panel.offsetLeft;
+        const edge = handle.classList.contains('left') ? 'left' : 'right';
+        const parentRect = panel.parentElement.getBoundingClientRect();
+        const minWidth = isCompactScreen() ? 260 : 420, minHeight = isCompactScreen() ? 240 : 320;
+        const onMove = (ev) => { ev.preventDefault(); let nextLeft = startLeft; let nextWidth = startWidth + ev.clientX - startX; if (edge === 'left') { nextWidth = startWidth - (ev.clientX - startX); nextLeft = startLeft + (ev.clientX - startX); if (nextWidth < minWidth) { nextLeft -= minWidth - nextWidth; nextWidth = minWidth; } if (nextLeft < 8) { nextWidth += nextLeft - 8; nextLeft = 8; } panel.style.left = `${nextLeft}px`; } const maxWidth = edge === 'left' ? startLeft + startWidth - 8 : parentRect.width - panel.offsetLeft - 12; const maxHeight = parentRect.height - panel.offsetTop - 12; panel.style.width = `${Math.min(Math.max(minWidth, nextWidth), maxWidth)}px`; panel.style.height = `${Math.min(Math.max(minHeight, startHeight + ev.clientY - startY), maxHeight)}px`; };
+        const onUp = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+        window.addEventListener('pointermove', onMove, { passive: false }); window.addEventListener('pointerup', onUp, { once: true });
+    }));
+    panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+
+    ensureFloatingPanel(panel, getDefaultPanelOptions(fileManager));
+    const base = getDefaultPanelOptions(fileManager);
+    const { dx, dy } = getNextFileManagerOffset();
+    Object.assign(panel.style, { left: `${(base.left || 16) + dx}px`, top: `${(base.top || 52) + dy}px`, width: `${base.width}px`, height: `${base.height}px`, right: 'auto', bottom: 'auto' });
+    extraFileManagerWindows.add(state);
+    panel.classList.add('open');
+    updateFileButtonActiveState();
+    updateMobileActions();
+    bringPanelToFront(panel);
+    requestAnimationFrame(() => animatePanelFromButton(panel, fileBtn, true));
+    if (!sftpReady) initSFTP(); else refresh();
+    return state;
+}
+function handleExtraFileManagerListMessage(msg) {
+    const requestId = String(msg.requestId || '');
+    if (!requestId) return false;
+    const state = fileManagerWindowsByRequestId.get(requestId);
+    if (!state) return false;
+    fileManagerWindowsByRequestId.delete(requestId);
+    const pathInput = state.panel.querySelector('.fm-path-input');
+    if (msg.error) showToast('列出目录失败: ' + msg.error, 'error');
+    else {
+        state.selectedFilePaths.clear();
+        state.currentPath = msg.path;
+        if (pathInput) pathInput.value = state.currentPath;
+        const listEl = state.panel.querySelector('.fm-list');
+        state.allFiles = sortFiles(msg.files || []);
+        const filtered = filterFiles(state.allFiles, state.searchQuery || '');
+        if (listEl) {
+            listEl.innerHTML = '';
+            filtered.forEach((file) => {
+                const item = document.createElement('div');
+                item.className = 'fm-item';
+                const itemPath = state.currentPath.replace(/\/+$/, '') + '/' + file.name;
+                item.dataset.fileName = file.name; item.dataset.fileType = file.type; item.dataset.filePath = itemPath;
+                const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
+                const nameSpan = document.createElement('span'); nameSpan.textContent = `${icon} ${file.name}`; nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
+                nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); state.selectedFilePaths = new Set([itemPath]); listEl.querySelectorAll('.fm-item').forEach((el) => el.classList.toggle('selected', el.dataset.filePath === itemPath)); });
+                nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); if (file.type === 'd') { state.currentPath = itemPath; state.searchQuery = ''; const si = state.panel.querySelector('.fm-search-input'); if (si) si.value = ''; const rid = `${state.requestPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; fileManagerWindowsByRequestId.set(rid, state); wsConnection.send(JSON.stringify({ type: 'sftp-list', requestId: rid, path: state.currentPath })); } else openFileItem(itemPath, file.type); });
+                const actions = document.createElement('div'); actions.className = 'fm-item-actions';
+                if (file.type !== 'd') { const downloadBtn = document.createElement('button'); downloadBtn.textContent = '⬇️'; downloadBtn.title = '下载'; downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDownload({ ...file, path: itemPath }); }); actions.appendChild(downloadBtn); }
+                const renameBtn = document.createElement('button'); renameBtn.textContent = '✏️'; renameBtn.title = '重命名'; renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (newName) wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: state.currentPath.replace(/\/+$/, '') + '/' + newName })); });
+                const deleteBtn = document.createElement('button'); deleteBtn.textContent = '🗑️'; deleteBtn.title = '删除'; deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
+                actions.appendChild(renameBtn); actions.appendChild(deleteBtn); item.appendChild(nameSpan); item.appendChild(actions); listEl.appendChild(item);
+            });
+        }
+    }
+    return true;
+}
+
 // ---------- 文件管理器 ----------
 function showFileManager() {
     ensureFloatingPanel(fileManager, getDefaultPanelOptions(fileManager));
     fileManager.classList.add('open');
-    fileBtn.classList.add('active');
+    updateFileButtonActiveState();
     updateMobileFileActions();
     bringPanelToFront(fileManager);
     requestAnimationFrame(() => animatePanelFromButton(fileManager, fileBtn, true));
@@ -2272,14 +2510,14 @@ function hideFileManager() {
     if (typeof closePanelLayoutMenu === 'function') closePanelLayoutMenu({ instant: true });
     animatePanelFromButton(fileManager, fileBtn, false);
     fileManager.classList.remove('open');
-    fileBtn.classList.remove('active');
+    updateFileButtonActiveState();
     mobileFileSelectMode = false;
     updateMobileFileActions();
     window.setTimeout(() => clearPanelMotion(fileManager), 320);
 }
 fileBtn.addEventListener('click', () => {
-    if (fileManager.classList.contains('open')) hideFileManager();
-    else showFileManager();
+    if (!fileManager.classList.contains('open') && extraFileManagerWindows.size === 0) showFileManager();
+    else createFileManagerWindow({ path: currentPath });
 });
 fmCloseBtn.addEventListener('click', hideFileManager);
 
@@ -4563,13 +4801,14 @@ if (window.ResizeObserver && fmEditorMain) {
 // ---------- SFTP 消息处理 ----------
 function handleSFTPMessage(msg) {
     switch (msg.type) {
-        case 'sftp-ready': sftpReady = true; refreshFileList(); flushPendingUploads(); break;
+        case 'sftp-ready': sftpReady = true; refreshAllOpenFileManagers(); flushPendingUploads(); break;
         case 'sftp-list':
+            if (handleExtraFileManagerListMessage(msg)) break;
             if (msg.error) alert('列出目录失败: ' + msg.error);
             else { selectedFilePaths.clear(); renderFileList(msg.files); currentPath = msg.path; fmPathInput.value = currentPath; updateMobileFileActions(); }
             break;
         case 'sftp-mkdir': case 'sftp-touch': case 'sftp-delete': case 'sftp-rename': case 'sftp-upload': case 'sftp-chmod':
-            if (msg.success) { refreshFileList(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); if (msg.type === 'sftp-chmod') { hideFilePropertiesModal(); showToast('权限已修改', 'success'); } }
+            if (msg.success) { refreshAllOpenFileManagers(); if (msg.type === 'sftp-upload') showToast('文件上传完成', 'success'); if (msg.type === 'sftp-chmod') { hideFilePropertiesModal(); showToast('权限已修改', 'success'); } }
             else showToast('操作失败: ' + (msg.error || '未知错误'), 'error');
             break;
         case 'sftp-upload-ready': {
@@ -4590,7 +4829,7 @@ function handleSFTPMessage(msg) {
             const upload = activeSftpUploads.get(msg.uploadId);
             if (upload) markUploadProgress(msg.uploadId, { status: 'done', loaded: upload.size || upload.file?.size || 0 });
             window.setTimeout(() => { activeSftpUploads.delete(msg.uploadId); scheduleTransferRender(); }, 5000);
-            refreshFileList();
+            refreshAllOpenFileManagers();
             showToast('文件上传完成', 'success');
             break;
         }
@@ -4683,15 +4922,15 @@ function handleSFTPMessage(msg) {
             break;
         }
         case 'sftp-clipboard-paste':
-            if (msg.success) { showToast('粘贴完成', 'success'); refreshFileList(); }
+            if (msg.success) { showToast('粘贴完成', 'success'); refreshAllOpenFileManagers(); }
             else alert('粘贴失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-compress':
-            if (msg.success) { showToast('压缩完成', 'success'); refreshFileList(); }
+            if (msg.success) { showToast('压缩完成', 'success'); refreshAllOpenFileManagers(); }
             else alert('压缩失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-extract':
-            if (msg.success) { showToast('解压完成', 'success'); refreshFileList(); }
+            if (msg.success) { showToast('解压完成', 'success'); refreshAllOpenFileManagers(); }
             else alert('解压失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-readfile': {
@@ -4723,7 +4962,7 @@ function handleSFTPMessage(msg) {
         case 'sftp-writefile': {
             const panel = msg.editorId ? editorPanelsByPath.get(msg.editorId) : Array.from(editorPanelsByPath.values()).reverse().find((p) => p.dataset.editorPath === msg.path);
             if (panel) updateActiveEditorRefs(panel);
-            if (msg.success) { refreshFileList(); } else alert('保存失败: ' + (msg.error || '未知错误'));
+            if (msg.success) { refreshAllOpenFileManagers(); } else alert('保存失败: ' + (msg.error || '未知错误'));
             break;
         }
         case 'sftp-error': alert('SFTP 错误: ' + msg.message); sftpReady = false; break;
@@ -6431,7 +6670,7 @@ setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
     setStableViewportHeight();
-    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, ...Array.from(imagePreviewPanelsByPath.values(), (preview) => preview.modal), ...Array.from(mediaPreviewPanelsByPath.values(), (preview) => preview.modal)].forEach((panel) => panel && clampPanel(panel));
+    [fileManager, infoModal, dockerPanel, snippetPanel, shortcutPanel, ...Array.from(extraFileManagerWindows, (entry) => entry.panel), ...Array.from(imagePreviewPanelsByPath.values(), (preview) => preview.modal), ...Array.from(mediaPreviewPanelsByPath.values(), (preview) => preview.modal)].forEach((panel) => panel && clampPanel(panel));
     updateViewportInsets();
     logTerminalLayoutDiagnostics('window-resize');
     if (!isTouchKeyboardDevice()) requestStableTerminalLayout('window-resize', { includeResize: true });
