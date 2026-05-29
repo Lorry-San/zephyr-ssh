@@ -196,12 +196,13 @@ class RawGuacWebSocketTunnel {
         this.state = 2;
         this.oninstruction = null;
         this.onstatechange = null;
+        this.onuuid = null;
         this.onerror = null;
         this.socket = null;
         this.parser = new GuacInstructionParser((opcode, args) => {
             console.debug('[guac-client]', 'instruction', { opcode, argCount: args.length });
             if (opcode === 'ready') {
-                this.uuid = args[0] || `zephyr-${Date.now()}`;
+                this.setUUID(args[0] || `zephyr-${Date.now()}`);
                 console.info('[guac-client]', 'tunnel ready', { uuid: this.uuid });
                 this.setState(1);
                 return;
@@ -223,6 +224,15 @@ class RawGuacWebSocketTunnel {
     setState(state) {
         this.state = state;
         this.onstatechange?.(state);
+    }
+
+    setUUID(uuid) {
+        this.uuid = uuid;
+        this.onuuid?.(uuid);
+    }
+
+    isConnected() {
+        return this.state === 1 || this.state === 3;
     }
 
     connect() {
