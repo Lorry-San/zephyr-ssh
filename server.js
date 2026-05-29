@@ -75,6 +75,8 @@ const PREVIEW_TOKEN_TTL = 10 * 60 * 1000;
 const PREVIEW_CACHE_TTL = 30 * 60 * 1000;
 const PREVIEW_CACHE_DIR = path.join(os.tmpdir(), 'zephyr-preview-cache');
 const MEDIA_TOKEN_TTL = 24 * 60 * 60 * 1000;
+const MEDIA_CACHE_TTL = 30 * 60 * 1000;
+const MEDIA_CACHE_DIR = path.join(os.tmpdir(), 'zephyr-media-cache');
 const BROWSER_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'avif']);
 const BROWSER_IMAGE_CONTENT_TYPES = new Map([
     ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['png', 'image/png'], ['webp', 'image/webp'],
@@ -2561,6 +2563,60 @@ function mediaRangeFromRequest(req, size) {
     return { start, end, partial: true };
 }
 
+function cleanupMediaFileCache() {
+    const now = Date.now();
+    try { fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true }); } catch {}
+    let entries = [];
+    try { entries = fs.readdirSync(MEDIA_CACHE_DIR, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const full = path.join(MEDIA_CACHE_DIR, entry.name);
+        try {
+            const stat = fs.statSync(full);
+            if (now - Number(stat.mtimeMs || 0) > MEDIA_CACHE_TTL) fs.unlinkSync(full);
+        } catch {}
+    }
+}
+
+function mediaCacheFilePath(mediaTask, ext) {
+    const key = mediaCacheKey([mediaTask.path, String(mediaTask.size || ''), String(mediaTask.mtime || ''), ext || 'media']);
+    return path.join(MEDIA_CACHE_DIR, `${key}.${ext || 'bin'}`);
+}
+
+function cacheSftpMediaToFile(sftp, mediaTask, ext) {
+    cleanupMediaFileCache();
+    const target = mediaCacheFilePath(mediaTask, ext);
+    return new Promise((resolve, reject) => {
+        fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true });
+        fs.stat(target, (statErr, cachedStat) => {
+            if (!statErr && Number(cachedStat.size) === Number(mediaTask.size || 0)) {
+                fs.utimes(target, new Date(), new Date(), () => resolve(target));
+                return;
+            }
+            const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+            const input = sftp.createReadStream(mediaTask.path);
+            const output = fs.createWriteStream(tmp);
+            let settled = false;
+            const done = (err) => {
+                if (settled) return;
+                settled = true;
+                try { input.destroy(); } catch {}
+                try { output.destroy(); } catch {}
+                if (err) {
+                    try { fs.unlinkSync(tmp); } catch {}
+                    reject(err);
+                    return;
+                }
+                fs.rename(tmp, target, (renameErr) => renameErr ? reject(renameErr) : resolve(target));
+            };
+            input.on('error', done);
+            output.on('error', done);
+            output.on('finish', () => done());
+            input.pipe(output);
+        });
+    });
+}
+
 app.get('/api/sftp/media/stream/:token', requireAuth, async (req, res) => {
     const mediaTask = getMediaTask(req.params.token, req, res);
     if (!mediaTask) return;
@@ -2606,21 +2662,20 @@ app.get('/api/sftp/media/stream/:token', requireAuth, async (req, res) => {
         res.status(200);
         res.type(isVideoExt(ext) ? 'video/mp4' : 'audio/mp4');
         res.setHeader('Accept-Ranges', 'none');
-        const args = ffmpegArgsForMode(mediaTask.mode, isVideoExt(ext));
-        const ffmpeg = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+        const inputPath = await cacheSftpMediaToFile(sftp, mediaTask, ext);
+        closeMediaRouted(routed, sftp);
+        routed = null;
+        sftp = null;
+        const args = ffmpegArgsForMode(mediaTask.mode, isVideoExt(ext), inputPath);
+        const ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
         let stderr = '';
         ffmpeg.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8').slice(-4000); });
         ffmpeg.on('error', (err) => { if (!res.headersSent) res.status(500).end(err.message); else res.destroy(err); });
         ffmpeg.on('close', (code) => {
-            closeMediaRouted(routed, sftp);
             if (code && !res.destroyed) console.warn('[sftp-media]', 'ffmpeg exited', { path: mediaTask.path, mode: mediaTask.mode, code, stderr: stderr.trim().slice(-500) });
         });
-        const readStream = sftp.createReadStream(mediaTask.path);
-        readStream.on('error', (err) => { try { ffmpeg.stdin.destroy(err); } catch {} });
         ffmpeg.stdout.on('error', () => {});
-        ffmpeg.stdin.on('error', () => {});
-        res.on('close', () => { try { readStream.destroy(); } catch {}; try { ffmpeg.kill('SIGKILL'); } catch {}; closeMediaRouted(routed, sftp); });
-        readStream.pipe(ffmpeg.stdin);
+        res.on('close', () => { try { ffmpeg.kill('SIGKILL'); } catch {} });
         ffmpeg.stdout.pipe(res);
     } catch (err) {
         closeMediaRouted(routed, sftp);

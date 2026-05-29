@@ -4381,7 +4381,7 @@ function ensureMediaPreviewModule() {
             window.__zephyrMediaPreviewLoading = null;
             resolve(false);
         }, { once: true });
-        script.src = `preview/media/media-preview.js?v=20260529-media-fix-${Date.now()}`;
+        script.src = `preview/media/media-preview.js?v=20260529-media-ui-fix-${Date.now()}`;
         document.body.appendChild(script);
     });
     return window.__zephyrMediaPreviewLoading;

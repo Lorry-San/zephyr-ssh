@@ -77,8 +77,8 @@
                     <div class="media-preview-stage" data-role="stage" style="display:none;"></div>
                 </div>
                 <div class="media-preview-meta" data-role="meta"></div>
-                <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整大小"></div>
-                <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整大小"></div>`;
+                <div class="panel-resize-handle left" data-role="resize-left" title="拖动调整窗口大小"></div>
+                <div class="panel-resize-handle right" data-role="resize-right" title="拖动调整窗口大小"></div>`;
             modal.addEventListener('pointerdown', () => this.focus());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
             modal.querySelector('[data-role="subtitle-input"]')?.addEventListener('change', (event) => this.mountManualSubtitle(event.target.files?.[0], event.target));
@@ -174,17 +174,24 @@
                     event.preventDefault(); event.stopPropagation(); this.focus();
                     modal.classList.add('resizing'); handle.setPointerCapture?.(event.pointerId);
                     const side = handle.dataset.role === 'resize-left' ? 'left' : 'right';
-                    const startX = event.clientX, startWidth = modal.offsetWidth, startLeft = modal.offsetLeft;
+                    const startX = event.clientX, startY = event.clientY;
+                    const startWidth = modal.offsetWidth, startHeight = modal.offsetHeight, startLeft = modal.offsetLeft;
                     const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
                     const minWidth = 300, maxWidth = Math.max(minWidth, parentRect.width - 12);
+                    const minHeight = 240, maxHeight = Math.max(minHeight, parentRect.height - 12);
                     const onMove = (ev) => {
                         ev.preventDefault();
                         const dx = ev.clientX - startX;
+                        const dy = ev.clientY - startY;
                         let nextWidth = side === 'left' ? startWidth - dx : startWidth + dx;
+                        let nextHeight = startHeight + dy;
                         nextWidth = Math.min(Math.max(minWidth, nextWidth), maxWidth);
+                        nextHeight = Math.min(Math.max(minHeight, nextHeight), maxHeight);
                         modal.style.width = `${nextWidth}px`;
+                        modal.style.height = `${nextHeight}px`;
                         if (side === 'left') modal.style.left = `${Math.min(Math.max(0, startLeft + (startWidth - nextWidth)), Math.max(0, parentRect.width - 80))}px`;
                         modal.style.right = 'auto';
+                        modal.style.bottom = 'auto';
                     };
                     const onUp = () => { modal.classList.remove('resizing'); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); window.removeEventListener('pointercancel', onUp); };
                     window.addEventListener('pointermove', onMove, { passive: false });
@@ -340,7 +347,20 @@
                 const err = media.error;
                 this.notify(`媒体播放失败${err?.message ? `：${err.message}` : ''}，可点刷新尝试转码`, 'error');
             });
-            stage.appendChild(media);
+            if (message.kind === 'audio') {
+                const audioWrap = document.createElement('div');
+                audioWrap.className = 'media-audio-card';
+                audioWrap.innerHTML = `
+                    <div class="media-audio-art" aria-hidden="true"><span></span></div>
+                    <div class="media-audio-info">
+                        <div class="media-audio-name">${escapeHtml((message.path || '').split(/[\\/]/).pop() || '音频')}</div>
+                        <div class="media-audio-hint">点击下方控件播放 / 暂停</div>
+                    </div>`;
+                audioWrap.appendChild(media);
+                stage.appendChild(audioWrap);
+            } else {
+                stage.appendChild(media);
+            }
             this.applySubtitles();
             if (state) state.style.display = 'none';
             stage.style.display = 'grid';

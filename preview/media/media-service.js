@@ -135,8 +135,8 @@ function decidePlayMode(info, ext, capabilities = {}) {
     if (isVideo && videoSupported) return 'REMUX';
     return isVideo ? 'FULL_TRANSCODE' : 'AUDIO_TRANSCODE';
 }
-function ffmpegArgsForMode(mode, isVideo) {
-    const common = ['-hide_banner', '-loglevel', 'warning', '-fflags', '+genpts', '-i', 'pipe:0'];
+function ffmpegArgsForMode(mode, isVideo, input = 'pipe:0') {
+    const common = ['-hide_banner', '-loglevel', 'warning', '-fflags', '+genpts', '-i', input];
     if (!isVideo) return [...common, '-vn', '-c:a', 'aac', '-b:a', '192k', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', 'pipe:1'];
     if (mode === 'REMUX') return [...common, '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', 'pipe:1'];
     if (mode === 'AUDIO_TRANSCODE') return [...common, '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof', 'pipe:1'];
