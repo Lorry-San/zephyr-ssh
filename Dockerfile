@@ -45,17 +45,18 @@ RUN /bin/sh /tmp/zephyr-guacd-patches/apply.sh && \
     make -j$(nproc) && \
     make install
 
-FROM guacamole/guacd:1.5.5
+FROM guacd-build
 
 USER root
 WORKDIR /app
 
-# 复用官方 guacd 镜像提供的 guacd、RDP/VNC 插件和运行依赖；
-# guacamole/guacd:1.5.5 基于 Alpine，guacd 位于 /opt/guacamole/sbin。
+# 直接以 guacd-build 作为运行层，确保补丁版 guacd/RDP 插件与 FreeRDP 等运行库来自同一 APK 解依赖结果。
+# 之前运行层重新 FROM guacamole/guacd:1.5.5 后只复制 /opt/guacamole，可能出现插件编译期 FreeRDP 运行库
+# 与最终镜像内旧运行库不一致，表现为 RDP 会话 ready 后 guacd 子进程很快退出。
 # 从 Alpine 版 Node 官方镜像复制 Node.js 运行时，避免 glibc/musl 不兼容。
 # 同步复制构建阶段的 C++ 运行库，避免 guacd 镜像内旧 libstdc++ 导致 better-sqlite3 符号缺失。
 ENV PATH="/opt/guacamole/sbin:${PATH}"
-COPY --from=guacd-build /opt/guacamole /opt/guacamole
+ENV LD_LIBRARY_PATH="/opt/guacamole/lib:/usr/lib/freerdp2"
 COPY --from=app-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=app-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=app-build /tmp/native-runtime-libs/libstdc++.so.6 /usr/lib/libstdc++.so.6

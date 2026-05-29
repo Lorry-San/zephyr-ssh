@@ -903,6 +903,12 @@ async function openGuacdSession(conn, display = {}, timeout = 10000) {
         socket.write(guacInstruction('select', protocol));
         const argsInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd args');
         if (argsInstruction.opcode !== 'args') throw new Error(`guacd 未返回 args 指令：${argsInstruction.opcode}`);
+        console.info('[guacd]', 'args received', {
+            protocol,
+            count: argsInstruction.args.length,
+            hasVersion: /^VERSION_/.test(argsInstruction.args[0] || ''),
+            firstArgs: argsInstruction.args.slice(0, 8),
+        });
 
         const params = guacamoleParameterMap(effectiveConn, display);
         socket.write(guacInstruction('size', params.width, params.height, params.dpi));
