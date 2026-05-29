@@ -4301,6 +4301,7 @@ function openImagePreview(filePath) {
             notify: showToast,
             bringToFront: bringPanelToFront,
             allocateZIndex: allocateFloatingPanelZIndex,
+            layoutMenu: { open: openPanelLayoutMenu, close: closePanelLayoutMenu },
             formatSize: formatTransferSize,
             getImages: () => allFiles.filter((file) => file.type !== 'd' && window.ZephyrImagePreview?.isImage?.(file.name)).map((file) => ({ ...file, path: fullFilePath(file.name) })),
             onFocus: (instance) => { activeImagePreview = instance; },

@@ -174,3 +174,18 @@
     transform: none;
 }
 .image-preview-actions [data-action="close"] { display: none !important; }
+
+.image-preview-titlebar {
+    cursor: grab;
+    touch-action: none;
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255,255,255,.22), transparent 42%),
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, rgba(255,255,255,.10)), color-mix(in srgb, var(--surface) 74%, transparent));
+}
+.image-preview-modal.dragging .image-preview-titlebar { cursor: grabbing; }
+.image-preview-titlebar .panel-traffic-btn {
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.18),
+        0 10px 24px rgba(0,0,0,.18),
+        0 0 0 1px color-mix(in srgb, var(--border) 36%, transparent);
+}

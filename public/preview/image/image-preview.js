@@ -36,6 +36,7 @@
             this.getImages = options.getImages || (() => []);
             this.notify = options.notify || (() => {});
             this.bringToFront = options.bringToFront || (() => {});
+            this.layoutMenu = options.layoutMenu || null;
             this.formatSize = options.formatSize || formatSize;
             this.onFocus = options.onFocus || (() => {});
             this.onClose = options.onClose || (() => {});
@@ -78,6 +79,7 @@
             modal.addEventListener('pointerdown', () => this.focus());
             modal.querySelector('[data-action="refresh"]')?.addEventListener('click', () => this.open(this.currentPath, { force: true }));
             modal.querySelector('[data-action="open-viewer"]')?.addEventListener('click', () => this.showViewer());
+            this.setupTitlebarDrag(modal);
             this.setupLayoutButton(modal);
             this.setupDrag(modal);
             this.setupResize(modal);
@@ -87,6 +89,45 @@
         focus() {
             this.onFocus(this);
             this.bringToFront(this.modal);
+        }
+
+        setupTitlebarDrag(modal) {
+            const titlebar = modal.querySelector('.image-preview-titlebar');
+            if (!titlebar) return;
+            titlebar.addEventListener('pointerdown', (event) => {
+                if (event.target.closest('button,input,select,textarea,label')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                this.focus();
+                modal.classList.add('dragging');
+                titlebar.setPointerCapture?.(event.pointerId);
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const startLeft = modal.offsetLeft;
+                const startTop = modal.offsetTop;
+                const parentRect = modal.parentElement?.getBoundingClientRect?.() || document.documentElement.getBoundingClientRect();
+                const clamp = (left, top) => ({
+                    left: Math.min(Math.max(0, left), Math.max(0, parentRect.width - 80)),
+                    top: Math.min(Math.max(0, top), Math.max(0, parentRect.height - 80)),
+                });
+                const onMove = (ev) => {
+                    ev.preventDefault();
+                    const next = clamp(startLeft + ev.clientX - startX, startTop + ev.clientY - startY);
+                    modal.style.left = `${next.left}px`;
+                    modal.style.top = `${next.top}px`;
+                    modal.style.right = 'auto';
+                    modal.style.bottom = 'auto';
+                };
+                const onUp = () => {
+                    modal.classList.remove('dragging');
+                    window.removeEventListener('pointermove', onMove);
+                    window.removeEventListener('pointerup', onUp);
+                    window.removeEventListener('pointercancel', onUp);
+                };
+                window.addEventListener('pointermove', onMove, { passive: false });
+                window.addEventListener('pointerup', onUp, { once: true });
+                window.addEventListener('pointercancel', onUp, { once: true });
+            });
         }
 
         setupLayoutButton(modal) {
@@ -112,7 +153,11 @@
                     ev.preventDefault();
                     const dx = ev.clientX - startX;
                     const dy = ev.clientY - startY;
-                    if (!moved && Math.hypot(dx, dy) > 7) { moved = true; modal.classList.add('dragging'); }
+                    if (!moved && Math.hypot(dx, dy) > 7) {
+                        moved = true;
+                        this.layoutMenu?.close?.({ instant: true });
+                        modal.classList.add('dragging');
+                    }
                     if (!moved) return;
                     const next = clamp(startLeft + dx, startTop + dy);
                     modal.style.left = `${next.left}px`;
@@ -126,15 +171,19 @@
                     this.suppressLayoutClick = moved;
                     window.removeEventListener('pointermove', onMove);
                     window.removeEventListener('pointerup', onUp);
+                    window.removeEventListener('pointercancel', onUp);
                 };
                 window.addEventListener('pointermove', onMove, { passive: false });
                 window.addEventListener('pointerup', onUp, { once: true });
+                window.addEventListener('pointercancel', onUp, { once: true });
             });
             button.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 if (this.suppressLayoutClick) { this.suppressLayoutClick = false; return; }
-                this.close();
+                this.focus();
+                if (navigator.vibrate) navigator.vibrate(8);
+                this.layoutMenu?.open?.(button, modal);
             });
         }
 
