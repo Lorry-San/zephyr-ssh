@@ -2612,9 +2612,7 @@ function handleFileMenuAction(action) {
     if (action === 'copy' || action === 'cut') {
         if (!selected.length) return;
         wsConnection.send(JSON.stringify({ type: 'sftp-clipboard-set', mode: action, items: selected }));
-        sftpClipboardAvailable = true;
-        updateMobileFileActions();
-        showToast(`${action === 'copy' ? '已复制' : '已剪切'} ${selected.length} 项`, 'success');
+        showToast(`正在${action === 'copy' ? '复制' : '剪切'} ${selected.length} 项...`, 'info');
         return;
     }
     if (action === 'paste') {
@@ -4201,7 +4199,11 @@ function handleSFTPMessage(msg) {
             break;
         }
         case 'sftp-clipboard-set':
-            if (!msg.success) {
+            if (msg.success) {
+                sftpClipboardAvailable = true;
+                updateMobileFileActions();
+                showToast(`${msg.mode === 'cut' ? '已剪切' : '已复制'} ${msg.count || 0} 项`, 'success');
+            } else {
                 sftpClipboardAvailable = false;
                 updateMobileFileActions();
                 alert('剪贴板操作失败: ' + (msg.error || '未知错误'));

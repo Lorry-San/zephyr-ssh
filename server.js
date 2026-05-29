@@ -1840,6 +1840,27 @@ function shellQuote(value) {
     return `'${String(value ?? '').replace(/'/g, `'"'"'`)}'`;
 }
 
+function remoteCommandArg(value) {
+    return shellQuote(value);
+}
+
+function buildRemoteScript(lines) {
+    return (Array.isArray(lines) ? lines : [lines]).filter(Boolean).join('\n');
+}
+
+function remoteSameFileSafeCopyCommand(sourcePath, targetPath, { move = false, conflict = 'rename' } = {}) {
+    const sourceArg = remoteCommandArg(sourcePath);
+    const targetArg = remoteCommandArg(targetPath);
+    return buildRemoteScript([
+        'set -e',
+        `src=${sourceArg}`,
+        `dst=${targetArg}`,
+        '[ -e "$src" ] || { echo "源文件不存在: $src" >&2; exit 2; }',
+        conflict === 'cancel' ? '[ ! -e "$dst" ] || { echo "目标已存在: $dst" >&2; exit 3; }' : '',
+        conflict === 'rename' ? 'if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); case "$b" in *.*) n=${b%.*}; e=.${b##*.};; *) n=$b; e=;; esac; i=1; while :; do c="$d/$n ($i)$e"; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi' : '',
+        move ? 'mv -- "$src" "$dst"' : 'cp -a -- "$src" "$dst"',
+    ]);
+}
 
 function normalizeRemotePath(value) {
     return String(value || '').replace(/\/+/g, '/') || '/';
@@ -1948,13 +1969,7 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
         const commands = [];
         for (const item of clip.items) {
             const targetPath = remoteJoin(targetDir, basenameRemote(item.path));
-            const sourceArg = shellQuote(item.path);
-            const command = [
-                `dst=${shellQuote(targetPath)}`,
-                conflict === 'cancel' ? `[ ! -e "$dst" ] || exit 3` : '',
-                conflict === 'rename' ? `if [ -e "$dst" ]; then d=$(dirname -- "$dst"); b=$(basename -- "$dst"); n="${'${b%.*}'}"; e="${'${b##*.}'}"; i=1; while :; do if [ "$n" != "$e" ]; then c="$d/$n ($i).$e"; else c="$d/$b ($i)"; fi; [ ! -e "$c" ] && { dst="$c"; break; }; i=$((i+1)); done; fi` : '',
-                mode === 'cut' ? `mv -- ${sourceArg} "$dst"` : `cp -a -- ${sourceArg} "$dst"`,
-            ].filter(Boolean).join('; ');
+            const command = remoteSameFileSafeCopyCommand(item.path, targetPath, { move: mode === 'cut', conflict });
             commands.push(command);
         }
         console.info('[sftp-clipboard-paste]', 'same connection paste', { count: clip.items.length, targetDir, mode });
@@ -3549,13 +3564,22 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         if (msg.type === 'sftp-clipboard-set') {
             const username = currentSession(req)?.username || '';
-            const items = Array.isArray(msg.items) ? msg.items.map((item) => ({
-                path: String(item.path || ''),
+            const rawItems = Array.isArray(msg.items) ? msg.items : [];
+            const items = rawItems.map((item) => ({
+                path: normalizeRemotePath(item.path || ''),
                 name: String(item.name || basenameRemote(item.path || '')).slice(0, 255),
                 type: item.type === 'd' ? 'd' : '-',
                 size: Number(item.size) || 0,
                 modifyTime: Number(item.modifyTime) || 0,
-            })).filter((item) => item.path && item.path !== '/') : [];
+            })).filter((item) => item.path && item.path !== '/');
+            if (sftpStream && items.length) {
+                try {
+                    await Promise.all(items.map((item) => sftpStat(sftpStream, item.path)));
+                } catch (err) {
+                    sendJSON({ type: 'sftp-clipboard-set', success: false, error: `复制失败：源路径无效或不存在（${err.message}）` });
+                    return;
+                }
+            }
             if (!username || !items.length) {
                 sendJSON({ type: 'sftp-clipboard-set', success: false, error: '没有可复制的项目' });
                 return;
