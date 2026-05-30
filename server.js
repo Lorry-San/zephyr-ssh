@@ -956,11 +956,8 @@ async function openGuacdSession(conn, display = {}, timeout = 10000) {
 
         const params = guacamoleParameterMap(effectiveConn, display);
         socket.write(guacInstruction('size', params.width, params.height, params.dpi));
-        const qual = String(display.quality || 'balanced');
-        if (qual !== 'performance') {
-            socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
-            socket.write(guacInstruction('video'));
-        }
+        socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
+        socket.write(guacInstruction('video'));
         socket.write(guacInstruction('image', qual === 'quality' ? 'image/png' : 'image/jpeg', 'image/png'));
         socket.write(guacInstruction('connect', ...argsInstruction.args.map((name) => params[name] ?? '')));
 
