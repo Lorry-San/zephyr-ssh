@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-29.2-standard-ws-tunnel';
+const GUAC_CLIENT_VERSION = '2026-05-30.1-rdp-webcodecs-annexb';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -352,7 +352,29 @@ function updateInfo() {
 }
 
 function applyDisplayScale() {
-    if (!client || !displayShell) return;
+    if (!displayShell) return;
+    const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
+    if (rdpCanvas && !client) {
+        const bounds = stage.getBoundingClientRect();
+        const curW = displayWidth || rdpCanvas.width || 1280;
+        const curH = displayHeight || rdpCanvas.height || 720;
+        if (!curW || !curH) return;
+        const mode = fitModes[fitModeIdx];
+        if (mode === '1:1') {
+            displayRoot.style.width = `${curW}px`;
+            displayRoot.style.height = `${curH}px`;
+            rdpCanvas.style.width = `${curW}px`;
+            rdpCanvas.style.height = `${curH}px`;
+            return;
+        }
+        const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
+        displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
+        displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
+        rdpCanvas.style.width = '100%';
+        rdpCanvas.style.height = '100%';
+        return;
+    }
+    if (!client) return;
     const display = client.getDisplay();
     const bounds = stage.getBoundingClientRect();
     const curW = displayWidth || display.getWidth?.() || 1280;
@@ -568,6 +590,123 @@ function setupMobilePointerMouse() {
     }, { passive: false });
 }
 
+function createRdpCanvasDisplay(canvas) {
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    return {
+        ctx,
+        setSize(width, height) {
+            if (canvas.width !== width || canvas.height !== height) {
+                canvas.width = width;
+                canvas.height = height;
+                displayWidth = width;
+                displayHeight = height;
+                applyDisplayScale();
+            }
+        },
+        draw(frame) {
+            this.setSize(frame.displayWidth || frame.codedWidth || canvas.width || 1280, frame.displayHeight || frame.codedHeight || canvas.height || 720);
+            ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        },
+    };
+}
+
+class AnnexBH264AccessUnitParser {
+    constructor(onConfig, onFrame) {
+        this.buffer = new Uint8Array(0);
+        this.pending = [];
+        this.sps = null;
+        this.pps = null;
+        this.configured = false;
+        this.onConfig = onConfig;
+        this.onFrame = onFrame;
+    }
+    push(chunk) {
+        this.buffer = AnnexBH264AccessUnitParser.concat(this.buffer, chunk);
+        const units = this.extractNalUnits(false);
+        for (const nal of units) this.acceptNal(nal);
+    }
+    flush() {
+        for (const nal of this.extractNalUnits(true)) this.acceptNal(nal);
+        this.emitPending(true);
+    }
+    acceptNal(nal) {
+        if (!nal || nal.length < 1) return;
+        const type = nal[0] & 0x1f;
+        if (type === 7) this.sps = nal;
+        if (type === 8) this.pps = nal;
+        if (!this.configured && this.sps && this.pps) {
+            this.configured = true;
+            this.onConfig(this.buildAvcc(this.sps, this.pps));
+        }
+        const startsPicture = type === 1 || type === 5;
+        if (startsPicture && this.pending.some((n) => (n[0] & 0x1f) === 1 || (n[0] & 0x1f) === 5)) {
+            this.emitPending(false);
+        }
+        this.pending.push(nal);
+        if (type === 9 && this.pending.length > 1) this.emitPending(false);
+    }
+    emitPending(force) {
+        const hasSlice = this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
+        if (!hasSlice && !force) return;
+        if (!this.configured) return;
+        const key = this.pending.some((n) => (n[0] & 0x1f) === 5);
+        const data = AnnexBH264AccessUnitParser.toAvccFrame(this.pending);
+        this.pending = [];
+        if (data.byteLength) this.onFrame(data, key);
+    }
+    extractNalUnits(flush) {
+        const starts = [];
+        for (let i = 0; i < this.buffer.length - 3; i++) {
+            if (this.buffer[i] === 0 && this.buffer[i + 1] === 0 && this.buffer[i + 2] === 1) starts.push({ pos: i, len: 3 });
+            else if (i < this.buffer.length - 4 && this.buffer[i] === 0 && this.buffer[i + 1] === 0 && this.buffer[i + 2] === 0 && this.buffer[i + 3] === 1) starts.push({ pos: i, len: 4 });
+        }
+        if (starts.length === 0) {
+            if (this.buffer.length > 1024 * 1024) this.buffer = new Uint8Array(0);
+            return [];
+        }
+        const completeCount = flush ? starts.length : Math.max(0, starts.length - 1);
+        const out = [];
+        for (let i = 0; i < completeCount; i++) {
+            const start = starts[i].pos + starts[i].len;
+            const end = (i + 1 < starts.length) ? starts[i + 1].pos : this.buffer.length;
+            if (end > start) out.push(this.buffer.slice(start, end));
+        }
+        const keep = flush ? this.buffer.length : starts[starts.length - 1].pos;
+        this.buffer = this.buffer.slice(keep);
+        return out;
+    }
+    buildAvcc(sps, pps) {
+        const avcc = new Uint8Array(11 + sps.length + pps.length);
+        let o = 0;
+        avcc[o++] = 1;
+        avcc[o++] = sps[1] || 0x42;
+        avcc[o++] = sps[2] || 0x00;
+        avcc[o++] = sps[3] || 0x1f;
+        avcc[o++] = 0xff;
+        avcc[o++] = 0xe1;
+        avcc[o++] = (sps.length >> 8) & 255; avcc[o++] = sps.length & 255; avcc.set(sps, o); o += sps.length;
+        avcc[o++] = 1;
+        avcc[o++] = (pps.length >> 8) & 255; avcc[o++] = pps.length & 255; avcc.set(pps, o);
+        return avcc;
+    }
+    static toAvccFrame(nals) {
+        const size = nals.reduce((n, nal) => n + 4 + nal.length, 0);
+        const out = new Uint8Array(size);
+        let o = 0;
+        for (const nal of nals) {
+            out[o++] = (nal.length >>> 24) & 255; out[o++] = (nal.length >>> 16) & 255; out[o++] = (nal.length >>> 8) & 255; out[o++] = nal.length & 255;
+            out.set(nal, o); o += nal.length;
+        }
+        return out;
+    }
+    static concat(a, b) {
+        if (!a.length) return b;
+        const out = new Uint8Array(a.length + b.length);
+        out.set(a, 0); out.set(b, a.length);
+        return out;
+    }
+}
+
 async function connect() {
     params = loadParams();
     const label = protocolLabel();
@@ -582,166 +721,116 @@ async function connect() {
 
     try {
         displayRoot.innerHTML = '';
-        // 创建 Canvas 用于 H.264 硬件解码渲染
+        client = null;
         const canvas = document.createElement('canvas');
         canvas.id = 'rdp-canvas';
-        canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none';
+        canvas.tabIndex = 0;
+        canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
         displayRoot.appendChild(canvas);
-        const ctx = canvas.getContext('2d');
-
-        // WebSocket → H.264 流
+        const rdpDisplay = createRdpCanvasDisplay(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
         tunnel = new WebSocket(`${wsBase}?connectionId=${encodeURIComponent(params.connectionId)}`);
         tunnel.binaryType = 'arraybuffer';
 
-        let vdec = null, vcfg = false;
+        let decoder = null;
+        let timestamp = 0;
+        let frameDuration = Math.round(1000000 / 30);
+        let configured = false;
+        let pendingFrames = [];
+        let firstFrameDrawn = false;
+
+        const parser = new AnnexBH264AccessUnitParser(async (description) => {
+            if (!window.VideoDecoder || !window.EncodedVideoChunk) {
+                setStatus('error', '浏览器不支持 WebCodecs H.264 解码');
+                return;
+            }
+            const codec = `avc1.${[description[1], description[2], description[3]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+            const config = { codec, description, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true };
+            const support = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
+            if (!support.supported) {
+                setStatus('error', `当前浏览器不支持 ${codec}`);
+                return;
+            }
+            decoder = new VideoDecoder({
+                output: (frame) => {
+                    try {
+                        rdpDisplay.draw(frame);
+                        if (!firstFrameDrawn) {
+                            firstFrameDrawn = true;
+                            setStatus('connected', `${label} 已连接 [WebCodecs H.264]`);
+                            connected = true;
+                            notifyParentStatus('connected');
+                        }
+                    } finally { frame.close(); }
+                },
+                error: (err) => {
+                    console.warn('[rdp] decoder error', err);
+                    setStatus('error', `H.264 解码失败：${err.message || err}`);
+                },
+            });
+            decoder.configure(config);
+            configured = true;
+            for (const item of pendingFrames.splice(0)) decodeFrame(item.data, item.key);
+        }, (data, key) => {
+            if (!configured) pendingFrames.push({ data, key });
+            else decodeFrame(data, key);
+        });
+
+        function decodeFrame(data, key) {
+            if (!decoder || decoder.state !== 'configured') return;
+            if (decoder.decodeQueueSize > 2 && !key) return;
+            timestamp += frameDuration;
+            try {
+                decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp, duration: frameDuration, data }));
+            } catch (err) {
+                console.warn('[rdp] decode rejected', err);
+            }
+        }
 
         tunnel.onopen = () => {
-            setStatus('connected', `${label} 已连接 [H.264]`);
+            setStatus('connecting', `${label} 视频通道已建立，等待首帧...`);
             connected = true;
-            notifyParentStatus('connected');
+            canvas.focus({ preventScroll: true });
+            notifyParentStatus('connecting');
         };
-
-        tunnel.onclose = (e) => {
-            setStatus('disconnected', `${label} 已断开`);
+        tunnel.onclose = (event) => {
+            parser.flush();
             connected = false;
             notifyParentStatus('disconnected');
-            if (vdec) { try { vdec.close(); } catch {} vdec = null; vcfg = false; }
+            if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+            setStatus('disconnected', event.reason || `${label} 已断开`);
         };
-
         tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
-
-        // 视频流消息缓冲区（初始化期间缓存所有消息）
-        let msgBuffer = [];
-        let msReady = false;
-
         tunnel.onmessage = async (ev) => {
-            let buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
-            if (!buf || buf.byteLength < 5) return;
-            const data = new Uint8Array(buf);
-
-            if (!msReady) {
-                if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
-
-                // 第一条消息：创建 MediaSource 和 <video>
-                msgBuffer.push(data);
-                msReady = true; // 防止重复初始化
-
-                const video = document.createElement('video');
-                video.style.cssText = 'position:absolute;opacity:0.01;pointer-events:none;width:1px;height:1px';
-                video.muted = true;
-                video.playsInline = true;
-                video.setAttribute('playsinline', '');
-                document.body.appendChild(video);
-
-                const ms = new MediaSource();
-                video.src = URL.createObjectURL(ms);
-
-                ms.onsourceopen = () => {
-                    let codec = 'video/mp4; codecs="avc1.42E01E"';
-                    try {
-                        const sb = ms.addSourceBuffer(codec);
-                        const queue = [];
-                        let appending = false;
-
-                        const flush = () => {
-                            if (appending || sb.updating) return;
-                            if (queue.length === 0) return;
-                            appending = true;
-                            const d = queue.shift();
-                            try { sb.appendBuffer(d); } catch(e) {
-                                appending = false;
-                                setTimeout(flush, 100);
-                            }
-                        };
-
-                        sb.onupdateend = () => {
-                            appending = false;
-                            // 画到 Canvas
-                            if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-                                if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-                                    canvas.width = video.videoWidth;
-                                    canvas.height = video.videoHeight;
-                                    displayWidth = video.videoWidth;
-                                    displayHeight = video.videoHeight;
-                                    applyDisplayScale();
-                                }
-                                try { ctx.drawImage(video, 0, 0); } catch(e) {}
-                            }
-                            flush();
-                        };
-                        sb.onerror = () => console.warn('[rdp] sb error');
-
-                        // 把初始缓冲的所有数据入队
-                        for (const d of msgBuffer) queue.push(d);
-                        msgBuffer = [];
-
-                        // 后续消息直接入队
-                        tunnel.onmessage = async (ev2) => {
-                            let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
-                            if (!b2 || b2.byteLength < 5) return;
-                            queue.push(new Uint8Array(b2));
-                            flush();
-                        };
-
-                        // 开始消费队列
-                        flush();
-
-                        // 播放
-                        video.play().then(() => {
-                            setStatus('connected', `${label} 已连接 [H.264]`);
-                            connected = true; notifyParentStatus('connected');
-                        }).catch(() => {
-                            // 自动播放被阻止,等用户交互
-                            const tryPlay = () => { video.play().then(() => {
-                                setStatus('connected', `${label} 已连接 [H.264]`);
-                                connected = true; notifyParentStatus('connected');
-                            }).catch(() => {}); };
-                            stage.addEventListener('pointerdown', tryPlay, { once: true });
-                            stage.addEventListener('keydown', tryPlay, { once: true });
-                        });
-
-                        vdec = video;
-                        vcfg = true;
-
-                    } catch(e) {
-                        setStatus('error', '初始化失败: '+e.message);
+            if (typeof ev.data === 'string') {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg.type === 'hello') {
+                        if (msg.width && msg.height) rdpDisplay.setSize(Number(msg.width), Number(msg.height));
+                        if (msg.fps) frameDuration = Math.round(1000000 / Number(msg.fps));
                     }
-                };
-                ms.onsourceended = () => {};
-                // 第一条消息已经 buffer 了，之后的会进入 tunnel.onmessage 的 else 分支
-                tunnel.onmessage = async (ev2) => {
-                    let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
-                    if (!b2 || b2.byteLength < 5) return;
-                    msgBuffer.push(new Uint8Array(b2));
-                };
+                } catch {}
+                return;
             }
+            const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
+            if (!buf || buf.byteLength < 5) return;
+            parser.push(new Uint8Array(buf));
         };
 
-        // 输入转发 → xdotool
-        function wsInput(msg) { if (tunnel && tunnel.readyState===WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
+        function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
+        function pos(e) { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * (canvas.width / Math.max(1, r.width))), y: Math.round((e.clientY - r.top) * (canvas.height / Math.max(1, r.height))) }; }
+        canvas.addEventListener('mousemove', (e) => { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); });
+        canvas.addEventListener('mousedown', (e) => { e.preventDefault(); canvas.focus({ preventScroll: true }); const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: e.button + 1 }); });
+        canvas.addEventListener('mouseup', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: e.button + 1 }); });
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({ type: 'scroll', deltaY: e.deltaY }); }, { passive: false });
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); const t = e.touches[0]; if (!t) return; const p = pos(t); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: 1 }); }, { passive: false });
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); const t = e.touches[0]; if (!t) return; const p = pos(t); wsInput({ type: 'mouse', x: p.x, y: p.y }); }, { passive: false });
+        canvas.addEventListener('touchend', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: 1 }); }, { passive: false });
 
-        canvas.addEventListener('mousemove', (e) => { const r=canvas.getBoundingClientRect(); wsInput({type:'mouse',x:Math.round((e.clientX-r.left)*(canvas.width/r.width)),y:Math.round((e.clientY-r.top)*(canvas.height/r.height))}); notifyParentActivity(); });
-        canvas.addEventListener('mousedown', (e) => wsInput({type:'mousedown',button:e.button+1}));
-        canvas.addEventListener('mouseup', (e) => wsInput({type:'mouseup',button:e.button+1}));
-        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({type:'scroll',deltaY:e.deltaY}); }, {passive:false});
-
-        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); wsInput({type:'mousedown',button:1}); }, {passive:false});
-        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); const t=e.touches[0],r=canvas.getBoundingClientRect(); wsInput({type:'mouse',x:Math.round((t.clientX-r.left)*(canvas.width/r.width)),y:Math.round((t.clientY-r.top)*(canvas.height/r.height))}); }, {passive:false});
-        canvas.addEventListener('touchend', (e) => { e.preventDefault(); wsInput({type:'mouseup',button:1}); }, {passive:false});
-
-        // 键盘 → xdotool key names
-        const keyMap = {'Backspace':'BackSpace','Tab':'Tab','Enter':'Return','Escape':'Escape',
-            'ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right',
-            'Delete':'Delete','Home':'Home','End':'End','PageUp':'Page_Up','PageDown':'Page_Down',
-            'ShiftLeft':'Shift_L','ShiftRight':'Shift_R','ControlLeft':'Control_L','ControlRight':'Control_R',
-            'AltLeft':'Alt_L','AltRight':'Alt_R','MetaLeft':'Super_L','MetaRight':'Super_R',
-            'F1':'F1','F2':'F2','F3':'F3','F4':'F4','F5':'F5','F6':'F6','F7':'F7','F8':'F8',
-            'F9':'F9','F10':'F10','F11':'F11','F12':'F12'
-        };
-        document.addEventListener('keydown', (e) => { const k=keyMap[e.code]||e.key; e.preventDefault(); wsInput({type:'key',key:k}); });
-        document.addEventListener('keyup', () => {});
-
+        const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
+        canvas.addEventListener('keydown', (e) => { const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
+        document.addEventListener('keydown', (e) => { if (document.activeElement === canvas) return; if (!connected) return; const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
         setStatus('error', err.message || `${label} 连接失败`);

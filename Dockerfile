@@ -72,6 +72,9 @@ RUN apk update && \
     apk add --no-cache \
         imagemagick \
         ffmpeg \
+        freerdp \
+        xvfb \
+        xdotool \
     && \
     rm -rf /opt/guacamole/* 2>/dev/null; \
     echo "=== runtime deps installed ==="

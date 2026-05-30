@@ -3405,125 +3405,178 @@ server.on('upgrade', (req, socket, head) => {
 
 editorLspWss.on('connection', handleEditorLspConnection);
 
-const rdpPipes = new Map(); // connectionId → { xvfb, xfreerdp, ffmpeg, xfreerdpReady }
+const RDP_STREAM_WIDTH = Number(process.env.RDP_H264_WIDTH || 1280);
+const RDP_STREAM_HEIGHT = Number(process.env.RDP_H264_HEIGHT || 720);
+const RDP_STREAM_FPS = Number(process.env.RDP_H264_FPS || 30);
+const rdpPipes = new Map(); // connectionId → pipeline state
+
+function rdpSpawn(name, args, options = {}) {
+    const child = spawn(name, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options });
+    child.on('error', (err) => console.error('[rdp-h264]', `${name} spawn failed`, { error: err.message }));
+    return child;
+}
+
+function rdpAttachLog(child, label, level = 'info') {
+    child.stdout?.on('data', (d) => console.debug('[rdp-h264]', `${label} stdout`, d.toString('utf8').trim()));
+    child.stderr?.on('data', (d) => {
+        const text = d.toString('utf8').trim();
+        if (!text) return;
+        if (level === 'warn' || /error|failed|unable|denied/i.test(text)) console.warn('[rdp-h264]', `${label} stderr`, text);
+        else console.info('[rdp-h264]', `${label} stderr`, text);
+    });
+    child.on('exit', (code, signal) => console.warn('[rdp-h264]', `${label} exited`, { code, signal }));
+}
+
+async function startRdpH264Pipeline(connId, conn) {
+    cleanupPipe(connId);
+    const targetHost = conn.host;
+    const targetPort = Number(conn.port) || 3389;
+    const username = conn.username || 'Administrator';
+    const password = conn.password || '';
+    const displayNo = 100 + (rdpPipes.size % 50);
+    const xvfbDisp = `:${displayNo}`;
+    const env = { ...process.env, DISPLAY: xvfbDisp };
+
+    const xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', `${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}x24`, '-ac', '+extension', 'RANDR']);
+    rdpAttachLog(xvfb, 'Xvfb');
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const xfreerdpArgs = [
+        `/v:${targetHost}:${targetPort}`,
+        `/u:${username}`,
+        `/p:${password}`,
+        '/cert:ignore',
+        `/size:${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
+        '/bpp:32',
+        '/network:lan',
+        '+gfx', '+gfx-h264', '/gfx:AVC444',
+        '+fonts', '-wallpaper', '-themes', '-aero',
+        '/dynamic-resolution',
+        '/log-level:WARN',
+    ];
+    const xfreerdp = rdpSpawn('xfreerdp', xfreerdpArgs, { env });
+    rdpAttachLog(xfreerdp, 'xfreerdp', 'warn');
+
+    /*
+     * This is deliberately raw Annex-B H.264, not fragmented MP4. The browser
+     * side uses WebCodecs, whose EncodedVideoChunk input must be complete access
+     * units. MP4/MSE chunks were the source of the black-checkerboard failure.
+     * TODO/native path: replace the X11 capture fallback with a FreeRDP-side
+     * AVC444/GFX frame exporter while keeping the exact same WS frame contract.
+     */
+    const ffmpegArgs = [
+        '-hide_banner', '-loglevel', 'warning',
+        '-f', 'x11grab', '-draw_mouse', '0',
+        '-framerate', String(RDP_STREAM_FPS),
+        '-video_size', `${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
+        '-i', xvfbDisp,
+        '-an', '-c:v', 'libx264',
+        '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'baseline', '-level', '3.1',
+        '-pix_fmt', 'yuv420p',
+        '-g', String(RDP_STREAM_FPS), '-keyint_min', String(RDP_STREAM_FPS),
+        '-x264-params', `repeat-headers=1:scenecut=0:open-gop=0`,
+        '-bsf:v', 'h264_mp4toannexb',
+        '-f', 'h264', 'pipe:1',
+    ];
+    const ffmpeg = rdpSpawn('ffmpeg', ffmpegArgs, { env });
+    rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
+
+    const pipe = {
+        connId, xvfb, xfreerdp, ffmpeg, env,
+        clients: new Set(),
+        startedAt: Date.now(),
+        ready: false,
+    };
+    rdpPipes.set(connId, pipe);
+
+    const markReady = () => {
+        if (!pipe.ready) console.info('[rdp-h264]', 'pipeline ready', { connId, target: `${targetHost}:${targetPort}`, width: RDP_STREAM_WIDTH, height: RDP_STREAM_HEIGHT });
+        pipe.ready = true;
+    };
+    const readyTimer = setTimeout(markReady, 1800);
+    xfreerdp.stderr?.on('data', (d) => {
+        if (/connected|Logon|GFX|AVC|framebuffer|Desktop/i.test(d.toString('utf8'))) markReady();
+    });
+
+    ffmpeg.stdout.on('data', (chunk) => {
+        if (chunk.length > 0) markReady();
+        for (const client of pipe.clients) {
+            if (client.readyState !== client.OPEN) continue;
+            if (client.bufferedAmount > 8 * 1024 * 1024) continue;
+            try { client.send(chunk, { binary: true }); } catch {}
+        }
+    });
+    ffmpeg.on('exit', () => {
+        clearTimeout(readyTimer);
+        for (const client of pipe.clients) {
+            try { if (client.readyState === client.OPEN) client.close(1011, 'rdp encoder exited'); } catch {}
+        }
+        cleanupPipe(connId);
+    });
+    xfreerdp.on('exit', () => {
+        for (const client of pipe.clients) {
+            try { if (client.readyState === client.OPEN) client.close(1011, 'xfreerdp exited'); } catch {}
+        }
+        cleanupPipe(connId);
+    });
+
+    console.info('[rdp-h264]', 'pipeline started', { connId, target: `${targetHost}:${targetPort}`, xfreerdpArgs: xfreerdpArgs.filter((a) => !a.startsWith('/p:')) });
+    return pipe;
+}
+
+function handleRdpInput(pipe, raw) {
+    let msg;
+    try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
+    const execXdo = (args) => {
+        const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
+        child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool failed', { error: err.message, args }));
+    };
+    if (msg.type === 'mouse' && Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
+        execXdo(['mousemove', '--sync', String(Math.round(msg.x)), String(Math.round(msg.y))]);
+    } else if (msg.type === 'mousedown' && msg.button !== undefined) {
+        execXdo(['mousedown', String(msg.button)]);
+    } else if (msg.type === 'mouseup' && msg.button !== undefined) {
+        execXdo(['mouseup', String(msg.button)]);
+    } else if (msg.type === 'scroll') {
+        const button = Number(msg.deltaY || 0) > 0 ? '5' : '4';
+        const steps = Math.max(1, Math.min(6, Math.round(Math.abs(Number(msg.deltaY || 0)) / 80)));
+        for (let i = 0; i < steps; i++) execXdo(['click', button]);
+    } else if (msg.type === 'key' && msg.key) {
+        execXdo(['key', String(msg.key)]);
+    } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
+        execXdo(['key', 'F5']);
+    }
+}
 
 rdpH264Wss.on('connection', async (ws, req) => {
     const url = new URL(req.url || '/rdp-h264', `http://${req.headers.host || 'localhost'}`);
     const connId = url.searchParams.get('connectionId') || 'default';
     try {
         const sessionUser = currentSession(req);
-        if (!sessionUser) { ws.close(1011, 'unauthorized'); return; }
+        if (!sessionUser) { ws.close(1008, 'unauthorized'); return; }
         const store = readJSON(CONNECTIONS_FILE, { connections: [] });
         const conn = (store.connections || []).find((c) => c.id === connId);
-        if (!conn) { ws.close(1011, 'connection not found'); return; }
-
-        const targetHost = conn.host;
-        const targetPort = conn.port || 3389;
-        const username = conn.username || 'Administrator';
-        const password = conn.password || '';
+        if (!conn) { ws.close(1008, 'connection not found'); return; }
 
         let pipe = rdpPipes.get(connId);
-        if (pipe && pipe.xfreerdpReady) {
-            // 重用已有连接
-        } else {
-            // 清理旧的
-            cleanupPipe(connId);
-            // 启动 Xvfb
-            const xvfbDir = `/tmp/rdp-xvfb-${connId}`;
-            require('fs').mkdirSync(xvfbDir, { recursive: true });
-            const xvfbDisp = 100 + (Object.keys(rdpPipes).length % 10);
-            const xvfbDispStr = `:${xvfbDisp}`;
-            const xvfb = require('child_process').spawn('Xvfb', [xvfbDispStr, '-screen', '0', '1280x720x24', '-ac'],
-                { stdio: ['ignore', 'pipe', 'pipe'] });
+        if (!pipe) pipe = await startRdpH264Pipeline(connId, conn);
+        pipe.clients.add(ws);
+        ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: RDP_STREAM_WIDTH, height: RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
+        console.info('[rdp-h264]', 'browser attached', { connId, clients: pipe.clients.size });
 
-            // 等待 Xvfb 就绪
-            await new Promise((r) => setTimeout(r, 2000));
-
-            // xfreerdp 包装脚本
-            const wrp = `/tmp/xfreerdp_${connId}.sh`;
-            require('fs').writeFileSync(wrp, `#!/bin/sh\nexport DISPLAY=${xvfbDispStr}\nexec /usr/bin/xfreerdp "$@"\n`, 'utf8');
-            require('fs').chmodSync(wrp, 0o755);
-
-            const xfreerdp = require('child_process').spawn(wrp, [
-                '/v:' + targetHost, '/port:' + String(targetPort),
-                '/u:' + username, '/p:' + password,
-                '/cert:ignore', '/f', '+fonts', '/bpp:24', '/network:lan',
-                '-wallpaper', '-themes', '-aero'
-            ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-            xfreerdp.stderr.on('data', (d) => {
-                const s = d.toString();
-                if (s.includes('Local framebuffer') || s.includes('PIXEL_FORMAT')) {
-                    if (!pipe) pipe = rdpPipes.get(connId);
-                    if (pipe) pipe.xfreerdpReady = true;
-                    console.info('[rdp-h264]', 'xfreerdp ready', { connId });
-                }
-            });
-
-            // ffmpeg: capture → H.264 → pipe to WS
-            // 给 xfreerdp 时间连接，避免 ffmpeg 捕获到黑屏
-            await new Promise((r) => setTimeout(r, 4000));
-
-            const ffmpeg = require('child_process').spawn('ffmpeg', [
-                '-y', '-f', 'x11grab', '-framerate', '30', '-video_size', '1280x720',
-                '-i', xvfbDispStr,
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-                '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
-                '-g', '30', '-keyint_min', '30',
-                '-f', 'mp4', '-movflags', 'empty_moov+frag_keyframe+omit_tfhd_offset',
-                '-'
-            ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-            ffmpeg.stderr.on('data', (d) => {
-                const s = d.toString();
-                if (s.includes('Error') || s.includes('Error')) console.warn('[rdp-h264]', 'ffmpeg err:', s.trim());
-                if (s.includes('fps=')) console.info('[rdp-h264]', s.trim());
-            });
-
-            pipe = { xvfb, xfreerdp, ffmpeg, xfreerdpReady: false, xvfbDisp: xvfbDispStr, xdotoolEnv: { DISPLAY: xvfbDispStr } };
-            rdpPipes.set(connId, pipe);
-
-            console.info('[rdp-h264]', 'pipeline started', { connId, target: `${targetHost}:${targetPort}` });
-
-            // 管道 ffmpeg → WS (带缓冲)
-            let wsOpen = true;
-            ws.on('close', () => { wsOpen = false; });
-            ffmpeg.stdout.on('data', (chunk) => {
-                if (wsOpen && ws.readyState === ws.OPEN) {
-                    try { ws.send(chunk); } catch {}
-                }
-            });
-            ffmpeg.stdout.on('end', () => {
-                if (wsOpen) try { ws.close(); } catch {}
-            });
-
-            // 接收鼠标/键盘 → xdotool
-            ws.on('message', (raw) => {
-                try {
-                    const msg = JSON.parse(raw.toString());
-                    if (msg.type === 'mouse' && msg.x !== undefined && msg.y !== undefined) {
-                        require('child_process').execFile('xdotool',
-                            ['mousemove', '--sync', String(msg.x), String(msg.y),
-                             ...(msg.button ? ['click', String(msg.button)] : [])],
-                            { env: pipe.xdotoolEnv });
-                    } else if (msg.type === 'key' && msg.key !== undefined) {
-                        require('child_process').execFile('xdotool',
-                            ['key', msg.key],
-                            { env: pipe.xdotoolEnv });
-                    } else if (msg.type === 'mousedown' && msg.button !== undefined) {
-                        require('child_process').execFile('xdotool',
-                            ['mousedown', String(msg.button)],
-                            { env: pipe.xdotoolEnv });
-                    } else if (msg.type === 'mouseup' && msg.button !== undefined) {
-                        require('child_process').execFile('xdotool',
-                            ['mouseup', String(msg.button)],
-                            { env: pipe.xdotoolEnv });
-                    }
-                } catch(e) { console.warn('[rdp-h264]', 'input error', e.message); }
-            });
-        }
+        ws.on('message', (raw, isBinary) => { if (!isBinary) handleRdpInput(pipe, raw); });
+        ws.on('close', () => {
+            pipe.clients.delete(ws);
+            console.info('[rdp-h264]', 'browser detached', { connId, clients: pipe.clients.size });
+            if (pipe.clients.size === 0) setTimeout(() => {
+                const latest = rdpPipes.get(connId);
+                if (latest && latest.clients.size === 0) cleanupPipe(connId);
+            }, 5000);
+        });
+        ws.on('error', (err) => console.warn('[rdp-h264]', 'browser websocket error', { connId, error: err.message }));
     } catch (err) {
-        console.error('[rdp-h264]', 'connection error', err.message);
+        console.error('[rdp-h264]', 'connection error', { connId, error: err.message });
         try { ws.close(1011, err.message.slice(0, 120)); } catch {}
     }
 });
@@ -3531,9 +3584,9 @@ rdpH264Wss.on('connection', async (ws, req) => {
 function cleanupPipe(connId) {
     const p = rdpPipes.get(connId);
     if (p) {
-        try { p.ffmpeg?.kill(); } catch {}
-        try { p.xfreerdp?.kill(); } catch {}
-        try { p.xvfb?.kill(); } catch {}
+        try { p.ffmpeg?.kill('SIGTERM'); } catch {}
+        try { p.xfreerdp?.kill('SIGTERM'); } catch {}
+        try { p.xvfb?.kill('SIGTERM'); } catch {}
         rdpPipes.delete(connId);
         console.info('[rdp-h264]', 'pipeline cleaned', { connId });
     }
