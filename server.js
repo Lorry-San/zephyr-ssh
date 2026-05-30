@@ -862,7 +862,7 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96, qua
         'enable-desktop-composition': isQual ? 'true' : isPerf ? 'false' : 'true',
         'enable-full-window-drag': 'false',
         'enable-menu-animations': 'false',
-        'jpeg-quality': isPerf ? '40' : isQual ? '90' : '65',
+        'jpeg-quality': isPerf ? '30' : isQual ? '90' : '65',
         'jpeg-subsampling': isPerf ? '420' : isQual ? '444' : '420',
         'lossless-jpeg-color-conversion': isQual ? 'true' : 'false',
     };
@@ -880,12 +880,11 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96, qua
         base['disable-encryption'] = 'true';
         base['enable-frame-acknowledge'] = 'true';
         base['enable-surface-commands'] = 'true';
-        base['enable-gfx'] = isPerf ? 'false' : 'true';
+        base['enable-gfx'] = 'true';
         base['enable-gfx-h264'] = isQual ? 'true' : 'false';
-        // 传输层优化
-        base['enable-compression'] = 'true';            // RDP 压缩
-        base['enable-async-update'] = 'true';           // 异步更新
-        base['enable-async-transport'] = !isQual;       // 异步传输（非画质模式）
+        base['enable-compression'] = 'true';
+        base['enable-async-update'] = 'true';
+        base['enable-async-transport'] = isQual ? 'false' : 'false';
         base['gateway'] = '';
     }
 
@@ -954,6 +953,7 @@ async function openGuacdSession(conn, display = {}, timeout = 10000) {
         });
 
         socket = net.createConnection(GUACD_PORT, GUACD_HOST);
+        socket.setNoDelay(true); // TCP_NODELAY，减少小包延迟
         socket.setEncoding('utf8');
         await waitForSocket(socket, timeout, 'guacd');
         const parser = new GuacParser();
