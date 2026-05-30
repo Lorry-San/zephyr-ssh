@@ -3555,13 +3555,20 @@ function shQuote(value) {
 
 function pasteTextIntoRdp(pipe, text, { paste = true } = {}) {
     if (!text) return;
-    const script = paste
-        ? `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null && xdotool key --clearmodifiers ctrl+v`
-        : `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null`;
-    const args = pipe?.activeWindowId ? ['windowactivate', '--sync', pipe.activeWindowId, 'exec', 'sh', '-c', script] : ['exec', 'sh', '-c', script];
-    const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
-    child.on('error', (err) => console.warn('[rdp-h264]', 'rdp clipboard operation failed', { error: err.message, paste }));
+    const quoted = shQuote(text);
+    const pasteCmd = pipe?.activeWindowId ? `xdotool windowactivate --sync ${pipe.activeWindowId} key --clearmodifiers ctrl+v` : `xdotool key --clearmodifiers ctrl+v`;
+    const xclipSet = `printf %s ${quoted} | xclip -selection clipboard -i && printf %s ${quoted} | xclip -selection primary -i`;
+    const script = paste ? `(${xclipSet} && ${pasteCmd}; sleep 0.12; ${pasteCmd})` : `(${xclipSet})`;
+    const child = spawn('sh', ['-c', script], { env: pipe.env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let errText = '';
+    child.stderr.on('data', (d) => { errText += d.toString('utf8'); });
+    child.on('close', (code) => {
+        if (code !== 0) console.warn('[rdp-h264]', 'rdp clipboard operation failed', { paste, code, error: errText.trim().slice(0, 240) });
+        else console.info('[rdp-h264]', 'rdp clipboard operation ok', { paste, length: String(text).length });
+    });
+    child.on('error', (err) => console.warn('[rdp-h264]', 'rdp clipboard operation spawn failed', { error: err.message, paste }));
 }
+
 
 
 function handleRdpInput(pipe, raw) {
