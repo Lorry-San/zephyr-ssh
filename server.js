@@ -3461,14 +3461,24 @@ rdpH264Wss.on('connection', async (ws, req) => {
             });
 
             // ffmpeg: capture → H.264 → pipe to WS
+            // 给 xfreerdp 时间连接，避免 ffmpeg 捕获到黑屏
+            await new Promise((r) => setTimeout(r, 4000));
+
             const ffmpeg = require('child_process').spawn('ffmpeg', [
                 '-y', '-f', 'x11grab', '-framerate', '30', '-video_size', '1280x720',
                 '-i', xvfbDispStr,
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
                 '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
-                '-f', 'mp4', '-movflags', 'empty_moov+frag_keyframe+omit_tfhd_offset',
-                '-'
-            ], { stdio: ['ignore', 'pipe', 'ignore'] });
+                '-bsf:v', 'h264_mp4toannexb',
+                '-flush_packets', '1',
+                '-f', 'h264', '-'
+            ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+            ffmpeg.stderr.on('data', (d) => {
+                const s = d.toString();
+                if (s.includes('Error') || s.includes('Error')) console.warn('[rdp-h264]', 'ffmpeg err:', s.trim());
+                if (s.includes('fps=')) console.info('[rdp-h264]', s.trim());
+            });
 
             pipe = { xvfb, xfreerdp, ffmpeg, xfreerdpReady: false, xvfbDisp: xvfbDispStr, xdotoolEnv: { DISPLAY: xvfbDispStr } };
             rdpPipes.set(connId, pipe);
