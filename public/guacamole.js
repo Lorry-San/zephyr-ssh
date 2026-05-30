@@ -932,6 +932,8 @@ function installRdpTouchControls(canvas, wsInput, pos) {
     let panStart = null;
     let startScroll = null;
     let lastTwoFingerCenter = null;
+    let twoFingerMode = null;
+    let pinchBaseZoom = 1;
     let edgeTimer = 0;
     let pointer = { clientX: 0, clientY: 0 };
     const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
@@ -996,7 +998,9 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             panStart.dist = dist;
             panStart.w = displayRoot.getBoundingClientRect().width;
             panStart.h = displayRoot.getBoundingClientRect().height;
-            showRdpHud('双指移动 / 捏合缩放', 700);
+            twoFingerMode = null;
+            pinchBaseZoom = rdpScaleZoom || 1;
+            showRdpHud('双指滚动 / 捏合缩放', 700);
         }
         notifyParentActivity();
     }, { passive: false });
@@ -1010,20 +1014,27 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             const dx = cx - (lastTwoFingerCenter?.x ?? cx);
             const dy = cy - (lastTwoFingerCenter?.y ?? cy);
             lastTwoFingerCenter = { x: cx, y: cy };
-            const beforeLeft = displayShell.scrollLeft;
-            const beforeTop = displayShell.scrollTop;
-            displayShell.scrollLeft = startScroll.left - (cx - panStart.x);
-            displayShell.scrollTop = startScroll.top - (cy - panStart.y);
-            const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
+            const totalMove = Math.hypot(cx - panStart.x, cy - panStart.y);
             const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            if (panStart.dist && Math.abs(dist - panStart.dist) > 22) {
-                rdpScaleZoom = Math.max(.5, Math.min(3, dist / panStart.dist));
+            const distDelta = Math.abs(dist - (panStart.dist || dist));
+            if (!twoFingerMode) {
+                if (distDelta > 42 && distDelta > totalMove * 0.75) twoFingerMode = 'pinch';
+                else if (totalMove > 10) twoFingerMode = 'scroll';
+            }
+            if (twoFingerMode === 'pinch') {
+                const scale = Math.max(.5, Math.min(3, (pinchBaseZoom || 1) * (dist / Math.max(1, panStart.dist || dist))));
+                rdpScaleZoom = scale;
                 applyDisplayScale();
                 showRdpHud(`${Math.round(rdpScaleZoom * 100)}%`, 500);
-            } else if (!didPanViewport) {
-                wsInput({ type: 'scroll', deltaX: -dx * 6, deltaY: -dy * 6 });
-                showRdpHud('双指滚动', 400);
-            } else showRdpHud('平移', 400);
+            } else {
+                const beforeLeft = displayShell.scrollLeft;
+                const beforeTop = displayShell.scrollTop;
+                displayShell.scrollLeft -= dx;
+                displayShell.scrollTop -= dy;
+                const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
+                if (!didPanViewport) wsInput({ type: 'scroll', deltaX: -dx * 8, deltaY: -dy * 8 });
+                showRdpHud(didPanViewport ? '平移' : '双指滚动', 400);
+            }
             return;
         }
         const t = [...touches.values()][0];
@@ -1060,7 +1071,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
         clearLongPress();
         stopEdgeScroll();
         if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
-        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; }
+        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; twoFingerMode = null; }
         notifyParentActivity();
     };
     canvas.addEventListener('touchend', finishTouch, { passive: false });
@@ -2055,9 +2066,10 @@ function setupMobileKeyboard() {
     });
     mobileKeyboardInput.addEventListener('beforeinput', (event) => {
         if ((!client && !rdpInputSender) || !connected) return;
-        event.preventDefault(); // 禁止浏览器实际修改 textarea
         const inputType = event.inputType || '';
         const data = event.data || '';
+        if (inputType === 'insertCompositionText') return;
+        event.preventDefault(); // 禁止浏览器实际修改 textarea
 
         if (inputType.startsWith('deleteContent') || inputType === 'deleteByCut') {
             // 删除：之前内容长度用 mobileInputMirror 追踪
@@ -2082,7 +2094,7 @@ function setupMobileKeyboard() {
                 mobileInputMirror += data;
                 return;
             }
-            if (inputType === 'insertText' || inputType === 'insertCompositionText') {
+            if (inputType === 'insertText') {
                 sendTextToRemote(data);
                 mobileInputMirror += data;
                 return;

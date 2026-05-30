@@ -97,6 +97,7 @@ RUN apk update && \
         freerdp \
         xvfb \
         xdotool \
+        xclip \
     && \
     rm -rf /opt/guacamole/* 2>/dev/null; \
     echo "=== runtime deps installed ==="

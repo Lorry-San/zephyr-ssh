@@ -3458,6 +3458,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         '/network:lan',
         ...(RDP_ALLOW_GFX_FALLBACK ? [] : ['/gfx:AVC444']),
         '+fonts',
+        '+clipboard',
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '/log-level:WARN',
@@ -3548,6 +3549,18 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     return pipe;
 }
 
+function shQuote(value) {
+    return `'${String(value ?? '').replace(/'/g, `'"'"'`)}'`;
+}
+
+function pasteTextIntoRdp(pipe, text) {
+    if (!text) return;
+    const script = `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null && xdotool key --clearmodifiers ctrl+v`;
+    const args = pipe?.activeWindowId ? ['windowactivate', '--sync', pipe.activeWindowId, 'exec', 'sh', '-c', script] : ['exec', 'sh', '-c', script];
+    const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
+    child.on('error', (err) => console.warn('[rdp-h264]', 'rdp text paste failed', { error: err.message }));
+}
+
 function handleRdpInput(pipe, raw) {
     let msg;
     try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
@@ -3573,7 +3586,9 @@ function handleRdpInput(pipe, raw) {
     } else if (msg.type === 'key' && msg.key) {
         execXdo(['key', '--clearmodifiers', String(msg.key)]);
     } else if (msg.type === 'text' && msg.text !== undefined) {
-        execXdo(['type', '--delay', '1', String(msg.text)]);
+        const text = String(msg.text);
+        if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text);
+        else execXdo(['type', '--delay', '1', text]);
     } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
         execXdo(['key', 'F5']);
     }
