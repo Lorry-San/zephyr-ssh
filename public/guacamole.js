@@ -633,18 +633,26 @@ async function connect() {
         };
 
         // 节流鼠标移动事件，避免每微秒都发
+        // 同时修正坐标映射：G.Mouse 给的是 DOM 元素 CSS 像素空间，需换算到远程桌面分辨率
         let mouseThrottle = 0;
         mouse = new G.Mouse(displayEl);
-        mouse.onmousedown = mouse.onmouseup = (mouseState) => {
+        const sendMouseScaled = (mouseState) => {
             notifyParentActivity();
+            const display = client.getDisplay();
+            const dw = display.getWidth(), dh = display.getHeight();
+            const ew = displayEl.offsetWidth, eh = displayEl.offsetHeight;
+            if (dw && ew && ew > 0) {
+                mouseState.x = Math.round(mouseState.x * dw / ew);
+                mouseState.y = Math.round(mouseState.y * dh / eh);
+            }
             client.sendMouseState(mouseState);
         };
+        mouse.onmousedown = mouse.onmouseup = sendMouseScaled;
         mouse.onmousemove = (mouseState) => {
             const now = Date.now();
             if (now - mouseThrottle < 16) return; // 60fps max
             mouseThrottle = now;
-            notifyParentActivity();
-            client.sendMouseState(mouseState);
+            sendMouseScaled(mouseState);
         };
 
         client.onclipboard = (stream, mimetype) => {
@@ -1588,20 +1596,52 @@ function toggleMobileKeyboard() {
     else focusMobileKeyboard();
 }
 
-function handleMobileKeyboardInput() {
-    const value = mobileKeyboardInput.value || '';
-    let prefix = 0;
-    while (prefix < value.length && prefix < mobileInputMirror.length && value[prefix] === mobileInputMirror[prefix]) prefix += 1;
+function setupMobileKeyboard() {
+    if (!mobileKeyboardInput) return;
+    // 用 beforeinput 事件精确处理插入/删除，避免字符遍历法被粘贴替换打炸
+    mobileKeyboardInput.addEventListener('beforeinput', (event) => {
+        if (!client || !connected) return;
+        event.preventDefault(); // 禁止浏览器实际修改 textarea
+        const inputType = event.inputType || '';
+        const data = event.data || '';
 
-    const removed = mobileInputMirror.length - prefix;
-    const added = value.slice(prefix);
-    for (let i = 0; i < removed; i += 1) sendKeyDownUp(KEY.BACKSPACE);
-    sendTextToRemote(added);
+        if (inputType.startsWith('deleteContent') || inputType === 'deleteByCut') {
+            // 删除：之前内容长度用 mobileInputMirror 追踪
+            const delCount = inputType === 'deleteContentBackward' ? 1
+                : inputType === 'deleteContentForward' ? 1
+                : inputType === 'deleteByCut' ? mobileInputMirror.length
+                : parseInt(inputType.match(/deleteContent(\d+)/)?.[1] || '0') || 1;
+            for (let i = 0; i < delCount; i++) sendKeyDownUp(KEY.BACKSPACE);
+            mobileInputMirror = mobileInputMirror.slice(0, -Math.min(delCount, mobileInputMirror.length));
+            return;
+        }
+        if (inputType.startsWith('insert')) {
+            // 插入文本
+            if (inputType === 'insertFromPaste' || inputType === 'insertFromDrop') {
+                sendTextToRemote(data);
+                mobileInputMirror += data;
+                return;
+            }
+            if (inputType === 'insertText' || inputType === 'insertCompositionText') {
+                sendTextToRemote(data);
+                mobileInputMirror += data;
+                return;
+            }
+            // insertLineBreak, insertParagraph, etc.
+            sendKeyDownUp(KEY.ENTER);
+            mobileInputMirror += '\n';
+            return;
+        }
+        // historyUndo/historyRedo: ignore
+    });
 
-    mobileInputMirror = value;
-    if (value.length > 80) {
-        mobileKeyboardInput.value = mobileInputMirror = '';
-    }
+    // 清理过长的同步缓存
+    mobileKeyboardInput.addEventListener('input', () => {
+        if (mobileInputMirror.length > 200) {
+            mobileKeyboardInput.value = '';
+            mobileInputMirror = '';
+        }
+    });
 }
 
 async function runShortcut(name) {
@@ -1702,7 +1742,7 @@ stage?.addEventListener('pointerdown', () => {
 }, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
-mobileKeyboardInput?.addEventListener('input', handleMobileKeyboardInput);
+setupMobileKeyboard();
 mobileKeyboardInput?.addEventListener('blur', () => keyboardBtn?.classList.remove('active'));
 mobileKeyboardInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Backspace' && !mobileKeyboardInput.value) {
