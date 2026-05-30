@@ -578,147 +578,95 @@ async function connect() {
 
     disconnect(false);
     updateInfo();
-    setStatus('connecting', `正在加载 ${label} 客户端...`);
-    console.info('[guac-client]', 'connect requested', { protocol: label, connectionId: params.connectionId, host: params.host, port: params.port || protocolDefaultPort() });
+    setStatus('connecting', `正在连接 ${label} H.264...`);
 
     try {
-        const G = await loadGuacamole();
-        setStatus('connecting', `正在连接 guacd/${label}...`);
-
         displayRoot.innerHTML = '';
-        tunnel = new G.WebSocketTunnel(guacamoleTunnelBaseUrl());
-        tunnel.receiveTimeout = 30000;
-        tunnel.unstableThreshold = 7000;
-        client = new G.Client(tunnel);
+        // 创建 Canvas 用于 H.264 硬件解码渲染
+        const canvas = document.createElement('canvas');
+        canvas.id = 'rdp-canvas';
+        canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none';
+        displayRoot.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
 
-        const displayEl = client.getDisplay().getElement();
-        displayEl.classList.add('guac-display-element');
-        displayRoot.appendChild(displayEl);
+        // WebSocket → H.264 流
+        const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
+        tunnel = new WebSocket(`${wsBase}?connectionId=${encodeURIComponent(params.connectionId)}`);
+        tunnel.binaryType = 'arraybuffer';
 
-        // 隐藏浏览器原生光标（RDP 远程光标由 guacd cursor 指令渲染到 canvas）
-        displayEl.style.cursor = 'none';
-        // 阻止浏览器手势（手势由我们的 setupGestures 处理）
-        displayEl.style.touchAction = 'none';
-        displayEl.style.webkitTouchCallout = 'none';
-        displayEl.style.userSelect = 'none';
+        let vdec = null, vcfg = false;
 
-        // 限制帧速率：只响应每第 N 个 sync，减少往返
-        let syncSeq = 0;
-        const origSendMsg = tunnel.sendMessage.bind(tunnel);
-        const syncBatchInterval = qualityModes[qualityIdx] === 'performance' ? 2 : qualityModes[qualityIdx] === 'quality' ? 1 : 1;
-        // 在性能模式下降低 sync 反馈频率以减小编码压力
-
-        client.onerror = (error) => {
-            console.error('[guac-client]', 'client error', error);
-            setStatus('error', error?.message || String(error) || `${label} 客户端错误`);
+        tunnel.onopen = () => {
+            setStatus('connected', `${label} 已连接 [H.264]`);
+            connected = true;
+            notifyParentStatus('connected');
         };
 
-        client.onstatechange = (state) => {
-            console.info('[guac-client]', 'client state changed', { protocol: label, state });
-            if (state === 3) {
-                setStatus('connected', `${label} 已连接${qualityIdx > 0 ? ' [' + qualityModes[qualityIdx] + ']' : ''}`);
-                applyDisplayScale();
-            } else if (state === 4 || state === 5) {
-                setStatus('disconnected', `${label} 已断开`);
-                // 断开时恢复光标
-                displayEl.style.cursor = '';
-            }
+        tunnel.onclose = (e) => {
+            setStatus('disconnected', `${label} 已断开`);
+            connected = false;
+            notifyParentStatus('disconnected');
+            if (vdec) { try { vdec.close(); } catch {} vdec = null; vcfg = false; }
         };
 
-        client.getDisplay().onresize = (width, height) => {
-            displayWidth = width;
-            displayHeight = height;
-            applyDisplayScale();
-            console.debug('[guac-client]', 'remote display resized', { width, height });
-        };
+        tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
 
-        // 节流鼠标移动事件，避免每微秒都发
-        // 同时修正坐标映射：G.Mouse 给的是 DOM 元素 CSS 像素空间，需换算到远程桌面分辨率
-        let mouseThrottle = 0;
-        mouse = new G.Mouse(displayEl);
-        const sendMouseScaled = (mouseState) => {
-            notifyParentActivity();
-            const display = client.getDisplay();
-            const dw = display.getWidth(), dh = display.getHeight();
-            const ew = displayEl.offsetWidth, eh = displayEl.offsetHeight;
-            if (dw && ew && ew > 0) {
-                mouseState.x = Math.round(mouseState.x * dw / ew);
-                mouseState.y = Math.round(mouseState.y * dh / eh);
-            }
-            client.sendMouseState(mouseState);
-        };
-        mouse.onmousedown = mouse.onmouseup = sendMouseScaled;
-        mouse.onmousemove = (mouseState) => {
-            const now = Date.now();
-            if (now - mouseThrottle < 16) return; // 60fps max
-            mouseThrottle = now;
-            sendMouseScaled(mouseState);
-        };
+        tunnel.onmessage = async (ev) => {
+            let buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
+            if (!buf || buf.byteLength < 5) return;
+            const raw = new Uint8Array(buf);
 
-        client.onclipboard = (stream, mimetype) => {
-            console.info('[guac-client]', 'remote clipboard stream received', { mimetype });
-            receiveRemoteClipboard(stream, mimetype);
-        };
-
-        keyboard = new G.Keyboard(document);
-        keyboard.onkeydown = (keysym) => {
-            notifyParentActivity();
-            console.debug('[guac-client]', 'keyboard down', { keysym });
-            client.sendKeyEvent(1, keysym);
-        };
-        keyboard.onkeyup = (keysym) => {
-            console.debug('[guac-client]', 'keyboard up', { keysym });
-            client.sendKeyEvent(0, keysym);
-        };
-
-        // WebCodecs H.264 硬解：接管 guacd 的 video 指令
-        if (window.VideoDecoder) {
-            client.onvideo = (stream, layer, mimetype) => {
-                if (!mimetype?.includes('h264') && !mimetype?.includes('avc')) return null;
-                let vdec = null;
-                let buf = [];
-                stream.onblob = (data) => buf.push(data);
-                stream.onend = () => {
-                    const raw = Uint8Array.from(atob(buf.join('')), c => c.charCodeAt(0));
-                    // 从 SPS NAL 解析分辨率
-                    let cfg = { codec: 'avc1.42001E', codedWidth: 1280, codedHeight: 720 };
-                    for (let i = 0; i < raw.length - 4; i++) {
-                        if (raw[i]===0 && raw[i+1]===0 && raw[i+2]===0 && raw[i+3]===1) {
-                            const t = raw[i+4] & 0x1F;
-                            if (t === 7) { // SPS
-                                cfg.codedWidth  = ((raw[i+5]&0x0F)<<8) | raw[i+6];
-                                cfg.codedHeight = ((raw[i+7]&0x0F)<<8) | raw[i+8];
-                                cfg.description = raw.slice(i, i+40);
-                                break;
-                            }
-                        }
+            if (!vdec) {
+                if (!window.VideoDecoder) { setStatus('error', '浏览器不支持 WebCodecs H.264 硬解'); return; }
+                let cfg = { codec: 'avc1.42001E', codedWidth: 1280, codedHeight: 720 };
+                for (let i = 0; i < raw.length - 4; i++) {
+                    if (raw[i]===0&&raw[i+1]===0&&raw[i+2]===0&&raw[i+3]===1) {
+                        const t = raw[i+4]&0x1F;
+                        if (t===7) { cfg.codedWidth=((raw[i+5]&0x0F)<<8)|raw[i+6]; cfg.codedHeight=((raw[i+7]&0x0F)<<8)|raw[i+8]; cfg.description=raw.slice(i,i+40); break; }
                     }
+                }
+                try {
+                    const sup = await VideoDecoder.isConfigSupported(cfg);
+                    if (!sup.supported) { setStatus('error', 'H.264 配置不支持'); return; }
                     vdec = new VideoDecoder({
-                        output: (frame) => {
-                            const c = document.createElement('canvas');
-                            c.width = frame.displayWidth; c.height = frame.displayHeight;
-                            c.getContext('2d').drawImage(frame, 0, 0);
-                            frame.close();
-                            layer.drawImage(c, 0, 0);
-                            try { client.getDisplay().flush?.(); } catch {}
+                        output: (f) => {
+                            if (canvas.width!==f.displayWidth||canvas.height!==f.displayHeight) { canvas.width=f.displayWidth; canvas.height=f.displayHeight; displayWidth=f.displayWidth; displayHeight=f.displayHeight; applyDisplayScale(); }
+                            ctx.drawImage(f,0,0);
+                            f.close();
                         },
-                        error: (e) => console.warn('[guac] video err', e.message)
+                        error: (e) => console.warn('[rdp-h264]', e.message)
                     });
-                    VideoDecoder.isConfigSupported(cfg).then(s => {
-                        if (s.supported) {
-                            vdec.configure(cfg);
-                            try { vdec.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:raw})); } catch(e) {}
-                        }
-                    });
-                };
-                return null; // 阻止默认 VideoPlayer
-            };
-        }
+                    vdec.configure(cfg); vcfg = true;
+                    if (!connected) { connected = true; setStatus('connected', `${label} 已连接 [H.264]`); }
+                } catch(e) { setStatus('error', '解码器初始化失败'); return; }
+            }
+            if (vdec && vcfg) { try { vdec.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:raw})); } catch(e) {} }
+        };
 
-        stage?.focus?.({ preventScroll: true });
-        client.connect(guacamoleConnectQuery());
-        installLocalClipboardBridge();
-        syncLocalClipboardToRemote({ paste: false, source: 'connect-initial' }).catch(() => {});
+        // 输入转发 → xdotool
+        function wsInput(msg) { if (tunnel && tunnel.readyState===WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
+
+        canvas.addEventListener('mousemove', (e) => { const r=canvas.getBoundingClientRect(); wsInput({type:'mouse',x:Math.round((e.clientX-r.left)*(canvas.width/r.width)),y:Math.round((e.clientY-r.top)*(canvas.height/r.height))}); notifyParentActivity(); });
+        canvas.addEventListener('mousedown', (e) => wsInput({type:'mousedown',button:e.button+1}));
+        canvas.addEventListener('mouseup', (e) => wsInput({type:'mouseup',button:e.button+1}));
+        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({type:'scroll',deltaY:e.deltaY}); }, {passive:false});
+
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); wsInput({type:'mousedown',button:1}); }, {passive:false});
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); const t=e.touches[0],r=canvas.getBoundingClientRect(); wsInput({type:'mouse',x:Math.round((t.clientX-r.left)*(canvas.width/r.width)),y:Math.round((t.clientY-r.top)*(canvas.height/r.height))}); }, {passive:false});
+        canvas.addEventListener('touchend', (e) => { e.preventDefault(); wsInput({type:'mouseup',button:1}); }, {passive:false});
+
+        // 键盘 → xdotool key names
+        const keyMap = {'Backspace':'BackSpace','Tab':'Tab','Enter':'Return','Escape':'Escape',
+            'ArrowUp':'Up','ArrowDown':'Down','ArrowLeft':'Left','ArrowRight':'Right',
+            'Delete':'Delete','Home':'Home','End':'End','PageUp':'Page_Up','PageDown':'Page_Down',
+            'ShiftLeft':'Shift_L','ShiftRight':'Shift_R','ControlLeft':'Control_L','ControlRight':'Control_R',
+            'AltLeft':'Alt_L','AltRight':'Alt_R','MetaLeft':'Super_L','MetaRight':'Super_R',
+            'F1':'F1','F2':'F2','F3':'F3','F4':'F4','F5':'F5','F6':'F6','F7':'F7','F8':'F8',
+            'F9':'F9','F10':'F10','F11':'F11','F12':'F12'
+        };
+        document.addEventListener('keydown', (e) => { const k=keyMap[e.code]||e.key; e.preventDefault(); wsInput({type:'key',key:k}); });
+        document.addEventListener('keyup', () => {});
+
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
         setStatus('error', err.message || `${label} 连接失败`);
@@ -726,28 +674,14 @@ async function connect() {
 }
 
 function disconnect(userInitiated = true) {
-    if (keyboard) {
-        keyboard.onkeydown = null;
-        keyboard.onkeyup = null;
-        keyboard = null;
-    }
-    if (mouse) {
-        mouse.onmousedown = null;
-        mouse.onmouseup = null;
-        mouse.onmousemove = null;
-        mouse = null;
-    }
-    if (client) {
-        try { client.disconnect(); } catch {}
-        client = null;
-    } else if (tunnel) {
-        try { tunnel.disconnect(); } catch {}
+    if (tunnel && tunnel.readyState === WebSocket.OPEN) {
+        try { tunnel.close(); } catch {}
     }
     tunnel = null;
     connected = false;
     if (userInitiated) {
-        setStatus('disconnected', `${protocolLabel()} 连接已断开`);
-        sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params');
+        setStatus('disconnected', `${protocolLabel()} 已断开`);
+        try { sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params'); } catch {}
     }
 }
 
