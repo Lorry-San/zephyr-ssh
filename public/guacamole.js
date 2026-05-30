@@ -39,13 +39,9 @@ let client = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
-let fitModes = ['fit', '1:1', '16:9', '4:3'];
-let fitModeIdx = 0;
-let fitModeLabel = () => fitModes[fitModeIdx] === 'fit' ? '↔ 适应' : fitModes[fitModeIdx] === '1:1' ? '1:1 原始' : fitModes[fitModeIdx];
+let fitToWindow = true;
 let displayWidth = 0;
 let displayHeight = 0;
-// 手势缩放（CSS transform，GPU 合成，不影响 RDP 分辨率）
-let displayZoom = 1;
 let resizeTimer = 0;
 let mobileInputMirror = '';
 let lastRemoteClipboard = '';
@@ -53,10 +49,11 @@ let clipboardAutoWriteOk = false;
 let clipboardAutoWriteFailed = false;
 let panelLayoutMenu = null;
 let suppressNextLayoutClick = false;
-let rdpFileClipboardSeq = 0;
+let touchClickCandidate = null;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
+let rdpFileClipboardSeq = 0;
 const rdpFileClipboardFiles = new Map();
 
 const RDP_FILE_CLIPBOARD_MIMETYPE = 'application/vnd.zephyr.rdp.file-clipboard';
@@ -325,14 +322,8 @@ function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
-    // RDP 桌面用 viewport 较长边计算 16:9 分辨率，保证登录界面完整
-    const viewMax = Math.max(rect.width || innerWidth || 1280, (rect.height || innerHeight || 720) - 2);
-    let width = Math.round(Math.max(1024, Math.min(1920, viewMax * effDpr)));
-    let height = Math.round(Math.max(768, Math.min(1200, width * 9 / 16)));
-    // 如果宽度 < 高度说明是竖屏，强制用宽边的 4:3
-    if (width < height) {
-        height = Math.round(width * 3 / 4);
-    }
+    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
     const dpi = Math.max(72, Math.round(96 * rawDpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
@@ -360,93 +351,19 @@ function applyDisplayScale() {
     if (!client || !displayShell) return;
     const display = client.getDisplay();
     const bounds = stage.getBoundingClientRect();
-    // 不要用 displayRoot 自身的尺寸，用 stage 实际尺寸
-    const curW = displayWidth || display.getWidth?.() || 1280;
-    const curH = displayHeight || display.getHeight?.() || 720;
-    if (!curW || !curH) return;
-
-    const mode = fitModes[fitModeIdx];
-
-    // 1:1 — 原始大小，不缩放
-    if (mode === '1:1') {
+    const width = displayWidth || display.getWidth?.() || bounds.width;
+    const height = displayHeight || display.getHeight?.() || bounds.height;
+    if (!fitToWindow || !width || !height) {
         display.scale(1);
-        displayRoot.style.width = `${curW}px`;
-        displayRoot.style.height = `${curH}px`;
-        applyZoomTransform();
-        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH, zoom: displayZoom });
+        displayRoot.style.width = '';
+        displayRoot.style.height = '';
         return;
     }
-
-    const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
+    const scale = Math.min(bounds.width / width, bounds.height / height, 1);
     display.scale(Math.max(0.1, scale));
-    displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
-    displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
-    applyZoomTransform();
-    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale, zoom: displayZoom });
-}
-
-// 缩放用 CSS transform 叠加在 displayShell 上（GPU 合成，不触发重排）
-function applyZoomTransform() {
-    if (displayZoom === 1) {
-        displayShell.style.transform = '';
-    } else {
-        displayShell.style.transform = `scale(${displayZoom})`;
-        displayShell.style.transformOrigin = 'center center';
-    }
-}
-
-function applyZoom(delta) {
-    const newZoom = Math.max(0.25, Math.min(4, displayZoom + delta));
-    if (newZoom === displayZoom) return;
-    displayZoom = newZoom;
-    applyDisplayScale();
-    console.info('[guac-client]', 'zoom changed', { zoom: displayZoom });
-    // 显示 zoom 指示
-    const el = $('#zoomIndicator') || (() => {
-        const e = document.createElement('div');
-        e.id = 'zoomIndicator';
-        e.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:6px 14px;border-radius:8px;font-size:13px;z-index:999;pointer-events:none;transition:opacity .3s';
-        document.body.appendChild(e);
-        return e;
-    })();
-    el.textContent = `${Math.round(displayZoom * 100)}%`;
-    el.style.opacity = '1';
-    clearTimeout(el._hideTimer);
-    el._hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 1200);
-}
-
-function switchFitMode(mode) {
-    if (!tunnel || !connected) return;
-    const bounds = stage.getBoundingClientRect();
-    const rawDpr = window.devicePixelRatio || 1;
-    const effDpr = Math.min(rawDpr, 2);
-
-    let targetW, targetH;
-    if (mode === '16:9') {
-        // 取 viewport 高度*16/9，确保宽度不溢出
-        targetW = Math.round(bounds.width * effDpr);
-        targetH = Math.round(targetW / (16 / 9));
-        if (targetH > bounds.height * effDpr) {
-            targetH = Math.round(bounds.height * effDpr);
-            targetW = Math.round(targetH * (16 / 9));
-        }
-    } else if (mode === '4:3') {
-        targetW = Math.round(bounds.width * effDpr);
-        targetH = Math.round(targetW / (4 / 3));
-        if (targetH > bounds.height * effDpr) {
-            targetH = Math.round(bounds.height * effDpr);
-            targetW = Math.round(targetH * (4 / 3));
-        }
-    } else {
-        return; // fit / 1:1 用 applyDisplayScale 即可
-    }
-
-    targetW = Math.max(320, Math.min(1920, targetW));
-    targetH = Math.max(240, Math.min(1200, targetH));
-
-    // 发送 size 让 RDP 切换分辨率
-    tunnel.sendMessage('size', targetW, targetH);
-    console.info('[guac-client]', 'switch fit mode size', { mode, targetW, targetH });
+    displayRoot.style.width = `${Math.ceil(width * scale)}px`;
+    displayRoot.style.height = `${Math.ceil(height * scale)}px`;
+    console.debug('[guac-client]', 'display scale', { width, height, scale });
 }
 
 function sendDisplaySize() {
@@ -454,18 +371,8 @@ function sendDisplaySize() {
     const rect = stage.getBoundingClientRect();
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
-    const mode = fitModes[fitModeIdx];
-    // 16:9 / 4:3 模式下用 switchFitMode 计算比例尺寸
-    if (mode === '16:9' || mode === '4:3') {
-        switchFitMode(mode);
-        return;
-    }
-    const viewMax = Math.max(rect.width || innerWidth || 1280, (rect.height || innerHeight || 720) - 2);
-    let width = Math.round(Math.max(1024, Math.min(1920, viewMax * effDpr)));
-    let height = Math.round(Math.max(768, Math.min(1200, width * 9 / 16)));
-    if (width < height) {
-        height = Math.round(width * 3 / 4);
-    }
+    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
 }
@@ -525,156 +432,52 @@ function sendRemoteMouseClick(position, source = 'touch') {
     return true;
 }
 
-function setupGestures() {
-    if (!stage) return;
-    let touches = new Map();          // pointerId → {startX, startY, position, startedAt, moved, isDrag}
-    let longPressTimer = null;
-    let gestureActive = false;        // true when multi-touch gesture is active
-    let lastPinchDist = 0;
-    // 忽略面板/按钮上的手势
-    const isInteractive = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
-
-    function clearLongPress() {
-        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-    }
-
-    function sendRightClick(pos) {
-        if (!client || !connected || !pos) return;
-        const down = createMouseState(pos.x, pos.y, false, false, true);
-        const up = createMouseState(pos.x, pos.y, false, false, false);
-        client.sendMouseState(down);
-        setTimeout(() => { try { client?.sendMouseState?.(up); } catch {} }, 45);
-        console.info('[guac-client]', 'gesture right click', { x: pos.x, y: pos.y });
-    }
-
-    function sendWheel(pos, deltaY) {
-        if (!client || !connected || !pos) return;
-        // Guacamole doesn't have native wheel - use PageUp/PageDown or up/down keys
-        const key = deltaY > 0 ? 0xff57 : 0xff56; // PAGE_DOWN / PAGE_UP
-        client.sendKeyEvent(1, key);
-        setTimeout(() => { try { client?.sendKeyEvent?.(0, key); } catch {} }, 30);
-    }
-
-    stage.addEventListener('pointerdown', (event) => {
-        if (event.pointerType !== 'touch') return;
-        if (isInteractive(event.target)) return;
-        const pos = getRemotePointerPosition(event);
-        if (!pos) return;
-
-        const touch = {
+function setupMobilePointerMouse() {
+    stage?.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
+        const position = getRemotePointerPosition(event);
+        if (!position) return;
+        event.preventDefault();
+        event.stopPropagation();
+        touchClickCandidate = {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
-            position: pos,
+            position,
             startedAt: performance.now(),
-            moved: false,
-            isDrag: false,
         };
-        touches.set(event.pointerId, touch);
+        stage.setPointerCapture?.(event.pointerId);
+        stage.focus({ preventScroll: true });
+        console.debug('[guac-client]', 'mobile pointer candidate', { x: position.x, y: position.y, pointerType: event.pointerType });
+    }, { passive: false, capture: true });
 
-        // 第二根手指 → 进入手势模式，取消长按
-        if (touches.size >= 2) {
-            clearLongPress();
-            gestureActive = true;
-            const pts = [...touches.values()];
-            lastPinchDist = Math.hypot(pts[0].startX - pts[1].startX, pts[0].startY - pts[1].startY);
-            return;
+    stage?.addEventListener('pointermove', (event) => {
+        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
+        const dx = event.clientX - touchClickCandidate.startX;
+        const dy = event.clientY - touchClickCandidate.startY;
+        if (Math.hypot(dx, dy) > 14) {
+            console.debug('[guac-client]', 'mobile pointer candidate cancelled by move', { dx: Number(dx.toFixed(1)), dy: Number(dy.toFixed(1)) });
+            touchClickCandidate = null;
         }
+    }, { passive: true });
 
-        // 单指：开始长按计时（右键候选）
-        clearLongPress();
-        longPressTimer = setTimeout(() => {
-            if (!gestureActive && touches.has(event.pointerId)) {
-                const t = touches.get(event.pointerId);
-                if (!t.moved) {
-                    sendRightClick(t.position);
-                    // 标记为已消费，pointerup 不再发左键
-                    t.isDrag = true;
-                }
-            }
-            longPressTimer = null;
-        }, 600);
-    }, { passive: true, capture: true });
-
-    stage.addEventListener('pointermove', (event) => {
-        if (event.pointerType !== 'touch') return;
-        if (!touches.has(event.pointerId)) return;
-        const t = touches.get(event.pointerId);
-        const dx = event.clientX - t.startX;
-        const dy = event.clientY - t.startY;
-        if (Math.hypot(dx, dy) > 8) {
-            t.moved = true;
-            clearLongPress();
-        }
-        // 双指手势 (pinch)
-        if (gestureActive && touches.size >= 2) {
-            event.preventDefault();
-            const pts = [...touches.values()];
-            const currentDist = Math.hypot(
-                (pts[0].startX + (event.pointerId === pts[0].pointerId ? dx : 0)) - (pts[1].startX + (event.pointerId === pts[1].pointerId ? (event.clientX - pts[1].startX) : 0)),
-                (pts[0].startY + (event.pointerId === pts[0].pointerId ? dy : 0)) - (pts[1].startY + (event.pointerId === pts[1].pointerId ? (event.clientY - pts[1].startY) : 0))
-            );
-            if (lastPinchDist > 0) {
-                const ratio = currentDist / lastPinchDist;
-                if (Math.abs(ratio - 1) > 0.02) {
-                    applyZoom(displayZoom * (ratio - 1));
-                }
-            }
-            lastPinchDist = currentDist;
+    stage?.addEventListener('pointerup', (event) => {
+        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const candidate = touchClickCandidate;
+        touchClickCandidate = null;
+        const dx = event.clientX - candidate.startX;
+        const dy = event.clientY - candidate.startY;
+        if (Math.hypot(dx, dy) <= 14 && performance.now() - candidate.startedAt < 850) {
+            sendRemoteMouseClick(candidate.position, event.pointerType || 'touch');
         }
     }, { passive: false, capture: true });
 
-    stage.addEventListener('pointerup', (event) => {
-        if (event.pointerType !== 'touch') return;
-        const t = touches.get(event.pointerId);
-        if (!t) return;
-        touches.delete(event.pointerId);
-        clearLongPress();
-
-        // 双指手势结束
-        if (gestureActive) {
-            gestureActive = false;
-            lastPinchDist = 0;
-            // 如果是两指同时抬起（tap），发右键
-            if (!t.moved && touches.size === 0) {
-                sendRightClick(t.position);
-            }
-            return;
-        }
-
-        // 单指抬起：如果没移动过且没被长按消费，发左键点击
-        if (!t.moved && !t.isDrag) {
-            sendRemoteMouseClick(t.position, 'touch');
-        }
-    }, { passive: true, capture: true });
-
-    stage.addEventListener('pointercancel', (event) => {
-        touches.delete(event.pointerId);
-        if (touches.size === 0) {
-            gestureActive = false;
-            lastPinchDist = 0;
-        }
-        clearLongPress();
+    stage?.addEventListener('pointercancel', (event) => {
+        if (touchClickCandidate?.pointerId === event.pointerId) touchClickCandidate = null;
     }, { passive: true });
-
-    // 键盘滚轮映射
-    stage.addEventListener('wheel', (event) => {
-        if (event.target.closest('.guac-floating-panel')) return;
-        const pos = getRemotePointerPosition(event);
-        if (!pos) return;
-        event.preventDefault();
-        // 滚轮 → 发送 up/down 按键
-        const steps = Math.max(1, Math.min(5, Math.abs(Math.round(event.deltaY / 40))));
-        const key = event.deltaY > 0 ? 0xff57 : 0xff56; // PAGE_DOWN / PAGE_UP
-        for (let i = 0; i < steps; i++) {
-            setTimeout(() => {
-                try {
-                    client?.sendKeyEvent?.(1, key);
-                    client?.sendKeyEvent?.(0, key);
-                } catch {}
-            }, i * 30);
-        }
-    }, { passive: false });
 }
 
 async function connect() {
@@ -1761,16 +1564,10 @@ function sendCtrlAltDel() {
 }
 
 fitBtn.addEventListener('click', () => {
-    fitModeIdx = (fitModeIdx + 1) % fitModes.length;
-    const mode = fitModes[fitModeIdx];
-    fitBtn.classList.toggle('active', mode !== '1:1');
-    fitBtn.textContent = fitModeLabel();
-    if (mode === '16:9' || mode === '4:3') {
-        switchFitMode(mode);
-    } else {
-        applyDisplayScale();
-    }
-    console.info('[guac-client]', 'fit mode changed', { mode, idx: fitModeIdx });
+    fitToWindow = !fitToWindow;
+    fitBtn.classList.toggle('active', fitToWindow);
+    fitBtn.textContent = fitToWindow ? '↔ 适应' : '1:1 原始';
+    applyDisplayScale();
 });
 
 clipboardBtn.addEventListener('click', () => {
@@ -1843,7 +1640,7 @@ window.addEventListener('message', (event) => {
 });
 
 setupFloatingPanels();
-setupGestures();
-fitBtn.classList.add('active'); // 初始：适应模式
+setupMobilePointerMouse();
+fitBtn.classList.add('active');
 setStatus('connecting');
 connect();
