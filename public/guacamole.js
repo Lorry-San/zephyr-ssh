@@ -323,16 +323,15 @@ function guacamoleTunnelBaseUrl() {
 
 function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
-    // DPR 上限 2x
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
-    // RDP 最低 1024×768（保证 Windows 登录界面完整显示）
-    // 竖屏手机用 viewport 宽度 × effDpr，但高度至少 768
-    let width = Math.round(Math.max(1024, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    let height = Math.round(Math.max(768, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
-    // 确保宽高比不要太极端（保持 >= 4:3 的宽高比用于 Windows 桌面）
-    if (width < height * 1.2) {
-        width = Math.round(height * 1.33); // 强制 4:3
+    // RDP 桌面用 viewport 较长边计算 16:9 分辨率，保证登录界面完整
+    const viewMax = Math.max(rect.width || innerWidth || 1280, (rect.height || innerHeight || 720) - 2);
+    let width = Math.round(Math.max(1024, Math.min(1920, viewMax * effDpr)));
+    let height = Math.round(Math.max(768, Math.min(1200, width * 9 / 16)));
+    // 如果宽度 < 高度说明是竖屏，强制用宽边的 4:3
+    if (width < height) {
+        height = Math.round(width * 3 / 4);
     }
     const dpi = Math.max(72, Math.round(96 * rawDpr));
     const query = new URLSearchParams({
@@ -361,8 +360,9 @@ function applyDisplayScale() {
     if (!client || !displayShell) return;
     const display = client.getDisplay();
     const bounds = stage.getBoundingClientRect();
-    const curW = displayWidth || display.getWidth?.() || bounds.width;
-    const curH = displayHeight || display.getHeight?.() || bounds.height;
+    // 不要用 displayRoot 自身的尺寸，用 stage 实际尺寸
+    const curW = displayWidth || display.getWidth?.() || 1280;
+    const curH = displayHeight || display.getHeight?.() || 720;
     if (!curW || !curH) return;
 
     const mode = fitModes[fitModeIdx];
@@ -370,10 +370,9 @@ function applyDisplayScale() {
     // 1:1 — 原始大小，不缩放
     if (mode === '1:1') {
         display.scale(1);
-        displayRoot.style.width = '';
-        displayRoot.style.height = '';
-        displayRoot.style.transform = `scale(${displayZoom})`;
-        displayRoot.style.transformOrigin = '0 0';
+        displayRoot.style.width = `${curW}px`;
+        displayRoot.style.height = `${curH}px`;
+        applyZoomTransform();
         console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH, zoom: displayZoom });
         return;
     }
@@ -382,9 +381,18 @@ function applyDisplayScale() {
     display.scale(Math.max(0.1, scale));
     displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
     displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
-    displayRoot.style.transform = `scale(${displayZoom})`;
-    displayRoot.style.transformOrigin = '0 0';
+    applyZoomTransform();
     console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale, zoom: displayZoom });
+}
+
+// 缩放用 CSS transform 叠加在 displayShell 上（GPU 合成，不触发重排）
+function applyZoomTransform() {
+    if (displayZoom === 1) {
+        displayShell.style.transform = '';
+    } else {
+        displayShell.style.transform = `scale(${displayZoom})`;
+        displayShell.style.transformOrigin = 'center center';
+    }
 }
 
 function applyZoom(delta) {
@@ -452,10 +460,11 @@ function sendDisplaySize() {
         switchFitMode(mode);
         return;
     }
-    let width = Math.round(Math.max(1024, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    let height = Math.round(Math.max(768, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
-    if (width < height * 1.2) {
-        width = Math.round(height * 1.33);
+    const viewMax = Math.max(rect.width || innerWidth || 1280, (rect.height || innerHeight || 720) - 2);
+    let width = Math.round(Math.max(1024, Math.min(1920, viewMax * effDpr)));
+    let height = Math.round(Math.max(768, Math.min(1200, width * 9 / 16)));
+    if (width < height) {
+        height = Math.round(width * 3 / 4);
     }
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
