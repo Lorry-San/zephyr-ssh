@@ -793,8 +793,8 @@ async function openConnection(id) {
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     if (['RDP', 'VNC'].includes(protocol)) {
         sessionStorage.setItem(`zephyr_guac_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
-        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
-        console.debug('[guac-client]', 'open guacamole tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
+        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'player', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+        console.debug('[guac-client]', 'open RDP H.264 player', { protocol, tabId, connectionId: c.id });
     } else {
         const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
@@ -1218,7 +1218,9 @@ function createTerminalWindowElement(t) {
         const frame = document.createElement('iframe');
         frame.className = 'terminal-frame active';
         frame.dataset.frame = t.id;
-        frame.src = t.page === 'guacamole'
+        frame.src = t.page === 'player'
+            ? `/player.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
+            : t.page === 'guacamole'
             ? `/guacamole.html?embed=1&tabId=${encodeURIComponent(t.id)}`
             : `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
         frame.allow = 'fullscreen; virtual-keyboard; clipboard-read; clipboard-write';
