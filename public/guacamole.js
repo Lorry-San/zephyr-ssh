@@ -112,6 +112,7 @@ function protocolDefaultPort() {
 
 function notifyParentStatus(status) {
     if (embeddedMode && window.parent && window.parent !== window) {
+        if (status === 'connecting' && connected) return;
         window.parent.postMessage({ source: 'zephyr-terminal', tabId: params?.tabId || tabId, status }, '*');
     }
 }
@@ -360,18 +361,32 @@ function applyDisplayScale() {
         const curH = displayHeight || rdpCanvas.height || 720;
         if (!curW || !curH) return;
         const mode = fitModes[fitModeIdx];
+        const setCanvasCss = (w, h) => {
+            displayRoot.style.width = `${Math.ceil(w)}px`;
+            displayRoot.style.height = `${Math.ceil(h)}px`;
+            rdpCanvas.style.width = `${Math.ceil(w)}px`;
+            rdpCanvas.style.height = `${Math.ceil(h)}px`;
+        };
         if (mode === '1:1') {
-            displayRoot.style.width = `${curW}px`;
-            displayRoot.style.height = `${curH}px`;
-            rdpCanvas.style.width = `${curW}px`;
-            rdpCanvas.style.height = `${curH}px`;
+            setCanvasCss(curW, curH);
             return;
         }
-        const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
-        displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
-        displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
-        rdpCanvas.style.width = '100%';
-        rdpCanvas.style.height = '100%';
+        let targetW = curW;
+        let targetH = curH;
+        if (mode === '16:9') {
+            targetW = bounds.width;
+            targetH = targetW / (16 / 9);
+            if (targetH > bounds.height) { targetH = bounds.height; targetW = targetH * (16 / 9); }
+        } else if (mode === '4:3') {
+            targetW = bounds.width;
+            targetH = targetW / (4 / 3);
+            if (targetH > bounds.height) { targetH = bounds.height; targetW = targetH * (4 / 3); }
+        } else {
+            const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
+            targetW = curW * scale;
+            targetH = curH * scale;
+        }
+        setCanvasCss(targetW, targetH);
         return;
     }
     if (!client) return;
@@ -419,6 +434,7 @@ function switchFitMode(mode) {
 
 function sendDisplaySize() {
     if (!tunnel || !connected) return;
+    if (!client) { applyDisplayScale(); return; }
     const rect = stage.getBoundingClientRect();
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
@@ -839,14 +855,108 @@ async function connect() {
 
         function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
         function pos(e) { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * (canvas.width / Math.max(1, r.width))), y: Math.round((e.clientY - r.top) * (canvas.height / Math.max(1, r.height))) }; }
-        canvas.addEventListener('mousemove', (e) => { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); });
-        canvas.addEventListener('mousedown', (e) => { e.preventDefault(); canvas.focus({ preventScroll: true }); const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: e.button + 1 }); });
-        canvas.addEventListener('mouseup', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: e.button + 1 }); });
+        function sendMouseMove(e) { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); }
+        canvas.addEventListener('mousemove', sendMouseMove);
+        canvas.addEventListener('mousedown', (e) => { e.preventDefault(); canvas.focus({ preventScroll: true }); const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: e.button + 1 }); notifyParentActivity(); });
+        canvas.addEventListener('mouseup', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: e.button + 1 }); notifyParentActivity(); });
         canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({ type: 'scroll', deltaY: e.deltaY }); }, { passive: false });
-        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); const t = e.touches[0]; if (!t) return; const p = pos(t); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: 1 }); }, { passive: false });
-        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); const t = e.touches[0]; if (!t) return; const p = pos(t); wsInput({ type: 'mouse', x: p.x, y: p.y }); }, { passive: false });
-        canvas.addEventListener('touchend', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: 1 }); }, { passive: false });
+        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({ type: 'scroll', deltaY: e.deltaY }); notifyParentActivity(); }, { passive: false });
+        installRdpTouchControls(canvas, wsInput, pos);
+function installRdpTouchControls(canvas, wsInput, pos) {
+    const touches = new Map();
+    let leftDown = false;
+    let longPressTimer = 0;
+    let longPressFired = false;
+    let lastTapAt = 0;
+    let lastTap = null;
+    let panStart = null;
+    let startScroll = null;
+    const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
+    const sendMove = (point) => { const p = pos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
+    const clickButton = (button, p) => {
+        wsInput({ type: 'mouse', x: p.x, y: p.y });
+        wsInput({ type: 'mousedown', button });
+        setTimeout(() => wsInput({ type: 'mouseup', button }), 55);
+    };
+    const updateTouch = (touch) => {
+        const item = touches.get(touch.identifier);
+        if (!item) return null;
+        item.x = touch.clientX;
+        item.y = touch.clientY;
+        item.moved = item.moved || Math.hypot(item.x - item.sx, item.y - item.sy) > 10;
+        return item;
+    };
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        canvas.focus({ preventScroll: true });
+        for (const t of e.changedTouches) touches.set(t.identifier, { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, moved: false, startedAt: Date.now() });
+        clearLongPress();
+        longPressFired = false;
+        if (touches.size === 1) {
+            const t = [...touches.values()][0];
+            const p = sendMove({ clientX: t.x, clientY: t.y });
+            longPressTimer = setTimeout(() => {
+                const cur = touches.get(t.id);
+                if (!cur || cur.moved || touches.size !== 1) return;
+                longPressFired = true;
+                clickButton(3, p);
+                if (navigator.vibrate) navigator.vibrate(20);
+            }, 600);
+        } else if (touches.size >= 2) {
+            clearLongPress();
+            if (leftDown) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
+            const pts = [...touches.values()].slice(0, 2);
+            panStart = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            startScroll = { left: displayShell.scrollLeft, top: displayShell.scrollTop };
+        }
+        notifyParentActivity();
+    }, { passive: false });
+    canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const t of e.changedTouches) updateTouch(t);
+        if (touches.size >= 2 && panStart && startScroll) {
+            const pts = [...touches.values()].slice(0, 2);
+            const cx = (pts[0].x + pts[1].x) / 2;
+            const cy = (pts[0].y + pts[1].y) / 2;
+            displayShell.scrollLeft = startScroll.left - (cx - panStart.x);
+            displayShell.scrollTop = startScroll.top - (cy - panStart.y);
+            return;
+        }
+        const t = [...touches.values()][0];
+        if (!t || longPressFired) return;
+        const p = sendMove({ clientX: t.x, clientY: t.y });
+        if (t.moved) {
+            clearLongPress();
+            if (!leftDown) { wsInput({ type: 'mousedown', button: 1 }); leftDown = true; }
+            wsInput({ type: 'mouse', x: p.x, y: p.y });
+        }
+        notifyParentActivity();
+    }, { passive: false });
+    const finishTouch = (e) => {
+        e.preventDefault();
+        const before = touches.size;
+        for (const t of e.changedTouches) {
+            const item = touches.get(t.identifier);
+            if (!item) continue;
+            const p = sendMove({ clientX: item.x, clientY: item.y });
+            if (!item.moved && !longPressFired && before === 1) {
+                const now = Date.now();
+                const isDouble = lastTap && now - lastTapAt < 320 && Math.hypot(item.x - lastTap.x, item.y - lastTap.y) < 24;
+                clickButton(1, p);
+                if (isDouble) setTimeout(() => clickButton(1, p), 90);
+                lastTapAt = now;
+                lastTap = { x: item.x, y: item.y };
+            }
+            touches.delete(t.identifier);
+        }
+        clearLongPress();
+        if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
+        if (touches.size < 2) { panStart = null; startScroll = null; }
+        notifyParentActivity();
+    };
+    canvas.addEventListener('touchend', finishTouch, { passive: false });
+    canvas.addEventListener('touchcancel', finishTouch, { passive: false });
+}
 
         const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
         canvas.addEventListener('keydown', (e) => { const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
@@ -1882,8 +1992,10 @@ fitBtn.addEventListener('click', () => {
     const m = fitModes[fitModeIdx];
     fitBtn.classList.toggle('active', m !== '1:1');
     fitBtn.textContent = m === 'fit' ? '↔ 适应' : m === '1:1' ? '1:1 原始' : m;
-    if (m === '16:9' || m === '4:3') switchFitMode(m);
-    else applyDisplayScale();
+    if (m === '16:9' || m === '4:3') {
+        if (client) switchFitMode(m);
+        applyDisplayScale();
+    } else applyDisplayScale();
 });
 
 clipboardBtn.addEventListener('click', () => {
