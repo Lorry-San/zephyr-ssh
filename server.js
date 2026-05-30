@@ -3454,7 +3454,8 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const env = { ...process.env, DISPLAY: xvfbDisp, ZEPHYR_RDP_H264_PIPE: fifoPath, PULSE_SERVER: `unix:/tmp/zephyr-pulse-${connId}/native` };
 
     let pulseaudio = null;
-    if (process.env.RDP_AUDIO !== 'false') {
+    const hasPulseRdpPlugin = fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-pulse.so') || fs.existsSync('/usr/lib/freerdp2/rdpsnd-client-pulse.so');
+    if (process.env.RDP_AUDIO !== 'false' && hasPulseRdpPlugin) {
         try { fs.rmSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true, force: true }); } catch {}
         try { fs.mkdirSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true }); } catch {}
         pulseaudio = rdpSpawn('pulseaudio', ['--daemonize=no', '--exit-idle-time=-1', '--disallow-exit=true', `--load=module-native-protocol-unix socket=/tmp/zephyr-pulse-${connId}/native auth-anonymous=1`, '--load=module-null-sink sink_name=zephyr_rdp_audio sink_properties=device.description=ZephyrRdpAudio'], { env });
@@ -3477,7 +3478,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_ALLOW_GFX_FALLBACK ? [] : ['/gfx:AVC444']),
         '+fonts',
         '+clipboard',
-        ...(process.env.RDP_AUDIO === 'false' ? [] : ['/sound:sys:pulse,format:1,rate:44100,channel:2']),
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-pulse.so') || fs.existsSync('/usr/lib/freerdp2/rdpsnd-client-pulse.so') ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '/log-level:WARN',
@@ -3632,7 +3633,7 @@ function handleRdpInput(pipe, raw) {
 }
 
 function startRdpAudioCapture(pipe) {
-    if (!pipe || pipe.audioFfmpeg || process.env.RDP_AUDIO === 'false') return;
+    if (!pipe || pipe.audioFfmpeg || process.env.RDP_AUDIO === 'false' || !pipe.pulseaudio) return;
     const args = [
         '-hide_banner', '-loglevel', 'warning',
         '-f', 'pulse', '-i', 'zephyr_rdp_audio.monitor',
