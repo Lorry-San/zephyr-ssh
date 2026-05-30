@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.1-rdp-no-pinch-clipboard-v2';
+const GUAC_CLIENT_VERSION = '2026-05-31.2-rdp-auto-clipboard-audio';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -43,6 +43,11 @@ let Guacamole = null;
 let tunnel = null;
 let client = null;
 let rdpInputSender = null;
+let rdpAudioSocket = null;
+let rdpAudioMediaSource = null;
+let rdpAudioSourceBuffer = null;
+let rdpAudioElement = null;
+let rdpAudioQueue = [];
 let keyboard = null;
 let mouse = null;
 let connected = false;
@@ -63,6 +68,8 @@ let suppressNextLayoutClick = false;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
+let clipboardAutoSyncTimer = 0;
+let lastClipboardReadAttemptAt = 0;
 let rdpFileClipboardSeq = 0;
 const rdpFileClipboardFiles = new Map();
 
@@ -798,6 +805,8 @@ async function connect() {
                             firstFrameDrawn = true;
                             setStatus('connected', `${label} 已连接 [WebCodecs H.264]`);
                             connected = true;
+                            startClipboardAutoSync();
+                            startRdpAudio();
                             requestRdpCanvasSize(fitModes[fitModeIdx], true);
                             notifyParentStatus('connected');
                         }
@@ -839,11 +848,15 @@ async function connect() {
             notifyParentStatus('disconnected');
             if (decoder) { try { decoder.close(); } catch {} decoder = null; }
             if (event.code === 1012) {
+                stopClipboardAutoSync();
+                stopRdpAudio();
                 setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
                 window.setTimeout(() => connect(), 250);
                 return;
             }
             setStatus('disconnected', event.reason || `${label} 已断开`);
+            stopRdpAudio();
+            stopClipboardAutoSync();
         };
         tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
         tunnel.onmessage = async (ev) => {
@@ -1052,6 +1065,8 @@ function disconnect(userInitiated = true) {
     rdpInputSender = null;
     connected = false;
     if (userInitiated) {
+        stopClipboardAutoSync();
+        stopRdpAudio();
         setStatus('disconnected', `${protocolLabel()} 已断开`);
         try { sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params'); } catch {}
     }
@@ -1544,6 +1559,62 @@ function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function stopRdpAudio() {
+    try { rdpAudioSocket?.close(); } catch {}
+    rdpAudioSocket = null;
+    try { rdpAudioElement?.pause(); } catch {}
+    if (rdpAudioElement) {
+        try { URL.revokeObjectURL(rdpAudioElement.src); } catch {}
+        rdpAudioElement.remove();
+    }
+    rdpAudioElement = null;
+    rdpAudioMediaSource = null;
+    rdpAudioSourceBuffer = null;
+    rdpAudioQueue = [];
+}
+
+function pumpRdpAudioQueue() {
+    if (!rdpAudioSourceBuffer || rdpAudioSourceBuffer.updating || !rdpAudioQueue.length) return;
+    const chunk = rdpAudioQueue.shift();
+    try { rdpAudioSourceBuffer.appendBuffer(chunk); }
+    catch (err) { console.warn('[rdp-audio]', 'append failed', { error: err.message }); rdpAudioQueue.length = 0; }
+}
+
+function startRdpAudio() {
+    if (rdpAudioSocket || !params?.connectionId || !window.MediaSource || !MediaSource.isTypeSupported('audio/webm; codecs="opus"')) return;
+    stopRdpAudio();
+    rdpAudioElement = document.createElement('audio');
+    rdpAudioElement.autoplay = true;
+    rdpAudioElement.playsInline = true;
+    rdpAudioElement.controls = false;
+    rdpAudioElement.style.display = 'none';
+    document.body.appendChild(rdpAudioElement);
+    rdpAudioMediaSource = new MediaSource();
+    rdpAudioElement.src = URL.createObjectURL(rdpAudioMediaSource);
+    rdpAudioElement.play().catch((err) => console.debug('[rdp-audio]', 'autoplay deferred', { error: err.message }));
+    rdpAudioMediaSource.addEventListener('sourceopen', () => {
+        try {
+            rdpAudioSourceBuffer = rdpAudioMediaSource.addSourceBuffer('audio/webm; codecs="opus"');
+            rdpAudioSourceBuffer.mode = 'sequence';
+            rdpAudioSourceBuffer.addEventListener('updateend', pumpRdpAudioQueue);
+            pumpRdpAudioQueue();
+        } catch (err) { console.warn('[rdp-audio]', 'sourcebuffer failed', { error: err.message }); }
+    }, { once: true });
+    const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-audio`;
+    rdpAudioSocket = new WebSocket(`${wsBase}?connectionId=${encodeURIComponent(params.connectionId)}`);
+    rdpAudioSocket.binaryType = 'arraybuffer';
+    rdpAudioSocket.onmessage = async (ev) => {
+        if (typeof ev.data === 'string') return;
+        const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
+        if (!buf || !buf.byteLength) return;
+        rdpAudioQueue.push(buf);
+        if (rdpAudioQueue.length > 60) rdpAudioQueue.splice(0, rdpAudioQueue.length - 60);
+        pumpRdpAudioQueue();
+    };
+    rdpAudioSocket.onclose = () => { rdpAudioSocket = null; };
+    rdpAudioSocket.onerror = (err) => console.warn('[rdp-audio]', 'socket error', err);
+}
+
 function ensureRemoteReady(action = '操作') {
     if ((!client && !rdpInputSender) || !connected) {
         const msg = `${protocolLabel()} 尚未连接，无法${action}`;
@@ -1601,14 +1672,34 @@ function isTextInputTarget(target = document.activeElement) {
     return tag === 'textarea' || tag === 'input' || target.isContentEditable;
 }
 
-async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipboard-sync', force = false } = {}) {
+function startClipboardAutoSync() {
+    if (clipboardAutoSyncTimer) return;
+    const tick = () => {
+        if (!connected || (!client && !rdpInputSender)) return;
+        const now = Date.now();
+        if (document.visibilityState !== 'visible') return;
+        if (isTextInputTarget(document.activeElement) && document.activeElement !== mobileKeyboardInput) return;
+        if (now - lastClipboardReadAttemptAt < 1400) return;
+        lastClipboardReadAttemptAt = now;
+        syncLocalClipboardToRemote({ paste: false, source: 'auto-poll', force: false, silent: true }).catch(() => {});
+    };
+    clipboardAutoSyncTimer = window.setInterval(tick, 1500);
+    window.setTimeout(tick, 250);
+}
+
+function stopClipboardAutoSync() {
+    if (clipboardAutoSyncTimer) window.clearInterval(clipboardAutoSyncTimer);
+    clipboardAutoSyncTimer = 0;
+}
+
+async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipboard-sync', force = false, silent = false } = {}) {
     if (!ensureRemoteReady('同步本机剪贴板')) return false;
     let text = '';
     try {
         text = await navigator.clipboard.readText();
     } catch (err) {
         console.warn('[guac-client]', 'local clipboard sync read failed', { source, error: err.message });
-        setClipboardHint('浏览器拒绝读取本机剪贴板，请打开剪贴板面板手动发送', 'warning');
+        if (!silent) setClipboardHint('浏览器拒绝读取本机剪贴板，请打开剪贴板面板手动发送', 'warning');
         return false;
     }
     if (!text) return false;
@@ -1621,8 +1712,10 @@ async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipb
     if (clipboardText) clipboardText.value = text;
     const ok = sendRemoteClipboardText(text);
     if (!ok) return false;
-    setClipboardHint(`本机剪贴板已同步到远程 ${text.length} 字符${paste ? '，并发送粘贴' : ''}`, 'success');
-    setTransientStatus(paste ? '已同步本机剪贴板并发送粘贴' : '已同步本机剪贴板到远程');
+    if (!silent) {
+        setClipboardHint(`本机剪贴板已同步到远程 ${text.length} 字符${paste ? '，并发送粘贴' : ''}`, 'success');
+        setTransientStatus(paste ? '已同步本机剪贴板并发送粘贴' : '已同步本机剪贴板到远程');
+    }
     if (paste) {
         pasteShortcutInProgress = true;
         const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || '');
@@ -1650,10 +1743,13 @@ function installLocalClipboardBridge() {
         lastLocalClipboardText = text;
         lastLocalClipboardSentAt = Date.now();
         if (clipboardText) clipboardText.value = text;
-        sendRemoteClipboardText(text);
-        setClipboardHint(`已捕获本机粘贴并同步到远程 ${text.length} 字符，正在发送 Ctrl+V`, 'success');
-        await sleep(70);
-        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+        if (rdpInputSender && !client) await sendRdpClipboardPaste(text, { paste: true });
+        else {
+            sendRemoteClipboardText(text);
+            await sleep(70);
+            await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+        }
+        setClipboardHint(`已捕获本机粘贴并发送到远程 ${text.length} 字符`, 'success');
     }, true);
     document.addEventListener('keydown', async (event) => {
         if (!connected || isTextInputTarget(event.target)) return;
@@ -1696,13 +1792,20 @@ function installLocalClipboardBridge() {
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
     }, true);
+    document.addEventListener('pointerdown', () => {
+        if (rdpAudioElement) rdpAudioElement.play().catch(() => {});
+    }, { passive: true });
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && connected && client) {
-            syncLocalClipboardToRemote({ paste: false, source: 'visibility-visible' }).catch(() => {});
+        if (connected) startClipboardAutoSync();
+        if (document.visibilityState === 'visible' && connected) {
+            syncLocalClipboardToRemote({ paste: false, source: 'visibility-visible', silent: true }).catch(() => {});
         }
     });
     window.addEventListener('focus', () => {
-        if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'window-focus' }).catch(() => {});
+        if (connected) {
+            startClipboardAutoSync();
+            syncLocalClipboardToRemote({ paste: false, source: 'window-focus', silent: true }).catch(() => {});
+        }
     });
 }
 
@@ -1799,7 +1902,7 @@ function sendRemoteClipboardText(text) {
         if (!text) return false;
         rdpInputSender({ type: 'clipboard', text });
         notifyParentActivity();
-        console.info('[guac-client]', 'rdp clipboard text sent', { length: text.length });
+        console.info('[guac-client]', 'rdp clipboard text sent', { length: text.length, paste: false });
         return true;
     }
     if (!client || !connected) {
