@@ -3494,12 +3494,14 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         '-i', xvfbDisp,
         '-an', '-c:v', 'libx264',
         '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'baseline', '-level', '3.1',
+        '-profile:v', 'baseline',
         '-pix_fmt', 'yuv420p',
         '-g', String(RDP_STREAM_FPS), '-keyint_min', String(RDP_STREAM_FPS),
         '-x264-params', `repeat-headers=1:scenecut=0:open-gop=0`,
-        '-bsf:v', 'h264_mp4toannexb',
-        '-f', 'h264', 'pipe:1',
+        '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-bsf:v', 'h264_metadata=sample_aspect_ratio=1/1',
+        '-flush_packets', '1',
+        'pipe:1',
     ];
     const ffmpeg = nativeH264 ? null : rdpSpawn('ffmpeg', ffmpegArgs, { env });
     if (ffmpeg) rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
@@ -3667,7 +3669,7 @@ rdpH264Wss.on('connection', async (ws, req) => {
         const requestedMode = url.searchParams.get('mode') || '';
         if (!pipe) pipe = await startRdpH264Pipeline(connId, conn, { width: requestedWidth, height: requestedHeight, mode: requestedMode });
         pipe.clients.add(ws);
-        ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: pipe.width || RDP_STREAM_WIDTH, height: pipe.height || RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
+        ws.send(JSON.stringify({ type: 'hello', container: 'fmp4', codec: 'avc1.42E01E', width: pipe.width || RDP_STREAM_WIDTH, height: pipe.height || RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
         console.info('[rdp-h264]', 'browser attached', { connId, clients: pipe.clients.size });
 
         ws.on('message', async (raw, isBinary) => {
