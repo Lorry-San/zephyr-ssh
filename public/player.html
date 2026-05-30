@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover,user-scalable=no">
+<title>Zephyr - H.264 RDP</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:-apple-system,sans-serif}
+#displayShell{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#display{position:relative;max-width:100%;max-height:100%}
+canvas{display:block;width:100%;height:auto;image-rendering:auto}
+.status{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);padding:4px 12px;border-radius:6px;font-size:12px;z-index:10}
+.controls{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10}
+.controls button{background:rgba(0,0,0,.5);color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer}
+.controls button:active{background:rgba(255,255,255,.2)}
+</style>
+</head>
+<body>
+<div id="displayShell"><canvas id="display"></canvas></div>
+<div class="status" id="statusText">连接中...</div>
+<div class="controls">
+<button id="fitBtn">适应</button>
+<button id="reconnectBtn">重连</button>
+<button id="disconnectBtn">断开</button>
+</div>
+<script>
+const canvas = document.getElementById('display');
+const ctx = canvas.getContext('2d');
+const statusText = document.getElementById('statusText');
+const fitBtn = document.getElementById('fitBtn');
+
+const urlParams = new URLSearchParams(location.search);
+const connId = urlParams.get('connectionId') || '';
+const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = `${protocol}//${location.host}/rdp-h264?connectionId=${encodeURIComponent(connId)}`;
+
+let ws = null;
+let decoder = null;
+let fitZoom = 1;
+
+function setStatus(s) { statusText.textContent = s; }
+
+function connect() {
+    if (ws) try { ws.close(); } catch {}
+    if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+    setStatus('连接中...');
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    let initBuffer = null;
+
+    ws.onmessage = async (event) => {
+        const data = event.data;
+        if (!(data instanceof ArrayBuffer) && !(data instanceof Blob)) {
+            return; // text message - ignore
+        }
+        const buf = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+
+        if (!decoder && window.VideoDecoder) {
+            // 尝试初始化 decoder
+            const raw = new Uint8Array(buf);
+            let cfg = { codec: 'avc1.42001E', codedWidth: 1280, codedHeight: 720 };
+            for (let i = 0; i < raw.length - 4; i++) {
+                if (raw[i]===0&&raw[i+1]===0&&raw[i+2]===0&&raw[i+3]===1) {
+                    const t = raw[i+4]&0x1F;
+                    if (t===7) {
+                        cfg.codedWidth=((raw[i+5]&0x0F)<<8)|raw[i+6];
+                        cfg.codedHeight=((raw[i+7]&0x0F)<<8)|raw[i+8];
+                        cfg.description=raw.slice(i,i+40);
+                        break;
+                    }
+                }
+            }
+            try {
+                const supported = await VideoDecoder.isConfigSupported(cfg);
+                if (!supported.supported) {
+                    setStatus('H.264 不支持');
+                    return;
+                }
+                decoder = new VideoDecoder({
+                    output: (frame) => {
+                        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+                            canvas.width = frame.displayWidth;
+                            canvas.height = frame.displayHeight;
+                        }
+                        ctx.drawImage(frame, 0, 0);
+                        frame.close();
+                    },
+                    error: (e) => setStatus('解码错误: '+e.message)
+                });
+                decoder.configure(cfg);
+                setStatus('已连接 (H.264)');
+                // 处理缓存的初始数据
+                if (initBuffer) {
+                    decoder.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:initBuffer}));
+                    initBuffer = null;
+                }
+                // 解码当前帧
+                decoder.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:raw}));
+            } catch(e) {
+                setStatus('初始化失败: '+e.message);
+            }
+        } else if (decoder) {
+            try {
+                decoder.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:new Uint8Array(buf)}));
+            } catch(e) {
+                console.warn('decode error', e.message);
+            }
+        } else if (!decoder && !window.VideoDecoder) {
+            setStatus('浏览器不支持 WebCodecs');
+        } else {
+            // 缓存初始数据直到 decoder 就绪
+            if (!initBuffer && buf.byteLength > 100) initBuffer = new Uint8Array(buf);
+        }
+    };
+
+    ws.onopen = () => setStatus('WebSocket 已连接');
+    ws.onclose = (e) => setStatus('断开 ('+e.code+')');
+    ws.onerror = () => setStatus('连接错误');
+}
+
+// 鼠标/触控 → WebSocket
+function sendInput(msg) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+const displayShell = document.getElementById('displayShell');
+displayShell.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+    sendInput({type:'mouse',x,y});
+});
+
+displayShell.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+    sendInput({type:'mouse',x,y,button:e.button+1});
+});
+
+displayShell.addEventListener('mouseup', (e) => {
+    sendInput({type:'mouseup',button:e.button+1});
+});
+
+// Touch
+displayShell.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((t.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((t.clientY - rect.top) * (canvas.height / rect.height));
+    sendInput({type:'mouse',x,y,button:1});
+}, {passive:false});
+
+displayShell.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((t.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((t.clientY - rect.top) * (canvas.height / rect.height));
+    sendInput({type:'mouse',x,y});
+}, {passive:false});
+
+displayShell.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    sendInput({type:'mouseup',button:1});
+}, {passive:false});
+
+document.getElementById('reconnectBtn').addEventListener('click', connect);
+document.getElementById('disconnectBtn').addEventListener('click', () => { if(ws) ws.close(); });
+fitBtn.addEventListener('click', () => {
+    fitZoom = fitZoom === 1 ? 2 : fitZoom === 2 ? 0.5 : 1;
+    canvas.style.width = (1280 * fitZoom) + 'px';
+    fitBtn.textContent = fitZoom === 1 ? '适应' : fitZoom === 2 ? '200%' : '50%';
+});
+
+connect();
+</script>
+</body>
+</html>

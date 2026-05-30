@@ -3375,6 +3375,7 @@ const wsServerOptions = {
 const wss = new WebSocketServer(wsServerOptions);
 const guacWss = new WebSocketServer(wsServerOptions);
 const editorLspWss = new WebSocketServer(wsServerOptions);
+const rdpH264Wss = new WebSocketServer(wsServerOptions);
 
 server.on('upgrade', (req, socket, head) => {
     let pathname = '';
@@ -3384,7 +3385,7 @@ server.on('upgrade', (req, socket, head) => {
         pathname = req.url || '';
     }
 
-    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/editor-lsp' ? editorLspWss : null;
+    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/editor-lsp' ? editorLspWss : pathname === '/rdp-h264' ? rdpH264Wss : null;
     if (!targetWss) {
         console.warn('[WS-DIAG] rejected websocket upgrade for unknown path', { url: req.url || '' });
         try { socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); } catch {}
@@ -3403,6 +3404,130 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 editorLspWss.on('connection', handleEditorLspConnection);
+
+const rdpPipes = new Map(); // connectionId → { xvfb, xfreerdp, ffmpeg, xfreerdpReady }
+
+rdpH264Wss.on('connection', async (ws, req) => {
+    const url = new URL(req.url || '/rdp-h264', `http://${req.headers.host || 'localhost'}`);
+    const connId = url.searchParams.get('connectionId') || 'default';
+    try {
+        const sessionUser = currentSession(req);
+        if (!sessionUser) { ws.close(1011, 'unauthorized'); return; }
+        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+        const conn = (store.connections || []).find((c) => c.id === connId);
+        if (!conn) { ws.close(1011, 'connection not found'); return; }
+
+        const targetHost = conn.host;
+        const targetPort = conn.port || 3389;
+        const username = conn.username || 'Administrator';
+        const password = conn.password || '';
+
+        let pipe = rdpPipes.get(connId);
+        if (pipe && pipe.xfreerdpReady) {
+            // 重用已有连接
+        } else {
+            // 清理旧的
+            cleanupPipe(connId);
+            // 启动 Xvfb
+            const xvfbDir = `/tmp/rdp-xvfb-${connId}`;
+            require('fs').mkdirSync(xvfbDir, { recursive: true });
+            const xvfbDisp = 100 + (Object.keys(rdpPipes).length % 10);
+            const xvfbDispStr = `:${xvfbDisp}`;
+            const xvfb = require('child_process').spawn('Xvfb', [xvfbDispStr, '-screen', '0', '1280x720x24', '-ac'],
+                { stdio: ['ignore', 'pipe', 'pipe'] });
+
+            // 等待 Xvfb 就绪
+            await new Promise((r) => setTimeout(r, 2000));
+
+            // xfreerdp 包装脚本
+            const wrp = `/tmp/xfreerdp_${connId}.sh`;
+            require('fs').writeFileSync(wrp, `#!/bin/sh\nexport DISPLAY=${xvfbDispStr}\nexec /usr/bin/xfreerdp "$@"\n`, 'utf8');
+            require('fs').chmodSync(wrp, 0o755);
+
+            const xfreerdp = require('child_process').spawn(wrp, [
+                '/v:' + targetHost, '/port:' + String(targetPort),
+                '/u:' + username, '/p:' + password,
+                '/cert:ignore', '/f', '+fonts', '/bpp:24', '/network:lan',
+                '-wallpaper', '-themes', '-aero'
+            ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+            xfreerdp.stderr.on('data', (d) => {
+                const s = d.toString();
+                if (s.includes('Local framebuffer') || s.includes('PIXEL_FORMAT')) {
+                    if (!pipe) pipe = rdpPipes.get(connId);
+                    if (pipe) pipe.xfreerdpReady = true;
+                    console.info('[rdp-h264]', 'xfreerdp ready', { connId });
+                }
+            });
+
+            // ffmpeg: capture → H.264 → pipe to WS
+            const ffmpeg = require('child_process').spawn('ffmpeg', [
+                '-y', '-f', 'x11grab', '-framerate', '30', '-video_size', '1280x720',
+                '-i', xvfbDispStr,
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+                '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
+                '-f', 'mp4', '-movflags', 'empty_moov+frag_keyframe+omit_tfhd_offset',
+                '-'
+            ], { stdio: ['ignore', 'pipe', 'ignore'] });
+
+            pipe = { xvfb, xfreerdp, ffmpeg, xfreerdpReady: false, xvfbDisp: xvfbDispStr, xdotoolEnv: { DISPLAY: xvfbDispStr } };
+            rdpPipes.set(connId, pipe);
+
+            console.info('[rdp-h264]', 'pipeline started', { connId, target: `${targetHost}:${targetPort}` });
+
+            // 管道 ffmpeg → WS (带缓冲)
+            let wsOpen = true;
+            ws.on('close', () => { wsOpen = false; });
+            ffmpeg.stdout.on('data', (chunk) => {
+                if (wsOpen && ws.readyState === ws.OPEN) {
+                    try { ws.send(chunk); } catch {}
+                }
+            });
+            ffmpeg.stdout.on('end', () => {
+                if (wsOpen) try { ws.close(); } catch {}
+            });
+
+            // 接收鼠标/键盘 → xdotool
+            ws.on('message', (raw) => {
+                try {
+                    const msg = JSON.parse(raw.toString());
+                    if (msg.type === 'mouse' && msg.x !== undefined && msg.y !== undefined) {
+                        require('child_process').execFile('xdotool',
+                            ['mousemove', '--sync', String(msg.x), String(msg.y),
+                             ...(msg.button ? ['click', String(msg.button)] : [])],
+                            { env: pipe.xdotoolEnv });
+                    } else if (msg.type === 'key' && msg.key !== undefined) {
+                        require('child_process').execFile('xdotool',
+                            ['key', msg.key],
+                            { env: pipe.xdotoolEnv });
+                    } else if (msg.type === 'mousedown' && msg.button !== undefined) {
+                        require('child_process').execFile('xdotool',
+                            ['mousedown', String(msg.button)],
+                            { env: pipe.xdotoolEnv });
+                    } else if (msg.type === 'mouseup' && msg.button !== undefined) {
+                        require('child_process').execFile('xdotool',
+                            ['mouseup', String(msg.button)],
+                            { env: pipe.xdotoolEnv });
+                    }
+                } catch(e) { console.warn('[rdp-h264]', 'input error', e.message); }
+            });
+        }
+    } catch (err) {
+        console.error('[rdp-h264]', 'connection error', err.message);
+        try { ws.close(1011, err.message.slice(0, 120)); } catch {}
+    }
+});
+
+function cleanupPipe(connId) {
+    const p = rdpPipes.get(connId);
+    if (p) {
+        try { p.ffmpeg?.kill(); } catch {}
+        try { p.xfreerdp?.kill(); } catch {}
+        try { p.xvfb?.kill(); } catch {}
+        rdpPipes.delete(connId);
+        console.info('[rdp-h264]', 'pipeline cleaned', { connId });
+    }
+}
 
 guacWss.on('connection', async (ws, req) => {
     const started = Date.now();
