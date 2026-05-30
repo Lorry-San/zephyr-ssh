@@ -3408,6 +3408,7 @@ editorLspWss.on('connection', handleEditorLspConnection);
 const RDP_STREAM_WIDTH = Number(process.env.RDP_H264_WIDTH || 1280);
 const RDP_STREAM_HEIGHT = Number(process.env.RDP_H264_HEIGHT || 720);
 const RDP_STREAM_FPS = Number(process.env.RDP_H264_FPS || 30);
+const RDP_NATIVE_H264 = process.env.RDP_NATIVE_H264 !== 'false';
 const rdpPipes = new Map(); // connectionId → pipeline state
 
 function rdpSpawn(name, args, options = {}) {
@@ -3435,7 +3436,10 @@ async function startRdpH264Pipeline(connId, conn) {
     const password = conn.password || '';
     const displayNo = 100 + (rdpPipes.size % 50);
     const xvfbDisp = `:${displayNo}`;
-    const env = { ...process.env, DISPLAY: xvfbDisp };
+    const fifoPath = `/tmp/zephyr-rdp-h264-${connId}.h264`;
+    try { fs.rmSync(fifoPath, { force: true }); } catch {}
+    try { require('child_process').execFileSync('mkfifo', [fifoPath]); } catch (err) { console.warn('[rdp-h264]', 'mkfifo failed, native export disabled', { error: err.message }); }
+    const env = { ...process.env, DISPLAY: xvfbDisp, ZEPHYR_RDP_H264_PIPE: fifoPath };
 
     const xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', `${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}x24`, '-ac', '+extension', 'RANDR']);
     rdpAttachLog(xvfb, 'Xvfb');
@@ -3457,13 +3461,7 @@ async function startRdpH264Pipeline(connId, conn) {
     const xfreerdp = rdpSpawn('xfreerdp', xfreerdpArgs, { env });
     rdpAttachLog(xfreerdp, 'xfreerdp', 'warn');
 
-    /*
-     * This is deliberately raw Annex-B H.264, not fragmented MP4. The browser
-     * side uses WebCodecs, whose EncodedVideoChunk input must be complete access
-     * units. MP4/MSE chunks were the source of the black-checkerboard failure.
-     * TODO/native path: replace the X11 capture fallback with a FreeRDP-side
-     * AVC444/GFX frame exporter while keeping the exact same WS frame contract.
-     */
+    const nativeH264 = RDP_NATIVE_H264 && fs.existsSync(fifoPath);
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'warning',
         '-f', 'x11grab', '-draw_mouse', '0',
@@ -3479,11 +3477,12 @@ async function startRdpH264Pipeline(connId, conn) {
         '-bsf:v', 'h264_mp4toannexb',
         '-f', 'h264', 'pipe:1',
     ];
-    const ffmpeg = rdpSpawn('ffmpeg', ffmpegArgs, { env });
-    rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
+    const ffmpeg = nativeH264 ? null : rdpSpawn('ffmpeg', ffmpegArgs, { env });
+    if (ffmpeg) rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
 
     const pipe = {
-        connId, xvfb, xfreerdp, ffmpeg, env,
+        connId, xvfb, xfreerdp, ffmpeg, fifoPath, nativeH264, env,
+        nativeReader: null,
         clients: new Set(),
         startedAt: Date.now(),
         ready: false,
@@ -3499,21 +3498,29 @@ async function startRdpH264Pipeline(connId, conn) {
         if (/connected|Logon|GFX|AVC|framebuffer|Desktop/i.test(d.toString('utf8'))) markReady();
     });
 
-    ffmpeg.stdout.on('data', (chunk) => {
+    const broadcastH264 = (chunk) => {
         if (chunk.length > 0) markReady();
         for (const client of pipe.clients) {
             if (client.readyState !== client.OPEN) continue;
             if (client.bufferedAmount > 8 * 1024 * 1024) continue;
             try { client.send(chunk, { binary: true }); } catch {}
         }
-    });
-    ffmpeg.on('exit', () => {
-        clearTimeout(readyTimer);
-        for (const client of pipe.clients) {
-            try { if (client.readyState === client.OPEN) client.close(1011, 'rdp encoder exited'); } catch {}
-        }
-        cleanupPipe(connId);
-    });
+    };
+    if (nativeH264) {
+        pipe.nativeReader = fs.createReadStream(fifoPath, { highWaterMark: 512 * 1024 });
+        pipe.nativeReader.on('data', broadcastH264);
+        pipe.nativeReader.on('error', (err) => console.warn('[rdp-h264]', 'native h264 pipe error', { connId, error: err.message }));
+        pipe.nativeReader.on('end', () => console.warn('[rdp-h264]', 'native h264 pipe ended', { connId }));
+    } else if (ffmpeg) {
+        ffmpeg.stdout.on('data', broadcastH264);
+        ffmpeg.on('exit', () => {
+            clearTimeout(readyTimer);
+            for (const client of pipe.clients) {
+                try { if (client.readyState === client.OPEN) client.close(1011, 'rdp encoder exited'); } catch {}
+            }
+            cleanupPipe(connId);
+        });
+    }
     xfreerdp.on('exit', () => {
         for (const client of pipe.clients) {
             try { if (client.readyState === client.OPEN) client.close(1011, 'xfreerdp exited'); } catch {}
@@ -3521,7 +3528,7 @@ async function startRdpH264Pipeline(connId, conn) {
         cleanupPipe(connId);
     });
 
-    console.info('[rdp-h264]', 'pipeline started', { connId, target: `${targetHost}:${targetPort}`, xfreerdpArgs: xfreerdpArgs.filter((a) => !a.startsWith('/p:')) });
+    console.info('[rdp-h264]', 'pipeline started', { connId, target: `${targetHost}:${targetPort}`, mode: nativeH264 ? 'freerdp-avc-export' : 'x11grab-fallback', xfreerdpArgs: xfreerdpArgs.filter((a) => !a.startsWith('/p:')) });
     return pipe;
 }
 
@@ -3584,9 +3591,11 @@ rdpH264Wss.on('connection', async (ws, req) => {
 function cleanupPipe(connId) {
     const p = rdpPipes.get(connId);
     if (p) {
+        try { p.nativeReader?.destroy(); } catch {}
         try { p.ffmpeg?.kill('SIGTERM'); } catch {}
         try { p.xfreerdp?.kill('SIGTERM'); } catch {}
         try { p.xvfb?.kill('SIGTERM'); } catch {}
+        try { if (p.fifoPath) fs.rmSync(p.fifoPath, { force: true }); } catch {}
         rdpPipes.delete(connId);
         console.info('[rdp-h264]', 'pipeline cleaned', { connId });
     }

@@ -38,9 +38,31 @@ WORKDIR /tmp/guacamole-server
 RUN apk add --no-cache \
         autoconf automake build-base cairo-dev cmake cunit-dev git grep \
         libjpeg-turbo-dev libpng-dev libtool libwebp-dev openssl-dev pango-dev \
-        pulseaudio-dev util-linux-dev wget freerdp-dev libssh2-dev libvncserver-dev
+        pulseaudio-dev util-linux-dev wget freerdp-dev libssh2-dev libvncserver-dev \
+        alsa-lib-dev cups-dev ffmpeg-dev openh264-dev pcsc-lite-dev
 
-# 克隆 & 打补丁 & 编译
+# 编译魔改 FreeRDP：在 RDPGFX AVC420/AVC444 SurfaceCommand 解码前导出原始 H.264 bitstream。
+WORKDIR /tmp/FreeRDP
+RUN git clone --depth 1 --branch 2.11.7 https://github.com/FreeRDP/FreeRDP.git . && \
+    mkdir -p /tmp/zephyr-freerdp-patches
+COPY patches/freerdp-2.11.7 /tmp/zephyr-freerdp-patches
+RUN /bin/sh /tmp/zephyr-freerdp-patches/apply.sh && \
+    cmake -S . -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/freerdp-zephyr \
+      -DWITH_SERVER=OFF \
+      -DWITH_CLIENT=ON \
+      -DWITH_X11=ON \
+      -DWITH_WAYLAND=OFF \
+      -DWITH_OPENH264=ON \
+      -DWITH_FFMPEG=ON \
+      -DWITH_PULSE=OFF \
+      -DWITH_CUPS=OFF \
+      -DWITH_PCSC=OFF && \
+    cmake --build build -j$(nproc) && \
+    cmake --install build
+
+WORKDIR /tmp/guacamole-server
 RUN git clone --depth 1 --branch 1.5.5 https://github.com/apache/guacamole-server.git . && \
     mkdir -p /tmp/zephyr-guacd-patches
 
@@ -80,6 +102,7 @@ RUN apk update && \
     echo "=== runtime deps installed ==="
 
 COPY --from=guacd-build /opt/guacamole /opt/guacamole
+COPY --from=guacd-build /opt/freerdp-zephyr /opt/freerdp-zephyr
 COPY --from=guacd-build /tmp/build-freerdp-version.txt /tmp/
 
 # 复制 Node.js 运行时和 C++ 库
@@ -93,14 +116,15 @@ COPY --from=app-build /app /app
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-ENV PATH="/opt/guacamole/sbin:${PATH}"
-ENV LD_LIBRARY_PATH="/opt/guacamole/lib:/usr/lib/freerdp2"
+ENV PATH="/opt/freerdp-zephyr/bin:/opt/guacamole/sbin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/freerdp-zephyr/lib:/opt/guacamole/lib:/usr/lib/freerdp2"
 
 # 运行时诊断
 RUN echo "=== runtime diagnostics ===" && \
     cat /etc/alpine-release && \
     echo "guacd=$(command -v guacd)" && \
     guacd -v && \
+    xfreerdp /version || true && \
     ls -la /opt/guacamole/lib/ | head -20 && \
     find /usr/lib/freerdp2 -maxdepth 1 \( -type f -o -type l \) 2>/dev/null | sort | head -20 && \
     node --version && \

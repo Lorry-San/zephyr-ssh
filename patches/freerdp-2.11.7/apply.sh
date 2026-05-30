@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+ROOT=${FREERDP_ROOT:-/tmp/FreeRDP}
+PATCH_DIR=${ZEPHYR_FREERDP_PATCH_DIR:-/tmp/zephyr-freerdp-patches}
+cd "$ROOT"
+patch -p1 < "$PATCH_DIR/zephyr-h264-export.patch"
