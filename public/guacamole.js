@@ -671,6 +671,50 @@ async function connect() {
             client.sendKeyEvent(0, keysym);
         };
 
+        // WebCodecs H.264 硬解：接管 guacd 的 video 指令
+        if (window.VideoDecoder) {
+            client.onvideo = (stream, layer, mimetype) => {
+                if (!mimetype?.includes('h264') && !mimetype?.includes('avc')) return null;
+                let vdec = null;
+                let buf = [];
+                stream.onblob = (data) => buf.push(data);
+                stream.onend = () => {
+                    const raw = Uint8Array.from(atob(buf.join('')), c => c.charCodeAt(0));
+                    // 从 SPS NAL 解析分辨率
+                    let cfg = { codec: 'avc1.42001E', codedWidth: 1280, codedHeight: 720 };
+                    for (let i = 0; i < raw.length - 4; i++) {
+                        if (raw[i]===0 && raw[i+1]===0 && raw[i+2]===0 && raw[i+3]===1) {
+                            const t = raw[i+4] & 0x1F;
+                            if (t === 7) { // SPS
+                                cfg.codedWidth  = ((raw[i+5]&0x0F)<<8) | raw[i+6];
+                                cfg.codedHeight = ((raw[i+7]&0x0F)<<8) | raw[i+8];
+                                cfg.description = raw.slice(i, i+40);
+                                break;
+                            }
+                        }
+                    }
+                    vdec = new VideoDecoder({
+                        output: (frame) => {
+                            const c = document.createElement('canvas');
+                            c.width = frame.displayWidth; c.height = frame.displayHeight;
+                            c.getContext('2d').drawImage(frame, 0, 0);
+                            frame.close();
+                            layer.drawImage(c, 0, 0);
+                            try { client.getDisplay().flush?.(); } catch {}
+                        },
+                        error: (e) => console.warn('[guac] video err', e.message)
+                    });
+                    VideoDecoder.isConfigSupported(cfg).then(s => {
+                        if (s.supported) {
+                            vdec.configure(cfg);
+                            try { vdec.decode(new EncodedVideoChunk({type:'key',timestamp:0,duration:0,data:raw})); } catch(e) {}
+                        }
+                    });
+                };
+                return null; // 阻止默认 VideoPlayer
+            };
+        }
+
         stage?.focus?.({ preventScroll: true });
         client.connect(guacamoleConnectQuery());
         installLocalClipboardBridge();
