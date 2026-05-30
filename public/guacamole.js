@@ -322,11 +322,13 @@ function guacamoleTunnelBaseUrl() {
 
 function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    // 用 devicePixelRatio 放大请求分辨率，保证高 DPI 屏幕清晰
-    const width = Math.max(1024, Math.min(1920, Math.round((rect.width || innerWidth || 1280) * dpr)));
-    const height = Math.max(768, Math.min(1200, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
-    const dpi = Math.max(72, Math.round(96 * dpr));
+    // DPR 上限 2x：手机 2.75x 屏也只用 2x，视网膜够清晰但像素量少 40%
+    // DPI 保持原始 DPR 让字体正确缩放
+    const rawDpr = window.devicePixelRatio || 1;
+    const effDpr = Math.min(rawDpr, 2);
+    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    const dpi = Math.max(72, Math.round(96 * rawDpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
         width: String(width),
@@ -378,22 +380,23 @@ function applyDisplayScale() {
 function switchFitMode(mode) {
     if (!tunnel || !connected) return;
     const bounds = stage.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const rawDpr = window.devicePixelRatio || 1;
+    const effDpr = Math.min(rawDpr, 2);
 
     let targetW, targetH;
     if (mode === '16:9') {
         // 取 viewport 高度*16/9，确保宽度不溢出
-        targetW = Math.round(bounds.width * dpr);
+        targetW = Math.round(bounds.width * effDpr);
         targetH = Math.round(targetW / (16 / 9));
-        if (targetH > bounds.height * dpr) {
-            targetH = Math.round(bounds.height * dpr);
+        if (targetH > bounds.height * effDpr) {
+            targetH = Math.round(bounds.height * effDpr);
             targetW = Math.round(targetH * (16 / 9));
         }
     } else if (mode === '4:3') {
-        targetW = Math.round(bounds.width * dpr);
+        targetW = Math.round(bounds.width * effDpr);
         targetH = Math.round(targetW / (4 / 3));
-        if (targetH > bounds.height * dpr) {
-            targetH = Math.round(bounds.height * dpr);
+        if (targetH > bounds.height * effDpr) {
+            targetH = Math.round(bounds.height * effDpr);
             targetW = Math.round(targetH * (4 / 3));
         }
     } else {
@@ -411,15 +414,16 @@ function switchFitMode(mode) {
 function sendDisplaySize() {
     if (!tunnel || !connected) return;
     const rect = stage.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const rawDpr = window.devicePixelRatio || 1;
+    const effDpr = Math.min(rawDpr, 2);
     const mode = fitModes[fitModeIdx];
     // 16:9 / 4:3 模式下用 switchFitMode 计算比例尺寸
     if (mode === '16:9' || mode === '4:3') {
         switchFitMode(mode);
         return;
     }
-    const width = Math.max(1024, Math.min(1920, Math.round((rect.width || innerWidth || 1280) * dpr)));
-    const height = Math.max(768, Math.min(1200, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
+    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
 }
