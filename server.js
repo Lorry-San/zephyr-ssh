@@ -873,6 +873,15 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96, qua
         base['disable-copy'] = 'false';
         base['disable-paste'] = 'false';
         base['clipboard-encoding'] = 'UTF-8';
+        // FreeRDP 底层优化
+        base['enable-glyph-cache'] = 'true';
+        base['enable-bitmap-caching'] = 'true';
+        base['enable-offscreen-caching'] = 'true';
+        base['disable-encryption'] = 'true';          // 跳过 RDP 加密，纯性能
+        base['enable-frame-acknowledge'] = 'true';    // 帧确认，减少丢帧
+        base['enable-surface-commands'] = 'true';     // SurfaceCommands 替代位图
+        base['enable-gfx'] = isPerf ? 'false' : 'true'; // GFX 图形管线 (非性能模式)
+        base['enable-gfx-h264'] = isQual ? 'true' : 'false'; // H.264 编码 (画质模式)
     }
 
     if (protocol === 'vnc') {
