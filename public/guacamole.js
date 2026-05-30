@@ -39,6 +39,7 @@ if (qualityIdx < 0) qualityIdx = 0;
 let Guacamole = null;
 let tunnel = null;
 let client = null;
+let rdpInputSender = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
@@ -854,6 +855,7 @@ async function connect() {
         };
 
         function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
+        rdpInputSender = wsInput;
         function pos(e) { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * (canvas.width / Math.max(1, r.width))), y: Math.round((e.clientY - r.top) * (canvas.height / Math.max(1, r.height))) }; }
         function sendMouseMove(e) { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); }
         canvas.addEventListener('mousemove', sendMouseMove);
@@ -972,6 +974,7 @@ function disconnect(userInitiated = true) {
         try { tunnel.close(); } catch {}
     }
     tunnel = null;
+    rdpInputSender = null;
     connected = false;
     if (userInitiated) {
         setStatus('disconnected', `${protocolLabel()} 已断开`);
@@ -1467,9 +1470,9 @@ function sleep(ms) {
 }
 
 function ensureRemoteReady(action = '操作') {
-    if (!client || !connected) {
+    if ((!client && !rdpInputSender) || !connected) {
         const msg = `${protocolLabel()} 尚未连接，无法${action}`;
-        console.warn('[guac-client]', msg, { hasClient: !!client, connected });
+        console.warn('[guac-client]', msg, { hasClient: !!client, hasRdpInput: !!rdpInputSender, connected });
         setTransientStatus(msg);
         return false;
     }
@@ -1793,9 +1796,13 @@ async function sendKeyDownUp(keysym, label = '快捷键') {
     if (!ensureRemoteReady(`发送${label}`)) return false;
     try {
         console.info('[guac-client]', 'shortcut key send', { label, keysym });
-        client.sendKeyEvent(1, keysym);
-        await sleep(35);
-        client.sendKeyEvent(0, keysym);
+        if (client) {
+            client.sendKeyEvent(1, keysym);
+            await sleep(35);
+            client.sendKeyEvent(0, keysym);
+        } else if (rdpInputSender) {
+            rdpInputSender({ type: 'key', key: keysymToXdotool(keysym) });
+        }
         notifyParentActivity();
         setTransientStatus(`已发送 ${label}`);
         return true;
@@ -1810,14 +1817,18 @@ async function sendKeyCombo(keysyms, label = '组合键') {
     if (!ensureRemoteReady(`发送${label}`)) return false;
     try {
         console.info('[guac-client]', 'shortcut combo send', { label, keysyms });
-        for (const keysym of keysyms) {
-            client.sendKeyEvent(1, keysym);
-            await sleep(25);
-        }
-        await sleep(60);
-        for (const keysym of [...keysyms].reverse()) {
-            client.sendKeyEvent(0, keysym);
-            await sleep(25);
+        if (client) {
+            for (const keysym of keysyms) {
+                client.sendKeyEvent(1, keysym);
+                await sleep(25);
+            }
+            await sleep(60);
+            for (const keysym of [...keysyms].reverse()) {
+                client.sendKeyEvent(0, keysym);
+                await sleep(25);
+            }
+        } else if (rdpInputSender) {
+            rdpInputSender({ type: 'key', key: keysyms.map(keysymToXdotool).join('+') });
         }
         notifyParentActivity();
         setTransientStatus(`已发送 ${label}`);
@@ -1827,6 +1838,21 @@ async function sendKeyCombo(keysyms, label = '组合键') {
         setTransientStatus(`${label} 发送失败`);
         return false;
     }
+}
+
+function keysymToXdotool(keysym) {
+    const map = {
+        [KEY.BACKSPACE]: 'BackSpace', [KEY.TAB]: 'Tab', [KEY.ENTER]: 'Return', [KEY.ESC]: 'Escape',
+        [KEY.HOME]: 'Home', [KEY.LEFT]: 'Left', [KEY.UP]: 'Up', [KEY.RIGHT]: 'Right', [KEY.DOWN]: 'Down',
+        [KEY.PAGE_UP]: 'Page_Up', [KEY.PAGE_DOWN]: 'Page_Down', [KEY.END]: 'End', [KEY.DELETE]: 'Delete',
+        [KEY.CTRL]: 'ctrl', [KEY.SHIFT]: 'shift', [KEY.ALT]: 'alt', [KEY.SUPER]: 'Super_L',
+        [KEY.F1]: 'F1', [KEY.F2]: 'F2', [KEY.F3]: 'F3', [KEY.F4]: 'F4', [KEY.F5]: 'F5', [KEY.F6]: 'F6',
+        [KEY.F7]: 'F7', [KEY.F8]: 'F8', [KEY.F9]: 'F9', [KEY.F10]: 'F10', [KEY.F11]: 'F11', [KEY.F12]: 'F12',
+    };
+    if (map[keysym]) return map[keysym];
+    if (keysym >= 0x01000000) return `U${(keysym - 0x01000000).toString(16).padStart(4, '0')}`;
+    if (keysym >= 0x20 && keysym <= 0x7e) return String.fromCharCode(keysym);
+    return String(keysym);
 }
 
 function asciiKeysym(char) {
@@ -1839,7 +1865,13 @@ function asciiKeysym(char) {
 }
 
 function sendTextToRemote(text) {
-    if (!text || !client || !connected) return;
+    if (!text || (!client && !rdpInputSender) || !connected) return;
+    if (rdpInputSender && !client) {
+        rdpInputSender({ type: 'text', text });
+        notifyParentActivity();
+        console.info('[guac-client]', 'rdp mobile keyboard text sent', { length: text.length });
+        return;
+    }
     for (const char of text) {
         const keysym = asciiKeysym(char);
         if (keysym) sendKeyDownUp(keysym);
@@ -1974,10 +2006,15 @@ async function sendClipboard() {
 }
 
 function sendCtrlAltDel() {
-    if (!client || !connected) return;
+    if (!ensureRemoteReady('发送 Ctrl+Alt+Del')) return;
     const CTRL = 0xffe3;
     const ALT = 0xffe9;
     const DEL = 0xffff;
+    if (rdpInputSender && !client) {
+        rdpInputSender({ type: 'key', key: 'ctrl+alt+Delete' });
+        notifyParentActivity();
+        return;
+    }
     client.sendKeyEvent(1, CTRL);
     client.sendKeyEvent(1, ALT);
     client.sendKeyEvent(1, DEL);

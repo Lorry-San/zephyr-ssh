@@ -3454,7 +3454,8 @@ async function startRdpH264Pipeline(connId, conn) {
         '/bpp:32',
         '/network:lan',
         ...(RDP_NATIVE_H264 ? ['/gfx:AVC444'] : []),
-        '+fonts', '-wallpaper', '-themes', '-aero',
+        '+fonts',
+        ...(RDP_NATIVE_H264 ? [] : ['-wallpaper', '-themes', '-aero']),
         '/dynamic-resolution',
         '/log-level:WARN',
     ];
@@ -3551,6 +3552,8 @@ function handleRdpInput(pipe, raw) {
         for (let i = 0; i < steps; i++) execXdo(['click', button]);
     } else if (msg.type === 'key' && msg.key) {
         execXdo(['key', String(msg.key)]);
+    } else if (msg.type === 'text' && msg.text !== undefined) {
+        execXdo(['type', '--clearmodifiers', '--delay', '1', String(msg.text)]);
     } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
         execXdo(['key', 'F5']);
     }
