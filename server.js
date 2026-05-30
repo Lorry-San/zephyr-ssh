@@ -3482,8 +3482,20 @@ async function startRdpH264Pipeline(connId, conn) {
     const ffmpeg = nativeH264 ? null : rdpSpawn('ffmpeg', ffmpegArgs, { env });
     if (ffmpeg) rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
 
+    let activeWindowId = null;
+    setTimeout(() => {
+        const finder = spawn('xdotool', ['search', '--class', 'xfreerdp'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+        let out = '';
+        finder.stdout.on('data', (d) => { out += d.toString('utf8'); });
+        finder.on('close', () => {
+            activeWindowId = out.trim().split(/\s+/).find(Boolean) || null;
+            if (activeWindowId) console.info('[rdp-h264]', 'xfreerdp window detected', { connId, window: activeWindowId });
+        });
+    }, 2200);
+
     const pipe = {
         connId, xvfb, xfreerdp, ffmpeg, fifoPath, nativeH264, env,
+        get activeWindowId() { return activeWindowId; },
         nativeReader: null,
         clients: new Set(),
         startedAt: Date.now(),
@@ -3539,8 +3551,9 @@ function handleRdpInput(pipe, raw) {
     try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
     const execXdo = (args) => {
         if (!pipe || pipe.xfreerdp?.exitCode !== null || pipe.xfreerdp?.killed) return;
-        const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
-        child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool failed', { error: err.message, args }));
+        const finalArgs = pipe.activeWindowId ? ['windowactivate', '--sync', pipe.activeWindowId, ...args] : args;
+        const child = spawn('xdotool', finalArgs, { env: pipe.env, stdio: 'ignore' });
+        child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool failed', { error: err.message, args: finalArgs }));
     };
     if (msg.type === 'mouse' && Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
         execXdo(['mousemove', '--sync', String(Math.round(msg.x)), String(Math.round(msg.y))]);
@@ -3557,7 +3570,7 @@ function handleRdpInput(pipe, raw) {
     } else if (msg.type === 'key' && msg.key) {
         execXdo(['key', '--clearmodifiers', String(msg.key)]);
     } else if (msg.type === 'text' && msg.text !== undefined) {
-        execXdo(['type', '--clearmodifiers', '--delay', '1', String(msg.text)]);
+        execXdo(['type', '--delay', '1', String(msg.text)]);
     } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
         execXdo(['key', 'F5']);
     }

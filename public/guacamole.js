@@ -1030,8 +1030,20 @@ function installRdpTouchControls(canvas, wsInput, pos) {
 
 
         const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
-        canvas.addEventListener('keydown', (e) => { const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
-        document.addEventListener('keydown', (e) => { if (document.activeElement === canvas) return; if (!connected) return; const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
+        const sendKeyboardEventToRdp = (e) => {
+            const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : '');
+            if (!k) return false;
+            e.preventDefault();
+            wsInput({ type: 'key', key: k });
+            notifyParentActivity();
+            return true;
+        };
+        canvas.addEventListener('keydown', sendKeyboardEventToRdp);
+        document.addEventListener('keydown', (e) => {
+            if (!connected) return;
+            if (isTextInputTarget(e.target)) return;
+            sendKeyboardEventToRdp(e);
+        }, true);
     } catch (err) {
         console.error('[guac-client]', 'connect failed', err);
         setStatus('error', err.message || `${label} 连接失败`);
@@ -1691,12 +1703,12 @@ function installLocalClipboardBridge() {
         event.dataTransfer.dropEffect = 'copy';
     }, true);
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && connected) {
+        if (document.visibilityState === 'visible' && connected && client) {
             syncLocalClipboardToRemote({ paste: false, source: 'visibility-visible' }).catch(() => {});
         }
     });
     window.addEventListener('focus', () => {
-        if (connected) syncLocalClipboardToRemote({ paste: false, source: 'window-focus' }).catch(() => {});
+        if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'window-focus' }).catch(() => {});
     });
 }
 
@@ -1778,8 +1790,19 @@ function clipboardEventFiles(event) {
 
 function sendRemoteClipboardText(text) {
     const label = protocolLabel();
+    if (rdpInputSender && !client) {
+        if (!connected) {
+            setTransientStatus(`${label} 尚未连接`);
+            return false;
+        }
+        if (!text) return false;
+        rdpInputSender({ type: 'text', text });
+        notifyParentActivity();
+        console.info('[guac-client]', 'rdp text sent through input channel', { length: text.length });
+        return true;
+    }
     if (!client || !connected) {
-        setStatus('error', `${label} 尚未连接`);
+        setTransientStatus(`${label} 尚未连接`);
         return false;
     }
     if (!text) return false;
@@ -1935,6 +1958,8 @@ function asciiKeysym(char) {
 
 function sendTextToRemote(text) {
     if (!text || (!client && !rdpInputSender) || !connected) return;
+    if (mobileKeyboardInput) mobileKeyboardInput.value = '';
+    mobileInputMirror = '';
     if (rdpInputSender && !client) {
         rdpInputSender({ type: 'text', text });
         notifyParentActivity();
@@ -1990,6 +2015,12 @@ function setupMobileKeyboard() {
 
         if (inputType.startsWith('deleteContent') || inputType === 'deleteByCut') {
             // 删除：之前内容长度用 mobileInputMirror 追踪
+            if (rdpInputSender && !client) {
+                rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
+                notifyParentActivity();
+                mobileKeyboardInput.value = mobileInputMirror = '';
+                return;
+            }
             const delCount = inputType === 'deleteContentBackward' ? 1
                 : inputType === 'deleteContentForward' ? 1
                 : inputType === 'deleteByCut' ? mobileInputMirror.length
@@ -2125,20 +2156,24 @@ clipboardSendBtn?.addEventListener('click', () => {
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
 stage?.addEventListener('focus', () => {
-    if (connected) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus' }).catch(() => {});
+    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus' }).catch(() => {});
 });
 stage?.addEventListener('pointerdown', () => {
-    if (connected) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown' }).catch(() => {});
+    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown' }).catch(() => {});
 }, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
 setupMobileKeyboard();
 mobileKeyboardInput?.addEventListener('blur', () => { keyboardBtn?.classList.remove('active'); stage?.classList.remove('keyboard-open'); });
 mobileKeyboardInput?.addEventListener('keydown', (event) => {
-    if (event.key === 'Backspace' && !mobileKeyboardInput.value) {
-        event.preventDefault();
-        sendKeyDownUp(KEY.BACKSPACE);
+    if (event.key !== 'Backspace' || mobileKeyboardInput.value) return;
+    event.preventDefault();
+    if (rdpInputSender && !client) {
+        rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
+        notifyParentActivity();
+        return;
     }
+    sendKeyDownUp(KEY.BACKSPACE);
 });
 
 shortcutsBtn?.addEventListener('click', () => {
