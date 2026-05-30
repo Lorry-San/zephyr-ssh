@@ -3469,9 +3469,9 @@ rdpH264Wss.on('connection', async (ws, req) => {
                 '-i', xvfbDispStr,
                 '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
                 '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
-                '-bsf:v', 'h264_mp4toannexb',
-                '-flush_packets', '1',
-                '-f', 'h264', '-'
+                '-g', '30', '-keyint_min', '30',
+                '-f', 'mp4', '-movflags', 'empty_moov+frag_keyframe+omit_tfhd_offset',
+                '-'
             ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
             ffmpeg.stderr.on('data', (d) => {

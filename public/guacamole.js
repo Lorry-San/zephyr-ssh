@@ -614,111 +614,71 @@ async function connect() {
         tunnel.onmessage = async (ev) => {
             let buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
             if (!buf || buf.byteLength < 5) return;
-            const raw = new Uint8Array(buf);
 
             if (!vdec) {
-                if (!window.VideoDecoder) { setStatus('error', '浏览器不支持 WebCodecs H.264 硬解'); return; }
-                // 从 AnnexB NAL 流提取 SPS/PPS，构建 AVCDecoderConfigurationRecord
-                let sps = null, pps = null, ppsFallback = new Uint8Array([0x68,0xEB,0xE3,0xCB]);
-                for (let i = 0; i < raw.length - 4; i++) {
-                    if (raw[i]===0&&raw[i+1]===0&&raw[i+2]===0&&raw[i+3]===1) {
-                        const nalType = raw[i+4] & 0x1F;
-                        if (nalType === 7) { // SPS
-                            sps = extractNalBody(raw, i, raw.length);
+                if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
+                // 使用 MediaSource + <video> 原生解码 H.264
+                const video = document.createElement('video');
+                video.style.cssText = 'display:none';
+                video.muted = true;
+                video.playsInline = true;
+                document.body.appendChild(video);
+                video.setAttribute('playsinline', '');
+
+                const mediaSource = new MediaSource();
+                video.src = URL.createObjectURL(mediaSource);
+                await new Promise((resolve) => { mediaSource.addEventListener('sourceopen', resolve, { once: true }); });
+                const sb = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
+                let pendingAppend = false;
+
+                // 将初始数据（ftyp+moov）追加到 SourceBuffer
+                try { sb.appendBuffer(buf); } catch(e) {}
+
+                // 后续数据追加到 SourceBuffer
+                let frameId = 0;
+                tunnel.onmessage = async (ev2) => {
+                    let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
+                    if (!b2 || b2.byteLength < 5) return;
+                    // 追加到 SourceBuffer
+                    const appendNext = () => {
+                        if (pendingAppend) { return; }
+                        pendingAppend = true;
+                        try {
+                            sb.appendBuffer(b2);
+                            frameId++;
+                            // ���制解码帧到 Canvas
+                            if (video.readyState >= 2) {
+                                if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+                                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                                    displayWidth = video.videoWidth; displayHeight = video.videoHeight;
+                                    applyDisplayScale();
+                                }
+                                ctx.drawImage(video, 0, 0);
+                            }
+                        } catch(e) {
+                            if (e.name === 'QuotaExceededError') {
+                                // 队列满了，清一下
+                                setTimeout(appendNext, 100);
+                                return;
+                            }
                         }
-                        if (nalType === 8) { // PPS
-                            pps = extractNalBody(raw, i, raw.length);
-                        }
-                        if (sps && pps) break;
-                    }
-                }
-                if (!sps) { setStatus('error', '未找到 SPS NAL'); return; }
-                // 构建 AVCC extradata
-                const spsLen = sps.length;
-                const ppsData = pps || ppsFallback;
-                const ppsLen = ppsData.length;
-                const avcc = new Uint8Array(7 + 2 + spsLen + 1 + 2 + ppsLen);
-                let off = 0;
-                avcc[off++] = 0x01;              // configurationVersion
-                avcc[off++] = sps[1];             // AVCProfileIndication
-                avcc[off++] = sps[2];             // profile_compatibility
-                avcc[off++] = sps[3];             // AVCLevelIndication
-                avcc[off++] = 0xFF;               // 6 bits reserved | 2 bits lengthSizeMinusOne (3)
-                avcc[off++] = 0xE1;               // 3 bits reserved | 5 bits numOfSequenceParameterSets (1)
-                avcc[off++] = (spsLen >> 8) & 0xFF;
-                avcc[off++] = spsLen & 0xFF;
-                avcc.set(sps, off); off += spsLen;
-                avcc[off++] = 0x01;               // numOfPictureParameterSets
-                avcc[off++] = (ppsLen >> 8) & 0xFF;
-                avcc[off++] = ppsLen & 0xFF;
-                avcc.set(ppsData, off);
-                try {
-                    const sup = await VideoDecoder.isConfigSupported({ codec: 'avc1.42001E', description: avcc });
-                    if (!sup.supported) { setStatus('error', 'H.264 配置不支持'); return; }
-                    vdec = new VideoDecoder({
-                        output: (f) => {
-                            if (canvas.width!==f.displayWidth||canvas.height!==f.displayHeight) { canvas.width=f.displayWidth; canvas.height=f.displayHeight; displayWidth=f.displayWidth; displayHeight=f.displayHeight; applyDisplayScale(); }
-                            ctx.drawImage(f,0,0); f.close();
-                        },
-                        error: (e) => console.warn('[rdp] dec err', e.message)
-                    });
-                    vdec.configure({ codec: 'avc1.42001E', description: avcc });
-                    vcfg = true;
+                        pendingAppend = false;
+                    };
+                    sb.addEventListener('updateend', () => { pendingAppend = false; }, { once: true });
+                    appendNext();
+                };
+
+                // 播放视频
+                video.play().then(() => {
                     setStatus('connected', `${label} 已连接 [H.264]`);
                     connected = true; notifyParentStatus('connected');
-                } catch(e) { setStatus('error', '解码器初始化失败:'+e.message); return; }
-            }
-            if (vdec && vcfg) {
-                // 按 NAL 起始码拆分为独立帧（access unit）
-                forEachNalUnit(raw, (nal, startCodeLen, i) => {
-                    const isNewAU = (i === 0) || isAccessUnitDelimiter(nal) || nal[0] === 0x65 || nal[0] === 0x41 || nal[0] === 0x67 || nal[0] === 0x68;
-                    return i; // continue - handled below
-                });
-                // 按帧边界分割并发送
-                let prevStart = 0;
-                for (let i = 0; i < raw.length - 3; i++) {
-                    let scLen = 0;
-                    if (raw[i]===0&&raw[i+1]===0&&raw[i+2]===0&&raw[i+3]===1) scLen = 4;
-                    else if (raw[i]===0&&raw[i+1]===0&&raw[i+2]===1) scLen = 3;
-                    if (!scLen) continue;
-                    if (i > prevStart) {
-                        const frame = raw.slice(prevStart, i);
-                        const hasIDR = checkNalType(frame, 5);
-                        try { vdec.decode(new EncodedVideoChunk({type:hasIDR?'key':'delta',timestamp:0,duration:16666,data:frame})); } catch(e) {}
-                    }
-                    // 每帧更新 prevStart 为当前 start code 位置
-                    prevStart = i;
-                    i += scLen - 1;
-                }
-                if (prevStart < raw.length) {
-                    const frame = raw.slice(prevStart);
-                    const hasIDR = checkNalType(frame, 5);
-                    try { vdec.decode(new EncodedVideoChunk({type:hasIDR?'key':'delta',timestamp:0,duration:16666,data:frame})); } catch(e) {}
-                }
+                }).catch(() => {});
+
+                vdec = video; // 复用 vdec 变量存 video 元素
+                vcfg = true;
+                return;
             }
         };
-
-        // NAL 流辅助函数
-        function extractNalBody(data, startCodePos, maxLen) {
-            const start = startCodePos + ((data[startCodePos+2]===1) ? 3 : 4);
-            let end = start;
-            while (end < maxLen - 3) {
-                if ((data[end]===0&&data[end+1]===0&&data[end+2]===1) || (data[end]===0&&data[end+1]===0&&data[end+2]===0&&data[end+3]===1)) break;
-                end++;
-            }
-            return data.slice(start, end);
-        }
-        function checkNalType(data, type) {
-            for (let i = 0; i < data.length - 4; i++) {
-                if ((data[i]===0&&data[i+1]===0&&data[i+2]===0&&data[i+3]===1) || (data[i]===0&&data[i+1]===0&&data[i+2]===1)) {
-                    if ((data[i+3]&0x1F)===type && data[i+2]===1) return true;
-                    if ((data[i+4]&0x1F)===type) return true;
-                }
-            }
-            return false;
-        }
-        function isAccessUnitDelimiter(nal) { return nal[0] === 0x09; }
-        function forEachNalUnit(data, fn) { return data; } // placeholder
 
         // 输入转发 → xdotool
         function wsInput(msg) { if (tunnel && tunnel.readyState===WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
