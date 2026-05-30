@@ -39,7 +39,9 @@ let client = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
-let fitToWindow = true;
+let fitModes = ['fit', '1:1', '16:9', '4:3'];
+let fitModeIdx = 0;
+let fitModeLabel = () => fitModes[fitModeIdx] === 'fit' ? '↔ 适应' : fitModes[fitModeIdx] === '1:1' ? '1:1 原始' : fitModes[fitModeIdx];
 let displayWidth = 0;
 let displayHeight = 0;
 let resizeTimer = 0;
@@ -351,25 +353,71 @@ function applyDisplayScale() {
     if (!client || !displayShell) return;
     const display = client.getDisplay();
     const bounds = stage.getBoundingClientRect();
-    const width = displayWidth || display.getWidth?.() || bounds.width;
-    const height = displayHeight || display.getHeight?.() || bounds.height;
-    if (!fitToWindow || !width || !height) {
+    const curW = displayWidth || display.getWidth?.() || bounds.width;
+    const curH = displayHeight || display.getHeight?.() || bounds.height;
+    if (!curW || !curH) return;
+
+    const mode = fitModes[fitModeIdx];
+
+    // 1:1 — 原始大小，不缩放
+    if (mode === '1:1') {
         display.scale(1);
         displayRoot.style.width = '';
         displayRoot.style.height = '';
+        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH });
         return;
     }
-    const scale = Math.min(bounds.width / width, bounds.height / height, 1);
+
+    const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
     display.scale(Math.max(0.1, scale));
-    displayRoot.style.width = `${Math.ceil(width * scale)}px`;
-    displayRoot.style.height = `${Math.ceil(height * scale)}px`;
-    console.debug('[guac-client]', 'display scale', { width, height, scale });
+    displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
+    displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
+    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale });
+}
+
+function switchFitMode(mode) {
+    if (!tunnel || !connected) return;
+    const bounds = stage.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+
+    let targetW, targetH;
+    if (mode === '16:9') {
+        // 取 viewport 高度*16/9，确保宽度不溢出
+        targetW = Math.round(bounds.width * dpr);
+        targetH = Math.round(targetW / (16 / 9));
+        if (targetH > bounds.height * dpr) {
+            targetH = Math.round(bounds.height * dpr);
+            targetW = Math.round(targetH * (16 / 9));
+        }
+    } else if (mode === '4:3') {
+        targetW = Math.round(bounds.width * dpr);
+        targetH = Math.round(targetW / (4 / 3));
+        if (targetH > bounds.height * dpr) {
+            targetH = Math.round(bounds.height * dpr);
+            targetW = Math.round(targetH * (4 / 3));
+        }
+    } else {
+        return; // fit / 1:1 用 applyDisplayScale 即可
+    }
+
+    targetW = Math.max(320, Math.min(2560, targetW));
+    targetH = Math.max(240, Math.min(1600, targetH));
+
+    // 发送 size 让 RDP 切换分辨率
+    tunnel.sendMessage('size', targetW, targetH);
+    console.info('[guac-client]', 'switch fit mode size', { mode, targetW, targetH });
 }
 
 function sendDisplaySize() {
     if (!tunnel || !connected) return;
     const rect = stage.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
+    const mode = fitModes[fitModeIdx];
+    // 16:9 / 4:3 模式下用 switchFitMode 计算比例尺寸
+    if (mode === '16:9' || mode === '4:3') {
+        switchFitMode(mode);
+        return;
+    }
     const width = Math.max(1024, Math.min(2560, Math.round((rect.width || innerWidth || 1280) * dpr)));
     const height = Math.max(768, Math.min(1600, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
     tunnel.sendMessage('size', width, height);
@@ -1563,10 +1611,16 @@ function sendCtrlAltDel() {
 }
 
 fitBtn.addEventListener('click', () => {
-    fitToWindow = !fitToWindow;
-    fitBtn.classList.toggle('active', fitToWindow);
-    fitBtn.textContent = fitToWindow ? '↔ 适应' : '1:1 原始';
-    applyDisplayScale();
+    fitModeIdx = (fitModeIdx + 1) % fitModes.length;
+    const mode = fitModes[fitModeIdx];
+    fitBtn.classList.toggle('active', mode !== '1:1');
+    fitBtn.textContent = fitModeLabel();
+    if (mode === '16:9' || mode === '4:3') {
+        switchFitMode(mode);
+    } else {
+        applyDisplayScale();
+    }
+    console.info('[guac-client]', 'fit mode changed', { mode, idx: fitModeIdx });
 });
 
 clipboardBtn.addEventListener('click', () => {
@@ -1640,6 +1694,6 @@ window.addEventListener('message', (event) => {
 
 setupFloatingPanels();
 setupMobilePointerMouse();
-fitBtn.classList.add('active');
+fitBtn.classList.add('active'); // 初始：适应模式
 setStatus('connecting');
 connect();
