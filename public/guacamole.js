@@ -612,72 +612,90 @@ async function connect() {
         tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
 
         tunnel.onmessage = async (ev) => {
+            // 只处理第一条消息，后续由新 handler 处理
+            tunnel.onmessage = null;
             let buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
-            if (!buf || buf.byteLength < 5) return;
+            if (!buf || buf.byteLength < 5) { setStatus('error', '无效的视频流'); return; }
+            if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
 
-            if (!vdec) {
-                if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
-                // 使用 MediaSource + <video> 原生解码 H.264
-                const video = document.createElement('video');
-                video.style.cssText = 'display:none';
-                video.muted = true;
-                video.playsInline = true;
-                document.body.appendChild(video);
-                video.setAttribute('playsinline', '');
+            const video = document.createElement('video');
+            video.style.cssText = 'position:absolute;opacity:0.01;pointer-events:none;width:1px;height:1px';
+            video.muted = true;
+            video.playsInline = true;
+            video.setAttribute('playsinline', '');
+            document.body.appendChild(video);
 
-                const mediaSource = new MediaSource();
-                video.src = URL.createObjectURL(mediaSource);
-                await new Promise((resolve) => { mediaSource.addEventListener('sourceopen', resolve, { once: true }); });
-                const sb = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E"');
-                let pendingAppend = false;
+            const ms = new MediaSource();
+            video.src = URL.createObjectURL(ms);
+            ms.onsourceopen = () => {
+                // 猜测 codec，如果不对会自动降级
+                let codec = 'video/mp4; codecs="avc1.42E01E"';
+                try {
+                    const sb = ms.addSourceBuffer(codec);
+                    const queue = [];
+                    let appending = false;
 
-                // 将初始数据（ftyp+moov）追加到 SourceBuffer
-                try { sb.appendBuffer(buf); } catch(e) {}
-
-                // 后续数据追加到 SourceBuffer
-                let frameId = 0;
-                tunnel.onmessage = async (ev2) => {
-                    let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
-                    if (!b2 || b2.byteLength < 5) return;
-                    // 追加到 SourceBuffer
-                    const appendNext = () => {
-                        if (pendingAppend) { return; }
-                        pendingAppend = true;
-                        try {
-                            sb.appendBuffer(b2);
-                            frameId++;
-                            // ���制解码帧到 Canvas
-                            if (video.readyState >= 2) {
-                                if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-                                    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-                                    displayWidth = video.videoWidth; displayHeight = video.videoHeight;
-                                    applyDisplayScale();
-                                }
-                                ctx.drawImage(video, 0, 0);
-                            }
-                        } catch(e) {
-                            if (e.name === 'QuotaExceededError') {
-                                // 队列满了，清一下
-                                setTimeout(appendNext, 100);
-                                return;
-                            }
+                    const flushQueue = () => {
+                        if (appending || sb.updating) return;
+                        if (queue.length === 0) return;
+                        appending = true;
+                        const data = queue.shift();
+                        try { sb.appendBuffer(data); } catch(e) {
+                            appending = false;
+                            console.warn('[rdp] sb error', e.message);
+                            setTimeout(flushQueue, 50);
                         }
-                        pendingAppend = false;
                     };
-                    sb.addEventListener('updateend', () => { pendingAppend = false; }, { once: true });
-                    appendNext();
-                };
 
-                // 播放视频
-                video.play().then(() => {
+                    sb.onupdateend = () => {
+                        appending = false;
+                        // 画到 Canvas
+                        if (video.readyState >= 2) {
+                            if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+                                canvas.width = video.videoWidth;
+                                canvas.height = video.videoHeight;
+                                displayWidth = video.videoWidth;
+                                displayHeight = video.videoHeight;
+                                applyDisplayScale();
+                            }
+                            try { ctx.drawImage(video, 0, 0); } catch(e) {}
+                        }
+                        flushQueue();
+                    };
+                    sb.onerror = () => console.warn('[rdp] sourcebuffer error');
+
+                    // 追加初始数据 (ftyp+moov)
+                    try { sb.appendBuffer(buf); } catch(e) { console.warn('[rdp] init append error', e.message); }
+
+                    // 后续数据入队
+                    tunnel.onmessage = async (ev2) => {
+                        let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
+                        if (!b2 || b2.byteLength < 5) return;
+                        queue.push(new Uint8Array(b2));
+                        flushQueue();
+                    };
+                } catch(e) {
+                    setStatus('error', '编解码器不支持: '+e.message);
+                }
+            };
+            ms.onsourceended = () => console.warn('[rdp] source ended');
+
+            // 开始播放（静音自动播放策略）
+            video.play().then(() => {
+                setStatus('connected', `${label} 已连接 [H.264]`);
+                connected = true; notifyParentStatus('connected');
+            }).catch((e) => {
+                // 自动播放被阻止，用户交互后重试
+                const tryPlay = () => { video.play().then(() => {
                     setStatus('connected', `${label} 已连接 [H.264]`);
                     connected = true; notifyParentStatus('connected');
-                }).catch(() => {});
+                }).catch(() => {}); };
+                stage.addEventListener('pointerdown', tryPlay, { once: true });
+                stage.addEventListener('keydown', tryPlay, { once: true });
+            });
 
-                vdec = video; // 复用 vdec 变量存 video 元素
-                vcfg = true;
-                return;
-            }
+            vdec = video;
+            vcfg = true;
         };
 
         // 输入转发 → xdotool
