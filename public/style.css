@@ -6429,3 +6429,41 @@ body.smartbar-trash-hover .smartbar-trash-target {
     box-shadow: none;
     transform: translateY(-1px) scale(1.03);
 }
+
+.rdp-touch-hud {
+    position: absolute;
+    left: 50%;
+    bottom: 18px;
+    z-index: 42;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(5, 8, 12, .78);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1;
+    pointer-events: none;
+    box-shadow: 0 8px 28px rgba(0,0,0,.35);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+
+.rdp-pointer {
+    position: absolute;
+    z-index: 41;
+    width: 22px;
+    height: 22px;
+    margin-left: -11px;
+    margin-top: -11px;
+    border: 2px solid rgba(88,166,255,.95);
+    border-radius: 50%;
+    background: rgba(88,166,255,.18);
+    box-shadow: 0 0 0 5px rgba(88,166,255,.16), 0 8px 18px rgba(0,0,0,.35);
+    pointer-events: none;
+    transform: translate3d(0,0,0);
+}
+
+.guac-stage.keyboard-open .guac-display-shell {
+    padding-bottom: min(34vh, 260px);
+    scroll-padding-bottom: min(34vh, 260px);
+}

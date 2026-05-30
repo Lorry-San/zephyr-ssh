@@ -3409,6 +3409,7 @@ const RDP_STREAM_WIDTH = Number(process.env.RDP_H264_WIDTH || 1280);
 const RDP_STREAM_HEIGHT = Number(process.env.RDP_H264_HEIGHT || 720);
 const RDP_STREAM_FPS = Number(process.env.RDP_H264_FPS || 30);
 const RDP_NATIVE_H264 = process.env.RDP_NATIVE_H264 !== 'false';
+const RDP_ALLOW_GFX_FALLBACK = process.env.RDP_ALLOW_GFX_FALLBACK === 'true';
 const rdpPipes = new Map(); // connectionId → pipeline state
 
 function rdpSpawn(name, args, options = {}) {
@@ -3453,9 +3454,9 @@ async function startRdpH264Pipeline(connId, conn) {
         `/size:${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
         '/bpp:32',
         '/network:lan',
-        ...(RDP_NATIVE_H264 ? ['/gfx:AVC444'] : []),
+        ...(RDP_ALLOW_GFX_FALLBACK ? [] : ['/gfx:AVC444']),
         '+fonts',
-        ...(RDP_NATIVE_H264 ? [] : ['-wallpaper', '-themes', '-aero']),
+        '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '/log-level:WARN',
     ];

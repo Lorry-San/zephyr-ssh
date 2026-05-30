@@ -18,6 +18,8 @@ const ctrlAltDelBtn = $('#ctrlAltDelBtn');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
 const mobileKeyboardInput = $('#mobileKeyboardInput');
+const rdpTouchHud = $('#rdpTouchHud');
+const rdpPointer = $('#rdpPointer');
 const clipboardPanel = $('#clipboardPanel');
 const clipboardText = $('#clipboardText');
 const clipboardReadLocalBtn = $('#clipboardReadLocalBtn');
@@ -509,6 +511,24 @@ let guacLongPress = null;
 let guacPinchActive = false;
 let guacPinchDist = 0;
 let displayZoom = 1;
+let rdpInputMode = localStorage.getItem('zephyr-rdp-input-mode') || 'touch';
+let rdpHudTimer = 0;
+
+function showRdpHud(text, timeout = 900) {
+    if (!rdpTouchHud) return;
+    rdpTouchHud.textContent = text;
+    rdpTouchHud.hidden = false;
+    clearTimeout(rdpHudTimer);
+    rdpHudTimer = setTimeout(() => { rdpTouchHud.hidden = true; }, timeout);
+}
+
+function updateRdpPointer(clientX, clientY, visible = true) {
+    if (!rdpPointer) return;
+    const rect = stage.getBoundingClientRect();
+    rdpPointer.hidden = !visible || rdpInputMode !== 'mouse';
+    if (!rdpPointer.hidden) rdpPointer.style.transform = `translate3d(${clientX - rect.left}px, ${clientY - rect.top}px, 0)`;
+}
+
 
 function setupMobilePointerMouse() {
     if (!stage) return;
@@ -873,8 +893,10 @@ function installRdpTouchControls(canvas, wsInput, pos) {
     let lastTap = null;
     let panStart = null;
     let startScroll = null;
+    let edgeTimer = 0;
+    let pointer = { clientX: 0, clientY: 0 };
     const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
-    const sendMove = (point) => { const p = pos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
+    const sendMove = (point) => { pointer = { clientX: point.clientX, clientY: point.clientY }; updateRdpPointer(point.clientX, point.clientY, true); const p = pos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
     const clickButton = (button, p) => {
         wsInput({ type: 'mouse', x: p.x, y: p.y });
         wsInput({ type: 'mousedown', button });
@@ -888,11 +910,30 @@ function installRdpTouchControls(canvas, wsInput, pos) {
         item.moved = item.moved || Math.hypot(item.x - item.sx, item.y - item.sy) > 10;
         return item;
     };
+    const stopEdgeScroll = () => { if (edgeTimer) { clearInterval(edgeTimer); edgeTimer = 0; } };
+    const startEdgeScroll = (pt) => {
+        if (edgeTimer || !pt) return;
+        edgeTimer = setInterval(() => {
+            const rect = displayShell.getBoundingClientRect();
+            const margin = 34;
+            let dx = 0, dy = 0;
+            if (pt.clientX < rect.left + margin) dx = -18;
+            else if (pt.clientX > rect.right - margin) dx = 18;
+            if (pt.clientY < rect.top + margin) dy = -18;
+            else if (pt.clientY > rect.bottom - margin) dy = 18;
+            if (dx || dy) {
+                displayShell.scrollLeft += dx;
+                displayShell.scrollTop += dy;
+                showRdpHud('边缘滚动', 500);
+            }
+        }, 45);
+    };
     canvas.addEventListener('touchstart', (e) => {
         e.preventDefault();
         canvas.focus({ preventScroll: true });
         for (const t of e.changedTouches) touches.set(t.identifier, { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, moved: false, startedAt: Date.now() });
         clearLongPress();
+        stopEdgeScroll();
         longPressFired = false;
         if (touches.size === 1) {
             const t = [...touches.values()][0];
@@ -902,6 +943,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
                 if (!cur || cur.moved || touches.size !== 1) return;
                 longPressFired = true;
                 clickButton(3, p);
+                showRdpHud('右键');
                 if (navigator.vibrate) navigator.vibrate(20);
             }, 600);
         } else if (touches.size >= 2) {
@@ -910,6 +952,11 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             const pts = [...touches.values()].slice(0, 2);
             panStart = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
             startScroll = { left: displayShell.scrollLeft, top: displayShell.scrollTop };
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            panStart.dist = dist;
+            panStart.w = displayRoot.getBoundingClientRect().width;
+            panStart.h = displayRoot.getBoundingClientRect().height;
+            showRdpHud('双指移动 / 捏合缩放', 700);
         }
         notifyParentActivity();
     }, { passive: false });
@@ -922,15 +969,28 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             const cy = (pts[0].y + pts[1].y) / 2;
             displayShell.scrollLeft = startScroll.left - (cx - panStart.x);
             displayShell.scrollTop = startScroll.top - (cy - panStart.y);
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            if (panStart.dist && Math.abs(dist - panStart.dist) > 18) {
+                const scale = Math.max(.35, Math.min(3, dist / panStart.dist));
+                displayRoot.style.width = `${Math.round(panStart.w * scale)}px`;
+                displayRoot.style.height = `${Math.round(panStart.h * scale)}px`;
+                const c = displayRoot.querySelector('#rdp-canvas');
+                if (c) { c.style.width = displayRoot.style.width; c.style.height = displayRoot.style.height; }
+                showRdpHud(`${Math.round(scale * 100)}%`, 500);
+            } else showRdpHud('平移', 400);
             return;
         }
         const t = [...touches.values()][0];
         if (!t || longPressFired) return;
-        const p = sendMove({ clientX: t.x, clientY: t.y });
+        const point = { clientX: t.x, clientY: t.y };
+        const p = sendMove(point);
         if (t.moved) {
             clearLongPress();
-            if (!leftDown) { wsInput({ type: 'mousedown', button: 1 }); leftDown = true; }
-            wsInput({ type: 'mouse', x: p.x, y: p.y });
+            if (rdpInputMode === 'touch') {
+                if (!leftDown) { wsInput({ type: 'mousedown', button: 1 }); leftDown = true; }
+                wsInput({ type: 'mouse', x: p.x, y: p.y });
+            }
+            startEdgeScroll(point);
         }
         notifyParentActivity();
     }, { passive: false });
@@ -952,13 +1012,21 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             touches.delete(t.identifier);
         }
         clearLongPress();
+        stopEdgeScroll();
         if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
         if (touches.size < 2) { panStart = null; startScroll = null; }
         notifyParentActivity();
     };
     canvas.addEventListener('touchend', finishTouch, { passive: false });
     canvas.addEventListener('touchcancel', finishTouch, { passive: false });
+    canvas.addEventListener('dblclick', () => {
+        rdpInputMode = rdpInputMode === 'touch' ? 'mouse' : 'touch';
+        localStorage.setItem('zephyr-rdp-input-mode', rdpInputMode);
+        updateRdpPointer(pointer.clientX, pointer.clientY, rdpInputMode === 'mouse');
+        showRdpHud(rdpInputMode === 'mouse' ? '浮动鼠标模式' : '触控模式');
+    });
 }
+
 
         const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
         canvas.addEventListener('keydown', (e) => { const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : ''); if (!k) return; e.preventDefault(); wsInput({ type: 'key', key: k }); notifyParentActivity(); });
@@ -1882,14 +1950,19 @@ function sendTextToRemote(text) {
 function focusMobileKeyboard() {
     if (!mobileKeyboardInput) return;
     mobileKeyboardInput.value = mobileInputMirror = '';
+    mobileKeyboardInput.style.pointerEvents = 'auto';
     mobileKeyboardInput.focus({ preventScroll: true });
+    stage?.classList.add('keyboard-open');
     keyboardBtn?.classList.add('active');
+    setTimeout(() => { try { mobileKeyboardInput.focus({ preventScroll: true }); } catch {} }, 80);
     console.info('[guac-client]', 'mobile keyboard focused');
 }
 
 function blurMobileKeyboard() {
     if (!mobileKeyboardInput) return;
     mobileKeyboardInput.blur();
+    mobileKeyboardInput.style.pointerEvents = 'none';
+    stage?.classList.remove('keyboard-open');
     keyboardBtn?.classList.remove('active');
     console.info('[guac-client]', 'mobile keyboard blurred');
 }
@@ -1903,8 +1976,13 @@ function toggleMobileKeyboard() {
 function setupMobileKeyboard() {
     if (!mobileKeyboardInput) return;
     // 用 beforeinput 事件精确处理插入/删除，避免字符遍历法被粘贴替换打炸
+    mobileKeyboardInput.addEventListener('compositionend', (event) => {
+        const text = event.data || mobileKeyboardInput.value || '';
+        if (text) sendTextToRemote(text);
+        mobileKeyboardInput.value = mobileInputMirror = '';
+    });
     mobileKeyboardInput.addEventListener('beforeinput', (event) => {
-        if (!client || !connected) return;
+        if ((!client && !rdpInputSender) || !connected) return;
         event.preventDefault(); // 禁止浏览器实际修改 textarea
         const inputType = event.inputType || '';
         const data = event.data || '';
@@ -2054,7 +2132,7 @@ stage?.addEventListener('pointerdown', () => {
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
 setupMobileKeyboard();
-mobileKeyboardInput?.addEventListener('blur', () => keyboardBtn?.classList.remove('active'));
+mobileKeyboardInput?.addEventListener('blur', () => { keyboardBtn?.classList.remove('active'); stage?.classList.remove('keyboard-open'); });
 mobileKeyboardInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Backspace' && !mobileKeyboardInput.value) {
         event.preventDefault();

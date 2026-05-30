@@ -27,7 +27,9 @@
             </div>
         </div>
         <div class="guac-stage" id="guacStage" tabindex="0">
-            <textarea id="mobileKeyboardInput" class="guac-mobile-keyboard-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="远程桌面软键盘输入"></textarea>
+            <textarea id="mobileKeyboardInput" class="guac-mobile-keyboard-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text" enterkeyhint="done" aria-label="远程桌面软键盘输入"></textarea>
+            <div id="rdpTouchHud" class="rdp-touch-hud" hidden></div>
+            <div id="rdpPointer" class="rdp-pointer" hidden></div>
 
             <div class="guac-floating-panel clipboard-panel" id="clipboardPanel" hidden>
                 <div class="panel-drag-handle" data-drag-panel="clipboardPanel" title="拖动移动窗口">
@@ -131,6 +133,6 @@
             </div>
         </div>
     </div>
-    <script src="guacamole.js?v=20260530-rdp-webcodecs-annexb" type="module"></script>
+    <script src="guacamole.js?v=20260530-rdp-windows-app-mobile" type="module"></script>
 </body>
 </html>
