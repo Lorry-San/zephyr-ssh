@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.2-rdp-auto-clipboard-audio';
+const GUAC_CLIENT_VERSION = '2026-05-31.3-rdp-strict-aspect';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -375,22 +375,27 @@ function computeRdpTargetSize(mode = fitModes[fitModeIdx]) {
     const minH = 600;
     const even = (v) => Math.max(2, Math.round(v / 2) * 2);
     const fitBounds = () => {
-        let w = Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr));
-        let h = Math.max(minH, Math.min(maxH, (bounds.height || innerHeight || 720) * effDpr));
-        return { width: even(w), height: even(h), mode };
+        const w = even(Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr)));
+        const h = even(Math.max(minH, Math.min(maxH, (bounds.height || innerHeight || 720) * effDpr)));
+        return { width: w, height: h, mode };
     };
-    const byAspect = (aspect) => {
-        let w = Math.max(minW, (bounds.width || innerWidth || 1280) * effDpr);
-        let h = w / aspect;
-        if (w > maxW) { w = maxW; h = w / aspect; }
-        if (h > maxH) { h = maxH; w = h * aspect; }
-        if (h < minH) { h = minH; w = h * aspect; }
-        return { width: even(w), height: even(h), mode };
+    const byAspect = (num, den) => {
+        let w = even(Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr)));
+        let h = even(w * den / num);
+        if (h < minH) { h = even(minH); w = even(h * num / den); }
+        if (w > maxW) { w = even(maxW); h = even(w * den / num); }
+        if (h > maxH) { h = even(maxH); w = even(h * num / den); }
+        // 最后一遍严格按整数比例回算，避免四舍五入和最小尺寸导致 16:9 变形。
+        const unitW = Math.max(1, Math.floor(w / num));
+        const unitH = Math.max(1, Math.floor(h / den));
+        const unit = Math.max(1, Math.min(unitW, unitH));
+        return { width: num * unit, height: den * unit, mode };
     };
-    if (mode === '16:9') return byAspect(16 / 9);
-    if (mode === '4:3') return byAspect(4 / 3);
+    if (mode === '16:9') return byAspect(16, 9);
+    if (mode === '4:3') return byAspect(4, 3);
     return fitBounds();
 }
+
 
 
 function requestRdpCanvasSize(mode = fitModes[fitModeIdx], force = false) {

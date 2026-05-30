@@ -3436,8 +3436,16 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const targetPort = Number(conn.port) || 3389;
     const username = conn.username || 'Administrator';
     const password = conn.password || '';
-    const streamWidth = Math.max(800, Math.min(2560, Math.round(Number(options.width) || RDP_STREAM_WIDTH) / 2) * 2);
-    const streamHeight = Math.max(600, Math.min(1600, Math.round(Number(options.height) || RDP_STREAM_HEIGHT) / 2) * 2);
+    let streamWidth = Math.max(800, Math.min(2560, Math.round(Number(options.width) || RDP_STREAM_WIDTH) / 2) * 2);
+    let streamHeight = Math.max(600, Math.min(1600, Math.round(Number(options.height) || RDP_STREAM_HEIGHT) / 2) * 2);
+    const aspectMode = String(options.mode || '').toLowerCase();
+    const forceAspect = (num, den) => {
+        const unit = Math.max(1, Math.min(Math.floor(streamWidth / num), Math.floor(streamHeight / den)));
+        streamWidth = num * unit;
+        streamHeight = den * unit;
+    };
+    if (aspectMode === '16:9') forceAspect(16, 9);
+    else if (aspectMode === '4:3') forceAspect(4, 3);
     const displayNo = 100 + (rdpPipes.size % 50);
     const xvfbDisp = `:${displayNo}`;
     const fifoPath = `/tmp/zephyr-rdp-h264-${connId}.h264`;
@@ -3656,7 +3664,8 @@ rdpH264Wss.on('connection', async (ws, req) => {
         let pipe = rdpPipes.get(connId);
         const requestedWidth = Number(url.searchParams.get('width')) || RDP_STREAM_WIDTH;
         const requestedHeight = Number(url.searchParams.get('height')) || RDP_STREAM_HEIGHT;
-        if (!pipe) pipe = await startRdpH264Pipeline(connId, conn, { width: requestedWidth, height: requestedHeight });
+        const requestedMode = url.searchParams.get('mode') || '';
+        if (!pipe) pipe = await startRdpH264Pipeline(connId, conn, { width: requestedWidth, height: requestedHeight, mode: requestedMode });
         pipe.clients.add(ws);
         ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: pipe.width || RDP_STREAM_WIDTH, height: pipe.height || RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
         console.info('[rdp-h264]', 'browser attached', { connId, clients: pipe.clients.size });
@@ -3668,7 +3677,10 @@ rdpH264Wss.on('connection', async (ws, req) => {
             if (msg?.type === 'reconnect' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
                 const oldPipe = pipe;
                 oldPipe.clients.delete(ws);
-                try { if (ws.readyState === ws.OPEN) ws.close(1012, 'rdp resize reconnect'); } catch {}
+                const width = Math.max(800, Math.min(2560, Math.round(Number(msg.width) || RDP_STREAM_WIDTH)));
+                const height = Math.max(600, Math.min(1600, Math.round(Number(msg.height) || RDP_STREAM_HEIGHT)));
+                const mode = String(msg.mode || '');
+                try { if (ws.readyState === ws.OPEN) ws.close(1012, `rdp resize reconnect:${mode}:${width}x${height}`); } catch {}
                 cleanupPipe(connId);
                 return;
             }
