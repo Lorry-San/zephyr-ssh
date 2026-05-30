@@ -852,31 +852,31 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96, qua
         width: String(Math.max(320, Number(width) || 1280)),
         height: String(Math.max(240, Number(height) || 720)),
         dpi: String(Math.max(72, Number(dpi) || 96)),
-        'enable-wallpaper': isPerf ? 'false' : 'true',
-        'enable-theming': isPerf ? 'false' : 'true',
         'ignore-cert': 'true',
         'server-layout': 'en-us-qwerty',
-        'color-depth': isPerf ? '16' : isQual ? '32' : '24',
+        'color-depth': isQual ? '32' : '24',
         'resize-method': 'display-update',
+        'enable-wallpaper': isPerf ? 'false' : 'true',
+        'enable-theming': isPerf ? 'false' : 'true',
+        'enable-font-smoothing': isQual ? 'true' : 'false',
+        'enable-desktop-composition': isQual ? 'true' : isPerf ? 'false' : 'true',
+        'enable-full-window-drag': 'false',
+        'enable-menu-animations': 'false',
+        'jpeg-quality': isPerf ? '40' : isQual ? '90' : '65',
+        'jpeg-subsampling': isPerf ? '420' : isQual ? '444' : '420',
+        'lossless-jpeg-color-conversion': isQual ? 'true' : 'false',
     };
 
     if (protocol === 'rdp') {
         base.security = 'any';
         base['disable-auth'] = 'false';
-        base['enable-font-smoothing'] = isQual ? 'true' : 'false';
-        base['enable-desktop-composition'] = isPerf ? 'false' : 'true';
-        base['enable-full-window-drag'] = 'false';
-        base['enable-menu-animations'] = 'false';
-        base['jpeg-quality'] = isPerf ? '40' : isQual ? '90' : '65';
-        base['jpeg-subsampling'] = isPerf ? '420' : isQual ? '444' : '420';
-        base['lossless-jpeg-color-conversion'] = isQual ? 'true' : 'false';
         base['disable-copy'] = 'false';
         base['disable-paste'] = 'false';
         base['clipboard-encoding'] = 'UTF-8';
     }
 
     if (protocol === 'vnc') {
-        base['encodings'] = isPerf ? 'tight copyrect hextile' : 'tight zrle ultra copyrect hextile raw';
+        base['encodings'] = isPerf ? 'tight copyrect' : 'tight zrle ultra copyrect hextile raw';
         base['read-only'] = 'false';
     }
 
