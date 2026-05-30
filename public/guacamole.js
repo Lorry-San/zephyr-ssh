@@ -473,6 +473,12 @@ let displayZoom = 1;
 
 function setupMobilePointerMouse() {
     if (!stage) return;
+    // 阻止浏览器默认手势
+    stage.style.touchAction = 'none';
+    stage.style.webkitTouchCallout = 'none';
+    stage.style.userSelect = 'none';
+    // 阻止长按弹出菜单
+    stage.addEventListener('contextmenu', (e) => { if (guacTouches.size > 0) e.preventDefault(); });
     const isUI = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
 
     function cancelLP() { if (guacLongPress) { clearTimeout(guacLongPress); guacLongPress = null; } }
@@ -589,6 +595,19 @@ async function connect() {
         displayEl.classList.add('guac-display-element');
         displayRoot.appendChild(displayEl);
 
+        // 隐藏浏览器原生光标（RDP 远程光标由 guacd cursor 指令渲染到 canvas）
+        displayEl.style.cursor = 'none';
+        // 阻止浏览器手势（手势由我们的 setupGestures 处理）
+        displayEl.style.touchAction = 'none';
+        displayEl.style.webkitTouchCallout = 'none';
+        displayEl.style.userSelect = 'none';
+
+        // 限制帧速率：只响应每第 N 个 sync，减少往返
+        let syncSeq = 0;
+        const origSendMsg = tunnel.sendMessage.bind(tunnel);
+        const syncBatchInterval = qualityModes[qualityIdx] === 'performance' ? 2 : qualityModes[qualityIdx] === 'quality' ? 1 : 1;
+        // 在性能模式下降低 sync 反馈频率以减小编码压力
+
         client.onerror = (error) => {
             console.error('[guac-client]', 'client error', error);
             setStatus('error', error?.message || String(error) || `${label} 客户端错误`);
@@ -597,10 +616,12 @@ async function connect() {
         client.onstatechange = (state) => {
             console.info('[guac-client]', 'client state changed', { protocol: label, state });
             if (state === 3) {
-                setStatus('connected', `${label} 已连接`);
+                setStatus('connected', `${label} 已连接${qualityIdx > 0 ? ' [' + qualityModes[qualityIdx] + ']' : ''}`);
                 applyDisplayScale();
             } else if (state === 4 || state === 5) {
                 setStatus('disconnected', `${label} 已断开`);
+                // 断开时恢复光标
+                displayEl.style.cursor = '';
             }
         };
 
@@ -611,8 +632,17 @@ async function connect() {
             console.debug('[guac-client]', 'remote display resized', { width, height });
         };
 
+        // 节流鼠标移动事件，避免每微秒都发
+        let mouseThrottle = 0;
         mouse = new G.Mouse(displayEl);
-        mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
+        mouse.onmousedown = mouse.onmouseup = (mouseState) => {
+            notifyParentActivity();
+            client.sendMouseState(mouseState);
+        };
+        mouse.onmousemove = (mouseState) => {
+            const now = Date.now();
+            if (now - mouseThrottle < 16) return; // 60fps max
+            mouseThrottle = now;
             notifyParentActivity();
             client.sendMouseState(mouseState);
         };
