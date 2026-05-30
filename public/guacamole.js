@@ -611,91 +611,111 @@ async function connect() {
 
         tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
 
+        // 视频流消息缓冲区（初始化期间缓存所有消息）
+        let msgBuffer = [];
+        let msReady = false;
+
         tunnel.onmessage = async (ev) => {
-            // 只处理第一条消息，后续由新 handler 处理
-            tunnel.onmessage = null;
             let buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
-            if (!buf || buf.byteLength < 5) { setStatus('error', '无效的视频流'); return; }
-            if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
+            if (!buf || buf.byteLength < 5) return;
+            const data = new Uint8Array(buf);
 
-            const video = document.createElement('video');
-            video.style.cssText = 'position:absolute;opacity:0.01;pointer-events:none;width:1px;height:1px';
-            video.muted = true;
-            video.playsInline = true;
-            video.setAttribute('playsinline', '');
-            document.body.appendChild(video);
+            if (!msReady) {
+                if (!window.MediaSource) { setStatus('error', '浏览器不支持 MediaSource'); return; }
 
-            const ms = new MediaSource();
-            video.src = URL.createObjectURL(ms);
-            ms.onsourceopen = () => {
-                // 猜测 codec，如果不对会自动降级
-                let codec = 'video/mp4; codecs="avc1.42E01E"';
-                try {
-                    const sb = ms.addSourceBuffer(codec);
-                    const queue = [];
-                    let appending = false;
+                // 第一条消息：创建 MediaSource 和 <video>
+                msgBuffer.push(data);
+                msReady = true; // 防止重复初始化
 
-                    const flushQueue = () => {
-                        if (appending || sb.updating) return;
-                        if (queue.length === 0) return;
-                        appending = true;
-                        const data = queue.shift();
-                        try { sb.appendBuffer(data); } catch(e) {
-                            appending = false;
-                            console.warn('[rdp] sb error', e.message);
-                            setTimeout(flushQueue, 50);
-                        }
-                    };
+                const video = document.createElement('video');
+                video.style.cssText = 'position:absolute;opacity:0.01;pointer-events:none;width:1px;height:1px';
+                video.muted = true;
+                video.playsInline = true;
+                video.setAttribute('playsinline', '');
+                document.body.appendChild(video);
 
-                    sb.onupdateend = () => {
-                        appending = false;
-                        // 画到 Canvas
-                        if (video.readyState >= 2) {
-                            if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-                                canvas.width = video.videoWidth;
-                                canvas.height = video.videoHeight;
-                                displayWidth = video.videoWidth;
-                                displayHeight = video.videoHeight;
-                                applyDisplayScale();
+                const ms = new MediaSource();
+                video.src = URL.createObjectURL(ms);
+
+                ms.onsourceopen = () => {
+                    let codec = 'video/mp4; codecs="avc1.42E01E"';
+                    try {
+                        const sb = ms.addSourceBuffer(codec);
+                        const queue = [];
+                        let appending = false;
+
+                        const flush = () => {
+                            if (appending || sb.updating) return;
+                            if (queue.length === 0) return;
+                            appending = true;
+                            const d = queue.shift();
+                            try { sb.appendBuffer(d); } catch(e) {
+                                appending = false;
+                                setTimeout(flush, 100);
                             }
-                            try { ctx.drawImage(video, 0, 0); } catch(e) {}
-                        }
-                        flushQueue();
-                    };
-                    sb.onerror = () => console.warn('[rdp] sourcebuffer error');
+                        };
 
-                    // 追加初始数据 (ftyp+moov)
-                    try { sb.appendBuffer(buf); } catch(e) { console.warn('[rdp] init append error', e.message); }
+                        sb.onupdateend = () => {
+                            appending = false;
+                            // 画到 Canvas
+                            if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+                                if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+                                    canvas.width = video.videoWidth;
+                                    canvas.height = video.videoHeight;
+                                    displayWidth = video.videoWidth;
+                                    displayHeight = video.videoHeight;
+                                    applyDisplayScale();
+                                }
+                                try { ctx.drawImage(video, 0, 0); } catch(e) {}
+                            }
+                            flush();
+                        };
+                        sb.onerror = () => console.warn('[rdp] sb error');
 
-                    // 后续数据入队
-                    tunnel.onmessage = async (ev2) => {
-                        let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
-                        if (!b2 || b2.byteLength < 5) return;
-                        queue.push(new Uint8Array(b2));
-                        flushQueue();
-                    };
-                } catch(e) {
-                    setStatus('error', '编解码器不支持: '+e.message);
-                }
-            };
-            ms.onsourceended = () => console.warn('[rdp] source ended');
+                        // 把初始缓冲的所有数据入队
+                        for (const d of msgBuffer) queue.push(d);
+                        msgBuffer = [];
 
-            // 开始播放（静音自动播放策略）
-            video.play().then(() => {
-                setStatus('connected', `${label} 已连接 [H.264]`);
-                connected = true; notifyParentStatus('connected');
-            }).catch((e) => {
-                // 自动播放被阻止，用户交互后重试
-                const tryPlay = () => { video.play().then(() => {
-                    setStatus('connected', `${label} 已连接 [H.264]`);
-                    connected = true; notifyParentStatus('connected');
-                }).catch(() => {}); };
-                stage.addEventListener('pointerdown', tryPlay, { once: true });
-                stage.addEventListener('keydown', tryPlay, { once: true });
-            });
+                        // 后续消息直接入队
+                        tunnel.onmessage = async (ev2) => {
+                            let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
+                            if (!b2 || b2.byteLength < 5) return;
+                            queue.push(new Uint8Array(b2));
+                            flush();
+                        };
 
-            vdec = video;
-            vcfg = true;
+                        // 开始消费队列
+                        flush();
+
+                        // 播放
+                        video.play().then(() => {
+                            setStatus('connected', `${label} 已连接 [H.264]`);
+                            connected = true; notifyParentStatus('connected');
+                        }).catch(() => {
+                            // 自动播放被阻止,等用户交互
+                            const tryPlay = () => { video.play().then(() => {
+                                setStatus('connected', `${label} 已连接 [H.264]`);
+                                connected = true; notifyParentStatus('connected');
+                            }).catch(() => {}); };
+                            stage.addEventListener('pointerdown', tryPlay, { once: true });
+                            stage.addEventListener('keydown', tryPlay, { once: true });
+                        });
+
+                        vdec = video;
+                        vcfg = true;
+
+                    } catch(e) {
+                        setStatus('error', '初始化失败: '+e.message);
+                    }
+                };
+                ms.onsourceended = () => {};
+                // 第一条消息已经 buffer 了，之后的会进入 tunnel.onmessage 的 else 分支
+                tunnel.onmessage = async (ev2) => {
+                    let b2 = ev2.data instanceof ArrayBuffer ? ev2.data : ev2.data instanceof Blob ? await ev2.data.arrayBuffer() : null;
+                    if (!b2 || b2.byteLength < 5) return;
+                    msgBuffer.push(new Uint8Array(b2));
+                };
+            }
         };
 
         // 输入转发 → xdotool
