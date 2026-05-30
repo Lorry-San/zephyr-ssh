@@ -323,12 +323,17 @@ function guacamoleTunnelBaseUrl() {
 
 function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
-    // DPR 上限 2x：手机 2.75x 屏也只用 2x，视网膜够清晰但像素量少 40%
-    // DPI 保持原始 DPR 让字体正确缩放
+    // DPR 上限 2x
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
-    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    // RDP 最低 1024×768（保证 Windows 登录界面完整显示）
+    // 竖屏手机用 viewport 宽度 × effDpr，但高度至少 768
+    let width = Math.round(Math.max(1024, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    let height = Math.round(Math.max(768, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    // 确保宽高比不要太极端（保持 >= 4:3 的宽高比用于 Windows 桌面）
+    if (width < height * 1.2) {
+        width = Math.round(height * 1.33); // 强制 4:3
+    }
     const dpi = Math.max(72, Math.round(96 * rawDpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
@@ -447,8 +452,11 @@ function sendDisplaySize() {
         switchFitMode(mode);
         return;
     }
-    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    let width = Math.round(Math.max(1024, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
+    let height = Math.round(Math.max(768, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    if (width < height * 1.2) {
+        width = Math.round(height * 1.33);
+    }
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
 }
