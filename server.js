@@ -3418,7 +3418,7 @@ function rdpSpawn(name, args, options = {}) {
 }
 
 function rdpAttachLog(child, label, level = 'info') {
-    child.stdout?.on('data', (d) => console.debug('[rdp-h264]', `${label} stdout`, d.toString('utf8').trim()));
+    if (label !== 'ffmpeg') child.stdout?.on('data', (d) => console.debug('[rdp-h264]', `${label} stdout`, d.toString('utf8').trim()));
     child.stderr?.on('data', (d) => {
         const text = d.toString('utf8').trim();
         if (!text) return;
@@ -3453,7 +3453,7 @@ async function startRdpH264Pipeline(connId, conn) {
         `/size:${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
         '/bpp:32',
         '/network:lan',
-        '+gfx', '+gfx-h264', '/gfx:AVC444',
+        ...(RDP_NATIVE_H264 ? ['/gfx:AVC444'] : []),
         '+fonts', '-wallpaper', '-themes', '-aero',
         '/dynamic-resolution',
         '/log-level:WARN',

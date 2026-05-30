@@ -639,7 +639,10 @@ class AnnexBH264AccessUnitParser {
             this.onConfig(this.buildAvcc(this.sps, this.pps));
         }
         const startsPicture = type === 1 || type === 5;
-        if (startsPicture && this.pending.some((n) => (n[0] & 0x1f) === 1 || (n[0] & 0x1f) === 5)) {
+        if (startsPicture && this.pending.some((n) => {
+            const t = n[0] & 0x1f;
+            return t === 1 || t === 5;
+        }) && AnnexBH264AccessUnitParser.firstMbInSlice(nal) === 0) {
             this.emitPending(false);
         }
         this.pending.push(nal);
@@ -704,6 +707,23 @@ class AnnexBH264AccessUnitParser {
         const out = new Uint8Array(a.length + b.length);
         out.set(a, 0); out.set(b, a.length);
         return out;
+    }
+    static firstMbInSlice(nal) {
+        if (!nal || nal.length < 2) return 0;
+        let bit = 8;
+        let zeros = 0;
+        while (bit < nal.length * 8) {
+            const value = (nal[bit >> 3] >> (7 - (bit & 7))) & 1;
+            bit++;
+            if (value) break;
+            zeros++;
+            if (zeros > 31) return 0;
+        }
+        let value = (1 << zeros) - 1;
+        for (let i = 0; i < zeros && bit < nal.length * 8; i++, bit++) {
+            value = (value << 1) | ((nal[bit >> 3] >> (7 - (bit & 7))) & 1);
+        }
+        return value;
     }
 }
 
