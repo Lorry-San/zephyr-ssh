@@ -50,6 +50,9 @@ let fitModeIdx = 0;
 let displayWidth = 0;
 let displayHeight = 0;
 let resizeTimer = 0;
+let requestedRdpWidth = 0;
+let requestedRdpHeight = 0;
+let rdpScaleZoom = 1;
 let mobileInputMirror = '';
 let lastRemoteClipboard = '';
 let clipboardAutoWriteOk = false;
@@ -355,6 +358,45 @@ function updateInfo() {
     connInfo.textContent = parts.join(' · ');
 }
 
+function computeRdpTargetSize(mode = fitModes[fitModeIdx]) {
+    const bounds = stage?.getBoundingClientRect?.() || { width: innerWidth || 1280, height: innerHeight || 720 };
+    const effDpr = Math.min(window.devicePixelRatio || 1, 2);
+    const maxW = 2560;
+    const maxH = 1600;
+    const minW = 800;
+    const minH = 600;
+    const even = (v) => Math.max(2, Math.round(v / 2) * 2);
+    const fitBounds = () => {
+        let w = Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr));
+        let h = Math.max(minH, Math.min(maxH, (bounds.height || innerHeight || 720) * effDpr));
+        return { width: even(w), height: even(h), mode };
+    };
+    const byAspect = (aspect) => {
+        let w = Math.max(minW, (bounds.width || innerWidth || 1280) * effDpr);
+        let h = w / aspect;
+        if (w > maxW) { w = maxW; h = w / aspect; }
+        if (h > maxH) { h = maxH; w = h * aspect; }
+        if (h < minH) { h = minH; w = h * aspect; }
+        return { width: even(w), height: even(h), mode };
+    };
+    if (mode === '16:9') return byAspect(16 / 9);
+    if (mode === '4:3') return byAspect(4 / 3);
+    return fitBounds();
+}
+
+
+function requestRdpCanvasSize(mode = fitModes[fitModeIdx], force = false) {
+    if (!rdpInputSender || client || !connected) return false;
+    const target = computeRdpTargetSize(mode);
+    const changed = Math.abs((requestedRdpWidth || 0) - target.width) >= 2 || Math.abs((requestedRdpHeight || 0) - target.height) >= 2;
+    if (!force && !changed) return false;
+    requestedRdpWidth = target.width;
+    requestedRdpHeight = target.height;
+    rdpInputSender({ type: 'resize', width: target.width, height: target.height, mode: target.mode });
+    console.info('[guac-client]', 'rdp canvas remote resize requested', target);
+    return true;
+}
+
 function applyDisplayScale() {
     if (!displayShell) return;
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
@@ -365,31 +407,21 @@ function applyDisplayScale() {
         if (!curW || !curH) return;
         const mode = fitModes[fitModeIdx];
         const setCanvasCss = (w, h) => {
-            displayRoot.style.width = `${Math.ceil(w)}px`;
-            displayRoot.style.height = `${Math.ceil(h)}px`;
-            rdpCanvas.style.width = `${Math.ceil(w)}px`;
-            rdpCanvas.style.height = `${Math.ceil(h)}px`;
+            const cssW = Math.ceil(w * rdpScaleZoom);
+            const cssH = Math.ceil(h * rdpScaleZoom);
+            displayRoot.style.width = `${cssW}px`;
+            displayRoot.style.height = `${cssH}px`;
+            rdpCanvas.style.width = `${cssW}px`;
+            rdpCanvas.style.height = `${cssH}px`;
         };
         if (mode === '1:1') {
             setCanvasCss(curW, curH);
             return;
         }
-        let targetW = curW;
-        let targetH = curH;
-        if (mode === '16:9') {
-            targetW = bounds.width;
-            targetH = targetW / (16 / 9);
-            if (targetH > bounds.height) { targetH = bounds.height; targetW = targetH * (16 / 9); }
-        } else if (mode === '4:3') {
-            targetW = bounds.width;
-            targetH = targetW / (4 / 3);
-            if (targetH > bounds.height) { targetH = bounds.height; targetW = targetH * (4 / 3); }
-        } else {
-            const scale = Math.max(bounds.width / curW, bounds.height / curH);
-            targetW = curW * scale;
-            targetH = curH * scale;
-        }
-        setCanvasCss(targetW, targetH);
+        let scale = 1;
+        if (mode === 'fit') scale = Math.max(bounds.width / curW, bounds.height / curH);
+        else scale = Math.min(bounds.width / curW, bounds.height / curH);
+        setCanvasCss(curW * scale, curH * scale);
         return;
     }
     if (!client) return;
@@ -409,7 +441,7 @@ function applyDisplayScale() {
         return;
     }
 
-    const scale = Math.max(bounds.width / curW, bounds.height / curH);
+    const scale = mode === 'fit' ? Math.max(bounds.width / curW, bounds.height / curH) : Math.min(bounds.width / curW, bounds.height / curH);
     display.scale(Math.max(0.1, scale));
     displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
     displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
@@ -418,35 +450,26 @@ function applyDisplayScale() {
 
 function switchFitMode(mode) {
     if (!tunnel || !connected) return;
-    const bounds = stage.getBoundingClientRect();
-    const effDpr = Math.min(window.devicePixelRatio || 1, 2);
-    let targetW, targetH;
-    if (mode === '16:9') {
-        targetW = Math.round(bounds.width * effDpr);
-        targetH = Math.round(targetW / (16 / 9));
-        if (targetH > bounds.height * effDpr) { targetH = Math.round(bounds.height * effDpr); targetW = Math.round(targetH * (16 / 9)); }
-    } else if (mode === '4:3') {
-        targetW = Math.round(bounds.width * effDpr);
-        targetH = Math.round(targetW / (4 / 3));
-        if (targetH > bounds.height * effDpr) { targetH = Math.round(bounds.height * effDpr); targetW = Math.round(targetH * (4 / 3)); }
-    } else { return; }
-    targetW = Math.max(320, Math.min(1920, targetW));
-    targetH = Math.max(240, Math.min(1200, targetH));
-    tunnel.sendMessage('size', targetW, targetH);
+    if (rdpInputSender && !client) {
+        rdpScaleZoom = 1;
+        requestRdpCanvasSize(mode, true);
+        applyDisplayScale();
+        return;
+    }
+    const target = computeRdpTargetSize(mode);
+    if (mode === '16:9' || mode === '4:3' || mode === 'fit' || mode === '1:1') {
+        tunnel.sendMessage('size', target.width, target.height);
+        console.debug('[guac-client]', 'display resize requested', target);
+    }
 }
 
 function sendDisplaySize() {
     if (!tunnel || !connected) return;
-    if (!client) { applyDisplayScale(); return; }
-    const rect = stage.getBoundingClientRect();
-    const rawDpr = window.devicePixelRatio || 1;
-    const effDpr = Math.min(rawDpr, 2);
+    if (!client) { requestRdpCanvasSize(fitModes[fitModeIdx], false); applyDisplayScale(); return; }
     const mode = fitModes[fitModeIdx];
-    if (mode === '16:9' || mode === '4:3') { switchFitMode(mode); return; }
-    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
-    tunnel.sendMessage('size', width, height);
-    console.debug('[guac-client]', 'display resize requested', { width, height });
+    const target = computeRdpTargetSize(mode);
+    tunnel.sendMessage('size', target.width, target.height);
+    console.debug('[guac-client]', 'display resize requested', target);
 }
 
 function scheduleResize() {
@@ -786,7 +809,11 @@ async function connect() {
         displayRoot.appendChild(canvas);
         const rdpDisplay = createRdpCanvasDisplay(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
-        tunnel = new WebSocket(`${wsBase}?connectionId=${encodeURIComponent(params.connectionId)}`);
+        const initialTarget = computeRdpTargetSize(fitModes[fitModeIdx]);
+        requestedRdpWidth = initialTarget.width;
+        requestedRdpHeight = initialTarget.height;
+        const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode });
+        tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
         tunnel.binaryType = 'arraybuffer';
 
         let decoder = null;
@@ -816,6 +843,7 @@ async function connect() {
                             firstFrameDrawn = true;
                             setStatus('connected', `${label} 已连接 [WebCodecs H.264]`);
                             connected = true;
+                            requestRdpCanvasSize(fitModes[fitModeIdx], true);
                             notifyParentStatus('connected');
                         }
                     } finally { frame.close(); }
@@ -855,6 +883,11 @@ async function connect() {
             connected = false;
             notifyParentStatus('disconnected');
             if (decoder) { try { decoder.close(); } catch {} decoder = null; }
+            if (event.code === 1012) {
+                setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
+                window.setTimeout(() => connect(), 250);
+                return;
+            }
             setStatus('disconnected', event.reason || `${label} 已断开`);
         };
         tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
@@ -863,7 +896,12 @@ async function connect() {
                 try {
                     const msg = JSON.parse(ev.data);
                     if (msg.type === 'hello') {
-                        if (msg.width && msg.height) rdpDisplay.setSize(Number(msg.width), Number(msg.height));
+                        if (msg.width && msg.height) {
+                            rdpDisplay.setSize(Number(msg.width), Number(msg.height));
+                            requestedRdpWidth = Number(msg.width) || requestedRdpWidth;
+                            requestedRdpHeight = Number(msg.height) || requestedRdpHeight;
+                            window.setTimeout(() => requestRdpCanvasSize(fitModes[fitModeIdx], true), 300);
+                        }
                         if (msg.fps) frameDuration = Math.round(1000000 / Number(msg.fps));
                     }
                 } catch {}
@@ -893,6 +931,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
     let lastTap = null;
     let panStart = null;
     let startScroll = null;
+    let lastTwoFingerCenter = null;
     let edgeTimer = 0;
     let pointer = { clientX: 0, clientY: 0 };
     const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
@@ -951,6 +990,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             if (leftDown) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
             const pts = [...touches.values()].slice(0, 2);
             panStart = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            lastTwoFingerCenter = { x: panStart.x, y: panStart.y };
             startScroll = { left: displayShell.scrollLeft, top: displayShell.scrollTop };
             const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
             panStart.dist = dist;
@@ -967,16 +1007,22 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             const pts = [...touches.values()].slice(0, 2);
             const cx = (pts[0].x + pts[1].x) / 2;
             const cy = (pts[0].y + pts[1].y) / 2;
+            const dx = cx - (lastTwoFingerCenter?.x ?? cx);
+            const dy = cy - (lastTwoFingerCenter?.y ?? cy);
+            lastTwoFingerCenter = { x: cx, y: cy };
+            const beforeLeft = displayShell.scrollLeft;
+            const beforeTop = displayShell.scrollTop;
             displayShell.scrollLeft = startScroll.left - (cx - panStart.x);
             displayShell.scrollTop = startScroll.top - (cy - panStart.y);
+            const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
             const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            if (panStart.dist && Math.abs(dist - panStart.dist) > 18) {
-                const scale = Math.max(.35, Math.min(3, dist / panStart.dist));
-                displayRoot.style.width = `${Math.round(panStart.w * scale)}px`;
-                displayRoot.style.height = `${Math.round(panStart.h * scale)}px`;
-                const c = displayRoot.querySelector('#rdp-canvas');
-                if (c) { c.style.width = displayRoot.style.width; c.style.height = displayRoot.style.height; }
-                showRdpHud(`${Math.round(scale * 100)}%`, 500);
+            if (panStart.dist && Math.abs(dist - panStart.dist) > 22) {
+                rdpScaleZoom = Math.max(.5, Math.min(3, dist / panStart.dist));
+                applyDisplayScale();
+                showRdpHud(`${Math.round(rdpScaleZoom * 100)}%`, 500);
+            } else if (!didPanViewport) {
+                wsInput({ type: 'scroll', deltaX: -dx * 6, deltaY: -dy * 6 });
+                showRdpHud('双指滚动', 400);
             } else showRdpHud('平移', 400);
             return;
         }
@@ -1014,7 +1060,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
         clearLongPress();
         stopEdgeScroll();
         if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
-        if (touches.size < 2) { panStart = null; startScroll = null; }
+        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; }
         notifyParentActivity();
     };
     canvas.addEventListener('touchend', finishTouch, { passive: false });
@@ -2139,10 +2185,15 @@ fitBtn.addEventListener('click', () => {
     const m = fitModes[fitModeIdx];
     fitBtn.classList.toggle('active', m !== '1:1');
     fitBtn.textContent = m === 'fit' ? '↔ 适应' : m === '1:1' ? '1:1 原始' : m;
-    if (m === '16:9' || m === '4:3') {
-        if (client) switchFitMode(m);
+    if (rdpInputSender && !client) {
+        rdpScaleZoom = 1;
+        const target = computeRdpTargetSize(m);
+        rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode });
+        setTransientStatus(`正在切换 ${target.width}×${target.height}`);
+    } else {
+        switchFitMode(m);
         applyDisplayScale();
-    } else applyDisplayScale();
+    }
 });
 
 clipboardBtn.addEventListener('click', () => {

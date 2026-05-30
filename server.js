@@ -3429,12 +3429,14 @@ function rdpAttachLog(child, label, level = 'info') {
     child.on('exit', (code, signal) => console.warn('[rdp-h264]', `${label} exited`, { code, signal }));
 }
 
-async function startRdpH264Pipeline(connId, conn) {
+async function startRdpH264Pipeline(connId, conn, options = {}) {
     cleanupPipe(connId);
     const targetHost = conn.host;
     const targetPort = Number(conn.port) || 3389;
     const username = conn.username || 'Administrator';
     const password = conn.password || '';
+    const streamWidth = Math.max(800, Math.min(2560, Math.round(Number(options.width) || RDP_STREAM_WIDTH) / 2) * 2);
+    const streamHeight = Math.max(600, Math.min(1600, Math.round(Number(options.height) || RDP_STREAM_HEIGHT) / 2) * 2);
     const displayNo = 100 + (rdpPipes.size % 50);
     const xvfbDisp = `:${displayNo}`;
     const fifoPath = `/tmp/zephyr-rdp-h264-${connId}.h264`;
@@ -3442,7 +3444,7 @@ async function startRdpH264Pipeline(connId, conn) {
     try { require('child_process').execFileSync('mkfifo', [fifoPath]); } catch (err) { console.warn('[rdp-h264]', 'mkfifo failed, native export disabled', { error: err.message }); }
     const env = { ...process.env, DISPLAY: xvfbDisp, ZEPHYR_RDP_H264_PIPE: fifoPath };
 
-    const xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', `${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}x24`, '-ac', '+extension', 'RANDR']);
+    const xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', `${streamWidth}x${streamHeight}x24`, '-ac', '+extension', 'RANDR']);
     rdpAttachLog(xvfb, 'Xvfb');
     await new Promise((resolve) => setTimeout(resolve, 700));
 
@@ -3451,7 +3453,7 @@ async function startRdpH264Pipeline(connId, conn) {
         `/u:${username}`,
         `/p:${password}`,
         '/cert:ignore',
-        `/size:${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
+        `/size:${streamWidth}x${streamHeight}`,
         '/bpp:32',
         '/network:lan',
         ...(RDP_ALLOW_GFX_FALLBACK ? [] : ['/gfx:AVC444']),
@@ -3468,7 +3470,7 @@ async function startRdpH264Pipeline(connId, conn) {
         '-hide_banner', '-loglevel', 'warning',
         '-f', 'x11grab', '-draw_mouse', '0',
         '-framerate', String(RDP_STREAM_FPS),
-        '-video_size', `${RDP_STREAM_WIDTH}x${RDP_STREAM_HEIGHT}`,
+        '-video_size', `${streamWidth}x${streamHeight}`,
         '-i', xvfbDisp,
         '-an', '-c:v', 'libx264',
         '-preset', 'ultrafast', '-tune', 'zerolatency',
@@ -3494,7 +3496,7 @@ async function startRdpH264Pipeline(connId, conn) {
     }, 2200);
 
     const pipe = {
-        connId, xvfb, xfreerdp, ffmpeg, fifoPath, nativeH264, env,
+        connId, xvfb, xfreerdp, ffmpeg, fifoPath, nativeH264, env, width: streamWidth, height: streamHeight,
         get activeWindowId() { return activeWindowId; },
         nativeReader: null,
         clients: new Set(),
@@ -3504,7 +3506,7 @@ async function startRdpH264Pipeline(connId, conn) {
     rdpPipes.set(connId, pipe);
 
     const markReady = () => {
-        if (!pipe.ready) console.info('[rdp-h264]', 'pipeline ready', { connId, target: `${targetHost}:${targetPort}`, width: RDP_STREAM_WIDTH, height: RDP_STREAM_HEIGHT });
+        if (!pipe.ready) console.info('[rdp-h264]', 'pipeline ready', { connId, target: `${targetHost}:${targetPort}`, width: streamWidth, height: streamHeight });
         pipe.ready = true;
     };
     const readyTimer = setTimeout(markReady, 1800);
@@ -3565,7 +3567,8 @@ function handleRdpInput(pipe, raw) {
         execXdo(['click', String(msg.button)]);
     } else if (msg.type === 'scroll') {
         const button = Number(msg.deltaY || 0) > 0 ? '5' : '4';
-        const steps = Math.max(1, Math.min(6, Math.round(Math.abs(Number(msg.deltaY || 0)) / 80)));
+        const rawDelta = Math.abs(Number(msg.deltaY || msg.deltaX || 0));
+        const steps = Math.max(1, Math.min(10, Math.round(rawDelta / 45)));
         for (let i = 0; i < steps; i++) execXdo(['click', button]);
     } else if (msg.type === 'key' && msg.key) {
         execXdo(['key', '--clearmodifiers', String(msg.key)]);
@@ -3587,12 +3590,26 @@ rdpH264Wss.on('connection', async (ws, req) => {
         if (!conn) { ws.close(1008, 'connection not found'); return; }
 
         let pipe = rdpPipes.get(connId);
-        if (!pipe) pipe = await startRdpH264Pipeline(connId, conn);
+        const requestedWidth = Number(url.searchParams.get('width')) || RDP_STREAM_WIDTH;
+        const requestedHeight = Number(url.searchParams.get('height')) || RDP_STREAM_HEIGHT;
+        if (!pipe) pipe = await startRdpH264Pipeline(connId, conn, { width: requestedWidth, height: requestedHeight });
         pipe.clients.add(ws);
-        ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: RDP_STREAM_WIDTH, height: RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
+        ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: pipe.width || RDP_STREAM_WIDTH, height: pipe.height || RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
         console.info('[rdp-h264]', 'browser attached', { connId, clients: pipe.clients.size });
 
-        ws.on('message', (raw, isBinary) => { if (!isBinary) handleRdpInput(pipe, raw); });
+        ws.on('message', async (raw, isBinary) => {
+            if (isBinary) return;
+            let msg = null;
+            try { msg = JSON.parse(raw.toString('utf8')); } catch {}
+            if (msg?.type === 'reconnect' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
+                const oldPipe = pipe;
+                oldPipe.clients.delete(ws);
+                try { if (ws.readyState === ws.OPEN) ws.close(1012, 'rdp resize reconnect'); } catch {}
+                cleanupPipe(connId);
+                return;
+            }
+            handleRdpInput(pipe, raw);
+        });
         ws.on('close', () => {
             pipe.clients.delete(ws);
             console.info('[rdp-h264]', 'browser detached', { connId, clients: pipe.clients.size });
