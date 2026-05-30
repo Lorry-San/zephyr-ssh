@@ -1720,7 +1720,8 @@ if (qualityBtn) {
         params.quality = qualityModes[qualityIdx];
         const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
         try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
-        disconnect(true);
+        // 用 false 避免清除 sessionStorage
+        disconnect(false);
         setTimeout(() => connect(), 300);
     });
 }
