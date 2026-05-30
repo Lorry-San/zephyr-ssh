@@ -39,7 +39,8 @@ let client = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
-let fitToWindow = true;
+let fitModes = ['fit', '1:1', '16:9', '4:3'];
+let fitModeIdx = 0;
 let displayWidth = 0;
 let displayHeight = 0;
 let resizeTimer = 0;
@@ -49,7 +50,6 @@ let clipboardAutoWriteOk = false;
 let clipboardAutoWriteFailed = false;
 let panelLayoutMenu = null;
 let suppressNextLayoutClick = false;
-let touchClickCandidate = null;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
@@ -351,19 +351,44 @@ function applyDisplayScale() {
     if (!client || !displayShell) return;
     const display = client.getDisplay();
     const bounds = stage.getBoundingClientRect();
-    const width = displayWidth || display.getWidth?.() || bounds.width;
-    const height = displayHeight || display.getHeight?.() || bounds.height;
-    if (!fitToWindow || !width || !height) {
+    const curW = displayWidth || display.getWidth?.() || 1280;
+    const curH = displayHeight || display.getHeight?.() || 720;
+    if (!curW || !curH) return;
+
+    const mode = fitModes[fitModeIdx];
+
+    if (mode === '1:1') {
         display.scale(1);
-        displayRoot.style.width = '';
-        displayRoot.style.height = '';
+        displayRoot.style.width = `${curW}px`;
+        displayRoot.style.height = `${curH}px`;
+        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH });
         return;
     }
-    const scale = Math.min(bounds.width / width, bounds.height / height, 1);
+
+    const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
     display.scale(Math.max(0.1, scale));
-    displayRoot.style.width = `${Math.ceil(width * scale)}px`;
-    displayRoot.style.height = `${Math.ceil(height * scale)}px`;
-    console.debug('[guac-client]', 'display scale', { width, height, scale });
+    displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
+    displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
+    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale });
+}
+
+function switchFitMode(mode) {
+    if (!tunnel || !connected) return;
+    const bounds = stage.getBoundingClientRect();
+    const effDpr = Math.min(window.devicePixelRatio || 1, 2);
+    let targetW, targetH;
+    if (mode === '16:9') {
+        targetW = Math.round(bounds.width * effDpr);
+        targetH = Math.round(targetW / (16 / 9));
+        if (targetH > bounds.height * effDpr) { targetH = Math.round(bounds.height * effDpr); targetW = Math.round(targetH * (16 / 9)); }
+    } else if (mode === '4:3') {
+        targetW = Math.round(bounds.width * effDpr);
+        targetH = Math.round(targetW / (4 / 3));
+        if (targetH > bounds.height * effDpr) { targetH = Math.round(bounds.height * effDpr); targetW = Math.round(targetH * (4 / 3)); }
+    } else { return; }
+    targetW = Math.max(320, Math.min(1920, targetW));
+    targetH = Math.max(240, Math.min(1200, targetH));
+    tunnel.sendMessage('size', targetW, targetH);
 }
 
 function sendDisplaySize() {
@@ -371,6 +396,8 @@ function sendDisplaySize() {
     const rect = stage.getBoundingClientRect();
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
+    const mode = fitModes[fitModeIdx];
+    if (mode === '16:9' || mode === '4:3') { switchFitMode(mode); return; }
     const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
     const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
     tunnel.sendMessage('size', width, height);
@@ -432,52 +459,103 @@ function sendRemoteMouseClick(position, source = 'touch') {
     return true;
 }
 
+// G.Mouse(displayEl) 已通过 touchstart/touchend 原生处理单指→鼠标事件（点击、拖拽）
+// 此函数只处理 G.Mouse 覆盖不到的：长按→右键、双指→缩放/右键
+let guacTouches = new Map();   // pointerId → {sx, sy, pos, moved}
+let guacLongPress = null;
+let guacPinchActive = false;
+let guacPinchDist = 0;
+let displayZoom = 1;
+
 function setupMobilePointerMouse() {
-    stage?.addEventListener('pointerdown', (event) => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
-        if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
-        const position = getRemotePointerPosition(event);
-        if (!position) return;
-        event.preventDefault();
-        event.stopPropagation();
-        touchClickCandidate = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            position,
-            startedAt: performance.now(),
-        };
-        stage.setPointerCapture?.(event.pointerId);
-        stage.focus({ preventScroll: true });
-        console.debug('[guac-client]', 'mobile pointer candidate', { x: position.x, y: position.y, pointerType: event.pointerType });
-    }, { passive: false, capture: true });
+    if (!stage) return;
+    const isUI = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
 
-    stage?.addEventListener('pointermove', (event) => {
-        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
-        const dx = event.clientX - touchClickCandidate.startX;
-        const dy = event.clientY - touchClickCandidate.startY;
-        if (Math.hypot(dx, dy) > 14) {
-            console.debug('[guac-client]', 'mobile pointer candidate cancelled by move', { dx: Number(dx.toFixed(1)), dy: Number(dy.toFixed(1)) });
-            touchClickCandidate = null;
+    function cancelLP() { if (guacLongPress) { clearTimeout(guacLongPress); guacLongPress = null; } }
+    
+    function doRightClick(pos) {
+        if (!client || !connected || !pos) return;
+        const d = createMouseState(pos.x, pos.y, false, false, true);
+        const u = createMouseState(pos.x, pos.y, false, false, false);
+        client.sendMouseState(d);
+        setTimeout(() => { try { client?.sendMouseState?.(u); } catch {} }, 45);
+    }
+
+    function doZoom(delta) {
+        displayZoom = Math.max(0.25, Math.min(4, displayZoom + delta));
+        if (!displayShell) return;
+        displayShell.style.transform = displayZoom !== 1 ? `scale(${displayZoom})` : '';
+        displayShell.style.transformOrigin = 'center center';
+        const el = document.getElementById('zoomIndicator') || (() => {
+            const e = document.createElement('div');
+            e.id = 'zoomIndicator';
+            e.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:6px 14px;border-radius:8px;font-size:13px;z-index:999;pointer-events:none;transition:opacity.3s';
+            document.body.appendChild(e);
+            return e;
+        })();
+        el.textContent = `${Math.round(displayZoom*100)}%`;
+        el.style.opacity = '1';
+        clearTimeout(el._hideTimer);
+        el._hideTimer = setTimeout(() => el.style.opacity = '0', 1000);
+    }
+
+    // pointerdown: 跟踪触控，但不过滤/不拦截（让 G.Mouse 在 displayEl 正常接收）
+    stage.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'touch') return;
+        if (isUI(event.target)) return;
+        const pos = getRemotePointerPosition(event);
+        if (!pos) return;
+        const t = { id: event.pointerId, sx: event.clientX, sy: event.clientY, cx: event.clientX, cy: event.clientY, pos, moved: false };
+        guacTouches.set(event.pointerId, t);
+
+        if (guacTouches.size === 2) { cancelLP(); guacPinchActive = true; const p = [...guacTouches.values()]; guacPinchDist = Math.hypot(p[0].cx-p[1].cx, p[0].cy-p[1].cy); return; }
+        if (guacTouches.size === 1) {
+            cancelLP();
+            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) { doRightClick(pos); } guacLongPress = null; }, 600);
         }
+    }, { passive: true }); // ← 关键：passive + 无 capture，不干扰 G.Mouse
+
+    stage.addEventListener('pointermove', (event) => {
+        if (event.pointerType !== 'touch') return;
+        const t = guacTouches.get(event.pointerId);
+        if (!t) return;
+        t.cx = event.clientX; t.cy = event.clientY;
+        if (!t.moved && Math.hypot(t.cx-t.sx, t.cy-t.sy) > 10) { t.moved = true; cancelLP(); }
+        if (guacPinchActive && guacTouches.size === 2) {
+            event.preventDefault();
+            const p = [...guacTouches.values()];
+            const d = Math.hypot(p[0].cx-p[1].cx, p[0].cy-p[1].cy);
+            if (guacPinchDist > 0) { const diff = d - guacPinchDist; if (Math.abs(diff) > 3) doZoom(diff * 0.008); }
+            guacPinchDist = d;
+        }
+    }, { passive: false });
+
+    stage.addEventListener('pointerup', (event) => {
+        if (event.pointerType !== 'touch') return;
+        const t = guacTouches.get(event.pointerId);
+        if (!t) return;
+        guacTouches.delete(event.pointerId);
+        cancelLP();
+        if (guacPinchActive) { guacPinchActive = false; guacPinchDist = 0; if (guacTouches.size === 0 && !t.moved) doRightClick(t.pos); return; }
+        // 单指释放：G.Mouse 已发送 mouseup，这里不做任何事
     }, { passive: true });
 
-    stage?.addEventListener('pointerup', (event) => {
-        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const candidate = touchClickCandidate;
-        touchClickCandidate = null;
-        const dx = event.clientX - candidate.startX;
-        const dy = event.clientY - candidate.startY;
-        if (Math.hypot(dx, dy) <= 14 && performance.now() - candidate.startedAt < 850) {
-            sendRemoteMouseClick(candidate.position, event.pointerType || 'touch');
-        }
-    }, { passive: false, capture: true });
-
-    stage?.addEventListener('pointercancel', (event) => {
-        if (touchClickCandidate?.pointerId === event.pointerId) touchClickCandidate = null;
+    stage.addEventListener('pointercancel', (event) => {
+        guacTouches.delete(event.pointerId);
+        if (guacTouches.size === 0) { guacPinchActive = false; guacPinchDist = 0; }
+        cancelLP();
     }, { passive: true });
+
+    // 滚轮 → PageUp/PageDown
+    stage.addEventListener('wheel', (event) => {
+        if (isUI(event.target)) return;
+        const pos = getRemotePointerPosition(event);
+        if (!pos || !client || !connected) return;
+        event.preventDefault();
+        const steps = Math.min(5, Math.max(1, Math.abs(Math.round(event.deltaY / 40))));
+        const key = event.deltaY > 0 ? 0xff57 : 0xff56;
+        for (let i = 0; i < steps; i++) setTimeout(() => { try { client.sendKeyEvent(1, key); client.sendKeyEvent(0, key); } catch {} }, i * 30);
+    }, { passive: false });
 }
 
 async function connect() {
@@ -1564,10 +1642,12 @@ function sendCtrlAltDel() {
 }
 
 fitBtn.addEventListener('click', () => {
-    fitToWindow = !fitToWindow;
-    fitBtn.classList.toggle('active', fitToWindow);
-    fitBtn.textContent = fitToWindow ? '↔ 适应' : '1:1 原始';
-    applyDisplayScale();
+    fitModeIdx = (fitModeIdx + 1) % fitModes.length;
+    const m = fitModes[fitModeIdx];
+    fitBtn.classList.toggle('active', m !== '1:1');
+    fitBtn.textContent = m === 'fit' ? '↔ 适应' : m === '1:1' ? '1:1 原始' : m;
+    if (m === '16:9' || m === '4:3') switchFitMode(m);
+    else applyDisplayScale();
 });
 
 clipboardBtn.addEventListener('click', () => {
