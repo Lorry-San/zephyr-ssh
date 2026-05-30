@@ -385,7 +385,7 @@ function applyDisplayScale() {
             targetH = targetW / (4 / 3);
             if (targetH > bounds.height) { targetH = bounds.height; targetW = targetH * (4 / 3); }
         } else {
-            const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
+            const scale = Math.max(bounds.width / curW, bounds.height / curH);
             targetW = curW * scale;
             targetH = curH * scale;
         }
@@ -409,7 +409,7 @@ function applyDisplayScale() {
         return;
     }
 
-    const scale = Math.min(bounds.width / curW, bounds.height / curH, 1);
+    const scale = Math.max(bounds.width / curW, bounds.height / curH);
     display.scale(Math.max(0.1, scale));
     displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
     displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
@@ -896,11 +896,11 @@ function installRdpTouchControls(canvas, wsInput, pos) {
     let edgeTimer = 0;
     let pointer = { clientX: 0, clientY: 0 };
     const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
-    const sendMove = (point) => { pointer = { clientX: point.clientX, clientY: point.clientY }; updateRdpPointer(point.clientX, point.clientY, true); const p = pos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
+    const toPos = (point) => pos(point);
+    const sendMove = (point) => { pointer = { clientX: point.clientX, clientY: point.clientY }; updateRdpPointer(point.clientX, point.clientY, true); const p = toPos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
     const clickButton = (button, p) => {
         wsInput({ type: 'mouse', x: p.x, y: p.y });
-        wsInput({ type: 'mousedown', button });
-        setTimeout(() => wsInput({ type: 'mouseup', button }), 55);
+        wsInput({ type: 'click', button });
     };
     const updateTouch = (touch) => {
         const item = touches.get(touch.identifier);
@@ -1026,6 +1026,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
         showRdpHud(rdpInputMode === 'mouse' ? '浮动鼠标模式' : '触控模式');
     });
 }
+
 
 
         const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
@@ -1919,7 +1920,7 @@ function keysymToXdotool(keysym) {
     };
     if (map[keysym]) return map[keysym];
     if (keysym >= 0x01000000) return `U${(keysym - 0x01000000).toString(16).padStart(4, '0')}`;
-    if (keysym >= 0x20 && keysym <= 0x7e) return String.fromCharCode(keysym);
+    if (keysym >= 0x20 && keysym <= 0x7e) return `U${keysym.toString(16).padStart(4, '0')}`;
     return String(keysym);
 }
 

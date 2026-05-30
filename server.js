@@ -3538,6 +3538,7 @@ function handleRdpInput(pipe, raw) {
     let msg;
     try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
     const execXdo = (args) => {
+        if (!pipe || pipe.xfreerdp?.exitCode !== null || pipe.xfreerdp?.killed) return;
         const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
         child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool failed', { error: err.message, args }));
     };
@@ -3547,12 +3548,14 @@ function handleRdpInput(pipe, raw) {
         execXdo(['mousedown', String(msg.button)]);
     } else if (msg.type === 'mouseup' && msg.button !== undefined) {
         execXdo(['mouseup', String(msg.button)]);
+    } else if (msg.type === 'click' && msg.button !== undefined) {
+        execXdo(['click', String(msg.button)]);
     } else if (msg.type === 'scroll') {
         const button = Number(msg.deltaY || 0) > 0 ? '5' : '4';
         const steps = Math.max(1, Math.min(6, Math.round(Math.abs(Number(msg.deltaY || 0)) / 80)));
         for (let i = 0; i < steps; i++) execXdo(['click', button]);
     } else if (msg.type === 'key' && msg.key) {
-        execXdo(['key', String(msg.key)]);
+        execXdo(['key', '--clearmodifiers', String(msg.key)]);
     } else if (msg.type === 'text' && msg.text !== undefined) {
         execXdo(['type', '--clearmodifiers', '--delay', '1', String(msg.text)]);
     } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
