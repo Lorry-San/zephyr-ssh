@@ -320,9 +320,11 @@ function guacamoleTunnelBaseUrl() {
 
 function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
-    const width = Math.max(320, Math.round(rect.width || innerWidth || 1280));
-    const height = Math.max(240, Math.round((rect.height || innerHeight || 720) - 2));
-    const dpi = Math.max(72, Math.round(window.devicePixelRatio ? 96 * window.devicePixelRatio : 96));
+    const dpr = window.devicePixelRatio || 1;
+    // 用 devicePixelRatio 放大请求分辨率，保证高 DPI 屏幕清晰
+    const width = Math.max(1024, Math.min(2560, Math.round((rect.width || innerWidth || 1280) * dpr)));
+    const height = Math.max(768, Math.min(1600, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
+    const dpi = Math.max(72, Math.round(96 * dpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
         width: String(width),
@@ -367,8 +369,9 @@ function applyDisplayScale() {
 function sendDisplaySize() {
     if (!tunnel || !connected) return;
     const rect = stage.getBoundingClientRect();
-    const width = Math.max(320, Math.round(rect.width || innerWidth || 1280));
-    const height = Math.max(240, Math.round((rect.height || innerHeight || 720) - 2));
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1024, Math.min(2560, Math.round((rect.width || innerWidth || 1280) * dpr)));
+    const height = Math.max(768, Math.min(1600, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
 }
