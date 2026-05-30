@@ -44,6 +44,8 @@ let fitModeIdx = 0;
 let fitModeLabel = () => fitModes[fitModeIdx] === 'fit' ? '↔ 适应' : fitModes[fitModeIdx] === '1:1' ? '1:1 原始' : fitModes[fitModeIdx];
 let displayWidth = 0;
 let displayHeight = 0;
+// 手势缩放（CSS transform，GPU 合成，不影响 RDP 分辨率）
+let displayZoom = 1;
 let resizeTimer = 0;
 let mobileInputMirror = '';
 let lastRemoteClipboard = '';
@@ -51,11 +53,10 @@ let clipboardAutoWriteOk = false;
 let clipboardAutoWriteFailed = false;
 let panelLayoutMenu = null;
 let suppressNextLayoutClick = false;
-let touchClickCandidate = null;
+let rdpFileClipboardSeq = 0;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
-let rdpFileClipboardSeq = 0;
 const rdpFileClipboardFiles = new Map();
 
 const RDP_FILE_CLIPBOARD_MIMETYPE = 'application/vnd.zephyr.rdp.file-clipboard';
@@ -366,7 +367,9 @@ function applyDisplayScale() {
         display.scale(1);
         displayRoot.style.width = '';
         displayRoot.style.height = '';
-        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH });
+        displayRoot.style.transform = `scale(${displayZoom})`;
+        displayRoot.style.transformOrigin = '0 0';
+        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH, zoom: displayZoom });
         return;
     }
 
@@ -374,7 +377,29 @@ function applyDisplayScale() {
     display.scale(Math.max(0.1, scale));
     displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
     displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
-    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale });
+    displayRoot.style.transform = `scale(${displayZoom})`;
+    displayRoot.style.transformOrigin = '0 0';
+    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale, zoom: displayZoom });
+}
+
+function applyZoom(delta) {
+    const newZoom = Math.max(0.25, Math.min(4, displayZoom + delta));
+    if (newZoom === displayZoom) return;
+    displayZoom = newZoom;
+    applyDisplayScale();
+    console.info('[guac-client]', 'zoom changed', { zoom: displayZoom });
+    // 显示 zoom 指示
+    const el = $('#zoomIndicator') || (() => {
+        const e = document.createElement('div');
+        e.id = 'zoomIndicator';
+        e.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);color:#fff;padding:6px 14px;border-radius:8px;font-size:13px;z-index:999;pointer-events:none;transition:opacity .3s';
+        document.body.appendChild(e);
+        return e;
+    })();
+    el.textContent = `${Math.round(displayZoom * 100)}%`;
+    el.style.opacity = '1';
+    clearTimeout(el._hideTimer);
+    el._hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 1200);
 }
 
 function switchFitMode(mode) {
@@ -483,52 +508,156 @@ function sendRemoteMouseClick(position, source = 'touch') {
     return true;
 }
 
-function setupMobilePointerMouse() {
-    stage?.addEventListener('pointerdown', (event) => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
-        if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
-        const position = getRemotePointerPosition(event);
-        if (!position) return;
-        event.preventDefault();
-        event.stopPropagation();
-        touchClickCandidate = {
+function setupGestures() {
+    if (!stage) return;
+    let touches = new Map();          // pointerId → {startX, startY, position, startedAt, moved, isDrag}
+    let longPressTimer = null;
+    let gestureActive = false;        // true when multi-touch gesture is active
+    let lastPinchDist = 0;
+    // 忽略面板/按钮上的手势
+    const isInteractive = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
+
+    function clearLongPress() {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    }
+
+    function sendRightClick(pos) {
+        if (!client || !connected || !pos) return;
+        const down = createMouseState(pos.x, pos.y, false, false, true);
+        const up = createMouseState(pos.x, pos.y, false, false, false);
+        client.sendMouseState(down);
+        setTimeout(() => { try { client?.sendMouseState?.(up); } catch {} }, 45);
+        console.info('[guac-client]', 'gesture right click', { x: pos.x, y: pos.y });
+    }
+
+    function sendWheel(pos, deltaY) {
+        if (!client || !connected || !pos) return;
+        // Guacamole doesn't have native wheel - use PageUp/PageDown or up/down keys
+        const key = deltaY > 0 ? 0xff57 : 0xff56; // PAGE_DOWN / PAGE_UP
+        client.sendKeyEvent(1, key);
+        setTimeout(() => { try { client?.sendKeyEvent?.(0, key); } catch {} }, 30);
+    }
+
+    stage.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'touch') return;
+        if (isInteractive(event.target)) return;
+        const pos = getRemotePointerPosition(event);
+        if (!pos) return;
+
+        const touch = {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
-            position,
+            position: pos,
             startedAt: performance.now(),
+            moved: false,
+            isDrag: false,
         };
-        stage.setPointerCapture?.(event.pointerId);
-        stage.focus({ preventScroll: true });
-        console.debug('[guac-client]', 'mobile pointer candidate', { x: position.x, y: position.y, pointerType: event.pointerType });
+        touches.set(event.pointerId, touch);
+
+        // 第二根手指 → 进入手势模式，取消长按
+        if (touches.size >= 2) {
+            clearLongPress();
+            gestureActive = true;
+            const pts = [...touches.values()];
+            lastPinchDist = Math.hypot(pts[0].startX - pts[1].startX, pts[0].startY - pts[1].startY);
+            return;
+        }
+
+        // 单指：开始长按计时（右键候选）
+        clearLongPress();
+        longPressTimer = setTimeout(() => {
+            if (!gestureActive && touches.has(event.pointerId)) {
+                const t = touches.get(event.pointerId);
+                if (!t.moved) {
+                    sendRightClick(t.position);
+                    // 标记为已消费，pointerup 不再发左键
+                    t.isDrag = true;
+                }
+            }
+            longPressTimer = null;
+        }, 600);
+    }, { passive: true, capture: true });
+
+    stage.addEventListener('pointermove', (event) => {
+        if (event.pointerType !== 'touch') return;
+        if (!touches.has(event.pointerId)) return;
+        const t = touches.get(event.pointerId);
+        const dx = event.clientX - t.startX;
+        const dy = event.clientY - t.startY;
+        if (Math.hypot(dx, dy) > 8) {
+            t.moved = true;
+            clearLongPress();
+        }
+        // 双指手势 (pinch)
+        if (gestureActive && touches.size >= 2) {
+            event.preventDefault();
+            const pts = [...touches.values()];
+            const currentDist = Math.hypot(
+                (pts[0].startX + (event.pointerId === pts[0].pointerId ? dx : 0)) - (pts[1].startX + (event.pointerId === pts[1].pointerId ? (event.clientX - pts[1].startX) : 0)),
+                (pts[0].startY + (event.pointerId === pts[0].pointerId ? dy : 0)) - (pts[1].startY + (event.pointerId === pts[1].pointerId ? (event.clientY - pts[1].startY) : 0))
+            );
+            if (lastPinchDist > 0) {
+                const ratio = currentDist / lastPinchDist;
+                if (Math.abs(ratio - 1) > 0.02) {
+                    applyZoom(displayZoom * (ratio - 1));
+                }
+            }
+            lastPinchDist = currentDist;
+        }
     }, { passive: false, capture: true });
 
-    stage?.addEventListener('pointermove', (event) => {
-        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
-        const dx = event.clientX - touchClickCandidate.startX;
-        const dy = event.clientY - touchClickCandidate.startY;
-        if (Math.hypot(dx, dy) > 14) {
-            console.debug('[guac-client]', 'mobile pointer candidate cancelled by move', { dx: Number(dx.toFixed(1)), dy: Number(dy.toFixed(1)) });
-            touchClickCandidate = null;
+    stage.addEventListener('pointerup', (event) => {
+        if (event.pointerType !== 'touch') return;
+        const t = touches.get(event.pointerId);
+        if (!t) return;
+        touches.delete(event.pointerId);
+        clearLongPress();
+
+        // 双指手势结束
+        if (gestureActive) {
+            gestureActive = false;
+            lastPinchDist = 0;
+            // 如果是两指同时抬起（tap），发右键
+            if (!t.moved && touches.size === 0) {
+                sendRightClick(t.position);
+            }
+            return;
         }
+
+        // 单指抬起：如果没移动过且没被长按消费，发左键点击
+        if (!t.moved && !t.isDrag) {
+            sendRemoteMouseClick(t.position, 'touch');
+        }
+    }, { passive: true, capture: true });
+
+    stage.addEventListener('pointercancel', (event) => {
+        touches.delete(event.pointerId);
+        if (touches.size === 0) {
+            gestureActive = false;
+            lastPinchDist = 0;
+        }
+        clearLongPress();
     }, { passive: true });
 
-    stage?.addEventListener('pointerup', (event) => {
-        if (!touchClickCandidate || touchClickCandidate.pointerId !== event.pointerId) return;
+    // 键盘滚轮映射
+    stage.addEventListener('wheel', (event) => {
+        if (event.target.closest('.guac-floating-panel')) return;
+        const pos = getRemotePointerPosition(event);
+        if (!pos) return;
         event.preventDefault();
-        event.stopPropagation();
-        const candidate = touchClickCandidate;
-        touchClickCandidate = null;
-        const dx = event.clientX - candidate.startX;
-        const dy = event.clientY - candidate.startY;
-        if (Math.hypot(dx, dy) <= 14 && performance.now() - candidate.startedAt < 850) {
-            sendRemoteMouseClick(candidate.position, event.pointerType || 'touch');
+        // 滚轮 → 发送 up/down 按键
+        const steps = Math.max(1, Math.min(5, Math.abs(Math.round(event.deltaY / 40))));
+        const key = event.deltaY > 0 ? 0xff57 : 0xff56; // PAGE_DOWN / PAGE_UP
+        for (let i = 0; i < steps; i++) {
+            setTimeout(() => {
+                try {
+                    client?.sendKeyEvent?.(1, key);
+                    client?.sendKeyEvent?.(0, key);
+                } catch {}
+            }, i * 30);
         }
-    }, { passive: false, capture: true });
-
-    stage?.addEventListener('pointercancel', (event) => {
-        if (touchClickCandidate?.pointerId === event.pointerId) touchClickCandidate = null;
-    }, { passive: true });
+    }, { passive: false });
 }
 
 async function connect() {
@@ -1697,7 +1826,7 @@ window.addEventListener('message', (event) => {
 });
 
 setupFloatingPanels();
-setupMobilePointerMouse();
+setupGestures();
 fitBtn.classList.add('active'); // 初始：适应模式
 setStatus('connecting');
 connect();

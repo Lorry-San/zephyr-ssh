@@ -864,7 +864,7 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96 } = 
         base['enable-desktop-composition'] = 'true';
         base['enable-full-window-drag'] = 'false';
         base['enable-menu-animations'] = 'false';
-        base['jpeg-quality'] = '85';
+        base['jpeg-quality'] = '65';
 
         // 明确启用 RDP 剪贴板双向重定向。guacd/RDP 默认通常启用，
         // 但显式传参可以避免连接配置或旧 guacd 默认值导致复制/粘贴被禁用。
