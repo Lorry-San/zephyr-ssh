@@ -33,6 +33,9 @@ const tabId = urlParams.get('tabId') || '';
 const embeddedMode = urlParams.get('embed') === '1';
 
 let params = loadParams();
+const qualityModes = ['balanced', 'performance', 'quality'];
+let qualityIdx = qualityModes.indexOf(params.quality || 'balanced');
+if (qualityIdx < 0) qualityIdx = 0;
 let Guacamole = null;
 let tunnel = null;
 let client = null;
@@ -330,6 +333,7 @@ function guacamoleConnectQuery() {
         width: String(width),
         height: String(height),
         dpi: String(dpi),
+        quality: qualityModes[qualityIdx],
     });
     return query.toString();
 }
@@ -1706,6 +1710,20 @@ stage?.addEventListener('pointerdown', (event) => {
     notifyParentActivity();
 });
 ctrlAltDelBtn.addEventListener('click', sendCtrlAltDel);
+const qualityBtn = document.getElementById('qualityBtn');
+if (qualityBtn) {
+    qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '⚡ 平衡' : qualityModes[qualityIdx] === 'performance' ? '⚡ 性能' : '⚡ 画质';
+    qualityBtn.addEventListener('click', () => {
+        qualityIdx = (qualityIdx + 1) % qualityModes.length;
+        qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '⚡ 平衡' : qualityModes[qualityIdx] === 'performance' ? '⚡ 性能' : '⚡ 画质';
+        // 保存 quality 到 params 和 sessionStorage
+        params.quality = qualityModes[qualityIdx];
+        const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
+        try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
+        disconnect(true);
+        setTimeout(() => connect(), 300);
+    });
+}
 reconnectBtn.addEventListener('click', () => connect());
 disconnectBtn.addEventListener('click', () => disconnect(true));
 window.addEventListener('resize', scheduleResize, { passive: true });
