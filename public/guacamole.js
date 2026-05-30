@@ -11,6 +11,7 @@ const stage = $('#guacStage');
 const displayRoot = $('#display');
 const displayShell = $('#displayShell');
 const fitBtn = $('#fitBtn');
+const zoomBtn = $('#zoomBtn');
 const clipboardBtn = $('#clipboardBtn');
 const keyboardBtn = $('#keyboardBtn');
 const shortcutsBtn = $('#shortcutsBtn');
@@ -932,8 +933,6 @@ function installRdpTouchControls(canvas, wsInput, pos) {
     let panStart = null;
     let startScroll = null;
     let lastTwoFingerCenter = null;
-    let twoFingerMode = null;
-    let pinchBaseZoom = 1;
     let edgeTimer = 0;
     let pointer = { clientX: 0, clientY: 0 };
     const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
@@ -998,9 +997,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             panStart.dist = dist;
             panStart.w = displayRoot.getBoundingClientRect().width;
             panStart.h = displayRoot.getBoundingClientRect().height;
-            twoFingerMode = null;
-            pinchBaseZoom = rdpScaleZoom || 1;
-            showRdpHud('双指滚动 / 捏合缩放', 700);
+            showRdpHud('双指滚动', 700);
         }
         notifyParentActivity();
     }, { passive: false });
@@ -1014,27 +1011,13 @@ function installRdpTouchControls(canvas, wsInput, pos) {
             const dx = cx - (lastTwoFingerCenter?.x ?? cx);
             const dy = cy - (lastTwoFingerCenter?.y ?? cy);
             lastTwoFingerCenter = { x: cx, y: cy };
-            const totalMove = Math.hypot(cx - panStart.x, cy - panStart.y);
-            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            const distDelta = Math.abs(dist - (panStart.dist || dist));
-            if (!twoFingerMode) {
-                if (distDelta > 42 && distDelta > totalMove * 0.75) twoFingerMode = 'pinch';
-                else if (totalMove > 10) twoFingerMode = 'scroll';
-            }
-            if (twoFingerMode === 'pinch') {
-                const scale = Math.max(.5, Math.min(3, (pinchBaseZoom || 1) * (dist / Math.max(1, panStart.dist || dist))));
-                rdpScaleZoom = scale;
-                applyDisplayScale();
-                showRdpHud(`${Math.round(rdpScaleZoom * 100)}%`, 500);
-            } else {
-                const beforeLeft = displayShell.scrollLeft;
-                const beforeTop = displayShell.scrollTop;
-                displayShell.scrollLeft -= dx;
-                displayShell.scrollTop -= dy;
-                const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
-                if (!didPanViewport) wsInput({ type: 'scroll', deltaX: -dx * 8, deltaY: -dy * 8 });
-                showRdpHud(didPanViewport ? '平移' : '双指滚动', 400);
-            }
+            const beforeLeft = displayShell.scrollLeft;
+            const beforeTop = displayShell.scrollTop;
+            displayShell.scrollLeft -= dx;
+            displayShell.scrollTop -= dy;
+            const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
+            if (!didPanViewport) wsInput({ type: 'scroll', deltaX: -dx * 8, deltaY: -dy * 8 });
+            showRdpHud(didPanViewport ? '平移' : '双指滚动', 400);
             return;
         }
         const t = [...touches.values()][0];
@@ -1071,7 +1054,7 @@ function installRdpTouchControls(canvas, wsInput, pos) {
         clearLongPress();
         stopEdgeScroll();
         if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
-        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; twoFingerMode = null; }
+        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; }
         notifyParentActivity();
     };
     canvas.addEventListener('touchend', finishTouch, { passive: false });
@@ -1690,7 +1673,7 @@ async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipb
         pasteShortcutInProgress = true;
         const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || '');
         await sleep(80);
-        await sendKeyCombo([isMac ? KEY.SUPER : KEY.CTRL, 0x0076], isMac ? 'Cmd+V' : 'Ctrl+V');
+        await sendRdpClipboardPaste(text, { paste: true });
         window.setTimeout(() => { pasteShortcutInProgress = false; }, 300);
     }
     return true;
@@ -1845,6 +1828,13 @@ function clipboardEventFiles(event) {
     return Array.from(dt?.files || []).filter((file) => file && file.size >= 0);
 }
 
+async function sendRdpClipboardPaste(text, { paste = true } = {}) {
+    if (!text || !rdpInputSender || client || !connected) return false;
+    rdpInputSender({ type: paste ? 'paste' : 'clipboard', text });
+    notifyParentActivity();
+    return true;
+}
+
 function sendRemoteClipboardText(text) {
     const label = protocolLabel();
     if (rdpInputSender && !client) {
@@ -1853,9 +1843,9 @@ function sendRemoteClipboardText(text) {
             return false;
         }
         if (!text) return false;
-        rdpInputSender({ type: 'text', text });
+        rdpInputSender({ type: 'clipboard', text });
         notifyParentActivity();
-        console.info('[guac-client]', 'rdp text sent through input channel', { length: text.length });
+        console.info('[guac-client]', 'rdp clipboard text sent', { length: text.length });
         return true;
     }
     if (!client || !connected) {
@@ -2018,9 +2008,9 @@ function sendTextToRemote(text) {
     if (mobileKeyboardInput) mobileKeyboardInput.value = '';
     mobileInputMirror = '';
     if (rdpInputSender && !client) {
-        rdpInputSender({ type: 'text', text });
+        rdpInputSender({ type: 'paste', text });
         notifyParentActivity();
-        console.info('[guac-client]', 'rdp mobile keyboard text sent', { length: text.length });
+        console.info('[guac-client]', 'rdp mobile keyboard text pasted', { length: text.length });
         return;
     }
     for (const char of text) {
@@ -2208,14 +2198,31 @@ fitBtn.addEventListener('click', () => {
     }
 });
 
+zoomBtn?.addEventListener('click', () => {
+    const levels = [1, 1.25, 1.5, 2, 0.75];
+    const cur = rdpScaleZoom || 1;
+    let idx = levels.findIndex((v) => Math.abs(v - cur) < 0.03);
+    rdpScaleZoom = levels[(idx + 1 + levels.length) % levels.length];
+    zoomBtn.textContent = `🔍 ${Math.round(rdpScaleZoom * 100)}%`;
+    applyDisplayScale();
+    showRdpHud(`缩放 ${Math.round(rdpScaleZoom * 100)}%`, 700);
+});
+
 clipboardBtn.addEventListener('click', () => {
     togglePanel(clipboardPanel);
     if (!clipboardPanel.hidden) clipboardText?.focus?.();
 });
 clipboardReadLocalBtn?.addEventListener('click', () => readLocalClipboardIntoPanel());
-clipboardSendBtn?.addEventListener('click', () => {
+clipboardSendBtn?.addEventListener('click', async () => {
     const text = clipboardText?.value || '';
-    if (sendRemoteClipboardText(text)) setClipboardHint(`已发送 ${text.length} 字符到远程`, 'success');
+    if (sendRemoteClipboardText(text)) {
+        setClipboardHint(`已发送 ${text.length} 字符到远程剪贴板，可在远程 Ctrl+V 粘贴`, 'success');
+        if (rdpInputSender && !client) {
+            await sleep(80);
+            setTransientStatus('远程剪贴板已设置，正在粘贴');
+            rdpInputSender({ type: 'paste', text });
+        }
+    }
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
 stage?.addEventListener('focus', () => {

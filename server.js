@@ -3553,13 +3553,16 @@ function shQuote(value) {
     return `'${String(value ?? '').replace(/'/g, `'"'"'`)}'`;
 }
 
-function pasteTextIntoRdp(pipe, text) {
+function pasteTextIntoRdp(pipe, text, { paste = true } = {}) {
     if (!text) return;
-    const script = `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null && xdotool key --clearmodifiers ctrl+v`;
+    const script = paste
+        ? `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null && xdotool key --clearmodifiers ctrl+v`
+        : `printf %s ${shQuote(text)} | xclip -selection clipboard -i 2>/dev/null`;
     const args = pipe?.activeWindowId ? ['windowactivate', '--sync', pipe.activeWindowId, 'exec', 'sh', '-c', script] : ['exec', 'sh', '-c', script];
     const child = spawn('xdotool', args, { env: pipe.env, stdio: 'ignore' });
-    child.on('error', (err) => console.warn('[rdp-h264]', 'rdp text paste failed', { error: err.message }));
+    child.on('error', (err) => console.warn('[rdp-h264]', 'rdp clipboard operation failed', { error: err.message, paste }));
 }
+
 
 function handleRdpInput(pipe, raw) {
     let msg;
@@ -3587,8 +3590,12 @@ function handleRdpInput(pipe, raw) {
         execXdo(['key', '--clearmodifiers', String(msg.key)]);
     } else if (msg.type === 'text' && msg.text !== undefined) {
         const text = String(msg.text);
-        if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text);
+        if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text, { paste: true });
         else execXdo(['type', '--delay', '1', text]);
+    } else if (msg.type === 'clipboard' && msg.text !== undefined) {
+        pasteTextIntoRdp(pipe, String(msg.text), { paste: false });
+    } else if (msg.type === 'paste' && msg.text !== undefined) {
+        pasteTextIntoRdp(pipe, String(msg.text), { paste: true });
     } else if (msg.type === 'resize' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
         execXdo(['key', 'F5']);
     }
