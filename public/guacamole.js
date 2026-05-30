@@ -324,8 +324,8 @@ function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     // 用 devicePixelRatio 放大请求分辨率，保证高 DPI 屏幕清晰
-    const width = Math.max(1024, Math.min(2560, Math.round((rect.width || innerWidth || 1280) * dpr)));
-    const height = Math.max(768, Math.min(1600, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
+    const width = Math.max(1024, Math.min(1920, Math.round((rect.width || innerWidth || 1280) * dpr)));
+    const height = Math.max(768, Math.min(1200, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
     const dpi = Math.max(72, Math.round(96 * dpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
@@ -400,8 +400,8 @@ function switchFitMode(mode) {
         return; // fit / 1:1 用 applyDisplayScale 即可
     }
 
-    targetW = Math.max(320, Math.min(2560, targetW));
-    targetH = Math.max(240, Math.min(1600, targetH));
+    targetW = Math.max(320, Math.min(1920, targetW));
+    targetH = Math.max(240, Math.min(1200, targetH));
 
     // 发送 size 让 RDP 切换分辨率
     tunnel.sendMessage('size', targetW, targetH);
@@ -418,8 +418,8 @@ function sendDisplaySize() {
         switchFitMode(mode);
         return;
     }
-    const width = Math.max(1024, Math.min(2560, Math.round((rect.width || innerWidth || 1280) * dpr)));
-    const height = Math.max(768, Math.min(1600, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
+    const width = Math.max(1024, Math.min(1920, Math.round((rect.width || innerWidth || 1280) * dpr)));
+    const height = Math.max(768, Math.min(1200, Math.round(((rect.height || innerHeight || 720) - 2) * dpr)));
     tunnel.sendMessage('size', width, height);
     console.debug('[guac-client]', 'display resize requested', { width, height });
 }

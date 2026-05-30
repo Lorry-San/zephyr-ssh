@@ -849,7 +849,8 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96 } = 
         width: String(Math.max(320, Number(width) || 1280)),
         height: String(Math.max(240, Number(height) || 720)),
         dpi: String(Math.max(72, Number(dpi) || 96)),
-        'enable-wallpaper': 'false',
+        'enable-wallpaper': 'true',
+        'enable-theming': 'true',
         'ignore-cert': 'true',
         'server-layout': 'en-us-qwerty',
         'color-depth': '24',
@@ -860,7 +861,10 @@ function guacamoleParameterMap(conn, { width = 1280, height = 720, dpi = 96 } = 
         base.security = 'any';
         base['disable-auth'] = 'false';
         base['enable-font-smoothing'] = 'true';
-        base['enable-desktop-composition'] = 'false';
+        base['enable-desktop-composition'] = 'true';
+        base['enable-full-window-drag'] = 'false';
+        base['enable-menu-animations'] = 'false';
+        base['jpeg-quality'] = '85';
 
         // 明确启用 RDP 剪贴板双向重定向。guacd/RDP 默认通常启用，
         // 但显式传参可以避免连接配置或旧 guacd 默认值导致复制/粘贴被禁用。
@@ -958,7 +962,7 @@ async function openGuacdSession(conn, display = {}, timeout = 10000) {
         socket.write(guacInstruction('size', params.width, params.height, params.dpi));
         socket.write(guacInstruction('audio', 'audio/L16;rate=44100,channels=2'));
         socket.write(guacInstruction('video'));
-        socket.write(guacInstruction('image', 'image/png', 'image/jpeg'));
+        socket.write(guacInstruction('image', 'image/jpeg', 'image/png'));
         socket.write(guacInstruction('connect', ...argsInstruction.args.map((name) => params[name] ?? '')));
 
         const readyInstruction = await nextGuacdInstruction(socket, parser, timeout, 'guacd ready');
