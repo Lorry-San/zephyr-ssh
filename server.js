@@ -3475,23 +3475,24 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const env = { ...process.env, DISPLAY: xvfbDisp, ZEPHYR_RDP_H264_PIPE: fifoPath, PULSE_SERVER: `unix:/tmp/zephyr-pulse-${connId}/native` };
 
     let pulseaudio = null;
-    const hasPulseRdpPlugin = (() => {
-        const paths = ['/usr/lib/freerdp2/librdpsnd-client-pulse.so', '/usr/lib/freerdp2/rdpsnd-client-pulse.so'];
-        for (const p of paths) {
-            if (!fs.existsSync(p)) continue;
-            try {
-                const out = require('child_process').execFileSync('nm', ['-D', p], { encoding: 'utf8', timeout: 3000 });
-                if (/^\S+ T freerdp_rdpsnd_client_subsystem_entry$/m.test(out)) return true;
-            } catch {}
-        }
-        return false;
+    const rdpAudioBackend = (() => {
+        const pulsePaths = ['/usr/lib/freerdp2/librdpsnd-client-pulse.so', '/usr/lib/freerdp2/rdpsnd-client-pulse.so', '/opt/freerdp-zephyr/lib/freerdp2/librdpsnd-client-pulse.so'];
+        if (pulsePaths.some((p) => fs.existsSync(p))) return 'pulse';
+        if (fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-alsa.so')) return 'alsa-pulse';
+        return '';
     })();
-    if (process.env.RDP_AUDIO !== 'false' && hasPulseRdpPlugin) {
+    if (process.env.RDP_AUDIO !== 'false' && rdpAudioBackend) {
         try { fs.rmSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true, force: true }); } catch {}
         try { fs.mkdirSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true }); } catch {}
+        const asoundrcPath = `/tmp/zephyr-pulse-${connId}/asoundrc`;
+        try {
+            fs.writeFileSync(asoundrcPath, 'pcm.!default { type pulse }\nctl.!default { type pulse }\n');
+            env.ALSA_CONFIG_PATH = asoundrcPath;
+        } catch {}
         pulseaudio = rdpSpawn('pulseaudio', ['--daemonize=no', '--exit-idle-time=-1', '--disallow-exit=true', `--load=module-native-protocol-unix socket=/tmp/zephyr-pulse-${connId}/native auth-anonymous=1`, '--load=module-null-sink sink_name=zephyr_rdp_audio sink_properties=device.description=ZephyrRdpAudio'], { env });
         rdpAttachLog(pulseaudio, 'pulseaudio', 'warn');
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        console.info('[rdp-audio]', 'audio backend enabled', { connId, backend: rdpAudioBackend });
     }
 
     const xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', `${streamWidth}x${streamHeight}x24`, '-ac', '+extension', 'RANDR']);
@@ -3509,7 +3510,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_NATIVE_H264 && !RDP_ALLOW_GFX_FALLBACK ? ['/gfx:AVC444'] : ['+gfx']),
         '+fonts',
         '+clipboard',
-        ...(process.env.RDP_AUDIO === 'false' ? [] : (hasPulseRdpPlugin ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : rdpAudioBackend === 'alsa-pulse' ? ['/sound:sys:alsa,format:1,rate:44100,channel:2'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '-fast-path',
@@ -3702,6 +3703,7 @@ function handleRdpInput(pipe, raw) {
 
 function startRdpAudioCapture(pipe) {
     if (!pipe || pipe.audioFfmpeg || process.env.RDP_AUDIO === 'false' || !pipe.pulseaudio) return;
+    console.info('[rdp-audio]', 'starting audio capture', { connId: pipe.connId });
     const args = [
         '-hide_banner', '-loglevel', 'warning',
         '-f', 'pulse', '-i', 'zephyr_rdp_audio.monitor',
@@ -3719,7 +3721,7 @@ function startRdpAudioCapture(pipe) {
             try { client.send(chunk, { binary: true }); } catch {}
         }
     });
-    ff.on('exit', () => { if (pipe.audioFfmpeg === ff) pipe.audioFfmpeg = null; });
+    ff.on('exit', (code, signal) => { console.info('[rdp-audio]', 'capture exited', { connId: pipe.connId, code, signal }); if (pipe.audioFfmpeg === ff) pipe.audioFfmpeg = null; });
 }
 
 rdpH264Wss.on('connection', async (ws, req) => {

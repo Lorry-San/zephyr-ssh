@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.12-rdp-input-resize-debounce';
+const GUAC_CLIENT_VERSION = '2026-05-31.13-rdp-touch-audio';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -48,6 +48,8 @@ let rdpAudioMediaSource = null;
 let rdpAudioSourceBuffer = null;
 let rdpAudioElement = null;
 let rdpAudioQueue = [];
+let rdpAudioUnlocked = false;
+let rdpPointerEventsBound = false;
 let keyboard = null;
 let mouse = null;
 let connected = false;
@@ -511,7 +513,8 @@ function scheduleResize() {
 }
 
 function getRemotePointerPosition(event) {
-    const displayEl = displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot;
+    const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
+    const displayEl = (rdpInputSender && !client && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot);
     const rect = displayEl?.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
     const rawX = event.clientX - rect.left;
@@ -588,7 +591,8 @@ function updateRdpPointer(clientX, clientY, visible = true) {
 }
 
 function setupMobilePointerMouse() {
-    if (!stage) return;
+    if (!stage || rdpPointerEventsBound) return;
+    rdpPointerEventsBound = true;
     stage.style.touchAction = 'none';
     stage.style.webkitTouchCallout = 'none';
     stage.style.userSelect = 'none';
@@ -910,6 +914,10 @@ async function connect() {
             try { tunnel.send(JSON.stringify(message)); return true; } catch { return false; }
         };
         rdpInputSender = wsInput;
+        guacTouches.clear();
+        displayRoot.style.pointerEvents = 'auto';
+        displayShell && (displayShell.style.pointerEvents = 'auto');
+        canvas.style.pointerEvents = 'auto';
 
         const parser = new AnnexBH264AccessUnitParser(async (description) => {
             if (!window.VideoDecoder || !window.EncodedVideoChunk) {
@@ -932,6 +940,7 @@ async function connect() {
                             setStatus('connected', `${label} 已连接 [WebCodecs H.264]`);
                             connected = true;
                             startClipboardAutoSync();
+                            ensureRdpAudioUnlocked();
                             startRdpAudio();
                             requestRdpCanvasSize(fitModes[fitModeIdx], true);
                             notifyParentStatus('connected');
@@ -974,6 +983,8 @@ async function connect() {
             notifyParentStatus('disconnected');
             if (decoder) { try { decoder.close(); } catch {} decoder = null; }
             if (event.code === 1012) {
+                guacTouches.clear();
+                updateRdpPointer(0, 0, false);
                 stopClipboardAutoSync();
                 stopRdpAudio();
                 setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
@@ -1042,6 +1053,8 @@ function disconnect(userInitiated = true) {
     }
     tunnel = null;
     rdpInputSender = null;
+    guacTouches.clear();
+    updateRdpPointer(0, 0, false);
     connected = false;
     if (userInitiated) {
         stopClipboardAutoSync();
@@ -1551,6 +1564,18 @@ function stopRdpAudio() {
     rdpAudioSourceBuffer = null;
     rdpAudioQueue = [];
 }
+function ensureRdpAudioUnlocked() {
+    if (rdpAudioUnlocked || !rdpAudioElement) return;
+    const tryPlay = () => {
+        if (!rdpAudioElement) return;
+        rdpAudioElement.muted = false;
+        rdpAudioElement.volume = 1;
+        rdpAudioElement.play().then(() => { rdpAudioUnlocked = true; }).catch((err) => console.debug('[rdp-audio]', 'play still blocked', { error: err.message }));
+    };
+    document.addEventListener('pointerdown', tryPlay, { once: true, passive: true });
+    document.addEventListener('keydown', tryPlay, { once: true, passive: true });
+}
+
 
 function pumpRdpAudioQueue() {
     if (!rdpAudioSourceBuffer || rdpAudioSourceBuffer.updating || !rdpAudioQueue.length) return;
@@ -1570,7 +1595,8 @@ function startRdpAudio() {
     document.body.appendChild(rdpAudioElement);
     rdpAudioMediaSource = new MediaSource();
     rdpAudioElement.src = URL.createObjectURL(rdpAudioMediaSource);
-    rdpAudioElement.play().catch((err) => console.debug('[rdp-audio]', 'autoplay deferred', { error: err.message }));
+    rdpAudioElement.play().then(() => { rdpAudioUnlocked = true; }).catch((err) => console.debug('[rdp-audio]', 'autoplay deferred', { error: err.message }));
+    ensureRdpAudioUnlocked();
     rdpAudioMediaSource.addEventListener('sourceopen', () => {
         try {
             rdpAudioSourceBuffer = rdpAudioMediaSource.addSourceBuffer('audio/webm; codecs="opus"');
@@ -1586,6 +1612,7 @@ function startRdpAudio() {
         if (typeof ev.data === 'string') return;
         const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
         if (!buf || !buf.byteLength) return;
+        if (rdpAudioElement?.paused) rdpAudioElement.play().then(() => { rdpAudioUnlocked = true; }).catch(() => {});
         rdpAudioQueue.push(buf);
         if (rdpAudioQueue.length > 60) rdpAudioQueue.splice(0, rdpAudioQueue.length - 60);
         pumpRdpAudioQueue();
@@ -2313,6 +2340,7 @@ stage?.addEventListener('focus', () => {
     if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus', silent: true }).catch(() => {});
 });
 stage?.addEventListener('pointerdown', () => {
+    ensureRdpAudioUnlocked();
     if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
 }, { passive: true });
 
