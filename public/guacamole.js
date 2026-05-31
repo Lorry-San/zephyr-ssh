@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.24-rdp-login-stable';
+const GUAC_CLIENT_VERSION = '2026-05-31.25-rdp-no-dynamic-resize';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');

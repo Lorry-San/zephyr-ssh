@@ -3518,6 +3518,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_NATIVE_H264 && !RDP_ALLOW_GFX_FALLBACK ? ['/gfx:AVC444'] : ['+gfx']),
         '+fonts',
         '+clipboard',
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2', '+async-channels'] : rdpAudioBackend === 'alsa-pulse' ? ['/audio-mode:0', '/sound:sys:alsa,format:1,rate:44100,channel:2', '+async-channels'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '-fast-path',
         '-mouse-motion',
