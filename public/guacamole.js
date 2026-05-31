@@ -33,7 +33,6 @@ const shortcutsPanel = $('#shortcutsPanel');
 const joystickPanel = $('#joystickPanel');
 const joystickContainer = $('#joystickContainer');
 const joystickKnob = $('#joystickKnob');
-const joystickHint = $('#joystickHint');
 const shortcutGrid = $('#shortcutGrid');
 
 const urlParams = new URLSearchParams(location.search);
@@ -1755,13 +1754,7 @@ function setupPanelResize() {
 }
 
 function updateJoystickHint() {
-    if (!joystickHint || !displayShell) return;
-    const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
-    const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
-    const canMove = maxX > 2 || maxY > 2;
-    joystickHint.textContent = canMove
-        ? `拖动摇杆移动缩放视区 · X ${Math.round(displayShell.scrollLeft)}/${Math.round(maxX)} · Y ${Math.round(displayShell.scrollTop)}/${Math.round(maxY)}`
-        : '当前画面未超出窗口；点 🔍 放大后可用摇杆调整显示区域';
+    // 摇杆浮窗不显示文字提示；保留空函数给滚动/缩放流程调用。
 }
 
 function setupViewportJoystick() {
