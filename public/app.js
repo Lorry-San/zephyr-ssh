@@ -2473,14 +2473,7 @@ function bindEvents() {
         if (!terminalSmartbarOpen) return;
         if (e.target.closest?.('[data-smartbar-toggle], .mobile-fullscreen-dock-toggle')) return;
         if (e.target.closest?.('.smartbar-picker')) return;
-        if (e.target.closest?.('[data-smartbar-add]')) return;
-        if (e.target.closest?.('.smartbar-dock')) {
-            if (isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open')) return;
-            terminalSmartbarPickerOpen = false;
-            renderTerminalSmartbar();
-            setTerminalSmartbarOpen(false);
-            return;
-        }
+        if (e.target.closest?.('.terminal-smartbar .smartbar-panel, .terminal-smartbar .smartbar-dock, .terminal-smartbar .smartbar-session, .terminal-smartbar .smartbar-add')) return;
         setTerminalSmartbarOpen(false);
         document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
