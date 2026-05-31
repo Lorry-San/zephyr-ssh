@@ -13,6 +13,7 @@ let terminalSmartbarSide = 'center';
 let terminalSmartbarPickerOpen = false;
 let terminalSmartbarTimer = 0;
 let terminalSmartbarClosing = false;
+let terminalSmartbarLastInnerPointerAt = 0;
 let smartbarDragState = null;
 let smartbarPressState = null;
 let suppressSmartbarClick = false;
@@ -1685,6 +1686,18 @@ async function fullscreenTerminalTab(tabId) {
     }
 }
 
+function scheduleTerminalSmartbarAutoClose(delay = 5000) {
+    window.clearTimeout(terminalSmartbarTimer);
+    terminalSmartbarTimer = window.setTimeout(() => {
+        if (!terminalSmartbarOpen) return;
+        if (Date.now() - terminalSmartbarLastInnerPointerAt < delay) {
+            scheduleTerminalSmartbarAutoClose(delay);
+            return;
+        }
+        setTerminalSmartbarOpen(false);
+    }, delay);
+}
+
 function setTerminalSmartbarOpen(open) {
     window.clearTimeout(terminalSmartbarTimer);
     window.clearTimeout(setTerminalSmartbarOpen._closeTimer);
@@ -1701,9 +1714,11 @@ function setTerminalSmartbarOpen(open) {
         }, 760);
         return;
     }
+    terminalSmartbarLastInnerPointerAt = Date.now();
     terminalSmartbarClosing = false;
     terminalSmartbarOpen = true;
     renderTerminalSmartbar();
+    scheduleTerminalSmartbarAutoClose();
 }
 function noteTerminalWorkspaceActivity() {}
 function swapTerminalWindows(a, b) {
@@ -1795,7 +1810,7 @@ function activateTerminalFromDock(tabId, sourceEl = null) {
     const mobileFullscreen = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
     if (!mobileFullscreen && t && !t.minimized && activeTerminalTab === tabId) minimizeTerminalSession(tabId);
     else showTerminalSessionInWorkspace(tabId);
-    if (!mobileFullscreen) setTerminalSmartbarOpen(false);
+    if (!mobileFullscreen) scheduleTerminalSmartbarAutoClose();
     renderTerminalTabs();
     animateWindowFromDock(tabId, sourceRect, { swap: false });
     window.setTimeout(() => {
@@ -2472,8 +2487,12 @@ function bindEvents() {
     document.addEventListener('pointerdown', (e) => {
         if (!terminalSmartbarOpen) return;
         if (e.target.closest?.('[data-smartbar-toggle], .mobile-fullscreen-dock-toggle')) return;
-        if (e.target.closest?.('.smartbar-picker')) return;
-        if (e.target.closest?.('.terminal-smartbar .smartbar-panel, .terminal-smartbar .smartbar-dock, .terminal-smartbar .smartbar-session, .terminal-smartbar .smartbar-add')) return;
+        if (e.target.closest?.('.smartbar-picker')) { terminalSmartbarLastInnerPointerAt = Date.now(); scheduleTerminalSmartbarAutoClose(); return; }
+        if (e.target.closest?.('.terminal-smartbar .smartbar-panel, .terminal-smartbar .smartbar-dock, .terminal-smartbar .smartbar-session, .terminal-smartbar .smartbar-add')) {
+            terminalSmartbarLastInnerPointerAt = Date.now();
+            scheduleTerminalSmartbarAutoClose();
+            return;
+        }
         setTerminalSmartbarOpen(false);
         document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
