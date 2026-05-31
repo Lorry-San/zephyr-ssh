@@ -3861,7 +3861,8 @@ function handleRdpInput(pipe, raw) {
     if (!pipe.lastPointer) pipe.lastPointer = { x: Math.round((pipe.width || 1280) / 2), y: Math.round((pipe.height || 720) / 2) };
     const execXdo = (args, opts = {}) => {
         if (!pipe || pipe.xfreerdp?.exitCode !== null || pipe.xfreerdp?.killed) return false;
-        const finalArgs = pipe.activeWindowId && opts.window !== false ? args : args;
+        const windowId = pipe.activeWindowId;
+        const finalArgs = windowId && opts.window !== false ? [...args.slice(0, 1), '--window', windowId, ...args.slice(1)] : args;
         const child = spawn('xdotool', finalArgs, { env: pipe.env, stdio: ['ignore', 'ignore', 'pipe'] });
         let errText = '';
         child.stderr?.on('data', (d) => { errText += d.toString('utf8'); });
@@ -3881,7 +3882,7 @@ function handleRdpInput(pipe, raw) {
     const buttonAction = (action, button) => {
         const b = String(button || 1);
         if (pipe.lastPointer) movePointer(pipe.lastPointer.x, pipe.lastPointer.y);
-        return execXdo([action, b], { window: false });
+        return execXdo([action, b]);
     };
     if (msg.type === 'mouse' && Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
         movePointer(msg.x, msg.y);
@@ -3900,10 +3901,10 @@ function handleRdpInput(pipe, raw) {
         const button = Number(msg.deltaY || 0) > 0 ? '5' : '4';
         const rawDelta = Math.abs(Number(msg.deltaY || msg.deltaX || 0));
         const steps = Math.max(1, Math.min(10, Math.round(rawDelta / 45)));
-        for (let i = 0; i < steps; i++) execXdo(['click', button], { window: false });
+        for (let i = 0; i < steps; i++) execXdo(['click', button]);
         console.info('[rdp-h264]', 'rdp pointer scroll', { connId: pipe.connId, button, steps, pos: pipe.lastPointer, window: pipe.activeWindowId || '' });
     } else if (msg.type === 'key' && msg.key) {
-        execXdo(['key', '--clearmodifiers', String(msg.key)], { window: false });
+        execXdo(['key', '--clearmodifiers', String(msg.key)]);
     } else if (msg.type === 'text' && msg.text !== undefined) {
         const text = String(msg.text);
         if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text, { paste: true });
