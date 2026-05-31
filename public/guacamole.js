@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.14-rdp-touch-no-blocking-audio';
+const GUAC_CLIENT_VERSION = '2026-05-31.15-rdp-isolated-audio';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');

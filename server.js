@@ -3411,7 +3411,8 @@ const RDP_STREAM_HEIGHT = Number(process.env.RDP_H264_HEIGHT || 720);
 const RDP_STREAM_FPS = Number(process.env.RDP_H264_FPS || 30);
 const RDP_NATIVE_H264 = process.env.RDP_NATIVE_H264 === 'true';
 const RDP_ALLOW_GFX_FALLBACK = process.env.RDP_ALLOW_GFX_FALLBACK === 'true';
-const rdpPipes = new Map(); // connectionId → pipeline state
+const rdpPipes = new Map();
+const rdpAudioWorkers = new Map(); // connectionId → pipeline state
 
 function evenClampRdpSize(value, min, max) {
     return Math.max(min, Math.min(max, Math.round((Number(value) || min) / 2) * 2));
@@ -3700,6 +3701,78 @@ function handleRdpInput(pipe, raw) {
     }
 }
 
+
+function startIsolatedRdpAudioWorker(connId, conn) {
+    if (process.env.RDP_AUDIO === 'false') return null;
+    const existing = rdpAudioWorkers.get(connId);
+    if (existing && !existing.stopping) return existing;
+    const targetHost = conn.host;
+    const targetPort = Number(conn.port) || 3389;
+    const username = conn.username || 'Administrator';
+    const password = conn.password || '';
+    const displayNo = allocateRdpDisplayNumber();
+    const xvfbDisp = `:${displayNo}`;
+    const pulseDir = `/tmp/zephyr-rdp-audio-${connId}`;
+    try { fs.rmSync(pulseDir, { recursive: true, force: true }); } catch {}
+    try { fs.mkdirSync(pulseDir, { recursive: true }); } catch {}
+    const env = { ...process.env, DISPLAY: xvfbDisp, PULSE_SERVER: `unix:${pulseDir}/native` };
+    try {
+        const asoundrcPath = `${pulseDir}/asoundrc`;
+        fs.writeFileSync(asoundrcPath, 'pcm.!default { type pulse }\nctl.!default { type pulse }\n');
+        env.ALSA_CONFIG_PATH = asoundrcPath;
+    } catch {}
+    const worker = { connId, clients: new Set(), pulseaudio: null, xvfb: null, xfreerdp: null, ffmpeg: null, stopping: false, startedAt: Date.now() };
+    rdpAudioWorkers.set(connId, worker);
+    worker.pulseaudio = rdpSpawn('pulseaudio', ['--daemonize=no', '--exit-idle-time=-1', '--disallow-exit=true', `--load=module-native-protocol-unix socket=${pulseDir}/native auth-anonymous=1`, '--load=module-null-sink sink_name=zephyr_rdp_audio sink_properties=device.description=ZephyrRdpAudio'], { env });
+    rdpAttachLog(worker.pulseaudio, 'rdp-audio-pulse', 'warn');
+    worker.xvfb = rdpSpawn('Xvfb', [xvfbDisp, '-screen', '0', '800x600x24', '-ac']);
+    rdpAttachLog(worker.xvfb, 'rdp-audio-xvfb', 'warn');
+    setTimeout(() => {
+        if (worker.stopping) return;
+        const args = [
+            `/v:${targetHost}:${targetPort}`, `/u:${username}`, `/p:${password}`, '/cert:ignore', '/size:800x600', '/bpp:16', '/network:lan',
+            '-clipboard', '-wallpaper', '-themes', '-aero', '-window-drag', '-menu-anims', '-fonts', '-fast-path', '-mouse-motion',
+            '/audio-mode:0', '/sound:sys:alsa,format:1,rate:44100,channel:2', '/log-level:WARN'
+        ];
+        worker.xfreerdp = rdpSpawn('xfreerdp', args, { env });
+        rdpAttachLog(worker.xfreerdp, 'rdp-audio-xfreerdp', 'warn');
+        worker.xfreerdp.on('exit', () => cleanupIsolatedRdpAudioWorker(connId));
+        console.info('[rdp-audio]', 'isolated audio rdp started', { connId, target: `${targetHost}:${targetPort}`, args: args.filter((a) => !a.startsWith('/p:')) });
+    }, 1000);
+    setTimeout(() => startIsolatedRdpAudioCapture(worker), 1800);
+    return worker;
+}
+
+function startIsolatedRdpAudioCapture(worker) {
+    if (!worker || worker.stopping || worker.ffmpeg) return;
+    const args = ['-hide_banner', '-loglevel', 'warning', '-f', 'pulse', '-i', 'zephyr_rdp_audio.monitor', '-vn', '-ac', '2', '-ar', '48000', '-c:a', 'libopus', '-b:a', '96k', '-application', 'lowdelay', '-f', 'webm', 'pipe:1'];
+    const ff = rdpSpawn('ffmpeg', args, { env: { ...process.env, PULSE_SERVER: `unix:/tmp/zephyr-rdp-audio-${worker.connId}/native` } });
+    worker.ffmpeg = ff;
+    rdpAttachLog(ff, 'rdp-audio', 'warn');
+    ff.stdout.on('data', (chunk) => {
+        for (const client of worker.clients || []) {
+            if (client.readyState !== client.OPEN) continue;
+            if (client.bufferedAmount > 2 * 1024 * 1024) continue;
+            try { client.send(chunk, { binary: true }); } catch {}
+        }
+    });
+    ff.on('exit', (code, signal) => { console.info('[rdp-audio]', 'isolated capture exited', { connId: worker.connId, code, signal }); if (worker.ffmpeg === ff) worker.ffmpeg = null; });
+    console.info('[rdp-audio]', 'isolated capture started', { connId: worker.connId });
+}
+
+function cleanupIsolatedRdpAudioWorker(connId) {
+    const w = rdpAudioWorkers.get(connId);
+    if (!w) return;
+    w.stopping = true;
+    try { w.ffmpeg?.kill('SIGTERM'); } catch {}
+    try { w.xfreerdp?.kill('SIGTERM'); } catch {}
+    try { w.xvfb?.kill('SIGTERM'); } catch {}
+    try { w.pulseaudio?.kill('SIGTERM'); } catch {}
+    try { fs.rmSync(`/tmp/zephyr-rdp-audio-${connId}`, { recursive: true, force: true }); } catch {}
+    rdpAudioWorkers.delete(connId);
+    console.info('[rdp-audio]', 'isolated worker cleaned', { connId });
+}
+
 function startRdpAudioCapture(pipe) {
     if (!pipe || pipe.audioFfmpeg || process.env.RDP_AUDIO === 'false' || !pipe.pulseaudio) return;
     console.info('[rdp-audio]', 'starting audio capture', { connId: pipe.connId });
@@ -3782,14 +3855,18 @@ rdpAudioWss.on('connection', async (ws, req) => {
         if (!sessionUser) { ws.close(1008, 'unauthorized'); return; }
         const pipe = rdpPipes.get(connId);
         if (!pipe) { ws.close(1011, 'rdp pipeline not ready'); return; }
-        pipe.audioClients.add(ws);
-        ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2 }));
-        startRdpAudioCapture(pipe);
-        console.info('[rdp-audio]', 'browser attached', { connId, clients: pipe.audioClients.size });
+        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+        const conn = (store.connections || []).find((c) => c.id === connId);
+        if (!conn) { ws.close(1008, 'connection not found'); return; }
+        const worker = startIsolatedRdpAudioWorker(connId, conn);
+        if (!worker) { ws.close(1011, 'rdp audio disabled'); return; }
+        worker.clients.add(ws);
+        ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'isolated' }));
+        console.info('[rdp-audio]', 'browser attached', { connId, clients: worker.clients.size, mode: 'isolated' });
         ws.on('close', () => {
-            pipe.audioClients.delete(ws);
-            console.info('[rdp-audio]', 'browser detached', { connId, clients: pipe.audioClients.size });
-            if (pipe.audioClients.size === 0 && pipe.audioFfmpeg) { try { pipe.audioFfmpeg.kill('SIGTERM'); } catch {} pipe.audioFfmpeg = null; }
+            worker.clients.delete(ws);
+            console.info('[rdp-audio]', 'browser detached', { connId, clients: worker.clients.size, mode: 'isolated' });
+            if (worker.clients.size === 0) setTimeout(() => { const latest = rdpAudioWorkers.get(connId); if (latest && latest.clients.size === 0) cleanupIsolatedRdpAudioWorker(connId); }, 5000);
         });
         ws.on('error', (err) => console.warn('[rdp-audio]', 'browser websocket error', { connId, error: err.message }));
     } catch (err) {
@@ -3810,6 +3887,7 @@ function cleanupPipe(connId) {
         try { p.xfreerdp?.kill('SIGTERM'); } catch {}
         try { p.xvfb?.kill('SIGTERM'); } catch {}
         try { if (p.fifoPath) fs.rmSync(p.fifoPath, { force: true }); } catch {}
+        cleanupIsolatedRdpAudioWorker(connId);
         rdpPipes.delete(connId);
         console.info('[rdp-h264]', 'pipeline cleaned', { connId });
     }
