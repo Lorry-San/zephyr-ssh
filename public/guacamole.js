@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.7-rdp-h264-au-parser';
+const GUAC_CLIENT_VERSION = '2026-05-31.8-rdp-mobile-interaction';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -512,12 +512,18 @@ function createMouseState(x, y, left = false) {
     return { x, y, left, middle: false, right: false, up: false, down: false };
 }
 
-function sendRemoteMouseClick(position, source = 'touch') {
-    if (!client || !connected || !position) return false;
-    const down = createMouseState(position.x, position.y, true);
-    const up = createMouseState(position.x, position.y, false);
+function sendRdpPointer(message) {
+    if (!rdpInputSender || client || !connected) return false;
+    rdpInputSender(message);
+    notifyParentActivity();
+    return true;
+}
+
+function sendRemoteMouseClick(position, source = 'touch', button = 1) {
+    if (!connected || !position) return false;
     console.info('[guac-client]', 'remote mouse click mapped', {
         source,
+        button,
         x: position.x,
         y: position.y,
         rawX: Number(position.rawX.toFixed(1)),
@@ -527,15 +533,18 @@ function sendRemoteMouseClick(position, source = 'touch') {
         remoteWidth: position.remoteWidth,
         remoteHeight: position.remoteHeight,
     });
+    if (rdpInputSender && !client) {
+        rdpInputSender({ type: 'mouse', x: position.x, y: position.y });
+        window.setTimeout(() => rdpInputSender?.({ type: 'click', button }), 15);
+        notifyParentActivity();
+        return true;
+    }
+    if (!client) return false;
+    const isRight = button === 3;
+    const down = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(position.x, position.y, !isRight, false, isRight, false, false) : createMouseState(position.x, position.y, !isRight);
+    const up = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(position.x, position.y, false, false, false, false, false) : createMouseState(position.x, position.y, false);
     client.sendMouseState(down);
-    window.setTimeout(() => {
-        try {
-            client?.sendMouseState?.(up);
-            console.debug('[guac-client]', 'remote mouse click sent', { source, x: position.x, y: position.y });
-        } catch (err) {
-            console.error('[guac-client]', 'remote mouse click release failed', { error: err.message });
-        }
-    }, 45);
+    window.setTimeout(() => { try { client?.sendMouseState?.(up); } catch (err) { console.error('[guac-client]', 'remote mouse click release failed', { error: err.message }); } }, 45);
     notifyParentActivity();
     return true;
 }
@@ -566,52 +575,121 @@ function setupMobilePointerMouse() {
     stage.style.touchAction = 'none';
     stage.style.webkitTouchCallout = 'none';
     stage.style.userSelect = 'none';
-    stage.addEventListener('contextmenu', (e) => { if (guacTouches.size > 0) e.preventDefault(); });
+    stage.addEventListener('contextmenu', (e) => { if (guacTouches.size > 0 || rdpInputSender) e.preventDefault(); });
     const isUI = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
+    let lastTapAt = 0;
+    let lastTapPos = null;
+    let twoFingerState = null;
     function cancelLP() { if (guacLongPress) { clearTimeout(guacLongPress); guacLongPress = null; } }
-    function doRightClick(pos) {
-        if (!client || !connected || !pos) return;
-        const d = createMouseState(pos.x, pos.y, false, false, true);
-        const u = createMouseState(pos.x, pos.y, false, false, false);
-        client.sendMouseState(d);
-        setTimeout(() => { try { client?.sendMouseState?.(u); } catch {} }, 45);
+    function sendMove(pos) {
+        if (!pos || !connected) return false;
+        if (rdpInputSender && !client) return sendRdpPointer({ type: 'mouse', x: pos.x, y: pos.y });
+        if (client) { client.sendMouseState(createMouseState(pos.x, pos.y, false)); notifyParentActivity(); return true; }
+        return false;
+    }
+    function sendButton(pos, button, down) {
+        if (!pos || !connected) return false;
+        if (rdpInputSender && !client) return sendRdpPointer({ type: down ? 'mousedown' : 'mouseup', button });
+        if (client) {
+            const st = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(pos.x, pos.y, button === 1 && down, button === 2 && down, button === 3 && down, false, false) : createMouseState(pos.x, pos.y, button === 1 && down);
+            client.sendMouseState(st);
+            notifyParentActivity();
+            return true;
+        }
+        return false;
+    }
+    function doRightClick(pos) { if (pos && connected) { showRdpHud('右键', 500); sendRemoteMouseClick(pos, 'long-press', 3); } }
+    function scrollBy(deltaY, deltaX = 0) {
+        if (!connected) return;
+        if (rdpInputSender && !client) { rdpInputSender({ type: 'scroll', deltaY, deltaX }); notifyParentActivity(); return; }
+        if (client) {
+            const steps = Math.min(8, Math.max(1, Math.round(Math.abs(deltaY || deltaX) / 45)));
+            const key = deltaY > 0 || deltaX > 0 ? KEY.PAGE_DOWN : KEY.PAGE_UP;
+            for (let i = 0; i < steps; i++) setTimeout(() => { try { client.sendKeyEvent(1, key); client.sendKeyEvent(0, key); } catch {} }, i * 25);
+            notifyParentActivity();
+        }
     }
     stage.addEventListener('pointerdown', (event) => {
-        if (event.pointerType !== 'touch') return;
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
         if (isUI(event.target)) return;
         const pos = getRemotePointerPosition(event);
         if (!pos) return;
-        const t = { id: event.pointerId, sx: event.clientX, sy: event.clientY, cx: event.clientX, cy: event.clientY, pos, moved: false };
+        event.preventDefault();
+        stage.focus({ preventScroll: true });
+        stage.setPointerCapture?.(event.pointerId);
+        const t = { id: event.pointerId, sx: event.clientX, sy: event.clientY, cx: event.clientX, cy: event.clientY, pos, lastPos: pos, moved: false, downSent: false };
         guacTouches.set(event.pointerId, t);
+        updateRdpPointer(event.clientX, event.clientY, true);
         if (guacTouches.size === 1) {
             cancelLP();
-            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) doRightClick(pos); guacLongPress = null; }, 600);
+            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || pos); t.rightClicked = true; } guacLongPress = null; }, 620);
+        } else if (guacTouches.size === 2) {
+            cancelLP();
+            const touches = Array.from(guacTouches.values());
+            twoFingerState = { x: (touches[0].cx + touches[1].cx) / 2, y: (touches[0].cy + touches[1].cy) / 2 };
         } else cancelLP();
-    }, { passive: true });
+    }, { passive: false });
     stage.addEventListener('pointermove', (event) => {
-        if (event.pointerType !== 'touch') return;
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
         const t = guacTouches.get(event.pointerId);
         if (!t) return;
+        event.preventDefault();
+        const pos = getRemotePointerPosition(event);
         t.cx = event.clientX; t.cy = event.clientY;
-        if (!t.moved && Math.hypot(t.cx-t.sx, t.cy-t.sy) > 10) { t.moved = true; cancelLP(); }
-    }, { passive: true });
+        if (pos) t.lastPos = pos;
+        updateRdpPointer(event.clientX, event.clientY, true);
+        const dist = Math.hypot(t.cx - t.sx, t.cy - t.sy);
+        if (!t.moved && dist > 8) { t.moved = true; cancelLP(); }
+        if (guacTouches.size === 2) {
+            const touches = Array.from(guacTouches.values());
+            const cx = (touches[0].cx + touches[1].cx) / 2;
+            const cy = (touches[0].cy + touches[1].cy) / 2;
+            if (twoFingerState) {
+                const dy = cy - twoFingerState.y;
+                const dx = cx - twoFingerState.x;
+                if (Math.abs(dy) > 18 || Math.abs(dx) > 24) { scrollBy(-dy, -dx); twoFingerState = { x: cx, y: cy }; showRdpHud('双指滚动', 350); }
+            }
+            return;
+        }
+        if (guacTouches.size !== 1 || !pos || t.rightClicked) return;
+        if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; showRdpHud('拖拽', 350); }
+        else if (t.downSent) sendMove(pos);
+    }, { passive: false });
     stage.addEventListener('pointerup', (event) => {
-        if (event.pointerType !== 'touch') return;
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        const t = guacTouches.get(event.pointerId);
+        if (!t) return;
+        event.preventDefault();
+        const pos = getRemotePointerPosition(event) || t.lastPos || t.pos;
         guacTouches.delete(event.pointerId);
+        if (guacTouches.size < 2) twoFingerState = null;
         if (guacTouches.size === 0) cancelLP();
-    }, { passive: true });
+        if (t.rightClicked) { updateRdpPointer(event.clientX, event.clientY, false); return; }
+        if (t.downSent) sendButton(pos, 1, false);
+        else if (!t.moved) {
+            const now = Date.now();
+            const isDouble = lastTapPos && now - lastTapAt < 360 && Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < 36;
+            sendRemoteMouseClick(pos, isDouble ? 'double-tap-1' : 'tap', 1);
+            if (isDouble) window.setTimeout(() => sendRemoteMouseClick(pos, 'double-tap-2', 1), 70);
+            showRdpHud(isDouble ? '双击' : '点击', 400);
+            lastTapAt = now; lastTapPos = pos;
+        }
+        updateRdpPointer(event.clientX, event.clientY, false);
+    }, { passive: false });
     stage.addEventListener('pointercancel', (event) => {
+        const t = guacTouches.get(event.pointerId);
+        if (t?.downSent) sendButton(t.lastPos || t.pos, 1, false);
         guacTouches.delete(event.pointerId);
-        if (guacTouches.size === 0) cancelLP();
+        if (guacTouches.size === 0) { cancelLP(); twoFingerState = null; }
+        updateRdpPointer(event.clientX || 0, event.clientY || 0, false);
     }, { passive: true });
     stage.addEventListener('wheel', (event) => {
         if (isUI(event.target)) return;
         const pos = getRemotePointerPosition(event);
-        if (!pos || !client || !connected) return;
+        if (!pos || !connected) return;
         event.preventDefault();
-        const steps = Math.min(5, Math.max(1, Math.abs(Math.round(event.deltaY / 40))));
-        const key = event.deltaY > 0 ? 0xff57 : 0xff56;
-        for (let i = 0; i < steps; i++) setTimeout(() => { try { client.sendKeyEvent(1, key); client.sendKeyEvent(0, key); } catch {} }, i * 30);
+        if (rdpInputSender && !client) { rdpInputSender({ type: 'mouse', x: pos.x, y: pos.y }); rdpInputSender({ type: 'scroll', deltaY: event.deltaY, deltaX: event.deltaX }); notifyParentActivity(); return; }
+        scrollBy(event.deltaY, event.deltaX);
     }, { passive: false });
 }
 
@@ -903,6 +981,15 @@ async function connect() {
                             if (msg.fps) frameDuration = Math.round(1000000 / Number(msg.fps));
                             window.setTimeout(() => requestRdpCanvasSize(fitModes[fitModeIdx], true), 300);
                         }
+                    } else if (msg.type === 'clipboard' && typeof msg.text === 'string') {
+                        lastRemoteClipboard = msg.text;
+                        if (remoteClipboardText) remoteClipboardText.value = msg.text;
+                        setClipboardHint(`收到远程剪贴板 ${msg.text.length} 字符，正在同步到本机...`, 'info');
+                        writeHostClipboard(msg.text).then((ok) => {
+                            clipboardAutoWriteOk = ok;
+                            clipboardAutoWriteFailed = !ok;
+                            setClipboardHint(ok ? '远程剪贴板已自动同步到本机' : '已收到远程剪贴板；浏览器阻止自动写入，请点“复制到本机”', ok ? 'success' : 'warning');
+                        });
                     }
                 } catch {}
                 return;
@@ -2157,10 +2244,10 @@ clipboardSendBtn?.addEventListener('click', async () => {
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
 stage?.addEventListener('focus', () => {
-    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus' }).catch(() => {});
+    if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus', silent: true }).catch(() => {});
 });
 stage?.addEventListener('pointerdown', () => {
-    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown' }).catch(() => {});
+    if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
 }, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);

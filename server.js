@@ -3533,6 +3533,8 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         clients: new Set(),
         audioClients: new Set(),
         audioFfmpeg: null,
+        clipboardTimer: null,
+        lastRemoteClipboardText: '',
         startedAt: Date.now(),
         ready: false,
     };
@@ -3599,6 +3601,36 @@ function pasteTextIntoRdp(pipe, text, { paste = true } = {}) {
         else console.info('[rdp-h264]', 'rdp clipboard operation ok', { paste, length: String(text).length });
     });
     child.on('error', (err) => console.warn('[rdp-h264]', 'rdp clipboard operation spawn failed', { error: err.message, paste }));
+}
+
+function readTextFromRdpClipboard(pipe, callback) {
+    if (!pipe || !callback) return;
+    const cmd = 'xclip -selection clipboard -o 2>/dev/null || xclip -selection primary -o 2>/dev/null || true';
+    const child = spawn('sh', ['-c', cmd], { env: pipe.env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d.toString('utf8'); if (out.length > 1024 * 1024) child.kill('SIGTERM'); });
+    child.on('close', () => callback(out));
+    child.on('error', () => callback(''));
+}
+
+function startRdpClipboardWatch(pipe) {
+    if (!pipe || pipe.clipboardTimer || process.env.RDP_CLIPBOARD_SYNC === 'false') return;
+    pipe.lastRemoteClipboardText = '';
+    const tick = () => {
+        if (!rdpPipes.has(pipe.connId) || pipe.clients.size === 0) return;
+        readTextFromRdpClipboard(pipe, (text) => {
+            if (!text || text === pipe.lastRemoteClipboardText) return;
+            pipe.lastRemoteClipboardText = text;
+            const payload = JSON.stringify({ type: 'clipboard', text });
+            for (const client of pipe.clients) {
+                if (client.readyState !== client.OPEN) continue;
+                try { client.send(payload); } catch {}
+            }
+            console.info('[rdp-h264]', 'remote clipboard synced to browser', { connId: pipe.connId, length: text.length });
+        });
+    };
+    pipe.clipboardTimer = setInterval(tick, 1200);
+    setTimeout(tick, 600);
 }
 
 
@@ -3678,6 +3710,7 @@ rdpH264Wss.on('connection', async (ws, req) => {
         const requestedMode = url.searchParams.get('mode') || '';
         if (!pipe) pipe = await startRdpH264Pipeline(connId, conn, { width: requestedWidth, height: requestedHeight, mode: requestedMode });
         pipe.clients.add(ws);
+        startRdpClipboardWatch(pipe);
         ws.send(JSON.stringify({ type: 'hello', codec: 'avc1.42001f', width: pipe.width || RDP_STREAM_WIDTH, height: pipe.height || RDP_STREAM_HEIGHT, fps: RDP_STREAM_FPS }));
         console.info('[rdp-h264]', 'browser attached', { connId, clients: pipe.clients.size });
 
@@ -3742,6 +3775,7 @@ function cleanupPipe(connId) {
         try { p.nativeReader?.destroy(); } catch {}
         try { p.ffmpeg?.kill('SIGTERM'); } catch {}
         try { p.audioFfmpeg?.kill('SIGTERM'); } catch {}
+        try { if (p.clipboardTimer) clearInterval(p.clipboardTimer); } catch {}
         try { p.pulseaudio?.kill('SIGTERM'); } catch {}
         try { p.xfreerdp?.kill('SIGTERM'); } catch {}
         try { p.xvfb?.kill('SIGTERM'); } catch {}
