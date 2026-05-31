@@ -3440,9 +3440,18 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     let streamHeight = Math.max(600, Math.min(1600, Math.round(Number(options.height) || RDP_STREAM_HEIGHT) / 2) * 2);
     const aspectMode = String(options.mode || '').toLowerCase();
     const forceAspect = (num, den) => {
-        const unit = Math.max(1, Math.min(Math.floor(streamWidth / num), Math.floor(streamHeight / den)));
+        const longSide = Math.max(streamWidth, streamHeight);
+        const shortSide = Math.min(streamWidth, streamHeight);
+        streamWidth = longSide;
+        streamHeight = shortSide;
+        let unit = Math.max(1, Math.min(Math.floor(streamWidth / num), Math.floor(streamHeight / den)));
         streamWidth = num * unit;
         streamHeight = den * unit;
+        if (streamWidth > 2560 || streamHeight > 1600) {
+            unit = Math.max(1, Math.min(Math.floor(2560 / num), Math.floor(1600 / den)));
+            streamWidth = num * unit;
+            streamHeight = den * unit;
+        }
     };
     if (aspectMode === '16:9') forceAspect(16, 9);
     else if (aspectMode === '4:3') forceAspect(4, 3);
@@ -3662,7 +3671,7 @@ function handleRdpInput(pipe, raw) {
     } else if (msg.type === 'text' && msg.text !== undefined) {
         const text = String(msg.text);
         if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text, { paste: true });
-        else execXdo(['type', '--delay', '1', text]);
+        else pasteTextIntoRdp(pipe, text, { paste: true });
     } else if (msg.type === 'clipboard' && msg.text !== undefined) {
         pasteTextIntoRdp(pipe, String(msg.text), { paste: false });
     } else if (msg.type === 'paste' && msg.text !== undefined) {

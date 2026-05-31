@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.8-rdp-mobile-interaction';
+const GUAC_CLIENT_VERSION = '2026-05-31.9-rdp-mobile-input-landscape';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -380,12 +380,13 @@ function computeRdpTargetSize(mode = fitModes[fitModeIdx]) {
         return { width: w, height: h, mode };
     };
     const byAspect = (num, den) => {
-        let w = even(Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr)));
+        const cssW = Math.max(bounds.width || innerWidth || 1280, bounds.height || innerHeight || 720);
+        const cssH = Math.min(bounds.width || innerWidth || 1280, bounds.height || innerHeight || 720);
+        let w = even(Math.max(minW, Math.min(maxW, cssW * effDpr)));
         let h = even(w * den / num);
         if (h < minH) { h = even(minH); w = even(h * num / den); }
         if (w > maxW) { w = even(maxW); h = even(w * den / num); }
         if (h > maxH) { h = even(maxH); w = even(h * num / den); }
-        // 最后一遍严格按整数比例回算，避免四舍五入和最小尺寸导致 16:9 变形。
         const unitW = Math.max(1, Math.floor(w / num));
         const unitH = Math.max(1, Math.floor(h / den));
         const unit = Math.max(1, Math.min(unitW, unitH));
@@ -598,7 +599,7 @@ function setupMobilePointerMouse() {
         }
         return false;
     }
-    function doRightClick(pos) { if (pos && connected) { showRdpHud('右键', 500); sendRemoteMouseClick(pos, 'long-press', 3); } }
+    function doRightClick(pos) { if (pos && connected) sendRemoteMouseClick(pos, 'long-press', 3); }
     function scrollBy(deltaY, deltaX = 0) {
         if (!connected) return;
         if (rdpInputSender && !client) { rdpInputSender({ type: 'scroll', deltaY, deltaX }); notifyParentActivity(); return; }
@@ -639,7 +640,7 @@ function setupMobilePointerMouse() {
         if (pos) t.lastPos = pos;
         updateRdpPointer(event.clientX, event.clientY, true);
         const dist = Math.hypot(t.cx - t.sx, t.cy - t.sy);
-        if (!t.moved && dist > 8) { t.moved = true; cancelLP(); }
+        if (!t.moved && dist > 12) { t.moved = true; cancelLP(); }
         if (guacTouches.size === 2) {
             const touches = Array.from(guacTouches.values());
             const cx = (touches[0].cx + touches[1].cx) / 2;
@@ -647,12 +648,12 @@ function setupMobilePointerMouse() {
             if (twoFingerState) {
                 const dy = cy - twoFingerState.y;
                 const dx = cx - twoFingerState.x;
-                if (Math.abs(dy) > 18 || Math.abs(dx) > 24) { scrollBy(-dy, -dx); twoFingerState = { x: cx, y: cy }; showRdpHud('双指滚动', 350); }
+                if (Math.abs(dy) > 14 || Math.abs(dx) > 20) { scrollBy(-dy, -dx); twoFingerState = { x: cx, y: cy }; }
             }
             return;
         }
         if (guacTouches.size !== 1 || !pos || t.rightClicked) return;
-        if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; showRdpHud('拖拽', 350); }
+        if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; }
         else if (t.downSent) sendMove(pos);
     }, { passive: false });
     stage.addEventListener('pointerup', (event) => {
@@ -671,7 +672,6 @@ function setupMobilePointerMouse() {
             const isDouble = lastTapPos && now - lastTapAt < 360 && Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < 36;
             sendRemoteMouseClick(pos, isDouble ? 'double-tap-1' : 'tap', 1);
             if (isDouble) window.setTimeout(() => sendRemoteMouseClick(pos, 'double-tap-2', 1), 70);
-            showRdpHud(isDouble ? '双击' : '点击', 400);
             lastTapAt = now; lastTapPos = pos;
         }
         updateRdpPointer(event.clientX, event.clientY, false);
@@ -2066,61 +2066,85 @@ function toggleMobileKeyboard() {
 
 function setupMobileKeyboard() {
     if (!mobileKeyboardInput) return;
-    // 用 beforeinput 事件精确处理插入/删除，避免字符遍历法被粘贴替换打炸
+    let composing = false;
+    const resetMobileInput = () => {
+        mobileKeyboardInput.value = '';
+        mobileInputMirror = '';
+    };
+    const sendBackspaceToRemote = () => {
+        if (rdpInputSender && !client && connected) {
+            rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
+            notifyParentActivity();
+            return true;
+        }
+        return sendKeyDownUp(KEY.BACKSPACE, 'Backspace');
+    };
+    const sendEnterToRemote = () => {
+        if (rdpInputSender && !client && connected) {
+            rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.ENTER) });
+            notifyParentActivity();
+            return true;
+        }
+        return sendKeyDownUp(KEY.ENTER, 'Enter');
+    };
+
+    mobileKeyboardInput.addEventListener('compositionstart', () => { composing = true; });
     mobileKeyboardInput.addEventListener('compositionend', (event) => {
+        composing = false;
         const text = event.data || mobileKeyboardInput.value || '';
         if (text) sendTextToRemote(text);
-        mobileKeyboardInput.value = mobileInputMirror = '';
+        resetMobileInput();
     });
+
     mobileKeyboardInput.addEventListener('beforeinput', (event) => {
         if ((!client && !rdpInputSender) || !connected) return;
         const inputType = event.inputType || '';
-        const data = event.data || '';
-        if (inputType === 'insertCompositionText') return;
-        event.preventDefault(); // 禁止浏览器实际修改 textarea
+        if (inputType === 'insertCompositionText' || composing) return;
+        event.preventDefault();
 
         if (inputType.startsWith('deleteContent') || inputType === 'deleteByCut') {
-            // 删除：之前内容长度用 mobileInputMirror 追踪
-            if (rdpInputSender && !client) {
-                rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
-                notifyParentActivity();
-                mobileKeyboardInput.value = mobileInputMirror = '';
-                return;
-            }
-            const delCount = inputType === 'deleteContentBackward' ? 1
-                : inputType === 'deleteContentForward' ? 1
-                : inputType === 'deleteByCut' ? mobileInputMirror.length
-                : parseInt(inputType.match(/deleteContent(\d+)/)?.[1] || '0') || 1;
-            for (let i = 0; i < delCount; i++) sendKeyDownUp(KEY.BACKSPACE);
-            mobileInputMirror = mobileInputMirror.slice(0, -Math.min(delCount, mobileInputMirror.length));
+            sendBackspaceToRemote();
+            resetMobileInput();
+            return;
+        }
+        if (inputType === 'insertLineBreak' || inputType === 'insertParagraph') {
+            sendEnterToRemote();
+            resetMobileInput();
             return;
         }
         if (inputType.startsWith('insert')) {
-            // 插入文本
-            if (inputType === 'insertFromPaste' || inputType === 'insertFromDrop') {
-                sendTextToRemote(data);
-                mobileInputMirror += data;
-                return;
-            }
-            if (inputType === 'insertText') {
-                sendTextToRemote(data);
-                mobileInputMirror += data;
-                return;
-            }
-            // insertLineBreak, insertParagraph, etc.
-            sendKeyDownUp(KEY.ENTER);
-            mobileInputMirror += '\n';
-            return;
+            const text = event.data || mobileKeyboardInput.value || '';
+            if (text) sendTextToRemote(text);
+            resetMobileInput();
         }
-        // historyUndo/historyRedo: ignore
     });
 
-    // 清理过长的同步缓存
     mobileKeyboardInput.addEventListener('input', () => {
-        if (mobileInputMirror.length > 200) {
-            mobileKeyboardInput.value = '';
-            mobileInputMirror = '';
+        if (composing) return;
+        const text = mobileKeyboardInput.value || '';
+        if (text) sendTextToRemote(text);
+        resetMobileInput();
+    });
+
+    mobileKeyboardInput.addEventListener('keydown', (event) => {
+        if ((!client && !rdpInputSender) || !connected) return;
+        if (event.key === 'Backspace') {
+            event.preventDefault();
+            sendBackspaceToRemote();
+            resetMobileInput();
+        } else if (event.key === 'Enter') {
+            event.preventDefault();
+            sendEnterToRemote();
+            resetMobileInput();
         }
+    });
+
+    mobileKeyboardInput.addEventListener('paste', (event) => {
+        const text = event.clipboardData?.getData('text/plain') || '';
+        if (!text) return;
+        event.preventDefault();
+        sendTextToRemote(text);
+        resetMobileInput();
     });
 }
 
@@ -2223,7 +2247,6 @@ zoomBtn?.addEventListener('click', () => {
     rdpScaleZoom = levels[(idx + 1 + levels.length) % levels.length];
     zoomBtn.textContent = `🔍 ${Math.round(rdpScaleZoom * 100)}%`;
     applyDisplayScale();
-    showRdpHud(`缩放 ${Math.round(rdpScaleZoom * 100)}%`, 700);
 });
 
 clipboardBtn.addEventListener('click', () => {
