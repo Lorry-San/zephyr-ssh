@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.10-rdp-resize-stability';
+const GUAC_CLIENT_VERSION = '2026-05-31.11-rdp-landscape-even';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -374,23 +374,25 @@ function computeRdpTargetSize(mode = fitModes[fitModeIdx]) {
     const minW = 800;
     const minH = 600;
     const even = (v) => Math.max(2, Math.round(v / 2) * 2);
+    const clampEven = (v, min, max) => even(Math.max(min, Math.min(max, v)));
     const fitBounds = () => {
-        const w = even(Math.max(minW, Math.min(maxW, (bounds.width || innerWidth || 1280) * effDpr)));
-        const h = even(Math.max(minH, Math.min(maxH, (bounds.height || innerHeight || 720) * effDpr)));
+        const w = clampEven((bounds.width || innerWidth || 1280) * effDpr, minW, maxW);
+        const h = clampEven((bounds.height || innerHeight || 720) * effDpr, minH, maxH);
         return { width: w, height: h, mode };
     };
     const byAspect = (num, den) => {
-        const cssW = Math.max(bounds.width || innerWidth || 1280, bounds.height || innerHeight || 720);
-        const cssH = Math.min(bounds.width || innerWidth || 1280, bounds.height || innerHeight || 720);
-        let w = even(Math.max(minW, Math.min(maxW, cssW * effDpr)));
+        const longCss = Math.max(bounds.width || innerWidth || 1280, bounds.height || innerHeight || 720);
+        let w = clampEven(longCss * effDpr, minW, maxW);
         let h = even(w * den / num);
-        if (h < minH) { h = even(minH); w = even(h * num / den); }
-        if (w > maxW) { w = even(maxW); h = even(w * den / num); }
-        if (h > maxH) { h = even(maxH); w = even(h * num / den); }
-        const unitW = Math.max(1, Math.floor(w / num));
-        const unitH = Math.max(1, Math.floor(h / den));
-        const unit = Math.max(1, Math.min(unitW, unitH));
-        return { width: num * unit, height: den * unit, mode };
+        if (h < minH) { h = clampEven(minH, minH, maxH); w = even(h * num / den); }
+        if (w > maxW) { w = clampEven(maxW, minW, maxW); h = even(w * den / num); }
+        if (h > maxH) { h = clampEven(maxH, minH, maxH); w = even(h * num / den); }
+        let unit = Math.max(1, Math.min(Math.floor(w / num), Math.floor(h / den)));
+        let width = num * unit;
+        let height = den * unit;
+        if (height % 2) height += 1;
+        if (width <= height) { width = even(Math.max(minW, height * num / den)); height = even(width * den / num); }
+        return { width, height, mode };
     };
     if (mode === '16:9') return byAspect(16, 9);
     if (mode === '4:3') return byAspect(4, 3);

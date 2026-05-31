@@ -3413,6 +3413,10 @@ const RDP_NATIVE_H264 = process.env.RDP_NATIVE_H264 === 'true';
 const RDP_ALLOW_GFX_FALLBACK = process.env.RDP_ALLOW_GFX_FALLBACK === 'true';
 const rdpPipes = new Map(); // connectionId → pipeline state
 
+function evenClampRdpSize(value, min, max) {
+    return Math.max(min, Math.min(max, Math.round((Number(value) || min) / 2) * 2));
+}
+
 function allocateRdpDisplayNumber() {
     for (let i = 0; i < 80; i++) {
         const n = 100 + ((Date.now() + process.pid + i) % 500);
@@ -3444,8 +3448,8 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const targetPort = Number(conn.port) || 3389;
     const username = conn.username || 'Administrator';
     const password = conn.password || '';
-    let streamWidth = Math.max(800, Math.min(2560, Math.round(Number(options.width) || RDP_STREAM_WIDTH) / 2) * 2);
-    let streamHeight = Math.max(600, Math.min(1600, Math.round(Number(options.height) || RDP_STREAM_HEIGHT) / 2) * 2);
+    let streamWidth = evenClampRdpSize(options.width || RDP_STREAM_WIDTH, 800, 2560);
+    let streamHeight = evenClampRdpSize(options.height || RDP_STREAM_HEIGHT, 600, 1600);
     const aspectMode = String(options.mode || '').toLowerCase();
     const forceAspect = (num, den) => {
         const longSide = Math.max(streamWidth, streamHeight);
@@ -3742,8 +3746,8 @@ rdpH264Wss.on('connection', async (ws, req) => {
             if (msg?.type === 'reconnect' && Number.isFinite(msg.width) && Number.isFinite(msg.height)) {
                 const oldPipe = pipe;
                 oldPipe.clients.delete(ws);
-                const width = Math.max(800, Math.min(2560, Math.round(Number(msg.width) || RDP_STREAM_WIDTH)));
-                const height = Math.max(600, Math.min(1600, Math.round(Number(msg.height) || RDP_STREAM_HEIGHT)));
+                const width = evenClampRdpSize(Number(msg.width) || RDP_STREAM_WIDTH, 800, 2560);
+                const height = evenClampRdpSize(Number(msg.height) || RDP_STREAM_HEIGHT, 600, 1600);
                 const mode = String(msg.mode || '');
                 try { if (ws.readyState === ws.OPEN) ws.close(1012, `rdp resize reconnect:${mode}:${width}x${height}`); } catch {}
                 cleanupPipe(connId);
