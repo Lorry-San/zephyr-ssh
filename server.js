@@ -3413,6 +3413,14 @@ const RDP_NATIVE_H264 = process.env.RDP_NATIVE_H264 === 'true';
 const RDP_ALLOW_GFX_FALLBACK = process.env.RDP_ALLOW_GFX_FALLBACK === 'true';
 const rdpPipes = new Map(); // connectionId → pipeline state
 
+function allocateRdpDisplayNumber() {
+    for (let i = 0; i < 80; i++) {
+        const n = 100 + ((Date.now() + process.pid + i) % 500);
+        if (!fs.existsSync(`/tmp/.X${n}-lock`) && !fs.existsSync(`/tmp/.X11-unix/X${n}`)) return n;
+    }
+    return 600 + Math.floor(Math.random() * 300);
+}
+
 function rdpSpawn(name, args, options = {}) {
     const child = spawn(name, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options });
     child.on('error', (err) => console.error('[rdp-h264]', `${name} spawn failed`, { error: err.message }));
@@ -3455,7 +3463,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     };
     if (aspectMode === '16:9') forceAspect(16, 9);
     else if (aspectMode === '4:3') forceAspect(4, 3);
-    const displayNo = 100 + (rdpPipes.size % 50);
+    const displayNo = allocateRdpDisplayNumber();
     const xvfbDisp = `:${displayNo}`;
     const fifoPath = `/tmp/zephyr-rdp-h264-${connId}.h264`;
     try { fs.rmSync(fifoPath, { force: true }); } catch {}
