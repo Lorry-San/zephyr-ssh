@@ -49,6 +49,7 @@ let rdpAudioSourceBuffer = null;
 let rdpAudioElement = null;
 let rdpAudioQueue = [];
 let rdpAudioUnlocked = false;
+let canvasTouchAbort = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
