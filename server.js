@@ -3512,6 +3512,8 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(process.env.RDP_AUDIO === 'false' ? [] : (hasPulseRdpPlugin ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
+        '-fast-path',
+        '-mouse-motion',
         '/log-level:WARN',
     ];
     const xfreerdp = rdpSpawn('xfreerdp', xfreerdpArgs, { env });

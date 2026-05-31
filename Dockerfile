@@ -99,6 +99,10 @@ RUN apk update && \
         freerdp \
         libxrandr \
         openh264 \
+        xprop \
+        xrandr \
+        xset \
+        xsetroot \
         xvfb \
         xdotool \
         xclip \
