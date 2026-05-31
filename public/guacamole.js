@@ -770,7 +770,9 @@ class WebmRdpSink {
         document.body.appendChild(this.video);
         const loop = () => {
             this._rafId = requestAnimationFrame(loop);
-            if (!this.video || this.video.readyState < 1) return;
+            if (!this.video) return;
+            if (this.video.readyState >= 1 && this.video.paused) this.video.play().catch(() => {});
+            if (this.video.readyState < 1) return;
             if (this.canvas.width !== this.video.videoWidth || this.canvas.height !== this.video.videoHeight) {
                 this.canvas.width = this.video.videoWidth;
                 this.canvas.height = this.video.videoHeight;
