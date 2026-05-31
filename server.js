@@ -1993,7 +1993,8 @@ function createProgressReporter({ transferId, username, direction, path: targetP
 function progressTransform(onChunk) {
     return new Transform({
         transform(chunk, encoding, callback) {
-            try { onChunk?.(chunk.length || 0); } catch {}
+            try { onChunk?.(chunk.length || 0); }
+            catch (err) { callback(err); return; }
             callback(null, chunk);
         }
     });
@@ -2427,97 +2428,6 @@ function configureClipboardChunkLimits(transfer, fileSize = 0) {
         : size >= 32 * 1024 * 1024 ? Math.min(maxParallel, 4)
         : 1;
 }
-function tuneClipboardChunkSize(transfer, bytes, elapsedMs = 0) {
-    if (!transfer || !bytes) return;
-    const minChunk = Number(transfer.minChunkSize) || 256 * 1024;
-    const maxChunk = Number(transfer.maxChunkSize) || 16 * 1024 * 1024;
-    const current = Math.max(minChunk, Math.min(Number(transfer.chunkSize) || 4 * 1024 * 1024, maxChunk));
-    const elapsed = Number(elapsedMs) || 0;
-    transfer.lastChunkMs = elapsed;
-    if (elapsed > 0) {
-        if (elapsed < 350 && current < maxChunk) {
-            transfer.chunkSize = Math.min(maxChunk, current * 2);
-            transfer.successfulChunks = 0;
-            return;
-        }
-        if (elapsed > 4500 && current > minChunk) {
-            transfer.chunkSize = Math.max(minChunk, Math.floor(current / 2));
-            transfer.successfulChunks = 0;
-            return;
-        }
-    }
-    transfer.successfulChunks = (Number(transfer.successfulChunks) || 0) + 1;
-    if (transfer.successfulChunks >= 2 && current < maxChunk) {
-        transfer.chunkSize = Math.min(maxChunk, current * 2);
-        transfer.successfulChunks = 0;
-    }
-}
-async function sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer, stats) {
-    throwIfClipboardTransferCancelled(transfer);
-    await ensureRemoteDirRecursive(targetSftp, dirnameRemote(targetPath));
-    let readHandle = null;
-    let writeHandle = null;
-    const readRef = { sftp: sourceSftp, handle: null };
-    const writeRef = { sftp: targetSftp, handle: null };
-    try {
-        readHandle = await sftpOpen(sourceSftp, sourcePath, 'r');
-        readRef.handle = readHandle;
-        transfer?.handles?.add?.(readRef);
-        writeHandle = await sftpOpen(targetSftp, targetPath, 'w');
-        writeRef.handle = writeHandle;
-        transfer?.handles?.add?.(writeRef);
-        const size = Number(stats?.size) || 0;
-        configureClipboardChunkLimits(transfer, size);
-        if (!size) return;
-        const workers = Math.max(1, Math.min(Number(transfer?.parallelism) || 1, Math.ceil(size / (1024 * 1024))));
-        const rangeSize = Math.max(16 * 1024 * 1024, Math.ceil(size / workers));
-        let nextRangeStart = 0;
-        const copyRange = async (start, end) => {
-            let position = start;
-            while (position < end) {
-                throwIfClipboardTransferCancelled(transfer);
-                const currentChunk = Number(transfer?.chunkSize) || 4 * 1024 * 1024;
-                const chunkSize = Math.max(64 * 1024, Math.min(currentChunk, end - position));
-                const startedAt = Date.now();
-                const buffer = Buffer.allocUnsafe(chunkSize);
-                const { bytesRead, buffer: readBuffer } = await sftpReadChunk(sourceSftp, readHandle, buffer, chunkSize, position);
-                throwIfClipboardTransferCancelled(transfer);
-                if (!bytesRead) break;
-                let written = 0;
-                while (written < bytesRead) {
-                    throwIfClipboardTransferCancelled(transfer);
-                    const slice = readBuffer.subarray(written, bytesRead);
-                    await sftpWriteChunk(targetSftp, writeHandle, slice, slice.length, position + written);
-                    written += slice.length;
-                }
-                position += bytesRead;
-                tuneClipboardChunkSize(transfer, bytesRead, Date.now() - startedAt);
-                onProgress?.(bytesRead);
-            }
-        };
-        const workerLoop = async () => {
-            while (nextRangeStart < size) {
-                throwIfClipboardTransferCancelled(transfer);
-                const start = nextRangeStart;
-                nextRangeStart = Math.min(size, nextRangeStart + rangeSize);
-                await copyRange(start, nextRangeStart);
-            }
-        };
-        await Promise.all(Array.from({ length: workers }, () => workerLoop()));
-        throwIfClipboardTransferCancelled(transfer);
-        await sftpClose(targetSftp, writeHandle);
-        writeRef.handle = null;
-        writeHandle = null;
-        const sourceHash = await sftpHashFile(sourceSftp, sourcePath, { transfer });
-        const targetHash = await sftpHashFile(targetSftp, targetPath, { transfer });
-        if (sourceHash !== targetHash) throw new Error(`复制校验失败：SHA-256 不一致（源 ${sourceHash}，目标 ${targetHash}）`);
-    } finally {
-        transfer?.handles?.delete?.(readRef);
-        transfer?.handles?.delete?.(writeRef);
-        await sftpClose(sourceSftp, readHandle);
-        await sftpClose(targetSftp, writeHandle);
-    }
-}
 async function remotePathExists(sftp, targetPath) {
     try { await sftpStat(sftp, targetPath); return true; } catch { return false; }
 }
@@ -2574,7 +2484,20 @@ async function ensureRemoteDirRecursive(sftp, dirPath) {
         try { await sftpMkdir(sftp, cur); } catch {}
     }
 }
-async function copyRemoteTree(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer) {
+async function copyRemoteFileViaMain(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer, stats) {
+    throwIfClipboardTransferCancelled(transfer);
+    await ensureRemoteDirRecursive(targetSftp, dirnameRemote(targetPath));
+    const size = Number(stats?.size) || 0;
+    configureClipboardChunkLimits(transfer, size);
+    await streamPipeline(
+        sourceSftp.createReadStream(sourcePath, { highWaterMark: Number(transfer?.chunkSize) || 4 * 1024 * 1024 }),
+        progressTransform((bytes) => { throwIfClipboardTransferCancelled(transfer); onProgress?.(bytes); }),
+        targetSftp.createWriteStream(targetPath)
+    );
+    throwIfClipboardTransferCancelled(transfer);
+}
+
+async function copyRemoteTreeViaMain(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer) {
     throwIfClipboardTransferCancelled(transfer);
     const stats = await sftpStat(sourceSftp, sourcePath);
     throwIfClipboardTransferCancelled(transfer);
@@ -2584,13 +2507,13 @@ async function copyRemoteTree(sourceSftp, sourcePath, targetSftp, targetPath, on
         for (const entry of list) {
             throwIfClipboardTransferCancelled(transfer);
             if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
-            await copyRemoteTree(sourceSftp, remoteJoin(sourcePath, entry.filename), targetSftp, remoteJoin(targetPath, entry.filename), onProgress, transfer);
+            await copyRemoteTreeViaMain(sourceSftp, remoteJoin(sourcePath, entry.filename), targetSftp, remoteJoin(targetPath, entry.filename), onProgress, transfer);
         }
         return;
     }
-    await ensureRemoteDirRecursive(targetSftp, dirnameRemote(targetPath));
-    await sftpAdaptiveCopyFile(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer, stats);
+    await copyRemoteFileViaMain(sourceSftp, sourcePath, targetSftp, targetPath, onProgress, transfer, stats);
 }
+
 async function removeRemotePath(connectionConfig, targetPath) {
     if (isDangerousRemotePath(targetPath)) throw new Error('拒绝删除空路径或根目录');
     const routed = await createRoutedSSHConnection(connectionConfig, 10000);
@@ -2675,6 +2598,7 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
             loaded = total;
             sendStatus('done', targetDir);
         } else {
+            console.info('[sftp-clipboard-paste]', 'cross connection paste via main side', { count: clip.items.length, targetDir, mode });
             await withRoutedSftp(clip.sourceConnectionConfig, async ({ sftp: sourceSftp }) => {
                 await withRoutedSftp(targetConnectionConfig, async ({ sftp: targetSftp }) => {
                     for (const item of clip.items) {
@@ -2687,7 +2611,7 @@ async function pasteSftpClipboard({ username, targetSession, targetDir, mode, co
                         } else if (conflictMode === 'overwrite') {
                             try { await removeRemotePath(targetConnectionConfig, targetPath); } catch {}
                         }
-                        await copyRemoteTree(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path), transfer);
+                        await copyRemoteTreeViaMain(sourceSftp, item.path, targetSftp, targetPath, (n) => bump(n, item.path), transfer);
                     }
                 }, transfer);
             }, transfer);
