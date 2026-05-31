@@ -756,6 +756,10 @@ class WebmRdpSink {
         this.video.style.display = 'none';
         this.video.muted = true;
         this.video.playsInline = true;
+        this.video.autoplay = true;
+        this.video.setAttribute('playsinline', '');
+        this.video.setAttribute('autoplay', '');
+        this.video.preload = 'auto';
         this.ms = null;
         this.sb = null;
         this.inited = false;
@@ -766,7 +770,7 @@ class WebmRdpSink {
         document.body.appendChild(this.video);
         const loop = () => {
             this._rafId = requestAnimationFrame(loop);
-            if (!this.video || this.video.readyState < 2) return;
+            if (!this.video || this.video.readyState < 1) return;
             if (this.canvas.width !== this.video.videoWidth || this.canvas.height !== this.video.videoHeight) {
                 this.canvas.width = this.video.videoWidth;
                 this.canvas.height = this.video.videoHeight;
@@ -775,7 +779,7 @@ class WebmRdpSink {
                 applyDisplayScale();
             }
             this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-            if (!this.firstFrameDrawn && this.video.videoWidth > 0) {
+            if (!this.firstFrameDrawn && this.video.videoWidth > 0 && this.video.readyState >= 2) {
                 this.firstFrameDrawn = true;
                 this._onConnected?.();
             }
