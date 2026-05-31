@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.27-rdp-close-tab';
+const GUAC_CLIENT_VERSION = '2026-05-31.28-rdp-viewport-joystick';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -15,6 +15,7 @@ const zoomBtn = $('#zoomBtn');
 const clipboardBtn = $('#clipboardBtn');
 const keyboardBtn = $('#keyboardBtn');
 const shortcutsBtn = $('#shortcutsBtn');
+const joystickBtn = $('#joystickBtn');
 const ctrlAltDelBtn = $('#ctrlAltDelBtn');
 const reconnectBtn = $('#reconnectBtn');
 const disconnectBtn = $('#disconnectBtn');
@@ -29,6 +30,10 @@ const remoteClipboardText = $('#remoteClipboardText');
 const clipboardCopyRemoteBtn = $('#clipboardCopyRemoteBtn');
 const clipboardHint = $('#clipboardHint');
 const shortcutsPanel = $('#shortcutsPanel');
+const joystickPanel = $('#joystickPanel');
+const joystickContainer = $('#joystickContainer');
+const joystickKnob = $('#joystickKnob');
+const joystickHint = $('#joystickHint');
 const shortcutGrid = $('#shortcutGrid');
 
 const urlParams = new URLSearchParams(location.search);
@@ -61,6 +66,9 @@ let resizeTimer = 0;
 let requestedRdpWidth = 0;
 let requestedRdpHeight = 0;
 let rdpScaleZoom = 1;
+let rdpViewportOffsetX = 0;
+let rdpViewportOffsetY = 0;
+let rdpJoystickState = null;
 let rdpReconnectTimer = 0;
 let rdpReconnectPending = false;
 let rdpReconnectSeq = 0;
@@ -441,6 +449,16 @@ function applyDisplayScale() {
         const curH = displayHeight || rdpCanvas.height || 720;
         if (!curW || !curH) return;
         const mode = fitModes[fitModeIdx];
+        const centerOversizedDisplay = () => {
+            requestAnimationFrame(() => {
+                if (!displayShell) return;
+                const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+                const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+                displayShell.scrollLeft = Math.max(0, Math.min(maxX, maxX / 2 + rdpViewportOffsetX));
+                displayShell.scrollTop = Math.max(0, Math.min(maxY, maxY / 2 + rdpViewportOffsetY));
+                updateJoystickHint();
+            });
+        };
         const setCanvasCss = (w, h) => {
             const cssW = Math.ceil(w * rdpScaleZoom);
             const cssH = Math.ceil(h * rdpScaleZoom);
@@ -448,6 +466,7 @@ function applyDisplayScale() {
             displayRoot.style.height = `${cssH}px`;
             rdpCanvas.style.width = `${cssW}px`;
             rdpCanvas.style.height = `${cssH}px`;
+            centerOversizedDisplay();
         };
         if (mode === '1:1') {
             setCanvasCss(curW, curH);
@@ -482,6 +501,7 @@ function applyDisplayScale() {
         display.scale(1);
         displayRoot.style.width = `${curW}px`;
         displayRoot.style.height = `${curH}px`;
+        requestAnimationFrame(() => { updateJoystickHint(); });
         console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH });
         return;
     }
@@ -490,6 +510,7 @@ function applyDisplayScale() {
     display.scale(Math.max(0.1, scale));
     displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
     displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
+    requestAnimationFrame(() => { updateJoystickHint(); });
     console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale });
 }
 
@@ -497,6 +518,8 @@ function switchFitMode(mode) {
     if (!tunnel || !connected) return;
     if (rdpInputSender && !client) {
         rdpScaleZoom = 1;
+        rdpViewportOffsetX = 0;
+        rdpViewportOffsetY = 0;
         requestRdpCanvasSize(mode, true);
         applyDisplayScale();
         return;
@@ -1131,6 +1154,8 @@ async function connect() {
         const display = new WebCodecsH264Display(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
         rdpScaleZoom = 1;
+        rdpViewportOffsetX = 0;
+        rdpViewportOffsetY = 0;
         zoomBtn && (zoomBtn.textContent = '🔍 100%');
         const initialTarget = computeRdpTargetSize(fitModes[fitModeIdx]);
         requestedRdpWidth = initialTarget.width;
@@ -1344,12 +1369,15 @@ function isCompactScreen() {
 }
 
 function floatingPanels() {
-    return [clipboardPanel, shortcutsPanel].filter(Boolean);
+    return [clipboardPanel, shortcutsPanel, joystickPanel].filter(Boolean);
 }
 
 function getDefaultPanelOptions(panel) {
     const parentRect = panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
     if (isCompactScreen()) {
+        if (panel === joystickPanel) {
+            return { left: 10, top: Math.max(48, parentRect.height - 274), width: Math.min(300, parentRect.width - 20), height: 248 };
+        }
         return {
             left: 8,
             top: 44,
@@ -1359,6 +1387,9 @@ function getDefaultPanelOptions(panel) {
     }
     if (panel === shortcutsPanel) {
         return { width: Math.min(460, parentRect.width - 24), height: Math.min(360, parentRect.height - 80), left: 18, top: 54 };
+    }
+    if (panel === joystickPanel) {
+        return { width: 286, height: 244, left: 18, top: Math.max(60, parentRect.height - 270) };
     }
     return { width: Math.min(440, parentRect.width - 24), height: Math.min(500, parentRect.height - 80), left: Math.max(18, parentRect.width - 460), top: 54 };
 }
@@ -1723,7 +1754,117 @@ function setupPanelResize() {
     });
 }
 
+function updateJoystickHint() {
+    if (!joystickHint || !displayShell) return;
+    const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+    const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+    const canMove = maxX > 2 || maxY > 2;
+    joystickHint.textContent = canMove
+        ? `拖动摇杆移动缩放视区 · X ${Math.round(displayShell.scrollLeft)}/${Math.round(maxX)} · Y ${Math.round(displayShell.scrollTop)}/${Math.round(maxY)}`
+        : '当前画面未超出窗口；点 🔍 放大后可用摇杆调整显示区域';
+}
+
+function setupViewportJoystick() {
+    if (!joystickContainer || !joystickKnob || joystickContainer.dataset.ready === '1') return;
+    joystickContainer.dataset.ready = '1';
+    const icons = joystickContainer.querySelectorAll('.rdp-joystick-icon');
+    const maxRadius = 24;
+    const deadzone = 4;
+    const maxTilt = 14;
+    let active = false;
+    let startX = 0;
+    let startY = 0;
+    let raf = 0;
+    let resetTimer = 0;
+
+    const clearHighlights = () => icons.forEach((icon) => icon.classList.remove('active'));
+    const applyVisual = (x, y) => {
+        const clampedX = Math.min(Math.max(x, -maxRadius), maxRadius);
+        const clampedY = Math.min(Math.max(y, -maxRadius), maxRadius);
+        const distance = Math.hypot(clampedX, clampedY);
+        const normX = distance > 0.01 ? clampedX / maxRadius : 0;
+        const normY = distance > 0.01 ? clampedY / maxRadius : 0;
+        const rotY = normX * maxTilt;
+        const rotX = normY * -maxTilt;
+        joystickKnob.style.transform = `translate(${clampedX}px, ${clampedY}px) rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+        if (distance < deadzone) { clearHighlights(); return { x: 0, y: 0, intensity: 0 }; }
+        const angleDeg = (Math.atan2(normY, normX) * 180 / Math.PI + 360) % 360;
+        let activeIndex = angleDeg >= 45 && angleDeg < 135 ? 2 : angleDeg >= 135 && angleDeg < 225 ? 3 : angleDeg >= 225 && angleDeg < 315 ? 0 : 1;
+        clearHighlights();
+        icons[activeIndex]?.classList.add('active');
+        return { x: normX, y: normY, intensity: Math.min(distance / maxRadius, 1) };
+    };
+    const reset = (smooth = true) => {
+        if (raf) cancelAnimationFrame(raf);
+        raf = 0;
+        if (smooth) joystickKnob.classList.add('smooth-back');
+        joystickKnob.style.transform = 'translate(0px, 0px) rotateX(0deg) rotateY(0deg)';
+        clearHighlights();
+        window.clearTimeout(resetTimer);
+        resetTimer = window.setTimeout(() => joystickKnob.classList.remove('smooth-back'), 220);
+        rdpJoystickState = null;
+        updateJoystickHint();
+    };
+    const pumpScroll = () => {
+        if (!active || !rdpJoystickState || !displayShell) { raf = 0; return; }
+        const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+        const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+        const speed = 4 + 24 * rdpJoystickState.intensity;
+        displayShell.scrollLeft = Math.max(0, Math.min(maxX, displayShell.scrollLeft + rdpJoystickState.x * speed));
+        displayShell.scrollTop = Math.max(0, Math.min(maxY, displayShell.scrollTop + rdpJoystickState.y * speed));
+        rdpViewportOffsetX = displayShell.scrollLeft - maxX / 2;
+        rdpViewportOffsetY = displayShell.scrollTop - maxY / 2;
+        updateJoystickHint();
+        raf = requestAnimationFrame(pumpScroll);
+    };
+    const onMove = (event) => {
+        if (!active) return;
+        event.preventDefault();
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        const dist = Math.hypot(dx, dy);
+        const limitedX = dist > maxRadius ? dx / dist * maxRadius : dx;
+        const limitedY = dist > maxRadius ? dy / dist * maxRadius : dy;
+        rdpJoystickState = applyVisual(limitedX, limitedY);
+        if (!raf) raf = requestAnimationFrame(pumpScroll);
+    };
+    const onEnd = () => {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onEnd);
+        window.removeEventListener('pointercancel', onEnd);
+        reset(true);
+    };
+    joystickKnob.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        bringPanelToFront(joystickPanel);
+        active = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        window.clearTimeout(resetTimer);
+        joystickKnob.classList.remove('smooth-back');
+        rdpJoystickState = applyVisual(0, 0);
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', onEnd, { once: true });
+        window.addEventListener('pointercancel', onEnd, { once: true });
+        joystickKnob.setPointerCapture?.(event.pointerId);
+    });
+    joystickContainer.addEventListener('dragstart', (event) => event.preventDefault());
+    displayShell?.addEventListener('scroll', () => {
+        const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+        const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+        rdpViewportOffsetX = displayShell.scrollLeft - maxX / 2;
+        rdpViewportOffsetY = displayShell.scrollTop - maxY / 2;
+        updateJoystickHint();
+    }, { passive: true });
+    window.addEventListener('blur', () => { if (active) { active = false; reset(true); } });
+    reset(false);
+}
+
 function setupFloatingPanels() {
+    setupViewportJoystick();
     floatingPanels().forEach((panel) => {
         ensureFloatingPanel(panel, getDefaultPanelOptions(panel));
         panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
@@ -1758,7 +1899,8 @@ function togglePanel(panel, force, sourceButton = null) {
     panel.classList.toggle('open', shouldShow);
     if (panel === clipboardPanel) clipboardBtn?.classList.toggle('active', shouldShow);
     if (panel === shortcutsPanel) shortcutsBtn?.classList.toggle('active', shouldShow);
-    const button = sourceButton || (panel === clipboardPanel ? clipboardBtn : panel === shortcutsPanel ? shortcutsBtn : null);
+    if (panel === joystickPanel) joystickBtn?.classList.toggle('active', shouldShow);
+    const button = sourceButton || (panel === clipboardPanel ? clipboardBtn : panel === shortcutsPanel ? shortcutsBtn : panel === joystickPanel ? joystickBtn : null);
     requestAnimationFrame(() => animateGuacPanelFromButton(panel, button, shouldShow));
     if (shouldShow) bringPanelToFront(panel);
     else {
@@ -2556,6 +2698,12 @@ zoomBtn?.addEventListener('click', () => {
     let idx = levels.findIndex((v) => Math.abs(v - cur) < 0.03);
     rdpScaleZoom = levels[(idx + 1 + levels.length) % levels.length];
     zoomBtn.textContent = `🔍 ${Math.round(rdpScaleZoom * 100)}%`;
+    if (displayShell) {
+        const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+        const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+        rdpViewportOffsetX = displayShell.scrollLeft - maxX / 2;
+        rdpViewportOffsetY = displayShell.scrollTop - maxY / 2;
+    }
     applyDisplayScale();
 });
 
@@ -2600,6 +2748,10 @@ mobileKeyboardInput?.addEventListener('keydown', (event) => {
 
 shortcutsBtn?.addEventListener('click', () => {
     togglePanel(shortcutsPanel);
+});
+joystickBtn?.addEventListener('click', () => {
+    togglePanel(joystickPanel);
+    updateJoystickHint();
 });
 shortcutGrid?.addEventListener('pointerdown', (event) => {
     const btn = event.target.closest('[data-keyseq]');

@@ -6467,3 +6467,156 @@ body.smartbar-trash-hover .smartbar-trash-target {
     padding-bottom: min(34vh, 260px);
     scroll-padding-bottom: min(34vh, 260px);
 }
+
+.joystick-panel {
+    min-width: 248px;
+    min-height: 220px;
+}
+
+.joystick-panel-content {
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.joystick-panel .panel-titlebar {
+    width: 100%;
+    justify-content: center;
+}
+
+.rdp-joystick {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    flex: 0 0 auto;
+}
+
+.rdp-joystick:active { cursor: grabbing; }
+
+.rdp-joystick-around {
+    width: 200px;
+    height: 200px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    background-image: linear-gradient(145deg, #2b2c2f, #1b1c1e);
+    box-shadow: 0 8px 24px rgba(0,0,0,.6), inset 0 1px 1px rgba(255,255,255,.05);
+}
+
+.rdp-joystick-handle {
+    width: 155px;
+    height: 155px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    background: #141517;
+    box-shadow:
+        inset 0 4px 12px rgba(0,0,0,.8),
+        inset 0 -2px 6px rgba(255,255,255,.03),
+        0 2px 4px rgba(255,255,255,.05);
+    perspective: 300px;
+    overflow: visible;
+}
+
+.rdp-joystick-knob {
+    width: 102px;
+    height: 102px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    background-image: linear-gradient(145deg, #3a3f44, #24272a);
+    box-shadow:
+        0 12px 20px rgba(0,0,0,.7),
+        0 20px 15px -5px rgba(0,0,0,.5),
+        0 -4px 10px rgba(0,0,0,.4),
+        inset 0 2px 4px rgba(255,255,255,.1),
+        inset 0 -3px 5px rgba(0,0,0,.6);
+    transition: transform .08s linear, box-shadow .1s ease;
+    will-change: transform;
+    cursor: grab;
+    position: relative;
+}
+
+.rdp-joystick-knob.smooth-back {
+    transition: transform .2s cubic-bezier(.2,.9,.4,1.1), box-shadow .2s ease !important;
+}
+
+.rdp-joystick-inside {
+    position: relative;
+    width: 85px;
+    height: 85px;
+    border-radius: 50%;
+    background-image: linear-gradient(135deg, #212326, #16181a);
+    box-shadow: inset 0 3px 6px rgba(0,0,0,.7), inset 0 -2px 4px rgba(255,255,255,.04);
+}
+
+.rdp-joystick-dot {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #404449;
+    box-shadow: 0 1px 2px rgba(255,255,255,.05), inset 0 2px 3px rgba(0,0,0,.8);
+}
+.rdp-joystick-dot:nth-child(1) { left: 50%; top: 10%; }
+.rdp-joystick-dot:nth-child(2) { left: 90%; top: 50%; }
+.rdp-joystick-dot:nth-child(3) { left: 50%; top: 90%; }
+.rdp-joystick-dot:nth-child(4) { left: 10%; top: 50%; }
+
+.rdp-joystick-icon {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 30px;
+    fill: #3b4045;
+    filter: drop-shadow(1px 1px 2px rgba(0,0,0,.8));
+    transition: fill .15s, filter .2s;
+    pointer-events: none;
+    z-index: 5;
+}
+.rdp-joystick-icon:nth-of-type(1) { top: -12%; left: 50%; }
+.rdp-joystick-icon:nth-of-type(2) { top: 50%; left: 112%; }
+.rdp-joystick-icon:nth-of-type(3) { top: 112%; left: 50%; }
+.rdp-joystick-icon:nth-of-type(4) { top: 50%; left: -12%; }
+.rdp-joystick-icon.active {
+    fill: #ff9900;
+    filter: drop-shadow(0 0 6px rgba(255,153,0,.6)) drop-shadow(0 0 2px #fff);
+}
+
+.joystick-hint {
+    width: 100%;
+    text-align: center;
+    padding: 0 8px 4px;
+    font-family: var(--font-mono);
+}
+
+@media (prefers-color-scheme: light) {
+    .rdp-joystick-around { background-image: linear-gradient(0, #f5f8fa, #9da4a8); box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+    .rdp-joystick-handle { background: #c5d1da; box-shadow: 0 0 10px rgba(0,0,0,.5), 0 10px 10px rgba(0,0,0,.2), inset 0 0 16px rgba(0,0,0,.85), inset 0 0 24px rgba(0,0,0,.75), inset 0 0 48px rgba(0,0,0,.2); }
+    .rdp-joystick-knob { background-image: linear-gradient(0, #86969c, #eff1f1); box-shadow: 0 9px 14px rgba(0,0,0,.5), 0 19px 8px -2px rgba(0,0,0,.2), 0 33px 8px rgba(0,0,0,.4), 0 -12px 10px rgba(255,255,255,.5), inset 0 3px 3px rgba(255,255,255,.6), inset 0 -3px 3px rgba(89,91,92,.6); }
+    .rdp-joystick-inside { background-image: linear-gradient(180deg, #adb9bf, #d4dbdd); box-shadow: inset 0 3px 6px rgba(152,160,163,.4), inset 0 -3px 6px rgba(238,244,246,.4); }
+    .rdp-joystick-dot { background: #e7ecef; box-shadow: 0 2px 2px rgba(0,0,0,.3), inset 0 -2px 2px rgba(0,0,0,.2); }
+    .rdp-joystick-icon { fill: #b4b9bd; filter: drop-shadow(1px 1px 1px #f4f4f4); }
+    .rdp-joystick-icon.active { fill: #e3a560; filter: brightness(.9) drop-shadow(0 0 2px #e3a15b) drop-shadow(0 0 1px #fff); }
+}
+
+@media (max-width: 560px) {
+    .rdp-joystick { transform: scale(.92); }
+    .joystick-panel-content { gap: 2px; }
+    .rdp-joystick-icon { width: 26px; }
+    .rdp-joystick-icon:nth-of-type(1) { top: -10%; }
+    .rdp-joystick-icon:nth-of-type(2) { left: 110%; }
+    .rdp-joystick-icon:nth-of-type(3) { top: 110%; }
+    .rdp-joystick-icon:nth-of-type(4) { left: -10%; }
+}
