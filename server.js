@@ -3668,27 +3668,53 @@ function startRdpClipboardWatch(pipe) {
 function handleRdpInput(pipe, raw) {
     let msg;
     try { msg = JSON.parse(raw.toString('utf8')); } catch { return; }
-    const execXdo = (args) => {
-        if (!pipe || pipe.xfreerdp?.exitCode !== null || pipe.xfreerdp?.killed) return;
-        const finalArgs = pipe.activeWindowId ? ['windowactivate', '--sync', pipe.activeWindowId, ...args] : args;
-        const child = spawn('xdotool', finalArgs, { env: pipe.env, stdio: 'ignore' });
-        child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool failed', { error: err.message, args: finalArgs }));
+    if (!pipe) return;
+    if (!pipe.lastPointer) pipe.lastPointer = { x: Math.round((pipe.width || 1280) / 2), y: Math.round((pipe.height || 720) / 2) };
+    const execXdo = (args, opts = {}) => {
+        if (!pipe || pipe.xfreerdp?.exitCode !== null || pipe.xfreerdp?.killed) return false;
+        const finalArgs = pipe.activeWindowId && opts.window !== false ? args : args;
+        const child = spawn('xdotool', finalArgs, { env: pipe.env, stdio: ['ignore', 'ignore', 'pipe'] });
+        let errText = '';
+        child.stderr?.on('data', (d) => { errText += d.toString('utf8'); });
+        child.on('close', (code) => {
+            if (code !== 0) console.warn('[rdp-h264]', 'xdotool failed', { code, args: finalArgs, error: errText.trim().slice(0, 240) });
+        });
+        child.on('error', (err) => console.warn('[rdp-h264]', 'xdotool spawn failed', { error: err.message, args: finalArgs }));
+        return true;
+    };
+    const movePointer = (x, y) => {
+        const px = Math.max(0, Math.min((pipe.width || 1280) - 1, Math.round(Number(x))));
+        const py = Math.max(0, Math.min((pipe.height || 720) - 1, Math.round(Number(y))));
+        pipe.lastPointer = { x: px, y: py };
+        if (pipe.activeWindowId) return execXdo(['mousemove', '--window', pipe.activeWindowId, String(px), String(py)], { window: false });
+        return execXdo(['mousemove', String(px), String(py)], { window: false });
+    };
+    const buttonAction = (action, button) => {
+        const b = String(button || 1);
+        if (pipe.lastPointer) movePointer(pipe.lastPointer.x, pipe.lastPointer.y);
+        return execXdo([action, b], { window: false });
     };
     if (msg.type === 'mouse' && Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-        execXdo(['mousemove', '--sync', String(Math.round(msg.x)), String(Math.round(msg.y))]);
+        movePointer(msg.x, msg.y);
+        if (Date.now() - (pipe.lastInputLogAt || 0) > 1000) { pipe.lastInputLogAt = Date.now(); console.info('[rdp-h264]', 'rdp pointer move', { connId: pipe.connId, x: pipe.lastPointer.x, y: pipe.lastPointer.y, window: pipe.activeWindowId || '' }); }
     } else if (msg.type === 'mousedown' && msg.button !== undefined) {
-        execXdo(['mousedown', String(msg.button)]);
+        buttonAction('mousedown', msg.button);
+        console.info('[rdp-h264]', 'rdp pointer down', { connId: pipe.connId, button: msg.button, pos: pipe.lastPointer, window: pipe.activeWindowId || '' });
     } else if (msg.type === 'mouseup' && msg.button !== undefined) {
-        execXdo(['mouseup', String(msg.button)]);
+        buttonAction('mouseup', msg.button);
+        console.info('[rdp-h264]', 'rdp pointer up', { connId: pipe.connId, button: msg.button, pos: pipe.lastPointer, window: pipe.activeWindowId || '' });
     } else if (msg.type === 'click' && msg.button !== undefined) {
-        execXdo(['click', String(msg.button)]);
+        buttonAction('click', msg.button);
+        console.info('[rdp-h264]', 'rdp pointer click', { connId: pipe.connId, button: msg.button, pos: pipe.lastPointer, window: pipe.activeWindowId || '' });
     } else if (msg.type === 'scroll') {
+        if (pipe.lastPointer) movePointer(pipe.lastPointer.x, pipe.lastPointer.y);
         const button = Number(msg.deltaY || 0) > 0 ? '5' : '4';
         const rawDelta = Math.abs(Number(msg.deltaY || msg.deltaX || 0));
         const steps = Math.max(1, Math.min(10, Math.round(rawDelta / 45)));
-        for (let i = 0; i < steps; i++) execXdo(['click', button]);
+        for (let i = 0; i < steps; i++) execXdo(['click', button], { window: false });
+        console.info('[rdp-h264]', 'rdp pointer scroll', { connId: pipe.connId, button, steps, pos: pipe.lastPointer, window: pipe.activeWindowId || '' });
     } else if (msg.type === 'key' && msg.key) {
-        execXdo(['key', '--clearmodifiers', String(msg.key)]);
+        execXdo(['key', '--clearmodifiers', String(msg.key)], { window: false });
     } else if (msg.type === 'text' && msg.text !== undefined) {
         const text = String(msg.text);
         if (/[^\x00-\x7F]/.test(text) || text.length > 1) pasteTextIntoRdp(pipe, text, { paste: true });
