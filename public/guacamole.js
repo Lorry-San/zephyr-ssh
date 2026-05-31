@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.5-rdp-fmp4';
+const GUAC_CLIENT_VERSION = '2026-05-31.6-rdp-webcodecs-fixed';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -615,98 +615,35 @@ function setupMobilePointerMouse() {
     }, { passive: false });
 }
 
-const MP4 = (() => {
-    const enc = new TextEncoder();
-    const box = (type, ...payloads) => {
-        let total = 0;
-        for (const p of payloads) total += p.byteLength;
-        const sz = 8 + total;
-        const buf = new Uint8Array(sz);
-        new DataView(buf.buffer).setUint32(0, sz);
-        buf.set(enc.encode(type), 4);
-        let off = 8;
-        for (const p of payloads) { buf.set(new Uint8Array(p instanceof ArrayBuffer ? p : p.buffer, p.byteOffset || 0, p.byteLength), off); off += p.byteLength; }
-        return buf;
-    };
-    const u32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v); return b; };
-    const u16 = (v) => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v); return b; };
-    const u8  = (v) => new Uint8Array([v]);
-    const u24 = (v) => { const b = new Uint8Array(3); b[0] = (v>>>16)&255; b[1]=(v>>>8)&255; b[2]=v&255; return b; };
-    const u64h = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setUint32(0, Math.floor(v/4294967296)); new DataView(b.buffer).setUint32(4, v>>>0); return b; };
-    const bytes = (s) => enc.encode(s);
-    const zero8 = u64h(0);
-    const matrix9 = new Uint8Array([0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]);
-
-    function buildInitSegment(sps, pps, width, height) {
-        const profile = sps[1];
-        const compat  = sps[2];
-        const level   = sps[3];
-        const avcc = new Uint8Array(11 + sps.byteLength + pps.byteLength);
-        avcc[0]=1; avcc[1]=profile; avcc[2]=compat; avcc[3]=level; avcc[4]=0xff; avcc[5]=0xe1;
-        avcc[6]=(sps.byteLength>>>8)&255; avcc[7]=sps.byteLength&255; avcc.set(new Uint8Array(sps.buffer, sps.byteOffset, sps.byteLength), 8);
-        const aoff = 8 + sps.byteLength;
-        avcc[aoff]=1; avcc[aoff+1]=(pps.byteLength>>>8)&255; avcc[aoff+2]=pps.byteLength&255; avcc.set(new Uint8Array(pps.buffer, pps.byteOffset, pps.byteLength), aoff+3);
-
-        const avc1 = box('avc1',
-            zero8.slice(0,6), u16(1), zero8.slice(0,16), u16(width), u16(height), u32(0x00480000), u32(0x00480000), zero8.slice(0,4), u16(1),
-            bytes('\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0'),
-            u16(24), u16(0xffff), box('avcC', avcc.slice())
-        );
-        const stsd = box('stsd', u32(0), u32(1), avc1);
-        const stts = box('stts', u32(0), u32(0));
-        const stsc = box('stsc', u32(0), u32(1), u32(1), u32(1), u32(1));
-        const stsz = box('stsz', u32(0), u32(0), u32(0));
-        const stco = box('stco', u32(0), u32(0));
-        const stbl = box('stbl', stsd, stts, stsc, stsz, stco);
-        const dref = box('dref', u32(0), u32(1), box('url ', u32(1).slice(0,0)));
-        const dinf = box('dinf', dref);
-        const vmhd = box('vmhd', u32(0), u32(1), u32(0), u32(0));
-        const smhd = box('smhd', u32(0), u32(0));
-        const minf = box('minf', vmhd, dinf, stbl);
-        const hdlr = box('hdlr', u32(0), zero8.slice(0,4), bytes('vide'), zero8.slice(0,12), bytes('VideoHandler\0'));
-        const mdhd = box('mdhd', u32(0), u32(0), u32(0), u32(0), u32(0), zero8.slice(0,4), u32(0), u32(0), u32(0));
-        const mdia = box('mdia', mdhd, hdlr, minf);
-        const tkhd = box('tkhd', zero8, u32(7), zero8.slice(0,8), u32(1), zero8.slice(0,4), u32(1), u32(0), u32(0), u32(0), u32(0), u16(width), u16(height), u32(0), u32(0), u32(0), u32(0), matrix9.slice(), u32(0), u32(0), u32(0), u32(0), u32(0));
-        const trak = box('trak', tkhd, mdia);
-        const mvhd = box('mvhd', u32(0), u32(0), u32(0), u32(0), u32(0x3e8), u32(0), zero8.slice(0,8), matrix9.slice(0,36), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(2));
-        const ftyp = box('ftyp', bytes('isom'), u32(0x200), bytes('isom'), bytes('iso2'), bytes('avc1'), bytes('mp41'));
-
-        return box('\0\0\0\0', ftyp, box('moov', mvhd, trak));
+class WebCodecsH264Display {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
     }
-
-    function buildFragment(baseDecodeTime, data, key, duration) {
-        const flags = key ? 0x2000000 : 0x1000000;
-        const sampleEntry = new Uint8Array(8);
-        sampleEntry[0] = (duration>>>24)&255; sampleEntry[1]=(duration>>>16)&255; sampleEntry[2]=(duration>>>8)&255; sampleEntry[3]=duration&255;
-        sampleEntry[4] = (data.byteLength>>>24)&255; sampleEntry[5]=(data.byteLength>>>16)&255; sampleEntry[6]=(data.byteLength>>>8)&255; sampleEntry[7]=data.byteLength&255;
-        const trun = box('trun', u32(1), u32(0x100|0x200), u32(1), u32(0), sampleEntry);
-        const tfdt = box('tfdt', u32(1), u64h(baseDecodeTime));
-        const tfhd = box('tfhd', u32(0x20000), u32(1), zero8.slice(0,8), u32(1), u32(1));
-        const traf = box('traf', tfhd, tfdt, trun);
-        const mfhd = box('mfhd', u32(key ? (baseDecodeTime & 0xffffffff) : 0));
-        const moof = box('moof', mfhd, traf);
-        const mdat = box('mdat', data);
-        return box('\0'.repeat(4), moof, mdat);
+    setSize(w, h) {
+        if (this.canvas.width !== w || this.canvas.height !== h) {
+            this.canvas.width = w; this.canvas.height = h;
+            displayWidth = w; displayHeight = h;
+            applyDisplayScale();
+        }
     }
-
-    return { buildInitSegment, buildFragment, u32, u16, box };
-})();
+    draw(frame) {
+        this.setSize(frame.displayWidth || frame.codedWidth || this.canvas.width || 1280,
+                     frame.displayHeight || frame.codedHeight || this.canvas.height || 720);
+        this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+    }
+}
 
 class AnnexBH264AccessUnitParser {
     constructor(onConfig, onFrame) {
         this.buffer = new Uint8Array(0);
-        this.pending = [];
-        this.sps = null;
-        this.pps = null;
-        this.configured = false;
-        this.onConfig = onConfig;
-        this.onFrame = onFrame;
+        this.pending = []; this.sps = null; this.pps = null; this.configured = false;
+        this.onConfig = onConfig; this.onFrame = onFrame;
     }
     push(chunk) {
         const b = new Uint8Array(this.buffer.length + chunk.length);
         b.set(this.buffer, 0); b.set(chunk, this.buffer.length); this.buffer = b;
-        const units = this.extractNalUnits(false);
-        for (const nal of units) this.acceptNal(nal);
+        for (const nal of this.extractNalUnits(false)) this.acceptNal(nal);
     }
     flush() { for (const nal of this.extractNalUnits(true)) this.acceptNal(nal); this.emitPending(true); }
     acceptNal(nal) {
@@ -714,20 +651,19 @@ class AnnexBH264AccessUnitParser {
         const type = nal[0] & 0x1f;
         if (type === 7) this.sps = nal;
         if (type === 8) this.pps = nal;
-        if (!this.configured && this.sps && this.pps) { this.configured = true; this.onConfig(null); }
+        if (!this.configured && this.sps && this.pps) { this.configured = true; this.onConfig(this.buildAvcc(this.sps, this.pps)); }
         const startsPicture = type === 1 || type === 5;
-        if (startsPicture && this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; })) this.emitPending(false);
+        if (startsPicture && this.pending.some(n => { const t = n[0] & 0x1f; return t === 1 || t === 5; })) this.emitPending(false);
         this.pending.push(nal);
         if (type === 9 && this.pending.length > 1) this.emitPending(false);
     }
     emitPending(force) {
-        const hasSlice = this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
+        const hasSlice = this.pending.some(n => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
         if (!hasSlice && !force) return;
         if (!this.configured) return;
-        const key = this.pending.some((n) => (n[0] & 0x1f) === 5);
+        const key = this.pending.some(n => (n[0] & 0x1f) === 5);
         const size = this.pending.reduce((n, nal) => n + 4 + nal.length, 0);
-        const out = new Uint8Array(size);
-        let o = 0;
+        const out = new Uint8Array(size); let o = 0;
         for (const nal of this.pending) { out[o++] = (nal.length >>> 24) & 255; out[o++] = (nal.length >>> 16) & 255; out[o++] = (nal.length >>> 8) & 255; out[o++] = nal.length & 255; out.set(nal, o); o += nal.length; }
         this.pending = [];
         if (out.byteLength) this.onFrame(out, key);
@@ -742,89 +678,18 @@ class AnnexBH264AccessUnitParser {
         const completeCount = flush ? starts.length : Math.max(0, starts.length - 1);
         const out = [];
         for (let i = 0; i < completeCount; i++) { const s = starts[i].pos + starts[i].len; const e = (i + 1 < starts.length) ? starts[i + 1].pos : this.buffer.length; if (e > s) out.push(this.buffer.slice(s, e)); }
-        const keep = flush ? this.buffer.length : starts[starts.length - 1].pos;
-        this.buffer = this.buffer.slice(keep);
+        this.buffer = this.buffer.slice(flush ? this.buffer.length : starts[starts.length - 1].pos);
         return out;
     }
-}
-
-class WebmRdpSink {
-    constructor(canvas) {
-        this.canvas = canvas;
-        this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
-        this.video = document.createElement('video');
-        this.video.style.display = 'none';
-        this.video.muted = true;
-        this.video.playsInline = true;
-        this.video.autoplay = true;
-        this.video.setAttribute('playsinline', '');
-        this.video.setAttribute('autoplay', '');
-        this.video.preload = 'auto';
-        this.ms = null;
-        this.sb = null;
-        this.inited = false;
-        this.firstFrameDrawn = false;
-        this._rafId = 0;
-        this._onConnected = null;
-        this._queued = [];
-        document.body.appendChild(this.video);
-        const loop = () => {
-            this._rafId = requestAnimationFrame(loop);
-            if (!this.video) return;
-            if (this.video.readyState >= 1 && this.video.paused) this.video.play().catch(() => {});
-            if (this.video.readyState < 1) return;
-            if (this.canvas.width !== this.video.videoWidth || this.canvas.height !== this.video.videoHeight) {
-                this.canvas.width = this.video.videoWidth;
-                this.canvas.height = this.video.videoHeight;
-                displayWidth = this.video.videoWidth;
-                displayHeight = this.video.videoHeight;
-                applyDisplayScale();
-            }
-            this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
-            if (!this.firstFrameDrawn && this.video.videoWidth > 0 && this.video.readyState >= 2) {
-                this.firstFrameDrawn = true;
-                this._onConnected?.();
-            }
-        };
-        loop();
-    }
-    init(codec = 'video/webm; codecs="vp8"') {
-        if (this.inited) return;
-        if (!window.MediaSource) throw new Error('MSE not supported');
-        this.ms = new MediaSource();
-        this.video.src = URL.createObjectURL(this.ms);
-        this.video.play().catch(() => {});
-        const self = this;
-        this.ms.addEventListener('sourceopen', () => {
-            try { self.sb = self.ms.addSourceBuffer(codec); self.sb.mode = 'sequence'; }
-            catch (e) { console.warn('[rdp] sb fail', e); return; }
-            self.sb.addEventListener('updateend', () => {
-                if (self._queued.length) { try { self.sb.appendBuffer(self._queued.shift()); } catch { self._queued.length = 0; } }
-            });
-            self.inited = true;
-            for (const chunk of self._queued.splice(0)) { try { self.sb.appendBuffer(chunk); } catch {} }
-        }, { once: true });
-    }
-    feed(buf) {
-        if (!this.sb || this.sb.updating) {
-            if (this._queued.length > 60) this._queued.splice(0, this._queued.length - 60);
-            this._queued.push(buf);
-        } else {
-            try { this.sb.appendBuffer(buf); } catch { this._queued.push(buf); }
-        }
-    }
-    onConnected(cb) { this._onConnected = cb; }
-    destroy() {
-        if (this._rafId) cancelAnimationFrame(this._rafId);
-        try { this.sb?.abort(); } catch {}
-        try { URL.revokeObjectURL(this.video.src); } catch {}
-        this.video?.remove();
-        this.video = null; this.sb = null; this.ms = null; this.inited = false;
+    buildAvcc(sps, pps) {
+        const avcc = new Uint8Array(11 + sps.length + pps.length);
+        avcc[0] = 1; avcc[1] = sps[1] || 0x42; avcc[2] = sps[2] || 0x00; avcc[3] = sps[3] || 0x1f; avcc[4] = 0xff; avcc[5] = 0xe1;
+        avcc[6] = (sps.length >> 8) & 255; avcc[7] = sps.length & 255; avcc.set(sps, 8);
+        const aoff = 8 + sps.length;
+        avcc[aoff] = 1; avcc[aoff+1] = (pps.length >> 8) & 255; avcc[aoff+2] = pps.length & 255; avcc.set(pps, aoff+3);
+        return avcc;
     }
 }
-
-
-
 async function connect() {
     params = loadParams();
     const label = protocolLabel();
@@ -845,8 +710,7 @@ async function connect() {
         canvas.tabIndex = 0;
         canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
         displayRoot.appendChild(canvas);
-
-        const sink = new WebmRdpSink(canvas);
+        const display = new WebCodecsH264Display(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
         rdpScaleZoom = 1;
         zoomBtn && (zoomBtn.textContent = '🔍 100%');
@@ -856,16 +720,64 @@ async function connect() {
         const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode });
         tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
         tunnel.binaryType = 'arraybuffer';
-        sink.init();
 
-        sink.onConnected(() => {
-            setStatus('connected', `${label} 已连接 [MSE WebM]`);
-            connected = true;
-            startClipboardAutoSync();
-            startRdpAudio();
-            requestRdpCanvasSize(fitModes[fitModeIdx], true);
-            notifyParentStatus('connected');
+        let decoder = null;
+        let timestamp = 0;
+        let frameDuration = Math.round(1000000 / 30);
+        let configured = false;
+        let pendingFrames = [];
+        let firstFrameDrawn = false;
+
+        const parser = new AnnexBH264AccessUnitParser(async (description) => {
+            if (!window.VideoDecoder || !window.EncodedVideoChunk) {
+                setStatus('error', '此浏览器不支持 WebCodecs H.264 解码，请使用 Chrome/Edge/Safari 16.4+');
+                return;
+            }
+            const codec = `avc1.${[description[1], description[2], description[3]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+            const config = { codec, description, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true };
+            const support = await VideoDecoder.isConfigSupported(config).catch(() => ({ supported: false }));
+            if (!support.supported) {
+                setStatus('error', `当前浏览器不支持编解码 ${codec}`);
+                return;
+            }
+            decoder = new VideoDecoder({
+                output: (frame) => {
+                    try {
+                        display.draw(frame);
+                        if (!firstFrameDrawn) {
+                            firstFrameDrawn = true;
+                            setStatus('connected', `${label} 已连接 [WebCodecs H.264]`);
+                            connected = true;
+                            startClipboardAutoSync();
+                            startRdpAudio();
+                            requestRdpCanvasSize(fitModes[fitModeIdx], true);
+                            notifyParentStatus('connected');
+                        }
+                    } finally { frame.close(); }
+                },
+                error: (err) => {
+                    console.warn('[rdp] decoder error', err);
+                    setStatus('error', `H.264 解码失败：${err.message || err}`);
+                },
+            });
+            decoder.configure(config);
+            configured = true;
+            for (const item of pendingFrames.splice(0)) decodeFrame(item.data, item.key);
+        }, (data, key) => {
+            if (!configured) pendingFrames.push({ data, key });
+            else decodeFrame(data, key);
         });
+
+        function decodeFrame(data, key) {
+            if (!decoder || decoder.state !== 'configured') return;
+            if (decoder.decodeQueueSize > 2 && !key) return;
+            timestamp += frameDuration;
+            try {
+                decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp, duration: frameDuration, data }));
+            } catch (err) {
+                console.warn('[rdp] decode rejected', err);
+            }
+        }
 
         tunnel.onopen = () => {
             setStatus('connecting', `${label} 视频通道已建立，等待首帧...`);
@@ -874,17 +786,17 @@ async function connect() {
             notifyParentStatus('connecting');
         };
         tunnel.onclose = (event) => {
+            parser.flush();
             connected = false;
             notifyParentStatus('disconnected');
+            if (decoder) { try { decoder.close(); } catch {} decoder = null; }
             if (event.code === 1012) {
                 stopClipboardAutoSync();
                 stopRdpAudio();
-                sink.destroy();
                 setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
                 window.setTimeout(() => connect(), 250);
                 return;
             }
-            sink.destroy();
             setStatus('disconnected', event.reason || `${label} 已断开`);
             stopRdpAudio();
             stopClipboardAutoSync();
@@ -896,177 +808,20 @@ async function connect() {
                     const msg = JSON.parse(ev.data);
                     if (msg.type === 'hello') {
                         if (msg.width && msg.height) {
-                            displayWidth = Number(msg.width);
-                            displayHeight = Number(msg.height);
+                            display.setSize(Number(msg.width), Number(msg.height));
                             requestedRdpWidth = Number(msg.width) || requestedRdpWidth;
                             requestedRdpHeight = Number(msg.height) || requestedRdpHeight;
+                            if (msg.fps) frameDuration = Math.round(1000000 / Number(msg.fps));
                             window.setTimeout(() => requestRdpCanvasSize(fitModes[fitModeIdx], true), 300);
                         }
                     }
                 } catch {}
                 return;
             }
-            const buf = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data instanceof Blob ? new Uint8Array(await ev.data.arrayBuffer()) : null;
+            const buf = ev.data instanceof ArrayBuffer ? ev.data : ev.data instanceof Blob ? await ev.data.arrayBuffer() : null;
             if (!buf || buf.byteLength < 5) return;
-            sink.feed(buf);
+            parser.push(new Uint8Array(buf));
         };
-
-        function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
-        function pos(e) { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * (canvas.width / Math.max(1, r.width))), y: Math.round((e.clientY - r.top) * (canvas.height / Math.max(1, r.height))) }; }
-        function sendMouseMove(e) { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); }
-        canvas.addEventListener('mousemove', sendMouseMove);
-        canvas.addEventListener('mousedown', (e) => { e.preventDefault(); canvas.focus({ preventScroll: true }); const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); wsInput({ type: 'mousedown', button: e.button + 1 }); notifyParentActivity(); });
-        canvas.addEventListener('mouseup', (e) => { e.preventDefault(); wsInput({ type: 'mouseup', button: e.button + 1 }); notifyParentActivity(); });
-        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-        canvas.addEventListener('wheel', (e) => { e.preventDefault(); wsInput({ type: 'scroll', deltaY: e.deltaY }); notifyParentActivity(); }, { passive: false });
-        installRdpTouchControls(canvas, wsInput, pos);
-function installRdpTouchControls(canvas, wsInput, pos) {
-    const touches = new Map();
-    let leftDown = false;
-    let longPressTimer = 0;
-    let longPressFired = false;
-    let lastTapAt = 0;
-    let lastTap = null;
-    let panStart = null;
-    let startScroll = null;
-    let lastTwoFingerCenter = null;
-    let edgeTimer = 0;
-    let pointer = { clientX: 0, clientY: 0 };
-    const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
-    const toPos = (point) => pos(point);
-    const sendMove = (point) => { pointer = { clientX: point.clientX, clientY: point.clientY }; updateRdpPointer(point.clientX, point.clientY, true); const p = toPos(point); wsInput({ type: 'mouse', x: p.x, y: p.y }); return p; };
-    const clickButton = (button, p) => {
-        wsInput({ type: 'mouse', x: p.x, y: p.y });
-        wsInput({ type: 'click', button });
-    };
-    const updateTouch = (touch) => {
-        const item = touches.get(touch.identifier);
-        if (!item) return null;
-        item.x = touch.clientX;
-        item.y = touch.clientY;
-        item.moved = item.moved || Math.hypot(item.x - item.sx, item.y - item.sy) > 10;
-        return item;
-    };
-    const stopEdgeScroll = () => { if (edgeTimer) { clearInterval(edgeTimer); edgeTimer = 0; } };
-    const startEdgeScroll = (pt) => {
-        if (edgeTimer || !pt) return;
-        edgeTimer = setInterval(() => {
-            const rect = displayShell.getBoundingClientRect();
-            const margin = 34;
-            let dx = 0, dy = 0;
-            if (pt.clientX < rect.left + margin) dx = -18;
-            else if (pt.clientX > rect.right - margin) dx = 18;
-            if (pt.clientY < rect.top + margin) dy = -18;
-            else if (pt.clientY > rect.bottom - margin) dy = 18;
-            if (dx || dy) {
-                displayShell.scrollLeft += dx;
-                displayShell.scrollTop += dy;
-                showRdpHud('边缘滚动', 500);
-            }
-        }, 45);
-    };
-    canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        canvas.focus({ preventScroll: true });
-        for (const t of e.changedTouches) touches.set(t.identifier, { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, moved: false, startedAt: Date.now() });
-        clearLongPress();
-        stopEdgeScroll();
-        longPressFired = false;
-        if (touches.size === 1) {
-            const t = [...touches.values()][0];
-            const p = sendMove({ clientX: t.x, clientY: t.y });
-            longPressTimer = setTimeout(() => {
-                const cur = touches.get(t.id);
-                if (!cur || cur.moved || touches.size !== 1) return;
-                longPressFired = true;
-                clickButton(3, p);
-                showRdpHud('右键');
-                if (navigator.vibrate) navigator.vibrate(20);
-            }, 600);
-        } else if (touches.size >= 2) {
-            clearLongPress();
-            if (leftDown) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
-            const pts = [...touches.values()].slice(0, 2);
-            panStart = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-            lastTwoFingerCenter = { x: panStart.x, y: panStart.y };
-            startScroll = { left: displayShell.scrollLeft, top: displayShell.scrollTop };
-            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            panStart.dist = dist;
-            panStart.w = displayRoot.getBoundingClientRect().width;
-            panStart.h = displayRoot.getBoundingClientRect().height;
-            showRdpHud('双指滚动', 700);
-        }
-        notifyParentActivity();
-    }, { passive: false });
-    canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        for (const t of e.changedTouches) updateTouch(t);
-        if (touches.size >= 2 && panStart && startScroll) {
-            const pts = [...touches.values()].slice(0, 2);
-            const cx = (pts[0].x + pts[1].x) / 2;
-            const cy = (pts[0].y + pts[1].y) / 2;
-            const dx = cx - (lastTwoFingerCenter?.x ?? cx);
-            const dy = cy - (lastTwoFingerCenter?.y ?? cy);
-            lastTwoFingerCenter = { x: cx, y: cy };
-            const beforeLeft = displayShell.scrollLeft;
-            const beforeTop = displayShell.scrollTop;
-            displayShell.scrollLeft -= dx;
-            displayShell.scrollTop -= dy;
-            const didPanViewport = Math.abs(displayShell.scrollLeft - beforeLeft) > 0.5 || Math.abs(displayShell.scrollTop - beforeTop) > 0.5;
-            if (!didPanViewport) wsInput({ type: 'scroll', deltaX: -dx * 8, deltaY: -dy * 8 });
-            showRdpHud(didPanViewport ? '平移' : '双指滚动', 400);
-            return;
-        }
-        const t = [...touches.values()][0];
-        if (!t || longPressFired) return;
-        const point = { clientX: t.x, clientY: t.y };
-        const p = sendMove(point);
-        if (t.moved) {
-            clearLongPress();
-            if (rdpInputMode === 'touch') {
-                if (!leftDown) { wsInput({ type: 'mousedown', button: 1 }); leftDown = true; }
-                wsInput({ type: 'mouse', x: p.x, y: p.y });
-            }
-            startEdgeScroll(point);
-        }
-        notifyParentActivity();
-    }, { passive: false });
-    const finishTouch = (e) => {
-        e.preventDefault();
-        const before = touches.size;
-        for (const t of e.changedTouches) {
-            const item = touches.get(t.identifier);
-            if (!item) continue;
-            const p = sendMove({ clientX: item.x, clientY: item.y });
-            if (!item.moved && !longPressFired && before === 1) {
-                const now = Date.now();
-                const isDouble = lastTap && now - lastTapAt < 320 && Math.hypot(item.x - lastTap.x, item.y - lastTap.y) < 24;
-                clickButton(1, p);
-                if (isDouble) setTimeout(() => clickButton(1, p), 90);
-                lastTapAt = now;
-                lastTap = { x: item.x, y: item.y };
-            }
-            touches.delete(t.identifier);
-        }
-        clearLongPress();
-        stopEdgeScroll();
-        if (leftDown && touches.size === 0) { wsInput({ type: 'mouseup', button: 1 }); leftDown = false; }
-        if (touches.size < 2) { panStart = null; startScroll = null; lastTwoFingerCenter = null; }
-        notifyParentActivity();
-    };
-    canvas.addEventListener('touchend', finishTouch, { passive: false });
-    canvas.addEventListener('touchcancel', finishTouch, { passive: false });
-    canvas.addEventListener('dblclick', () => {
-        rdpInputMode = rdpInputMode === 'touch' ? 'mouse' : 'touch';
-        localStorage.setItem('zephyr-rdp-input-mode', rdpInputMode);
-        updateRdpPointer(pointer.clientX, pointer.clientY, rdpInputMode === 'mouse');
-        showRdpHud(rdpInputMode === 'mouse' ? '浮动鼠标模式' : '触控模式');
-    });
-}
-
-
-
-        const keyMap = { Backspace: 'BackSpace', Tab: 'Tab', Enter: 'Return', Escape: 'Escape', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'Page_Up', PageDown: 'Page_Down', ShiftLeft: 'Shift_L', ShiftRight: 'Shift_R', ControlLeft: 'Control_L', ControlRight: 'Control_R', AltLeft: 'Alt_L', AltRight: 'Alt_R', MetaLeft: 'Super_L', MetaRight: 'Super_R', F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12' };
         const sendKeyboardEventToRdp = (e) => {
             const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : '');
             if (!k) return false;
