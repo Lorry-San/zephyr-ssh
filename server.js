@@ -3432,7 +3432,7 @@ function rdpSpawn(name, args, options = {}) {
 }
 
 function rdpAttachLog(child, label, level = 'info') {
-    if (label !== 'ffmpeg') child.stdout?.on('data', (d) => console.debug('[rdp-h264]', `${label} stdout`, d.toString('utf8').trim()));
+    if (label !== 'ffmpeg' && label !== 'rdp-audio') child.stdout?.on('data', (d) => console.debug('[rdp-h264]', `${label} stdout`, d.toString('utf8').trim()));
     child.stderr?.on('data', (d) => {
         const text = d.toString('utf8').trim();
         if (!text) return;
@@ -3478,7 +3478,6 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const rdpAudioBackend = (() => {
         const pulsePaths = ['/usr/lib/freerdp2/librdpsnd-client-pulse.so', '/usr/lib/freerdp2/rdpsnd-client-pulse.so', '/opt/freerdp-zephyr/lib/freerdp2/librdpsnd-client-pulse.so'];
         if (pulsePaths.some((p) => fs.existsSync(p))) return 'pulse';
-        if (fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-alsa.so')) return 'alsa-pulse';
         return '';
     })();
     if (process.env.RDP_AUDIO !== 'false' && rdpAudioBackend) {
@@ -3510,7 +3509,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_NATIVE_H264 && !RDP_ALLOW_GFX_FALLBACK ? ['/gfx:AVC444'] : ['+gfx']),
         '+fonts',
         '+clipboard',
-        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : rdpAudioBackend === 'alsa-pulse' ? ['/sound:sys:alsa,format:1,rate:44100,channel:2'] : [])),
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '-fast-path',
