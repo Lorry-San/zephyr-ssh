@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.6-rdp-webcodecs-fixed';
+const GUAC_CLIENT_VERSION = '2026-05-31.7-rdp-h264-au-parser';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -634,59 +634,143 @@ class WebCodecsH264Display {
     }
 }
 
+class H264BitReader {
+    constructor(bytes) { this.bytes = bytes; this.bit = 0; }
+    readBit() {
+        const byte = this.bytes[this.bit >> 3];
+        const val = (byte >> (7 - (this.bit & 7))) & 1;
+        this.bit += 1;
+        return val;
+    }
+    readBits(n) { let v = 0; for (let i = 0; i < n; i++) v = (v << 1) | this.readBit(); return v >>> 0; }
+    readUE() {
+        let zeros = 0;
+        while (this.bit < this.bytes.length * 8 && this.readBit() === 0) zeros++;
+        if (zeros === 0) return 0;
+        return ((1 << zeros) - 1 + this.readBits(zeros)) >>> 0;
+    }
+}
+
+function h264Rbsp(nal) {
+    const out = [];
+    for (let i = 1; i < nal.length; i++) {
+        if (i + 2 < nal.length && nal[i] === 0 && nal[i + 1] === 0 && nal[i + 2] === 3) {
+            out.push(0, 0);
+            i += 2;
+        } else {
+            out.push(nal[i]);
+        }
+    }
+    return new Uint8Array(out);
+}
+
+function h264FirstMbInSlice(nal) {
+    try {
+        const type = nal[0] & 0x1f;
+        if (type !== 1 && type !== 5) return null;
+        return new H264BitReader(h264Rbsp(nal)).readUE();
+    } catch {
+        return null;
+    }
+}
+
 class AnnexBH264AccessUnitParser {
     constructor(onConfig, onFrame) {
         this.buffer = new Uint8Array(0);
-        this.pending = []; this.sps = null; this.pps = null; this.configured = false;
-        this.onConfig = onConfig; this.onFrame = onFrame;
+        this.pending = [];
+        this.sps = null;
+        this.pps = null;
+        this.configured = false;
+        this.hasVcl = false;
+        this.onConfig = onConfig;
+        this.onFrame = onFrame;
     }
     push(chunk) {
-        const b = new Uint8Array(this.buffer.length + chunk.length);
-        b.set(this.buffer, 0); b.set(chunk, this.buffer.length); this.buffer = b;
+        const incoming = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk || 0);
+        const b = new Uint8Array(this.buffer.length + incoming.length);
+        b.set(this.buffer, 0);
+        b.set(incoming, this.buffer.length);
+        this.buffer = b;
         for (const nal of this.extractNalUnits(false)) this.acceptNal(nal);
     }
-    flush() { for (const nal of this.extractNalUnits(true)) this.acceptNal(nal); this.emitPending(true); }
+    flush() {
+        for (const nal of this.extractNalUnits(true)) this.acceptNal(nal);
+        this.emitPending(true);
+    }
     acceptNal(nal) {
         if (!nal || nal.length < 1) return;
         const type = nal[0] & 0x1f;
         if (type === 7) this.sps = nal;
         if (type === 8) this.pps = nal;
-        if (!this.configured && this.sps && this.pps) { this.configured = true; this.onConfig(this.buildAvcc(this.sps, this.pps)); }
-        const startsPicture = type === 1 || type === 5;
-        if (startsPicture && this.pending.some(n => { const t = n[0] & 0x1f; return t === 1 || t === 5; })) this.emitPending(false);
+        if (!this.configured && this.sps && this.pps) {
+            this.configured = true;
+            this.onConfig(this.buildAvcc(this.sps, this.pps));
+        }
+
+        const isVcl = type === 1 || type === 5;
+        if (type === 9 && this.pending.length > 0) this.emitPending(false);
+        const firstMb = isVcl ? h264FirstMbInSlice(nal) : null;
+        if (isVcl && this.hasVcl && firstMb === 0) this.emitPending(false);
+
         this.pending.push(nal);
-        if (type === 9 && this.pending.length > 1) this.emitPending(false);
+        if (isVcl) this.hasVcl = true;
     }
     emitPending(force) {
-        const hasSlice = this.pending.some(n => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
+        const hasSlice = this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
         if (!hasSlice && !force) return;
         if (!this.configured) return;
-        const key = this.pending.some(n => (n[0] & 0x1f) === 5);
+        const key = this.pending.some((n) => (n[0] & 0x1f) === 5);
         const size = this.pending.reduce((n, nal) => n + 4 + nal.length, 0);
-        const out = new Uint8Array(size); let o = 0;
-        for (const nal of this.pending) { out[o++] = (nal.length >>> 24) & 255; out[o++] = (nal.length >>> 16) & 255; out[o++] = (nal.length >>> 8) & 255; out[o++] = nal.length & 255; out.set(nal, o); o += nal.length; }
+        const out = new Uint8Array(size);
+        let o = 0;
+        for (const nal of this.pending) {
+            out[o++] = (nal.length >>> 24) & 255;
+            out[o++] = (nal.length >>> 16) & 255;
+            out[o++] = (nal.length >>> 8) & 255;
+            out[o++] = nal.length & 255;
+            out.set(nal, o);
+            o += nal.length;
+        }
         this.pending = [];
-        if (out.byteLength) this.onFrame(out, key);
+        this.hasVcl = false;
+        if (out.byteLength && hasSlice) this.onFrame(out, key);
     }
     extractNalUnits(flush) {
         const starts = [];
         for (let i = 0; i < this.buffer.length - 3; i++) {
-            if (this.buffer[i]===0 && this.buffer[i+1]===0 && this.buffer[i+2]===1) starts.push({ pos: i, len: 3 });
-            else if (i < this.buffer.length-4 && this.buffer[i]===0 && this.buffer[i+1]===0 && this.buffer[i+2]===0 && this.buffer[i+3]===1) starts.push({ pos: i, len: 4 });
+            if (this.buffer[i] === 0 && this.buffer[i + 1] === 0 && this.buffer[i + 2] === 1) starts.push({ pos: i, len: 3 });
+            else if (i < this.buffer.length - 4 && this.buffer[i] === 0 && this.buffer[i + 1] === 0 && this.buffer[i + 2] === 0 && this.buffer[i + 3] === 1) starts.push({ pos: i, len: 4 });
         }
-        if (starts.length === 0) { if (this.buffer.length > 2*1024*1024) this.buffer = new Uint8Array(0); return []; }
+        if (starts.length === 0) {
+            if (this.buffer.length > 4 * 1024 * 1024) this.buffer = new Uint8Array(0);
+            return [];
+        }
         const completeCount = flush ? starts.length : Math.max(0, starts.length - 1);
         const out = [];
-        for (let i = 0; i < completeCount; i++) { const s = starts[i].pos + starts[i].len; const e = (i + 1 < starts.length) ? starts[i + 1].pos : this.buffer.length; if (e > s) out.push(this.buffer.slice(s, e)); }
+        for (let i = 0; i < completeCount; i++) {
+            const s = starts[i].pos + starts[i].len;
+            const e = (i + 1 < starts.length) ? starts[i + 1].pos : this.buffer.length;
+            if (e > s) out.push(this.buffer.slice(s, e));
+        }
         this.buffer = this.buffer.slice(flush ? this.buffer.length : starts[starts.length - 1].pos);
         return out;
     }
     buildAvcc(sps, pps) {
         const avcc = new Uint8Array(11 + sps.length + pps.length);
-        avcc[0] = 1; avcc[1] = sps[1] || 0x42; avcc[2] = sps[2] || 0x00; avcc[3] = sps[3] || 0x1f; avcc[4] = 0xff; avcc[5] = 0xe1;
-        avcc[6] = (sps.length >> 8) & 255; avcc[7] = sps.length & 255; avcc.set(sps, 8);
+        avcc[0] = 1;
+        avcc[1] = sps[1] || 0x42;
+        avcc[2] = sps[2] || 0x00;
+        avcc[3] = sps[3] || 0x1f;
+        avcc[4] = 0xff;
+        avcc[5] = 0xe1;
+        avcc[6] = (sps.length >> 8) & 255;
+        avcc[7] = sps.length & 255;
+        avcc.set(sps, 8);
         const aoff = 8 + sps.length;
-        avcc[aoff] = 1; avcc[aoff+1] = (pps.length >> 8) & 255; avcc[aoff+2] = pps.length & 255; avcc.set(pps, aoff+3);
+        avcc[aoff] = 1;
+        avcc[aoff + 1] = (pps.length >> 8) & 255;
+        avcc[aoff + 2] = pps.length & 255;
+        avcc.set(pps, aoff + 3);
         return avcc;
     }
 }
@@ -727,6 +811,11 @@ async function connect() {
         let configured = false;
         let pendingFrames = [];
         let firstFrameDrawn = false;
+        const wsInput = (message) => {
+            if (!tunnel || tunnel.readyState !== WebSocket.OPEN) return false;
+            try { tunnel.send(JSON.stringify(message)); return true; } catch { return false; }
+        };
+        rdpInputSender = wsInput;
 
         const parser = new AnnexBH264AccessUnitParser(async (description) => {
             if (!window.VideoDecoder || !window.EncodedVideoChunk) {
