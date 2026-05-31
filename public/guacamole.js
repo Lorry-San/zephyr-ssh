@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.21-rdp-canvas-touch';
+const GUAC_CLIENT_VERSION = '2026-05-31.22-rdp-touch-debug';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -831,23 +831,25 @@ function bindCanvasTouch(canvas) {
     let lastTap = null, lastTapAt = 0, longT = 0, tf = null;
     const cr = () => canvas.getBoundingClientRect();
     const p = (x, y) => {
-        const r = cr(); if (!r.width||!r.height) return null;
+        const r = cr(); if (!r.width||!r.height) { console.warn('[rdp-touch] zero canvas rect r',r); return null; }
         const rw = displayWidth||canvas.width||1280, rh = displayHeight||canvas.height||720;
         return { x: Math.max(0,Math.min(rw-1,Math.round((x-r.left)*rw/r.width))), y: Math.max(0,Math.min(rh-1,Math.round((y-r.top)*rh/r.height))) };
     };
-    const snd = (m) => { if (rdpInputSender&&!client&&connected) try { rdpInputSender(m); notifyParentActivity(); } catch {} };
-    const click = (pt, b=1) => { snd({type:'mouse',x:pt.x,y:pt.y}); setTimeout(()=>snd({type:'click',button:b}),10); };
+    const snd = (m) => { if (rdpInputSender&&!client&&connected) { rdpInputSender(m); notifyParentActivity(); return true; } else { console.warn('[rdp-touch] snd blocked',{is:!!rdpInputSender,cl:!!client,conn:connected}); return false; } };
+    const click = (pt, b=1) => { const ok = snd({type:'mouse',x:pt.x,y:pt.y}); if(ok) setTimeout(()=>snd({type:'click',button:b}),10); };
     const down = (b=1) => snd({type:'mousedown',button:b});
     const up = (b=1) => snd({type:'mouseup',button:b});
-    const tid = (t,i) => `t${i}`;
     let pointerTouchTs = 0;
+    setTransientStatus('\u89e6\u63a7\u76d1\u542c\u5df2\u5c31\u4f4d');
     canvas.addEventListener('pointerdown', (e) => {
+        console.info('[rdp-touch] pointerdown', {x:e.clientX,y:e.clientY,pt:e.pointerType,conn:connected,mapSz:map.size});
         pointerTouchTs = Date.now();
-        const pt = p(e.clientX, e.clientY); if (!pt) return;
+        const pt = p(e.clientX, e.clientY); if (!pt) { setTransientStatus('\u5750\u6807\u89e3\u6790\u5931\u8d25'); return; }
         e.preventDefault();
         const id = e.pointerId||'p0';
         map.set(id,{sx:e.clientX, sy:e.clientY, cx:e.clientX, cy:e.clientY, pos:pt, last:pt, moved:false, down:false, right:false});
-        snd({type:'mouse',x:pt.x,y:pt.y});
+        const ok = snd({type:'mouse',x:pt.x,y:pt.y});
+        setTransientStatus(ok ? `\u70b9\u51fb (${pt.x},${pt.y})` : '\u672a\u8fde\u63a5');
         clearTimeout(longT);
         if (map.size===1) longT=setTimeout(()=>{const t=map.get(id); if(t&&!t.moved&&t.last){click(t.last,3);t.right=true;} longT=0;},620);
         else if (map.size===2){clearTimeout(longT);const a=Array.from(map.values());tf={x:(a[0].cx+a[1].cx)/2,y:(a[0].cy+a[1].cy)/2};}
@@ -876,10 +878,10 @@ function bindCanvasTouch(canvas) {
         const t=map.get(e.pointerId||'p0'); if(t?.down)up(1); map.delete(e.pointerId||'p0');
         if(!map.size)clearTimeout(longT);
     },{passive:true,signal:sig});
-    // Native touch fallback
     const tId = (t) => '_t'+t.identifier;
     canvas.addEventListener('touchstart', (e) => {
-        if(Date.now()-pointerTouchTs<450)return;
+        console.info('[rdp-touch] touchstart', {msg:'native touch fallback',touches:e.touches?.length});
+        if(Date.now()-pointerTouchTs<450) { console.info('[rdp-touch] touchstart skipped, pointer just fired'); return; }
         for(const t of Array.from(e.changedTouches)){const pt=p(t.clientX,t.clientY); if(!pt)continue;
             map.set(tId(t),{sx:t.clientX,sy:t.clientY,cx:t.clientX,cy:t.clientY,pos:pt,last:pt,moved:false,down:false,right:false});
             snd({type:'mouse',x:pt.x,y:pt.y});}
@@ -916,7 +918,7 @@ function bindCanvasTouch(canvas) {
         const pt=p(e.clientX,e.clientY); if(!pt)return;
         e.preventDefault(); snd({type:'mouse',x:pt.x,y:pt.y}); snd({type:'scroll',deltaY:e.deltaY,deltaX:e.deltaX});
     },{passive:false,signal:sig});
-    console.info('[guac-client]', 'canvas touch bound', {w:canvas.width,h:canvas.height});
+    console.info('[guac-client]', 'canvas touch bound', {w:canvas.width,h:canvas.height, conn:connected, sender:!!rdpInputSender, client:!!client});
 }
 
 class WebCodecsH264Display {
