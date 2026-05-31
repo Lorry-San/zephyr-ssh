@@ -3516,11 +3516,11 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         '-mouse-motion',
         '/log-level:WARN',
     ];
+    const nativeH264 = RDP_NATIVE_H264 && fs.existsSync(fifoPath);
     const xfreerdpBin = nativeH264 ? (process.env.RDP_FREERDP_BIN || 'xfreerdp') : (process.env.RDP_FALLBACK_FREERDP_BIN || '/usr/bin/xfreerdp');
     const xfreerdp = rdpSpawn(xfreerdpBin, xfreerdpArgs, { env });
     rdpAttachLog(xfreerdp, 'xfreerdp', 'warn');
 
-    const nativeH264 = RDP_NATIVE_H264 && fs.existsSync(fifoPath);
     const ffmpegArgs = [
         '-hide_banner', '-loglevel', 'warning',
         '-f', 'x11grab', '-draw_mouse', '0',
