@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.25-rdp-no-dynamic-resize';
+const GUAC_CLIENT_VERSION = '2026-05-31.26-rdp-input-stable';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -1905,6 +1905,7 @@ function isTextInputTarget(target = document.activeElement) {
 }
 
 function startClipboardAutoSync() {
+    if (rdpInputSender && !client) return;
     if (clipboardAutoSyncTimer) return;
     const tick = () => {
         if (!connected || (!client && !rdpInputSender)) return;
@@ -2567,7 +2568,7 @@ stage?.addEventListener('focus', () => {
 });
 stage?.addEventListener('pointerdown', () => {
     ensureRdpAudioUnlocked();
-    if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
+    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
 }, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
