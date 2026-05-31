@@ -875,6 +875,40 @@ function bindCanvasTouch(canvas) {
     const down = (b=1) => snd({type:'mousedown',button:b});
     const up = (b=1) => snd({type:'mouseup',button:b});
     let pointerTouchTs = 0;
+    const isDesktopMousePointer = (e) => (e.pointerType || 'mouse') === 'mouse';
+    const mouseButton = (e) => e.button === 2 ? 3 : e.button === 1 ? 2 : 1;
+    const desktopMouseMove = (e) => {
+        if (!isDesktopMousePointer(e)) return false;
+        const pt = p(e.clientX, e.clientY);
+        if (!pt) return false;
+        snd({ type: 'mouse', x: pt.x, y: pt.y });
+        return true;
+    };
+    canvas.addEventListener('pointermove', (e) => {
+        if (!isDesktopMousePointer(e)) return;
+        desktopMouseMove(e);
+    }, { passive: true, signal: sig });
+    canvas.addEventListener('pointerdown', (e) => {
+        if (!isDesktopMousePointer(e)) return;
+        const pt = p(e.clientX, e.clientY);
+        if (!pt) return;
+        e.preventDefault();
+        canvas.focus({ preventScroll: true });
+        snd({ type: 'mouse', x: pt.x, y: pt.y });
+        snd({ type: 'mousedown', button: mouseButton(e) });
+        canvas.setPointerCapture?.(e.pointerId);
+    }, { passive: false, signal: sig });
+    canvas.addEventListener('pointerup', (e) => {
+        if (!isDesktopMousePointer(e)) return;
+        const pt = p(e.clientX, e.clientY);
+        if (pt) snd({ type: 'mouse', x: pt.x, y: pt.y });
+        snd({ type: 'mouseup', button: mouseButton(e) });
+    }, { passive: true, signal: sig });
+    canvas.addEventListener('pointercancel', (e) => {
+        if (!isDesktopMousePointer(e)) return;
+        snd({ type: 'mouseup', button: mouseButton(e) });
+    }, { passive: true, signal: sig });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: false, signal: sig });
     setTransientStatus('\u89e6\u63a7\u76d1\u542c\u5df2\u5c31\u4f4d');
     canvas.addEventListener('pointerdown', (e) => {
         console.info('[rdp-touch] pointerdown', {x:e.clientX,y:e.clientY,pt:e.pointerType,conn:connected,mapSz:map.size});
@@ -1148,7 +1182,7 @@ async function connect() {
         const canvas = document.createElement('canvas');
         canvas.id = 'rdp-canvas';
         canvas.tabIndex = 0;
-        canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
+        canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:default;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
         displayRoot.appendChild(canvas);
         const display = new WebCodecsH264Display(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
@@ -1289,16 +1323,40 @@ async function connect() {
             parser.push(new Uint8Array(buf));
         };
         const sendKeyboardEventToRdp = (e) => {
-            const k = keyMap[e.code] || (e.key && e.key.length === 1 ? e.key : '');
-            if (!k) return false;
+            if (!rdpInputSender || client || !connected) return false;
+            const key = e.key || '';
+            const code = e.code || '';
+            if (e.isComposing || key === 'Process' || key === 'Dead') return false;
+            if (e.ctrlKey || e.metaKey || e.altKey) {
+                const combo = [];
+                if (e.ctrlKey) combo.push('ctrl');
+                if (e.altKey) combo.push('alt');
+                if (e.metaKey) combo.push('Super_L');
+                if (e.shiftKey) combo.push('shift');
+                const base = key.length === 1 ? key.toLowerCase() : keysymToXdotool(keyEventToKeysym(e));
+                if (!base || base === '0') return false;
+                e.preventDefault();
+                wsInput({ type: 'key', key: [...combo, base].join('+') });
+                notifyParentActivity();
+                return true;
+            }
+            if (key.length === 1) {
+                e.preventDefault();
+                wsInput({ type: 'text', text: key });
+                notifyParentActivity();
+                return true;
+            }
+            const keysym = keyEventToKeysym(e);
+            const xKey = keysym ? keysymToXdotool(keysym) : (code ? code.replace(/^Key/, '').replace(/^Digit/, '') : '');
+            if (!xKey || xKey === '0') return false;
             e.preventDefault();
-            wsInput({ type: 'key', key: k });
+            wsInput({ type: 'key', key: xKey });
             notifyParentActivity();
             return true;
         };
         canvas.addEventListener('keydown', sendKeyboardEventToRdp);
         document.addEventListener('keydown', (e) => {
-            if (!connected) return;
+            if (!connected || !rdpInputSender || client) return;
             if (isTextInputTarget(e.target)) return;
             sendKeyboardEventToRdp(e);
         }, true);
@@ -2417,11 +2475,32 @@ async function sendKeyCombo(keysyms, label = '组合键') {
     }
 }
 
+function keyEventToKeysym(event = {}) {
+    const key = event.key || '';
+    const code = event.code || '';
+    const named = {
+        Backspace: KEY.BACKSPACE, Tab: KEY.TAB, Enter: KEY.ENTER, Escape: KEY.ESC,
+        Home: KEY.HOME, ArrowLeft: KEY.LEFT, ArrowUp: KEY.UP, ArrowRight: KEY.RIGHT, ArrowDown: KEY.DOWN,
+        PageUp: KEY.PAGE_UP, PageDown: KEY.PAGE_DOWN, End: KEY.END, Delete: KEY.DELETE,
+        Shift: KEY.SHIFT, Control: KEY.CTRL, Alt: KEY.ALT, Meta: KEY.SUPER,
+        Insert: 0xff63,
+    };
+    if (named[key]) return named[key];
+    const fn = /^F(\d{1,2})$/.exec(key || code);
+    if (fn) {
+        const n = Number(fn[1]);
+        if (n >= 1 && n <= 12) return KEY.F1 + n - 1;
+    }
+    if (key && key.length === 1) return asciiKeysym(key);
+    return 0;
+}
+
 function keysymToXdotool(keysym) {
     const map = {
         [KEY.BACKSPACE]: 'BackSpace', [KEY.TAB]: 'Tab', [KEY.ENTER]: 'Return', [KEY.ESC]: 'Escape',
         [KEY.HOME]: 'Home', [KEY.LEFT]: 'Left', [KEY.UP]: 'Up', [KEY.RIGHT]: 'Right', [KEY.DOWN]: 'Down',
         [KEY.PAGE_UP]: 'Page_Up', [KEY.PAGE_DOWN]: 'Page_Down', [KEY.END]: 'End', [KEY.DELETE]: 'Delete',
+        [0xff63]: 'Insert',
         [KEY.CTRL]: 'ctrl', [KEY.SHIFT]: 'shift', [KEY.ALT]: 'alt', [KEY.SUPER]: 'Super_L',
         [KEY.F1]: 'F1', [KEY.F2]: 'F2', [KEY.F3]: 'F3', [KEY.F4]: 'F4', [KEY.F5]: 'F5', [KEY.F6]: 'F6',
         [KEY.F7]: 'F7', [KEY.F8]: 'F8', [KEY.F9]: 'F9', [KEY.F10]: 'F10', [KEY.F11]: 'F11', [KEY.F12]: 'F12',
