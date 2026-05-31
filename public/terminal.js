@@ -2682,27 +2682,25 @@ function createFileManagerWindow({ path = currentPath } = {}) {
             item.dataset.fileType = file.type;
             item.dataset.filePath = itemPath;
             item.classList.toggle('selected', state.selectedFilePaths.has(itemPath));
-            const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
-            const nameSpan = document.createElement('span');
-            nameSpan.textContent = `${icon} ${file.name}`;
-            nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
-            nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); selectSingle(itemPath); });
-            nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); openItem(itemPath, file.type); });
+            const nameSpan = createFileNameNode(file, itemPath,
+                (e) => { e.preventDefault(); e.stopPropagation(); selectSingle(itemPath); },
+                (e) => { e.preventDefault(); e.stopPropagation(); openItem(itemPath, file.type); }
+            );
             const actions = document.createElement('div');
             actions.className = 'fm-item-actions';
             if (file.type !== 'd') {
                 const downloadBtn = document.createElement('button');
-                downloadBtn.textContent = '⬇️';
+                setCssActionIcon(downloadBtn, 'download');
                 downloadBtn.title = '下载';
                 downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadBtn.disabled = true; window.setTimeout(() => { downloadBtn.disabled = false; }, 2400); requestDownload({ ...file, path: itemPath }); });
                 actions.appendChild(downloadBtn);
             }
             const renameBtn = document.createElement('button');
-            renameBtn.textContent = '✏️';
+            setCssActionIcon(renameBtn, 'rename');
             renameBtn.title = '重命名';
             renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (!newName) return; wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: fullPath(newName) })); });
             const deleteBtn = document.createElement('button');
-            deleteBtn.textContent = '🗑️';
+            setCssActionIcon(deleteBtn, 'delete');
             deleteBtn.title = '删除';
             deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
             actions.appendChild(renameBtn); actions.appendChild(deleteBtn);
@@ -2811,14 +2809,14 @@ function handleExtraFileManagerListMessage(msg) {
                 item.className = 'fm-item';
                 const itemPath = state.currentPath.replace(/\/+$/, '') + '/' + file.name;
                 item.dataset.fileName = file.name; item.dataset.fileType = file.type; item.dataset.filePath = itemPath;
-                const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
-                const nameSpan = document.createElement('span'); nameSpan.textContent = `${icon} ${file.name}`; nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
-                nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); state.selectedFilePaths = new Set([itemPath]); listEl.querySelectorAll('.fm-item').forEach((el) => el.classList.toggle('selected', el.dataset.filePath === itemPath)); });
-                nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); if (file.type === 'd') { state.currentPath = itemPath; state.searchQuery = ''; const si = state.panel.querySelector('.fm-search-input'); if (si) si.value = ''; const rid = `${state.requestPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; fileManagerWindowsByRequestId.set(rid, state); wsConnection.send(JSON.stringify({ type: 'sftp-list', requestId: rid, path: state.currentPath })); } else openFileItem(itemPath, file.type); });
+                const nameSpan = createFileNameNode(file, itemPath,
+                    (e) => { e.preventDefault(); e.stopPropagation(); state.selectedFilePaths = new Set([itemPath]); listEl.querySelectorAll('.fm-item').forEach((el) => el.classList.toggle('selected', el.dataset.filePath === itemPath)); },
+                    (e) => { e.preventDefault(); e.stopPropagation(); if (file.type === 'd') { state.currentPath = itemPath; state.searchQuery = ''; const si = state.panel.querySelector('.fm-search-input'); if (si) si.value = ''; const rid = `${state.requestPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; fileManagerWindowsByRequestId.set(rid, state); wsConnection.send(JSON.stringify({ type: 'sftp-list', requestId: rid, path: state.currentPath })); } else openFileItem(itemPath, file.type); }
+                );
                 const actions = document.createElement('div'); actions.className = 'fm-item-actions';
-                if (file.type !== 'd') { const downloadBtn = document.createElement('button'); downloadBtn.textContent = '⬇️'; downloadBtn.title = '下载'; downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDownload({ ...file, path: itemPath }); }); actions.appendChild(downloadBtn); }
-                const renameBtn = document.createElement('button'); renameBtn.textContent = '✏️'; renameBtn.title = '重命名'; renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (newName) wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: state.currentPath.replace(/\/+$/, '') + '/' + newName })); });
-                const deleteBtn = document.createElement('button'); deleteBtn.textContent = '🗑️'; deleteBtn.title = '删除'; deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
+                if (file.type !== 'd') { const downloadBtn = document.createElement('button'); setCssActionIcon(downloadBtn, 'download'); downloadBtn.title = '下载'; downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDownload({ ...file, path: itemPath }); }); actions.appendChild(downloadBtn); }
+                const renameBtn = document.createElement('button'); setCssActionIcon(renameBtn, 'rename'); renameBtn.title = '重命名'; renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (newName) wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: state.currentPath.replace(/\/+$/, '') + '/' + newName })); });
+                const deleteBtn = document.createElement('button'); setCssActionIcon(deleteBtn, 'delete'); deleteBtn.title = '删除'; deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
                 actions.appendChild(renameBtn); actions.appendChild(deleteBtn); item.appendChild(nameSpan); item.appendChild(actions); listEl.appendChild(item);
             });
         }
@@ -3481,6 +3479,58 @@ document.addEventListener('keydown', (e) => {
     else if (mod && e.key.toLowerCase() === 'i') { e.preventDefault(); handleFileMenuAction('properties'); }
 });
 
+function fileCssIconClass(file = {}) {
+    const name = file.name || file.path || '';
+    if (file.type === 'd') return 'folder';
+    if (isArchiveFile(name)) return 'zip';
+    if (window.ZephyrImagePreview?.isImage?.(name)) return 'image';
+    if (isSftpMediaFile(name)) return isSftpVideoFile(name) ? 'video' : 'music';
+    return 'doc';
+}
+
+function createFileNameNode(file, itemPath, onSelect, onOpen) {
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'fm-item-name';
+    const icon = document.createElement('span');
+    icon.className = `fm-css-icon ${fileCssIconClass(file)}`;
+    icon.setAttribute('aria-hidden', 'true');
+    nameSpan.appendChild(icon);
+    nameSpan.appendChild(document.createTextNode(file.name || itemPath.split('/').pop() || itemPath));
+    nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
+    nameSpan.addEventListener('click', onSelect);
+    nameSpan.addEventListener('dblclick', onOpen);
+    return nameSpan;
+}
+
+function setCssActionIcon(button, type) {
+    button.textContent = '';
+    const icon = document.createElement('span');
+    icon.className = `fm-action-css-icon ${type}`;
+    icon.setAttribute('aria-hidden', 'true');
+    button.appendChild(icon);
+}
+
+function replaceFileToolbarEmojiIcons() {
+    const folderBtn = document.getElementById('fmNewFolderBtn');
+    if (folderBtn && !folderBtn.querySelector('.fm-css-icon')) {
+        folderBtn.textContent = '';
+        const icon = document.createElement('span');
+        icon.className = 'fm-css-icon folder';
+        icon.setAttribute('aria-hidden', 'true');
+        folderBtn.append(icon, document.createTextNode('新建文件夹'));
+    }
+    const fileBtn = document.getElementById('fmNewFileBtn');
+    if (fileBtn && !fileBtn.querySelector('.fm-css-icon')) {
+        fileBtn.textContent = '';
+        const icon = document.createElement('span');
+        icon.className = 'fm-css-icon doc';
+        icon.setAttribute('aria-hidden', 'true');
+        fileBtn.append(icon, document.createTextNode('新建文件'));
+    }
+}
+
+replaceFileToolbarEmojiIcons();
+
 function renderFileList(files) {
     allFiles = sortFiles(files);
     const filtered = filterFiles(allFiles, searchQuery);
@@ -3493,25 +3543,23 @@ function renderFileList(files) {
         item.dataset.fileType = file.type;
         item.dataset.filePath = itemPath;
         item.classList.toggle('selected', selectedFilePaths.has(itemPath));
-        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = `${icon} ${file.name}`;
-        nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
-        nameSpan.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            selectSingleFile(itemPath);
-        });
-        nameSpan.addEventListener('dblclick', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openFileItem(itemPath, file.type);
-        });
+        const nameSpan = createFileNameNode(file, itemPath,
+            (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                selectSingleFile(itemPath);
+            },
+            (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openFileItem(itemPath, file.type);
+            }
+        );
         const actions = document.createElement('div');
         actions.className = 'fm-item-actions';
 
         const renameBtn = document.createElement('button');
-        renameBtn.textContent = '✏️';
+        setCssActionIcon(renameBtn, 'rename');
         renameBtn.title = '重命名';
         renameBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3523,7 +3571,7 @@ function renderFileList(files) {
         });
 
         const deleteBtn = document.createElement('button');
-        deleteBtn.textContent = '🗑️';
+        setCssActionIcon(deleteBtn, 'delete');
         deleteBtn.title = '删除';
         deleteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3537,7 +3585,7 @@ function renderFileList(files) {
 
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
-            downloadBtn.textContent = '⬇️';
+            setCssActionIcon(downloadBtn, 'download');
             downloadBtn.title = '下载';
             downloadBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
