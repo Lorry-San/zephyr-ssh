@@ -3479,6 +3479,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const rdpAudioBackend = (() => {
         const pulsePaths = ['/usr/lib/freerdp2/librdpsnd-client-pulse.so', '/usr/lib/freerdp2/rdpsnd-client-pulse.so', '/opt/freerdp-zephyr/lib/freerdp2/librdpsnd-client-pulse.so'];
         if (pulsePaths.some((p) => fs.existsSync(p))) return 'pulse';
+        if (fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-alsa.so')) return 'alsa-pulse';
         return '';
     })();
     if (process.env.RDP_AUDIO !== 'false' && rdpAudioBackend) {
@@ -3510,7 +3511,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_NATIVE_H264 && !RDP_ALLOW_GFX_FALLBACK ? ['/gfx:AVC444'] : ['+gfx']),
         '+fonts',
         '+clipboard',
-        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (rdpAudioBackend === 'pulse' ? ['/sound:sys:pulse,format:1,rate:44100,channel:2', '+async-channels'] : rdpAudioBackend === 'alsa-pulse' ? ['/audio-mode:0', '/sound:sys:alsa,format:1,rate:44100,channel:2', '+async-channels'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '-fast-path',
@@ -3855,18 +3856,14 @@ rdpAudioWss.on('connection', async (ws, req) => {
         if (!sessionUser) { ws.close(1008, 'unauthorized'); return; }
         const pipe = rdpPipes.get(connId);
         if (!pipe) { ws.close(1011, 'rdp pipeline not ready'); return; }
-        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
-        const conn = (store.connections || []).find((c) => c.id === connId);
-        if (!conn) { ws.close(1008, 'connection not found'); return; }
-        const worker = startIsolatedRdpAudioWorker(connId, conn);
-        if (!worker) { ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'disabled', reason: 'audio worker disabled to keep the main RDP session stable' })); ws.close(1013, 'rdp audio disabled'); return; }
-        worker.clients.add(ws);
-        ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'isolated' }));
-        console.info('[rdp-audio]', 'browser attached', { connId, clients: worker.clients.size, mode: 'isolated' });
+        pipe.audioClients.add(ws);
+        ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'inline' }));
+        startRdpAudioCapture(pipe);
+        console.info('[rdp-audio]', 'browser attached', { connId, clients: pipe.audioClients.size, mode: 'inline' });
         ws.on('close', () => {
-            worker.clients.delete(ws);
-            console.info('[rdp-audio]', 'browser detached', { connId, clients: worker.clients.size, mode: 'isolated' });
-            if (worker.clients.size === 0) setTimeout(() => { const latest = rdpAudioWorkers.get(connId); if (latest && latest.clients.size === 0) cleanupIsolatedRdpAudioWorker(connId); }, 5000);
+            pipe.audioClients.delete(ws);
+            console.info('[rdp-audio]', 'browser detached', { connId, clients: pipe.audioClients.size, mode: 'inline' });
+            if (pipe.audioClients.size === 0 && pipe.audioFfmpeg) { try { pipe.audioFfmpeg.kill('SIGTERM'); } catch {} pipe.audioFfmpeg = null; }
         });
         ws.on('error', (err) => console.warn('[rdp-audio]', 'browser websocket error', { connId, error: err.message }));
     } catch (err) {
