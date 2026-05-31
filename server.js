@@ -3554,6 +3554,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         lastRemoteClipboardText: '',
         startedAt: Date.now(),
         ready: false,
+        stopping: false,
     };
     rdpPipes.set(connId, pipe);
 
@@ -3581,10 +3582,13 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         pipe.nativeReader.on('end', () => console.warn('[rdp-h264]', 'native h264 pipe ended', { connId }));
     } else if (ffmpeg) {
         ffmpeg.stdout.on('data', broadcastH264);
-        ffmpeg.on('exit', () => {
+        ffmpeg.on('exit', (code, signal) => {
             clearTimeout(readyTimer);
+            const latest = rdpPipes.get(connId);
+            if (pipe.stopping || latest !== pipe) return;
+            console.warn('[rdp-h264]', 'encoder exited unexpectedly, requesting reconnect', { connId, code, signal });
             for (const client of pipe.clients) {
-                try { if (client.readyState === client.OPEN) client.close(1011, 'rdp encoder exited'); } catch {}
+                try { if (client.readyState === client.OPEN) client.close(1012, 'rdp encoder restarting'); } catch {}
             }
             cleanupPipe(connId);
         });
@@ -3789,6 +3793,7 @@ rdpAudioWss.on('connection', async (ws, req) => {
 function cleanupPipe(connId) {
     const p = rdpPipes.get(connId);
     if (p) {
+        p.stopping = true;
         try { p.nativeReader?.destroy(); } catch {}
         try { p.ffmpeg?.kill('SIGTERM'); } catch {}
         try { p.audioFfmpeg?.kill('SIGTERM'); } catch {}

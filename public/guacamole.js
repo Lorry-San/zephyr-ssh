@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.9-rdp-mobile-input-landscape';
+const GUAC_CLIENT_VERSION = '2026-05-31.10-rdp-resize-stability';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -435,7 +435,17 @@ function applyDisplayScale() {
         let scale = 1;
         if (mode === 'fit') scale = Math.max(bounds.width / curW, bounds.height / curH);
         else scale = Math.min(bounds.width / curW, bounds.height / curH);
+        if (mode === '16:9' || mode === '4:3') {
+            const [num, den] = mode === '16:9' ? [16, 9] : [4, 3];
+            const targetW = Math.max(curW, curH * num / den);
+            const targetH = targetW * den / num;
+            scale = Math.min(bounds.width / targetW, bounds.height / targetH);
+            setCanvasCss(targetW * scale, targetH * scale);
+            rdpCanvas.style.objectFit = 'contain';
+            return;
+        }
         setCanvasCss(curW * scale, curH * scale);
+        rdpCanvas.style.objectFit = 'contain';
         return;
     }
     if (!client) return;
