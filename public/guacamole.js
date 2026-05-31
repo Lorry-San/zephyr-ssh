@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.17-rdp-inline-audio';
+const GUAC_CLIENT_VERSION = '2026-05-31.18-rdp-mobile-touch-fallback';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -601,6 +601,13 @@ function setupMobilePointerMouse() {
     let lastTapAt = 0;
     let lastTapPos = null;
     let twoFingerState = null;
+    let lastPointerTouchAt = 0;
+    const isTouchLikePointer = (event) => {
+        const pt = event.pointerType || '';
+        if (pt === 'touch' || pt === 'pen') return true;
+        if (pt === 'mouse') return false;
+        return !!(rdpInputSender && !client && ((navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches || isCompactScreen()));
+    };
     function cancelLP() { if (guacLongPress) { clearTimeout(guacLongPress); guacLongPress = null; } }
     function sendMove(pos) {
         if (!pos || !connected) return false;
@@ -631,7 +638,8 @@ function setupMobilePointerMouse() {
         }
     }
     stage.addEventListener('pointerdown', (event) => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        if (!isTouchLikePointer(event)) return;
+        lastPointerTouchAt = Date.now();
         if (isUI(event.target)) return;
         const pos = getRemotePointerPosition(event);
         if (!pos) return;
@@ -651,7 +659,8 @@ function setupMobilePointerMouse() {
         } else cancelLP();
     }, { passive: false });
     stage.addEventListener('pointermove', (event) => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        if (!isTouchLikePointer(event)) return;
+        lastPointerTouchAt = Date.now();
         const t = guacTouches.get(event.pointerId);
         if (!t) return;
         event.preventDefault();
@@ -677,7 +686,8 @@ function setupMobilePointerMouse() {
         else if (t.downSent) sendMove(pos);
     }, { passive: false });
     stage.addEventListener('pointerup', (event) => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+        if (!isTouchLikePointer(event)) return;
+        lastPointerTouchAt = Date.now();
         const t = guacTouches.get(event.pointerId);
         if (!t) return;
         event.preventDefault();
@@ -702,6 +712,103 @@ function setupMobilePointerMouse() {
         guacTouches.delete(event.pointerId);
         if (guacTouches.size === 0) { cancelLP(); twoFingerState = null; }
         updateRdpPointer(event.clientX || 0, event.clientY || 0, false);
+    }, { passive: true });
+
+    const touchId = (touch) => `t${touch.identifier}`;
+    const eventFromTouch = (touch) => ({ clientX: touch.clientX, clientY: touch.clientY, target: touch.target || stage });
+    stage.addEventListener('touchstart', (event) => {
+        if (Date.now() - lastPointerTouchAt < 450) return;
+        if (isUI(event.target)) return;
+        const touches = Array.from(event.changedTouches || []);
+        if (!touches.length) return;
+        event.preventDefault();
+        stage.focus({ preventScroll: true });
+        for (const touch of touches) {
+            const ev = eventFromTouch(touch);
+            const pos = getRemotePointerPosition(ev);
+            if (!pos) continue;
+            const id = touchId(touch);
+            const t = { id, sx: touch.clientX, sy: touch.clientY, cx: touch.clientX, cy: touch.clientY, pos, lastPos: pos, moved: false, downSent: false, touchFallback: true };
+            guacTouches.set(id, t);
+            updateRdpPointer(touch.clientX, touch.clientY, true);
+        }
+        if (guacTouches.size === 1) {
+            const t = Array.from(guacTouches.values())[0];
+            cancelLP();
+            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || t.pos); t.rightClicked = true; } guacLongPress = null; }, 620);
+        } else if (guacTouches.size === 2) {
+            cancelLP();
+            const arr = Array.from(guacTouches.values());
+            twoFingerState = { x: (arr[0].cx + arr[1].cx) / 2, y: (arr[0].cy + arr[1].cy) / 2 };
+        } else cancelLP();
+    }, { passive: false });
+    stage.addEventListener('touchmove', (event) => {
+        if (Date.now() - lastPointerTouchAt < 450) return;
+        const touches = Array.from(event.changedTouches || []);
+        if (!touches.length) return;
+        event.preventDefault();
+        for (const touch of touches) {
+            const id = touchId(touch);
+            const t = guacTouches.get(id);
+            if (!t) continue;
+            const pos = getRemotePointerPosition(eventFromTouch(touch));
+            t.cx = touch.clientX; t.cy = touch.clientY;
+            if (pos) t.lastPos = pos;
+            updateRdpPointer(touch.clientX, touch.clientY, true);
+            const dist = Math.hypot(t.cx - t.sx, t.cy - t.sy);
+            if (!t.moved && dist > 12) { t.moved = true; cancelLP(); }
+        }
+        if (guacTouches.size === 2) {
+            const arr = Array.from(guacTouches.values());
+            const cx = (arr[0].cx + arr[1].cx) / 2;
+            const cy = (arr[0].cy + arr[1].cy) / 2;
+            if (twoFingerState) {
+                const dy = cy - twoFingerState.y;
+                const dx = cx - twoFingerState.x;
+                if (Math.abs(dy) > 14 || Math.abs(dx) > 20) { scrollBy(-dy, -dx); twoFingerState = { x: cx, y: cy }; }
+            }
+            return;
+        }
+        const t = Array.from(guacTouches.values()).find((x) => x.touchFallback);
+        const pos = t?.lastPos;
+        if (!t || !pos || t.rightClicked) return;
+        if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; }
+        else if (t.downSent) sendMove(pos);
+    }, { passive: false });
+    stage.addEventListener('touchend', (event) => {
+        if (Date.now() - lastPointerTouchAt < 450) return;
+        const touches = Array.from(event.changedTouches || []);
+        if (!touches.length) return;
+        event.preventDefault();
+        for (const touch of touches) {
+            const id = touchId(touch);
+            const t = guacTouches.get(id);
+            if (!t) continue;
+            const pos = getRemotePointerPosition(eventFromTouch(touch)) || t.lastPos || t.pos;
+            guacTouches.delete(id);
+            if (t.rightClicked) continue;
+            if (t.downSent) sendButton(pos, 1, false);
+            else if (!t.moved) {
+                const now = Date.now();
+                const isDouble = lastTapPos && now - lastTapAt < 360 && Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < 36;
+                sendRemoteMouseClick(pos, isDouble ? 'double-tap-1' : 'tap', 1);
+                if (isDouble) window.setTimeout(() => sendRemoteMouseClick(pos, 'double-tap-2', 1), 70);
+                lastTapAt = now; lastTapPos = pos;
+            }
+            updateRdpPointer(touch.clientX, touch.clientY, false);
+        }
+        if (guacTouches.size < 2) twoFingerState = null;
+        if (guacTouches.size === 0) cancelLP();
+    }, { passive: false });
+    stage.addEventListener('touchcancel', (event) => {
+        if (Date.now() - lastPointerTouchAt < 450) return;
+        for (const touch of Array.from(event.changedTouches || [])) {
+            const id = touchId(touch);
+            const t = guacTouches.get(id);
+            if (t?.downSent) sendButton(t.lastPos || t.pos, 1, false);
+            guacTouches.delete(id);
+        }
+        if (guacTouches.size === 0) { cancelLP(); twoFingerState = null; }
     }, { passive: true });
     stage.addEventListener('wheel', (event) => {
         if (isUI(event.target)) return;
@@ -2381,7 +2488,7 @@ shortcutGrid?.addEventListener('click', (event) => {
 }, { capture: true });
 
 stage?.addEventListener('pointerdown', (event) => {
-    if (event.pointerType === 'touch' || event.pointerType === 'pen') return;
+    if (event.pointerType === 'touch' || event.pointerType === 'pen' || (!event.pointerType && ((navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches))) return;
     if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
     stage.focus({ preventScroll: true });
     notifyParentActivity();
