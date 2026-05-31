@@ -97,6 +97,8 @@ RUN apk update && \
         imagemagick \
         ffmpeg \
         freerdp \
+        libxrandr \
+        openh264 \
         xvfb \
         xdotool \
         xclip \
