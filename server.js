@@ -3609,7 +3609,10 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
             cleanupPipe(connId);
         });
     }
-    xfreerdp.on('exit', () => {
+    xfreerdp.on('exit', (code, signal) => {
+        const latest = rdpPipes.get(connId);
+        if (pipe.stopping || latest !== pipe) return;
+        console.warn('[rdp-h264]', 'xfreerdp exited unexpectedly', { connId, code, signal });
         for (const client of pipe.clients) {
             try { if (client.readyState === client.OPEN) client.close(1011, 'xfreerdp exited'); } catch {}
         }
