@@ -3703,7 +3703,7 @@ function handleRdpInput(pipe, raw) {
 
 
 function startIsolatedRdpAudioWorker(connId, conn) {
-    if (process.env.RDP_AUDIO === 'false') return null;
+    if (process.env.RDP_AUDIO !== 'force') return null;
     const existing = rdpAudioWorkers.get(connId);
     if (existing && !existing.stopping) return existing;
     const targetHost = conn.host;
@@ -3859,7 +3859,7 @@ rdpAudioWss.on('connection', async (ws, req) => {
         const conn = (store.connections || []).find((c) => c.id === connId);
         if (!conn) { ws.close(1008, 'connection not found'); return; }
         const worker = startIsolatedRdpAudioWorker(connId, conn);
-        if (!worker) { ws.close(1011, 'rdp audio disabled'); return; }
+        if (!worker) { ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'disabled', reason: 'audio worker disabled to keep the main RDP session stable' })); ws.close(1013, 'rdp audio disabled'); return; }
         worker.clients.add(ws);
         ws.send(JSON.stringify({ type: 'hello', container: 'webm', codec: 'opus', sampleRate: 48000, channels: 2, mode: 'isolated' }));
         console.info('[rdp-audio]', 'browser attached', { connId, clients: worker.clients.size, mode: 'isolated' });
