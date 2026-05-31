@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.4-rdp-mse-fmp4';
+const GUAC_CLIENT_VERSION = '2026-05-31.5-rdp-fmp4';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -615,27 +615,147 @@ function setupMobilePointerMouse() {
     }, { passive: false });
 }
 
-function createRdpCanvasDisplay(canvas) {
-    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
-    return {
-        ctx,
-        setSize(width, height) {
-            if (canvas.width !== width || canvas.height !== height) {
-                canvas.width = width;
-                canvas.height = height;
-                displayWidth = width;
-                displayHeight = height;
-                applyDisplayScale();
-            }
-        },
-        draw(frame) {
-            this.setSize(frame.displayWidth || frame.codedWidth || canvas.width || 1280, frame.displayHeight || frame.codedHeight || canvas.height || 720);
-            ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-        },
+const MP4 = (() => {
+    const enc = new TextEncoder();
+    const box = (type, ...payloads) => {
+        let total = 0;
+        for (const p of payloads) total += p.byteLength;
+        const sz = 8 + total;
+        const buf = new Uint8Array(sz);
+        new DataView(buf.buffer).setUint32(0, sz);
+        buf.set(enc.encode(type), 4);
+        let off = 8;
+        for (const p of payloads) { buf.set(new Uint8Array(p instanceof ArrayBuffer ? p : p.buffer, p.byteOffset || 0, p.byteLength), off); off += p.byteLength; }
+        return buf;
     };
+    const u32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v); return b; };
+    const u16 = (v) => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, v); return b; };
+    const u8  = (v) => new Uint8Array([v]);
+    const u24 = (v) => { const b = new Uint8Array(3); b[0] = (v>>>16)&255; b[1]=(v>>>8)&255; b[2]=v&255; return b; };
+    const u64h = (v) => { const b = new Uint8Array(8); new DataView(b.buffer).setUint32(0, Math.floor(v/4294967296)); new DataView(b.buffer).setUint32(4, v>>>0); return b; };
+    const bytes = (s) => enc.encode(s);
+    const zero8 = u64h(0);
+    const matrix9 = new Uint8Array([0,1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0]);
+
+    function buildInitSegment(sps, pps, width, height) {
+        const profile = sps[1];
+        const compat  = sps[2];
+        const level   = sps[3];
+        const avcc = new Uint8Array(7 + sps.byteLength + pps.byteLength);
+        avcc[0]=1; avcc[1]=profile; avcc[2]=compat; avcc[3]=level; avcc[4]=0xff; avcc[5]=0xe1;
+        avcc[6]=(sps.byteLength>>>8)&255; avcc[7]=sps.byteLength&255; avcc.set(new Uint8Array(sps.buffer, sps.byteOffset, sps.byteLength), 8);
+        const aoff = 8 + sps.byteLength;
+        avcc[aoff]=1; avcc[aoff+1]=(pps.byteLength>>>8)&255; avcc[aoff+2]=pps.byteLength&255; avcc.set(new Uint8Array(pps.buffer, pps.byteOffset, pps.byteLength), aoff+3);
+
+        const avc1 = box('avc1',
+            zero8.slice(0,6), u16(1), zero8.slice(0,16), u16(width), u16(height), u32(0x00480000), u32(0x00480000), zero8.slice(0,4), u16(1),
+            bytes('\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0'),
+            u16(24), u16(0xffff), box('avcC', avcc.slice())
+        );
+        const stsd = box('stsd', u32(0), u32(1), avc1);
+        const stts = box('stts', u32(0), u32(0));
+        const stsc = box('stsc', u32(0), u32(1), u32(1), u32(1), u32(1));
+        const stsz = box('stsz', u32(0), u32(0), u32(0));
+        const stco = box('stco', u32(0), u32(0));
+        const stbl = box('stbl', stsd, stts, stsc, stsz, stco);
+        const dref = box('dref', u32(0), u32(1), box('url ', u32(1).slice(0,0)));
+        const dinf = box('dinf', dref);
+        const vmhd = box('vmhd', u32(0), u32(1), u32(0), u32(0));
+        const smhd = box('smhd', u32(0), u32(0));
+        const minf = box('minf', vmhd, dinf, stbl);
+        const hdlr = box('hdlr', u32(0), zero8.slice(0,4), bytes('vide'), zero8.slice(0,12), bytes('VideoHandler\0'));
+        const mdhd = box('mdhd', u32(0), u32(0), u32(0), u32(0), u32(0), zero8.slice(0,4), u32(0), u32(0), u32(0));
+        const mdia = box('mdia', mdhd, hdlr, minf);
+        const tkhd = box('tkhd', zero8, u32(7), zero8.slice(0,8), u32(1), zero8.slice(0,4), u32(1), u32(0), u32(0), u32(0), u32(0), u16(width), u16(height), u32(0), u32(0), u32(0), u32(0), matrix9.slice(), u32(0), u32(0), u32(0), u32(0), u32(0));
+        const trak = box('trak', tkhd, mdia);
+        const mvhd = box('mvhd', u32(0), u32(0), u32(0), u32(0), u32(0x3e8), u32(0), zero8.slice(0,8), matrix9.slice(0,36), u32(0), u32(0), u32(0), u32(0), u32(0), u32(0), u32(2));
+        const ftyp = box('ftyp', bytes('isom'), u32(0x200), bytes('isom'), bytes('iso2'), bytes('avc1'), bytes('mp41'));
+
+        return box('\0\0\0\0', ftyp, box('moov', mvhd, trak));
+    }
+
+    function buildFragment(baseDecodeTime, data, key, duration) {
+        const w = data.byteLength;
+        const tfFlags = key ? 0x2000000 : 0x1000000;
+        const trunHeader = new Uint8Array(28);
+        trunHeader[0] = (w>>>24)&255; trunHeader[1]=(w>>>16)&255; trunHeader[2]=(w>>>8)&255; trunHeader[3]=w&255;
+        trunHeader[4] = (duration>>>24)&255; trunHeader[5]=(duration>>>16)&255; trunHeader[6]=(duration>>>8)&255; trunHeader[7]=duration&255;
+        const trunFlags = 0x100 | 0x200 | 0x400; // data-offset, first-sample-flags, sample-duration
+        const trun = box('trun', u32(trunFlags), u32(1), u32(28+8), trunHeader);
+        const tfdt = box('tfdt', u32(1), u64h(baseDecodeTime));
+        const tfhd = box('tfhd', u32(0x38), u32(1), zero8.slice(0,8), u32(1), u32(1));
+        const traf = box('traf', tfhd, tfdt, trun);
+        let mfhd;
+        if (key) {
+            mfhd = box('mfhd', u32(baseDecodeTime & 0xffffffff));
+        } else {
+            mfhd = box('mfhd', u32(0));
+        }
+        const moof = box('moof', mfhd, traf);
+        const mdat = box('mdat', data);
+        return box('\0\0\0\0', moof, mdat);
+    }
+
+    return { buildInitSegment, buildFragment, u32, u16, box };
+})();
+
+class AnnexBH264AccessUnitParser {
+    constructor(onConfig, onFrame) {
+        this.buffer = new Uint8Array(0);
+        this.pending = [];
+        this.sps = null;
+        this.pps = null;
+        this.configured = false;
+        this.onConfig = onConfig;
+        this.onFrame = onFrame;
+    }
+    push(chunk) {
+        const b = new Uint8Array(this.buffer.length + chunk.length);
+        b.set(this.buffer, 0); b.set(chunk, this.buffer.length); this.buffer = b;
+        const units = this.extractNalUnits(false);
+        for (const nal of units) this.acceptNal(nal);
+    }
+    flush() { for (const nal of this.extractNalUnits(true)) this.acceptNal(nal); this.emitPending(true); }
+    acceptNal(nal) {
+        if (!nal || nal.length < 1) return;
+        const type = nal[0] & 0x1f;
+        if (type === 7) this.sps = nal;
+        if (type === 8) this.pps = nal;
+        if (!this.configured && this.sps && this.pps) { this.configured = true; this.onConfig(null); }
+        const startsPicture = type === 1 || type === 5;
+        if (startsPicture && this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; })) this.emitPending(false);
+        this.pending.push(nal);
+        if (type === 9 && this.pending.length > 1) this.emitPending(false);
+    }
+    emitPending(force) {
+        const hasSlice = this.pending.some((n) => { const t = n[0] & 0x1f; return t === 1 || t === 5; });
+        if (!hasSlice && !force) return;
+        if (!this.configured) return;
+        const key = this.pending.some((n) => (n[0] & 0x1f) === 5);
+        const size = this.pending.reduce((n, nal) => n + 4 + nal.length, 0);
+        const out = new Uint8Array(size);
+        let o = 0;
+        for (const nal of this.pending) { out[o++] = (nal.length >>> 24) & 255; out[o++] = (nal.length >>> 16) & 255; out[o++] = (nal.length >>> 8) & 255; out[o++] = nal.length & 255; out.set(nal, o); o += nal.length; }
+        this.pending = [];
+        if (out.byteLength) this.onFrame(out, key);
+    }
+    extractNalUnits(flush) {
+        const starts = [];
+        for (let i = 0; i < this.buffer.length - 3; i++) {
+            if (this.buffer[i]===0 && this.buffer[i+1]===0 && this.buffer[i+2]===1) starts.push({ pos: i, len: 3 });
+            else if (i < this.buffer.length-4 && this.buffer[i]===0 && this.buffer[i+1]===0 && this.buffer[i+2]===0 && this.buffer[i+3]===1) starts.push({ pos: i, len: 4 });
+        }
+        if (starts.length === 0) { if (this.buffer.length > 2*1024*1024) this.buffer = new Uint8Array(0); return []; }
+        const completeCount = flush ? starts.length : Math.max(0, starts.length - 1);
+        const out = [];
+        for (let i = 0; i < completeCount; i++) { const s = starts[i].pos + starts[i].len; const e = (i + 1 < starts.length) ? starts[i + 1].pos : this.buffer.length; if (e > s) out.push(this.buffer.slice(s, e)); }
+        const keep = flush ? this.buffer.length : starts[starts.length - 1].pos;
+        this.buffer = this.buffer.slice(keep);
+        return out;
+    }
 }
 
-class MseRdpVideoSink {
+class Fmp4RdpSink {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -645,12 +765,15 @@ class MseRdpVideoSink {
         this.video.playsInline = true;
         this.ms = null;
         this.sb = null;
-        this.ready = false;
-        this.streaming = false;
+        this.inited = false;
         this.firstFrameDrawn = false;
         this._rafId = 0;
         this._onConnected = null;
         this._queued = [];
+        this._segNum = 0;
+        this._timescale = 90000;
+        this._baseTime = 0;
+        this._frameDur = 3000; // 90000/30
         document.body.appendChild(this.video);
         const loop = () => {
             this._rafId = requestAnimationFrame(loop);
@@ -671,59 +794,44 @@ class MseRdpVideoSink {
         loop();
     }
     init(codec = 'video/mp4; codecs="avc1.42E01E"') {
-        if (this.ready) return;
-        if (!window.MediaSource) throw new Error('浏览器不支持 MSE 视频解码');
+        if (this.inited) return;
+        if (!window.MediaSource) throw new Error('MSE not supported');
         this.ms = new MediaSource();
         this.video.src = URL.createObjectURL(this.ms);
         this.video.play().catch(() => {});
         const self = this;
         this.ms.addEventListener('sourceopen', () => {
-            if (!MediaSource.isTypeSupported(codec)) {
-                console.warn('[rdp]', 'codec not supported, try generic', codec);
-                codec = 'video/mp4; codecs="avc1.42E01E"';
-                if (!MediaSource.isTypeSupported(codec)) {
-                    self.destroy();
-                    return;
-                }
-            }
-            try {
-                self.sb = self.ms.addSourceBuffer(codec);
-                self.sb.mode = 'sequence';
-                self.sb.addEventListener('updateend', () => {
-                    if (self._queued.length) {
-                        try { self.sb.appendBuffer(self._queued.shift()); }
-                        catch { self._queued.length = 0; }
-                    }
-                });
-                self.ready = true;
-                for (const chunk of self._queued) self.feed(chunk);
-                self._queued.length = 0;
-            } catch (err) {
-                console.warn('[rdp]', 'sourcebuffer failed', err);
-            }
+            try { self.sb = self.ms.addSourceBuffer(codec); self.sb.mode = 'sequence'; }
+            catch (e) { console.warn('[rdp] sb fail', e); return; }
+            self.sb.addEventListener('updateend', () => {
+                if (self._queued.length) { try { self.sb.appendBuffer(self._queued.shift()); } catch { self._queued.length = 0; } }
+            });
+            self.inited = true;
         }, { once: true });
     }
-    feed(buf) {
-        if (!this.sb || this.sb.updating) {
-            if (this._queued.length > 120) this._queued.splice(0, this._queued.length - 120);
-            this._queued.push(buf);
-        } else {
-            try { this.sb.appendBuffer(buf); } catch { this._queued.push(buf); }
-        }
+    feedInit(sps, pps, w, h) {
+        if (!this.sb || this.sb.updating) { this._queued.push(MP4.buildInitSegment(sps, pps, w, h)); return; }
+        try { this.sb.appendBuffer(MP4.buildInitSegment(sps, pps, w, h)); } catch { this._queued.push(MP4.buildInitSegment(sps, pps, w, h)); }
     }
+    feedFrame(data, key) {
+        const seg = MP4.buildFragment(this._baseTime, data, key, this._frameDur);
+        this._baseTime += this._frameDur;
+        this._segNum++;
+        if (this._queued.length > 60) this._queued.splice(0, this._queued.length - 60);
+        if (!this.sb || this.sb.updating) { this._queued.push(seg); return; }
+        try { this.sb.appendBuffer(seg); } catch { this._queued.push(seg); }
+    }
+    setFrameDuration(fps) { this._frameDur = Math.round(90000 / Math.max(1, fps || 30)); }
     onConnected(cb) { this._onConnected = cb; }
     destroy() {
         if (this._rafId) cancelAnimationFrame(this._rafId);
-        this._rafId = 0;
         try { this.sb?.abort(); } catch {}
         try { URL.revokeObjectURL(this.video.src); } catch {}
-        this.video.remove();
-        this.video = null;
-        this.sb = null;
-        this.ms = null;
-        this.ready = false;
+        this.video?.remove();
+        this.video = null; this.sb = null; this.ms = null; this.inited = false;
     }
 }
+
 
 
 async function connect() {
@@ -747,7 +855,7 @@ async function connect() {
         canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
         displayRoot.appendChild(canvas);
 
-        const mseSink = new MseRdpVideoSink(canvas);
+        const sink = new Fmp4RdpSink(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
         rdpScaleZoom = 1;
         zoomBtn && (zoomBtn.textContent = '🔍 100%');
@@ -757,9 +865,12 @@ async function connect() {
         const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode });
         tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
         tunnel.binaryType = 'arraybuffer';
-        mseSink.init();
+        sink.init();
 
-        mseSink.onConnected(() => {
+        let parser = null;
+        let initSent = false;
+
+        sink.onConnected(() => {
             setStatus('connected', `${label} 已连接 [MSE H.264]`);
             connected = true;
             startClipboardAutoSync();
@@ -775,17 +886,18 @@ async function connect() {
             notifyParentStatus('connecting');
         };
         tunnel.onclose = (event) => {
+            if (parser) { try { parser = null; } catch {} }
             connected = false;
             notifyParentStatus('disconnected');
             if (event.code === 1012) {
                 stopClipboardAutoSync();
                 stopRdpAudio();
-                mseSink.destroy();
+                sink.destroy();
                 setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
                 window.setTimeout(() => connect(), 250);
                 return;
             }
-            mseSink.destroy();
+            sink.destroy();
             setStatus('disconnected', event.reason || `${label} 已断开`);
             stopRdpAudio();
             stopClipboardAutoSync();
@@ -801,6 +913,7 @@ async function connect() {
                             displayHeight = Number(msg.height);
                             requestedRdpWidth = Number(msg.width) || requestedRdpWidth;
                             requestedRdpHeight = Number(msg.height) || requestedRdpHeight;
+                            if (msg.fps) sink.setFrameDuration(Number(msg.fps));
                             window.setTimeout(() => requestRdpCanvasSize(fitModes[fitModeIdx], true), 300);
                         }
                     }
@@ -809,11 +922,25 @@ async function connect() {
             }
             const buf = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data instanceof Blob ? new Uint8Array(await ev.data.arrayBuffer()) : null;
             if (!buf || buf.byteLength < 5) return;
-            mseSink.feed(buf);
+            if (!parser) {
+                parser = new AnnexBH264AccessUnitParser(
+                    (description) => {
+                        if (!initSent) {
+                            const sps = parser.sps;
+                            const pps = parser.pps;
+                            if (sps && pps) {
+                                sink.feedInit(sps, pps, displayWidth || 1280, displayHeight || 720);
+                                initSent = true;
+                            }
+                        }
+                    },
+                    (data, key) => { if (initSent) sink.feedFrame(data, key); }
+                );
+            }
+            parser.push(buf);
         };
 
         function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
-        rdpInputSender = wsInput;
         function pos(e) { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * (canvas.width / Math.max(1, r.width))), y: Math.round((e.clientY - r.top) * (canvas.height / Math.max(1, r.height))) }; }
         function sendMouseMove(e) { const p = pos(e); wsInput({ type: 'mouse', x: p.x, y: p.y }); notifyParentActivity(); }
         canvas.addEventListener('mousemove', sendMouseMove);

@@ -3509,10 +3509,8 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         '-pix_fmt', 'yuv420p',
         '-g', String(RDP_STREAM_FPS), '-keyint_min', String(RDP_STREAM_FPS),
         '-x264-params', `repeat-headers=1:scenecut=0:open-gop=0`,
-        '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-        '-bsf:v', 'h264_metadata=sample_aspect_ratio=1/1',
-        '-flush_packets', '1',
-        'pipe:1',
+        '-bsf:v', 'h264_mp4toannexb',
+        '-f', 'h264', 'pipe:1',
     ];
     const ffmpeg = nativeH264 ? null : rdpSpawn('ffmpeg', ffmpegArgs, { env });
     if (ffmpeg) rdpAttachLog(ffmpeg, 'ffmpeg', 'warn');
