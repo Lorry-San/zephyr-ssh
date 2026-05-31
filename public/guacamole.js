@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.29-rdp-desktop-input';
+const GUAC_CLIENT_VERSION = '2026-05-31.30-rdp-continuous-zoom';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -12,6 +12,8 @@ const displayRoot = $('#display');
 const displayShell = $('#displayShell');
 const fitBtn = $('#fitBtn');
 const zoomBtn = $('#zoomBtn');
+const zoomSlider = $('#zoomSlider');
+const zoomValue = $('#zoomValue');
 const clipboardBtn = $('#clipboardBtn');
 const keyboardBtn = $('#keyboardBtn');
 const shortcutsBtn = $('#shortcutsBtn');
@@ -439,6 +441,22 @@ function requestRdpCanvasSize(mode = fitModes[fitModeIdx], force = false) {
     return true;
 }
 
+function setRdpScaleZoom(nextZoom, { preserveViewport = true } = {}) {
+    const zoom = Math.max(0.5, Math.min(2.5, Number(nextZoom) || 1));
+    if (preserveViewport && displayShell) {
+        const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
+        const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
+        rdpViewportOffsetX = displayShell.scrollLeft - maxX / 2;
+        rdpViewportOffsetY = displayShell.scrollTop - maxY / 2;
+    }
+    rdpScaleZoom = zoom;
+    const pct = Math.round(rdpScaleZoom * 100);
+    if (zoomSlider && Number(zoomSlider.value) !== pct) zoomSlider.value = String(pct);
+    if (zoomValue) zoomValue.textContent = `${pct}%`;
+    else if (zoomBtn) zoomBtn.textContent = `🔍 ${pct}%`;
+    applyDisplayScale();
+}
+
 function applyDisplayScale() {
     if (!displayShell) return;
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
@@ -516,7 +534,7 @@ function applyDisplayScale() {
 function switchFitMode(mode) {
     if (!tunnel || !connected) return;
     if (rdpInputSender && !client) {
-        rdpScaleZoom = 1;
+        setRdpScaleZoom(1, { preserveViewport: false });
         rdpViewportOffsetX = 0;
         rdpViewportOffsetY = 0;
         requestRdpCanvasSize(mode, true);
@@ -985,7 +1003,13 @@ function bindCanvasTouch(canvas) {
     canvas.addEventListener('touchcancel', () => {if(!map.size)clearTimeout(longT); map.clear();tf=null;},{passive:true,signal:sig});
     canvas.addEventListener('wheel', (e) => {
         const pt=p(e.clientX,e.clientY); if(!pt)return;
-        e.preventDefault(); snd({type:'mouse',x:pt.x,y:pt.y}); snd({type:'scroll',deltaY:e.deltaY,deltaX:e.deltaX});
+            if (!isDesktopMousePointer(e) && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                const factor = Math.exp(-e.deltaY / 700);
+                setRdpScaleZoom(rdpScaleZoom * factor);
+                return;
+            }
+            e.preventDefault(); snd({type:'mouse',x:pt.x,y:pt.y}); snd({type:'scroll',deltaY:e.deltaY,deltaX:e.deltaX});
     },{passive:false,signal:sig});
     // Document-level fallback - if canvas misses events, forward them
     document.addEventListener('pointerdown', (e) => {
@@ -1186,10 +1210,10 @@ async function connect() {
         displayRoot.appendChild(canvas);
         const display = new WebCodecsH264Display(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
-        rdpScaleZoom = 1;
+        setRdpScaleZoom(1, { preserveViewport: false });
         rdpViewportOffsetX = 0;
         rdpViewportOffsetY = 0;
-        zoomBtn && (zoomBtn.textContent = '🔍 100%');
+        setRdpScaleZoom(1, { preserveViewport: false });
         const initialTarget = computeRdpTargetSize(fitModes[fitModeIdx]);
         requestedRdpWidth = initialTarget.width;
         requestedRdpHeight = initialTarget.height;
@@ -2743,7 +2767,7 @@ fitBtn.addEventListener('click', () => {
     fitBtn.classList.toggle('active', m !== '1:1');
     fitBtn.textContent = m === 'fit' ? '↔ 适应' : m === '1:1' ? '1:1 原始' : m;
     if (rdpInputSender && !client) {
-        rdpScaleZoom = 1;
+        setRdpScaleZoom(1, { preserveViewport: false });
         const target = computeRdpTargetSize(m);
         applyDisplayScale();
         requestedRdpWidth = target.width;
@@ -2764,19 +2788,15 @@ fitBtn.addEventListener('click', () => {
     }
 });
 
-zoomBtn?.addEventListener('click', () => {
-    const levels = [1, 1.25, 1.5, 2, 0.75];
-    const cur = rdpScaleZoom || 1;
-    let idx = levels.findIndex((v) => Math.abs(v - cur) < 0.03);
-    rdpScaleZoom = levels[(idx + 1 + levels.length) % levels.length];
-    zoomBtn.textContent = `🔍 ${Math.round(rdpScaleZoom * 100)}%`;
-    if (displayShell) {
-        const maxX = Math.max(0, displayShell.scrollWidth - displayShell.clientWidth);
-        const maxY = Math.max(0, displayShell.scrollHeight - displayShell.clientHeight);
-        rdpViewportOffsetX = displayShell.scrollLeft - maxX / 2;
-        rdpViewportOffsetY = displayShell.scrollTop - maxY / 2;
-    }
-    applyDisplayScale();
+zoomSlider?.addEventListener('pointerdown', (event) => event.stopPropagation());
+zoomSlider?.addEventListener('click', (event) => event.stopPropagation());
+zoomSlider?.addEventListener('input', () => {
+    setRdpScaleZoom((Number(zoomSlider.value) || 100) / 100);
+});
+zoomBtn?.addEventListener('click', (event) => {
+    if (event.target === zoomSlider) return;
+    event.preventDefault();
+    zoomSlider?.focus?.({ preventScroll: true });
 });
 
 clipboardBtn.addEventListener('click', () => {

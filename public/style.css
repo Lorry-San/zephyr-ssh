@@ -6620,3 +6620,28 @@ body.smartbar-trash-hover .smartbar-trash-target {
     .rdp-joystick-icon:nth-of-type(3) { top: 110%; }
     .rdp-joystick-icon:nth-of-type(4) { left: -10%; }
 }
+
+.guac-page .zoom-control {
+    gap: 7px;
+    min-width: 172px;
+    padding-inline: 10px;
+    cursor: default;
+}
+.guac-page .zoom-control input[type="range"] {
+    width: 78px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.guac-page .zoom-control em {
+    min-width: 38px;
+    font-style: normal;
+    font-weight: 800;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: right;
+}
+@media (max-width: 560px) {
+    .guac-page .zoom-control { min-width: 146px; }
+    .guac-page .zoom-control input[type="range"] { width: 56px; }
+}
