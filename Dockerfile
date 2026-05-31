@@ -58,7 +58,9 @@ RUN /bin/sh /tmp/zephyr-freerdp-patches/apply.sh && \
       -DWITH_FFMPEG=ON \
       -DWITH_PULSE=OFF \
       -DWITH_CUPS=OFF \
-      -DWITH_PCSC=OFF && \
+      -DWITH_PCSC=OFF \
+      -DCHANNEL_URBDRC=OFF \
+      -DCHANNEL_URBDRC_CLIENT=OFF && \
     cmake --build build -j$(nproc) && \
     cmake --install build
 
