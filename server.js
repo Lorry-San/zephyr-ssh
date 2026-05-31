@@ -3415,7 +3415,12 @@ const rdpPipes = new Map();
 const rdpAudioWorkers = new Map(); // connectionId → pipeline state
 
 function evenClampRdpSize(value, min, max) {
-    return Math.max(min, Math.min(max, Math.round((Number(value) || min) / 2) * 2));
+    const n = Math.max(min, Math.min(max, Number(value) || min));
+    return Math.max(2, Math.floor(n / 2) * 2);
+}
+function evenRdpSize(value, min = 2, max = 4096) {
+    const n = Math.max(min, Math.min(max, Number(value) || min));
+    return Math.max(2, Math.floor(n / 2) * 2);
 }
 
 function allocateRdpDisplayNumber() {
@@ -3458,16 +3463,18 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         streamWidth = longSide;
         streamHeight = shortSide;
         let unit = Math.max(1, Math.min(Math.floor(streamWidth / num), Math.floor(streamHeight / den)));
-        streamWidth = num * unit;
-        streamHeight = den * unit;
+        streamWidth = evenRdpSize(num * unit, 800, 2560);
+        streamHeight = evenRdpSize(den * unit, 600, 1600);
         if (streamWidth > 2560 || streamHeight > 1600) {
             unit = Math.max(1, Math.min(Math.floor(2560 / num), Math.floor(1600 / den)));
-            streamWidth = num * unit;
-            streamHeight = den * unit;
+            streamWidth = evenRdpSize(num * unit, 800, 2560);
+            streamHeight = evenRdpSize(den * unit, 600, 1600);
         }
     };
     if (aspectMode === '16:9') forceAspect(16, 9);
     else if (aspectMode === '4:3') forceAspect(4, 3);
+    streamWidth = evenRdpSize(streamWidth, 800, 2560);
+    streamHeight = evenRdpSize(streamHeight, 600, 1600);
     const displayNo = allocateRdpDisplayNumber();
     const xvfbDisp = `:${displayNo}`;
     const fifoPath = `/tmp/zephyr-rdp-h264-${connId}.h264`;
