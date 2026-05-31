@@ -108,6 +108,9 @@ RUN apk update && \
         xclip \
         pulseaudio \
         alsa-plugins-pulse \
+        p7zip \
+        xz \
+        bzip2 \
     && \
     rm -rf /opt/guacamole/* 2>/dev/null; \
     echo "=== runtime deps installed ==="

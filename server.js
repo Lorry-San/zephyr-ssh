@@ -8,6 +8,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const { spawn } = require('child_process');
+const { pipeline: streamPipeline } = require('stream/promises');
 const nodemailer = require('nodemailer');
 const { TOTP, generateSecret, generateURI, verifySync } = require('otplib');
 const QRCode = require('qrcode');
@@ -1964,6 +1965,192 @@ function remoteSameFileSafeCopyCommand(sourcePath, targetPath, { move = false, c
         conflictMode === 'overwrite' ? '[ ! -e "$dst" ] || rm -rf -- "$dst"' : '',
         move ? 'mv -- "$src" "$dst"' : 'cp -a -- "$src" "$dst"',
     ]);
+}
+
+function isTarArchivePath(targetPath = '') {
+    const lower = String(targetPath || '').toLowerCase();
+    return lower.endsWith('.tar') || /\.(tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$/.test(lower);
+}
+
+function archiveExtensionOfPath(targetPath = '') {
+    const lower = String(targetPath || '').toLowerCase();
+    const exts = ['.tar.gz', '.tar.bz2', '.tar.xz', '.tgz', '.tbz2', '.txz', '.zip', '.tar', '.7z', '.rar', '.gz', '.bz2', '.xz'];
+    return exts.find((ext) => lower.endsWith(ext)) || '';
+}
+
+function stripArchiveExtension(name = '') {
+    const ext = archiveExtensionOfPath(name);
+    return ext ? String(name).slice(0, -ext.length) : String(name || 'archive');
+}
+
+async function runLocalArchiveTool(command, args, { cwd } = {}) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+        child.on('error', reject);
+        child.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error((stderr || `${command} 退出码 ${code}`).trim()));
+        });
+    });
+}
+
+async function runLocalArchiveShell(script, { cwd } = {}) {
+    return runLocalArchiveTool('sh', ['-lc', script], { cwd });
+}
+
+function ensureLocalChildPath(root, relativePath) {
+    const clean = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const normalized = path.posix.normalize(clean);
+    if (!normalized || normalized === '.' || normalized.startsWith('../') || path.posix.isAbsolute(normalized)) throw new Error(`压缩包包含不安全路径: ${relativePath}`);
+    const target = path.resolve(root, ...normalized.split('/'));
+    const resolvedRoot = path.resolve(root);
+    if (target !== resolvedRoot && !target.startsWith(resolvedRoot + path.sep)) throw new Error(`压缩包路径越界: ${relativePath}`);
+    return target;
+}
+
+async function downloadRemotePathToLocal(sftp, remotePath, localPath) {
+    const stats = await sftpStat(sftp, remotePath);
+    if (stats.isDirectory?.()) {
+        await fs.promises.mkdir(localPath, { recursive: true });
+        const list = await sftpReaddir(sftp, remotePath);
+        for (const entry of list) {
+            if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
+            await downloadRemotePathToLocal(sftp, remoteJoin(remotePath, entry.filename), path.join(localPath, entry.filename));
+        }
+        return;
+    }
+    await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+    await streamPipeline(sftp.createReadStream(remotePath), fs.createWriteStream(localPath));
+}
+
+async function uploadLocalPathToRemote(sftp, localPath, remotePath) {
+    const stats = await fs.promises.stat(localPath);
+    if (stats.isDirectory()) {
+        await ensureRemoteDirRecursive(sftp, remotePath);
+        const list = await fs.promises.readdir(localPath, { withFileTypes: true });
+        for (const entry of list) {
+            await uploadLocalPathToRemote(sftp, path.join(localPath, entry.name), remoteJoin(remotePath, entry.name));
+        }
+        return;
+    }
+    await ensureRemoteDirRecursive(sftp, dirnameRemote(remotePath));
+    await streamPipeline(fs.createReadStream(localPath), sftp.createWriteStream(remotePath));
+}
+
+async function createZipArchiveFromLocal(sourceDir, rootNames, outputPath) {
+    await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(outputPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        output.on('close', resolve);
+        output.on('error', reject);
+        archive.on('error', reject);
+        archive.pipe(output);
+        rootNames.forEach((name) => {
+            const local = path.join(sourceDir, name);
+            const stats = fs.statSync(local);
+            if (stats.isDirectory()) archive.directory(local, name);
+            else archive.file(local, { name });
+        });
+        archive.finalize();
+    });
+}
+
+async function createSingleFileCompressedArchive(inputPath, outputPath, format) {
+    if (format === '.gz') {
+        const zlib = require('zlib');
+        await streamPipeline(fs.createReadStream(inputPath), zlib.createGzip({ level: 9 }), fs.createWriteStream(outputPath));
+        return;
+    }
+    const tool = format === '.bz2' ? 'bzip2' : 'xz';
+    await runLocalArchiveShell(`command -v ${tool} >/dev/null 2>&1 || { echo '主端未安装 ${tool}，无法创建 ${format}' >&2; exit 127; }; ${tool} -c -- ${shellQuote(inputPath)} > ${shellQuote(outputPath)}`);
+}
+
+async function createMainSideArchiveFromRemote(sftp, items, targetPath) {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'zephyr-sftp-archive-'));
+    try {
+        const sourceDir = path.join(tmpRoot, 'src');
+        const outDir = path.join(tmpRoot, 'out');
+        await fs.promises.mkdir(sourceDir, { recursive: true });
+        await fs.promises.mkdir(outDir, { recursive: true });
+        const rootNames = [];
+        for (const remotePath of items) {
+            const name = basenameRemote(remotePath);
+            if (!name || name === '/' || rootNames.includes(name)) throw new Error(`压缩项目名称冲突或无效: ${remotePath}`);
+            rootNames.push(name);
+            await downloadRemotePathToLocal(sftp, remotePath, path.join(sourceDir, name));
+        }
+        const ext = archiveExtensionOfPath(targetPath);
+        const outputPath = path.join(outDir, basenameRemote(targetPath));
+        if (ext === '.zip') await createZipArchiveFromLocal(sourceDir, rootNames, outputPath);
+        else if (ext === '.7z') {
+            const args = `a -y ${shellQuote(outputPath)} -- ${rootNames.map(shellQuote).join(' ')}`;
+            await runLocalArchiveShell(`if command -v 7z >/dev/null 2>&1; then 7z ${args}; elif command -v 7za >/dev/null 2>&1; then 7za ${args}; else echo '主端未安装 7z/7za，无法创建 .7z' >&2; exit 127; fi`, { cwd: sourceDir });
+        } else if (ext === '.gz' || ext === '.bz2' || ext === '.xz') {
+            if (rootNames.length !== 1) throw new Error(`${ext} 只支持单个文件，请改用 .tar.*、.zip 或 .7z`);
+            const inputPath = path.join(sourceDir, rootNames[0]);
+            const stats = await fs.promises.stat(inputPath);
+            if (stats.isDirectory()) throw new Error(`${ext} 只支持单个文件，不能压缩目录`);
+            await createSingleFileCompressedArchive(inputPath, outputPath, ext);
+        } else throw new Error('暂不支持该压缩格式');
+        await uploadLocalPathToRemote(sftp, outputPath, targetPath);
+    } finally {
+        await fs.promises.rm(tmpRoot, { recursive: true, force: true });
+    }
+}
+
+async function extractZipArchiveToLocal(archivePath, destDir) {
+    const dir = await unzipper.Open.file(archivePath);
+    for (const entry of dir.files) {
+        const target = ensureLocalChildPath(destDir, entry.path);
+        if (entry.type === 'Directory' || entry.path.endsWith('/')) {
+            await fs.promises.mkdir(target, { recursive: true });
+        } else {
+            await fs.promises.mkdir(path.dirname(target), { recursive: true });
+            await streamPipeline(entry.stream(), fs.createWriteStream(target));
+        }
+    }
+}
+
+async function extractSingleFileCompressedArchive(archivePath, destDir, ext) {
+    const outName = stripArchiveExtension(path.basename(archivePath)) || 'extracted';
+    const outputPath = ensureLocalChildPath(destDir, outName);
+    await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+    if (ext === '.gz') {
+        const zlib = require('zlib');
+        await streamPipeline(fs.createReadStream(archivePath), zlib.createGunzip(), fs.createWriteStream(outputPath));
+        return;
+    }
+    const tool = ext === '.bz2' ? 'bzip2' : 'xz';
+    await runLocalArchiveShell(`command -v ${tool} >/dev/null 2>&1 || { echo '主端未安装 ${tool}，无法解压 ${ext}' >&2; exit 127; }; ${tool} -dc -- ${shellQuote(archivePath)} > ${shellQuote(outputPath)}`);
+}
+
+async function extractMainSideArchiveToRemote(sftp, archivePath, targetDir) {
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'zephyr-sftp-extract-'));
+    try {
+        const archiveLocal = path.join(tmpRoot, 'archive' + (archiveExtensionOfPath(archivePath) || path.extname(basenameRemote(archivePath)) || '.bin'));
+        const outDir = path.join(tmpRoot, 'out');
+        await fs.promises.mkdir(outDir, { recursive: true });
+        await downloadRemotePathToLocal(sftp, archivePath, archiveLocal);
+        const ext = archiveExtensionOfPath(archivePath);
+        if (ext === '.zip') await extractZipArchiveToLocal(archiveLocal, outDir);
+        else if (ext === '.7z') {
+            const args = `x -y -o${shellQuote(outDir)} -- ${shellQuote(archiveLocal)}`;
+            await runLocalArchiveShell(`if command -v 7z >/dev/null 2>&1; then 7z ${args}; elif command -v 7za >/dev/null 2>&1; then 7za ${args}; else echo '主端未安装 7z/7za，无法解压 .7z' >&2; exit 127; fi`);
+        } else if (ext === '.rar') {
+            const args = `x -y -o${shellQuote(outDir)} -- ${shellQuote(archiveLocal)}`;
+            await runLocalArchiveShell(`if command -v 7z >/dev/null 2>&1; then 7z ${args}; elif command -v unrar >/dev/null 2>&1; then unrar x -o+ -- ${shellQuote(archiveLocal)} ${shellQuote(outDir + path.sep)}; else echo '主端未安装 7z/unrar，无法解压 .rar' >&2; exit 127; fi`);
+        } else if (ext === '.gz' || ext === '.bz2' || ext === '.xz') await extractSingleFileCompressedArchive(archiveLocal, outDir, ext);
+        else throw new Error('暂不支持该压缩格式');
+        await ensureRemoteDirRecursive(sftp, targetDir);
+        const entries = await fs.promises.readdir(outDir, { withFileTypes: true });
+        for (const entry of entries) {
+            await uploadLocalPathToRemote(sftp, path.join(outDir, entry.name), remoteJoin(targetDir, entry.name));
+        }
+    } finally {
+        await fs.promises.rm(tmpRoot, { recursive: true, force: true });
+    }
 }
 
 function remoteArchiveCommand(items, targetPath) {
@@ -4907,12 +5094,18 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 sendJSON({ type: 'sftp-compress', success: false, error: '缺少压缩项目或目标路径' });
                 return;
             }
-            let cmd = '';
-            try { cmd = remoteArchiveCommand(items, targetPath); }
-            catch (err) { sendJSON({ type: 'sftp-compress', success: false, error: err.message }); return; }
-            execRemoteCommand(sshClient, cmd).then(() => {
-                sendJSON({ type: 'sftp-compress', success: true, path: targetPath });
-            }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
+            if (isTarArchivePath(targetPath)) {
+                let cmd = '';
+                try { cmd = remoteArchiveCommand(items, targetPath); }
+                catch (err) { sendJSON({ type: 'sftp-compress', success: false, error: err.message }); return; }
+                execRemoteCommand(sshClient, cmd).then(() => {
+                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'remote-tar' });
+                }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
+            } else {
+                createMainSideArchiveFromRemote(sftpStream, items, targetPath).then(() => {
+                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'main-side' });
+                }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
+            }
             return;
         }
 
@@ -4924,18 +5117,21 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 return;
             }
             const lower = archivePath.toLowerCase();
-            let cmd = `mkdir -p -- ${shellQuote(targetDir)} && `;
-            if (lower.endsWith('.zip')) cmd += `unzip -o -- ${shellQuote(archivePath)} -d ${shellQuote(targetDir)}`;
-            else if (/\.(tar\.gz|tgz)$/.test(lower)) cmd += `tar -xzf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
-            else if (/\.(tar\.bz2|tbz2)$/.test(lower)) cmd += `tar -xjf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
-            else if (/\.(tar\.xz|txz)$/.test(lower)) cmd += `tar -xJf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
-            else if (lower.endsWith('.tar')) cmd += `tar -xf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
-            else if (lower.endsWith('.7z')) cmd += `(command -v 7z >/dev/null && 7z x -y -o${shellQuote(targetDir)} ${shellQuote(archivePath)} || command -v 7za >/dev/null && 7za x -y -o${shellQuote(targetDir)} ${shellQuote(archivePath)})`;
-            else if (lower.endsWith('.rar')) cmd += `unrar x -o+ ${shellQuote(archivePath)} ${shellQuote(targetDir + '/')}`;
-            else { sendJSON({ type: 'sftp-extract', success: false, error: '暂不支持该压缩格式' }); return; }
-            execRemoteCommand(sshClient, cmd).then(() => {
-                sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir });
-            }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
+            if (isTarArchivePath(archivePath)) {
+                let cmd = `mkdir -p -- ${shellQuote(targetDir)} && `;
+                if (/\.(tar\.gz|tgz)$/.test(lower)) cmd += `tar -xzf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+                else if (/\.(tar\.bz2|tbz2)$/.test(lower)) cmd += `tar -xjf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+                else if (/\.(tar\.xz|txz)$/.test(lower)) cmd += `tar -xJf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+                else if (lower.endsWith('.tar')) cmd += `tar -xf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
+                else { sendJSON({ type: 'sftp-extract', success: false, error: '暂不支持该压缩格式' }); return; }
+                execRemoteCommand(sshClient, cmd).then(() => {
+                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'remote-tar' });
+                }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
+            } else {
+                extractMainSideArchiveToRemote(sftpStream, archivePath, targetDir).then(() => {
+                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'main-side' });
+                }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
+            }
             return;
         }
 
