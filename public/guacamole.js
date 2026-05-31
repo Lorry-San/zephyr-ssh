@@ -918,7 +918,22 @@ function bindCanvasTouch(canvas) {
         const pt=p(e.clientX,e.clientY); if(!pt)return;
         e.preventDefault(); snd({type:'mouse',x:pt.x,y:pt.y}); snd({type:'scroll',deltaY:e.deltaY,deltaX:e.deltaX});
     },{passive:false,signal:sig});
-    console.info('[guac-client]', 'canvas touch bound', {w:canvas.width,h:canvas.height, conn:connected, sender:!!rdpInputSender, client:!!client});
+    // Document-level fallback - if canvas misses events, forward them
+    document.addEventListener('pointerdown', (e) => {
+        const cv = document.getElementById('rdp-canvas');
+        if (!cv) return;
+        const rect = cv.getBoundingClientRect();
+        if (e.clientX < rect.left-4 || e.clientX > rect.right+4 || e.clientY < rect.top-4 || e.clientY > rect.bottom+4) return;
+        if (e.target === cv || cv.contains(e.target)) return; // already handled by canvas listener
+        console.warn('[rdp-touch] pointerdown MISSED canvas, forwarding', {targetTag:e.target?.tagName, targetId:e.target?.id, x:e.clientX, y:e.clientY, connected});
+        if (!connected || !rdpInputSender || client) return;
+        const x = Math.round((e.clientX-rect.left)*(displayWidth||cv.width||1280)/rect.width);
+        const y = Math.round((e.clientY-rect.top)*(displayHeight||cv.height||720)/rect.height);
+        rdpInputSender({type:'mouse',x,y}); rdpInputSender({type:'click',button:1});
+        notifyParentActivity();
+        setTransientStatus(`\u8865\u83b7\u70b9\u51fb (${x},${y})`);
+    }, {capture:true,passive:false,signal:sig});
+    console.info('[guac-client]', 'canvas touch bound+fallback', {w:canvas.width,h:canvas.height, conn:connected, sender:!!rdpInputSender, client:!!client});
 }
 
 class WebCodecsH264Display {
