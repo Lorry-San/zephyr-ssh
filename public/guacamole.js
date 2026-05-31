@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.20-rdp-input-layer';
+const GUAC_CLIENT_VERSION = '2026-05-31.21-rdp-canvas-touch';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -10,7 +10,6 @@ const overlayMsg = $('#overlayMsg');
 const stage = $('#guacStage');
 const displayRoot = $('#display');
 const displayShell = $('#displayShell');
-const rdpInputLayer = $('#rdpInputLayer');
 const fitBtn = $('#fitBtn');
 const zoomBtn = $('#zoomBtn');
 const clipboardBtn = $('#clipboardBtn');
@@ -50,9 +49,6 @@ let rdpAudioSourceBuffer = null;
 let rdpAudioElement = null;
 let rdpAudioQueue = [];
 let rdpAudioUnlocked = false;
-let rdpPointerEventsBound = false;
-let rdpDirectInputAbort = null;
-let rdpLayerInputAbort = null;
 let keyboard = null;
 let mouse = null;
 let connected = false;
@@ -594,8 +590,7 @@ function updateRdpPointer(clientX, clientY, visible = true) {
 }
 
 function setupMobilePointerMouse() {
-    if (!stage || rdpPointerEventsBound) return;
-    rdpPointerEventsBound = true;
+    if (!stage) return;
     stage.style.touchAction = 'none';
     stage.style.webkitTouchCallout = 'none';
     stage.style.userSelect = 'none';
@@ -825,290 +820,102 @@ function setupMobilePointerMouse() {
 
 
 
-function bindRdpInputLayer(canvas, sendInput) {
-    if (!rdpInputLayer) return;
-    try { rdpLayerInputAbort?.abort(); } catch {}
-    rdpLayerInputAbort = new AbortController();
-    const signal = rdpLayerInputAbort.signal;
-    const points = new Map();
-    let longTimer = 0;
-    let lastTapAt = 0;
-    let lastTap = null;
-    let twoFinger = null;
-    const clearLong = () => { if (longTimer) { clearTimeout(longTimer); longTimer = 0; } };
-    const canvasRect = () => canvas.getBoundingClientRect();
-    const pos = (x, y) => {
-        const rect = canvasRect();
-        if (!rect.width || !rect.height) return null;
-        const rw = displayWidth || canvas.width || 1280;
-        const rh = displayHeight || canvas.height || 720;
-        return {
-            x: Math.max(0, Math.min(rw - 1, Math.round((x - rect.left) * rw / rect.width))),
-            y: Math.max(0, Math.min(rh - 1, Math.round((y - rect.top) * rh / rect.height))),
-        };
-    };
-    const inside = (x, y) => {
-        const r = canvasRect();
-        return r.width > 0 && r.height > 0 && x >= r.left - 4 && y >= r.top - 4 && x <= r.right + 4 && y <= r.bottom + 4;
-    };
-    const send = (msg) => {
-        if (!connected || client || !rdpInputSender) return false;
-        try { return !!sendInput(msg); } finally { notifyParentActivity(); }
-    };
-    const move = (p) => send({ type: 'mouse', x: p.x, y: p.y });
-    const click = (p, button = 1) => { move(p); window.setTimeout(() => send({ type: 'click', button }), 10); };
-    const down = (button = 1) => send({ type: 'mousedown', button });
-    const up = (button = 1) => send({ type: 'mouseup', button });
-    const begin = (id, x, y) => {
-        if (!inside(x, y)) return false;
-        const p = pos(x, y);
-        if (!p) return false;
-        points.set(id, { sx: x, sy: y, cx: x, cy: y, pos: p, last: p, moved: false, down: false, right: false });
-        move(p);
-        if (points.size === 1) {
-            clearLong();
-            const st = points.get(id);
-            longTimer = setTimeout(() => {
-                if (points.size === 1 && st && !st.moved && st.last) { click(st.last, 3); st.right = true; }
-                longTimer = 0;
-            }, 620);
-        } else if (points.size === 2) {
-            clearLong();
-            const a = Array.from(points.values());
-            twoFinger = { x: (a[0].cx + a[1].cx) / 2, y: (a[0].cy + a[1].cy) / 2 };
-        }
-        return true;
-    };
-    const movePoint = (id, x, y) => {
-        const st = points.get(id);
-        if (!st) return false;
-        const p = pos(x, y);
-        st.cx = x; st.cy = y;
-        if (p) st.last = p;
-        if (!st.moved && Math.hypot(x - st.sx, y - st.sy) > 10) { st.moved = true; clearLong(); }
-        if (points.size === 2) {
-            const a = Array.from(points.values());
-            const cx = (a[0].cx + a[1].cx) / 2;
-            const cy = (a[0].cy + a[1].cy) / 2;
-            if (twoFinger) {
-                const dy = cy - twoFinger.y;
-                const dx = cx - twoFinger.x;
-                if (Math.abs(dy) > 12 || Math.abs(dx) > 18) { send({ type: 'scroll', deltaY: -dy, deltaX: -dx }); twoFinger = { x: cx, y: cy }; }
-            }
-            return true;
-        }
-        if (!p || st.right) return true;
-        if (st.moved && !st.down) { move(p); down(1); st.down = true; }
-        else if (st.down) move(p);
-        return true;
-    };
-    const finish = (id, x, y) => {
-        const st = points.get(id);
-        if (!st) return false;
-        const p = pos(x, y) || st.last || st.pos;
-        points.delete(id);
-        if (st.down) up(1);
-        else if (!st.moved && !st.right && p) {
-            const now = Date.now();
-            const dbl = lastTap && now - lastTapAt < 360 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 36;
-            click(p, 1);
-            if (dbl) window.setTimeout(() => click(p, 1), 70);
-            lastTapAt = now;
-            lastTap = p;
-        }
-        if (points.size < 2) twoFinger = null;
-        if (points.size === 0) clearLong();
-        return true;
-    };
-    const eat = (e) => { e.preventDefault(); e.stopPropagation(); };
-    rdpInputLayer.addEventListener('pointerdown', (e) => { if (begin(e.pointerId || 'p0', e.clientX, e.clientY)) { eat(e); try { rdpInputLayer.setPointerCapture?.(e.pointerId); } catch {} } }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('pointermove', (e) => { if (movePoint(e.pointerId || 'p0', e.clientX, e.clientY)) eat(e); }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('pointerup', (e) => { if (finish(e.pointerId || 'p0', e.clientX, e.clientY)) eat(e); }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('pointercancel', (e) => { const id = e.pointerId || 'p0'; const st = points.get(id); if (st?.down) up(1); points.delete(id); if (!points.size) clearLong(); }, { capture: true, passive: true, signal });
-    const tid = (t) => `t${t.identifier}`;
-    rdpInputLayer.addEventListener('touchstart', (e) => { let ok = false; for (const t of Array.from(e.changedTouches || [])) ok = begin(tid(t), t.clientX, t.clientY) || ok; if (ok) eat(e); }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('touchmove', (e) => { let ok = false; for (const t of Array.from(e.changedTouches || [])) ok = movePoint(tid(t), t.clientX, t.clientY) || ok; if (ok) eat(e); }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('touchend', (e) => { let ok = false; for (const t of Array.from(e.changedTouches || [])) ok = finish(tid(t), t.clientX, t.clientY) || ok; if (ok) eat(e); }, { capture: true, passive: false, signal });
-    rdpInputLayer.addEventListener('touchcancel', (e) => { for (const t of Array.from(e.changedTouches || [])) { const id = tid(t); const st = points.get(id); if (st?.down) up(1); points.delete(id); } if (!points.size) clearLong(); }, { capture: true, passive: true, signal });
-    rdpInputLayer.addEventListener('wheel', (e) => { if (!inside(e.clientX, e.clientY)) return; const p = pos(e.clientX, e.clientY); if (!p) return; eat(e); move(p); send({ type: 'scroll', deltaY: e.deltaY, deltaX: e.deltaX }); }, { capture: true, passive: false, signal });
-    stage?.classList.add('rdp-canvas-active');
-    console.info('[guac-client]', 'rdp input layer bound', { width: canvas.width, height: canvas.height });
-}
 
-function bindRdpDirectCanvasInput(canvas, sendInput) {
-    try { rdpDirectInputAbort?.abort(); } catch {}
-    rdpDirectInputAbort = new AbortController();
-    const signal = rdpDirectInputAbort.signal;
-    const active = new Map();
-    let lastTapAt = 0;
-    let lastTap = null;
-    let longPressTimer = 0;
-    let twoFinger = null;
-    let pointerTouchAt = 0;
-    const isUI = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
-    const isTouchEnv = () => (navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches || isCompactScreen();
-    const isTouchPointer = (e) => e.pointerType === 'touch' || e.pointerType === 'pen' || (!e.pointerType && isTouchEnv());
-    const pointInCanvas = (x, y) => {
-        const rect = canvas.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && x >= rect.left - 2 && y >= rect.top - 2 && x <= rect.right + 2 && y <= rect.bottom + 2;
+
+function bindCanvasTouch(canvas) {
+    try { canvasTouchAbort?.abort(); } catch {}
+    canvasTouchAbort = new AbortController();
+    const sig = canvasTouchAbort.signal;
+    const map = new Map();
+    let lastTap = null, lastTapAt = 0, longT = 0, tf = null;
+    const cr = () => canvas.getBoundingClientRect();
+    const p = (x, y) => {
+        const r = cr(); if (!r.width||!r.height) return null;
+        const rw = displayWidth||canvas.width||1280, rh = displayHeight||canvas.height||720;
+        return { x: Math.max(0,Math.min(rw-1,Math.round((x-r.left)*rw/r.width))), y: Math.max(0,Math.min(rh-1,Math.round((y-r.top)*rh/r.height))) };
     };
-    const posFromXY = (x, y) => {
-        const rect = canvas.getBoundingClientRect();
-        if (!rect.width || !rect.height) return null;
-        const rw = displayWidth || canvas.width || 1280;
-        const rh = displayHeight || canvas.height || 720;
-        return {
-            x: Math.max(0, Math.min(rw - 1, Math.round((x - rect.left) * rw / rect.width))),
-            y: Math.max(0, Math.min(rh - 1, Math.round((y - rect.top) * rh / rect.height))),
-            clientX: x,
-            clientY: y,
-        };
-    };
-    const send = (msg) => {
-        if (!connected || client || !rdpInputSender) return false;
-        const ok = sendInput(msg);
-        if (ok) notifyParentActivity();
-        return ok;
-    };
-    const clearLP = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = 0; } };
-    const sendMove = (pos) => send({ type: 'mouse', x: pos.x, y: pos.y });
-    const sendDown = (button = 1) => send({ type: 'mousedown', button });
-    const sendUp = (button = 1) => send({ type: 'mouseup', button });
-    const sendClick = (pos, button = 1) => { sendMove(pos); window.setTimeout(() => send({ type: 'click', button }), 12); };
-    const finishOne = (id, x, y) => {
-        const t = active.get(id);
-        if (!t) return;
-        const pos = posFromXY(x, y) || t.last || t.pos;
-        active.delete(id);
-        if (t.downSent) sendUp(1);
-        else if (!t.moved && !t.rightClicked && pos) {
-            const now = Date.now();
-            const dbl = lastTap && now - lastTapAt < 360 && Math.hypot(pos.x - lastTap.x, pos.y - lastTap.y) < 36;
-            sendClick(pos, 1);
-            if (dbl) window.setTimeout(() => sendClick(pos, 1), 70);
-            lastTapAt = now;
-            lastTap = pos;
+    const snd = (m) => { if (rdpInputSender&&!client&&connected) try { rdpInputSender(m); notifyParentActivity(); } catch {} };
+    const click = (pt, b=1) => { snd({type:'mouse',x:pt.x,y:pt.y}); setTimeout(()=>snd({type:'click',button:b}),10); };
+    const down = (b=1) => snd({type:'mousedown',button:b});
+    const up = (b=1) => snd({type:'mouseup',button:b});
+    const tid = (t,i) => `t${i}`;
+    let pointerTouchTs = 0;
+    canvas.addEventListener('pointerdown', (e) => {
+        pointerTouchTs = Date.now();
+        const pt = p(e.clientX, e.clientY); if (!pt) return;
+        e.preventDefault();
+        const id = e.pointerId||'p0';
+        map.set(id,{sx:e.clientX, sy:e.clientY, cx:e.clientX, cy:e.clientY, pos:pt, last:pt, moved:false, down:false, right:false});
+        snd({type:'mouse',x:pt.x,y:pt.y});
+        clearTimeout(longT);
+        if (map.size===1) longT=setTimeout(()=>{const t=map.get(id); if(t&&!t.moved&&t.last){click(t.last,3);t.right=true;} longT=0;},620);
+        else if (map.size===2){clearTimeout(longT);const a=Array.from(map.values());tf={x:(a[0].cx+a[1].cx)/2,y:(a[0].cy+a[1].cy)/2};}
+    },{passive:false,signal:sig});
+    canvas.addEventListener('pointermove', (e) => {
+        const t=map.get(e.pointerId||'p0'); if(!t)return; e.preventDefault();
+        const pt=p(e.clientX, e.clientY); t.cx=e.clientX; t.cy=e.clientY; if(pt) t.last=pt;
+        if(!t.moved&&Math.hypot(e.clientX-t.sx,e.clientY-t.sy)>10){t.moved=true;clearTimeout(longT);}
+        if(map.size===2){const a=Array.from(map.values());const cx=(a[0].cx+a[1].cx)/2,cy=(a[0].cy+a[1].cy)/2;if(tf){const dy=cy-tf.y,dx=cx-tf.x;if(Math.abs(dy)>12||Math.abs(dx)>18){snd({type:'scroll',deltaY:-dy,deltaX:-dx});tf={x:cx,y:cy};}}return;}
+        if(!pt||t.right)return;
+        if(t.moved&&!t.down){snd({type:'mouse',x:pt.x,y:pt.y});down(1);t.down=true;}
+        else if(t.down) snd({type:'mouse',x:pt.x,y:pt.y});
+    },{passive:false,signal:sig});
+    canvas.addEventListener('pointerup', (e) => {
+        const t=map.get(e.pointerId||'p0'); if(!t)return; e.preventDefault();
+        const pt=p(e.clientX,e.clientY)||t.last||t.pos;
+        map.delete(e.pointerId||'p0');
+        if(t.down) up(1);
+        else if(!t.moved&&!t.right&&pt){
+            const now=Date.now(); const dbl=lastTap&&now-lastTapAt<360&&Math.hypot(pt.x-lastTap.x,pt.y-lastTap.y)<36;
+            click(pt,1); if(dbl) setTimeout(()=>click(pt,1),70); lastTapAt=now; lastTap=pt;
         }
-        if (active.size < 2) twoFinger = null;
-        if (active.size === 0) clearLP();
-        updateRdpPointer(x || 0, y || 0, false);
-    };
-    const beginOne = (id, x, y, target) => {
-        if (isUI(target) || !pointInCanvas(x, y)) return false;
-        const pos = posFromXY(x, y);
-        if (!pos) return false;
-        active.set(id, { sx: x, sy: y, cx: x, cy: y, pos, last: pos, moved: false, downSent: false, rightClicked: false });
-        sendMove(pos);
-        updateRdpPointer(x, y, true);
-        if (active.size === 1) {
-            clearLP();
-            const t = active.get(id);
-            longPressTimer = setTimeout(() => {
-                if (active.size === 1 && t && !t.moved && t.last) {
-                    sendClick(t.last, 3);
-                    t.rightClicked = true;
-                }
-                longPressTimer = 0;
-            }, 620);
-        } else if (active.size === 2) {
-            clearLP();
-            const arr = Array.from(active.values());
-            twoFinger = { x: (arr[0].cx + arr[1].cx) / 2, y: (arr[0].cy + arr[1].cy) / 2 };
+        if(map.size<2)tf=null; if(!map.size)clearTimeout(longT);
+    },{passive:false,signal:sig});
+    canvas.addEventListener('pointercancel', (e) => {
+        const t=map.get(e.pointerId||'p0'); if(t?.down)up(1); map.delete(e.pointerId||'p0');
+        if(!map.size)clearTimeout(longT);
+    },{passive:true,signal:sig});
+    // Native touch fallback
+    const tId = (t) => '_t'+t.identifier;
+    canvas.addEventListener('touchstart', (e) => {
+        if(Date.now()-pointerTouchTs<450)return;
+        for(const t of Array.from(e.changedTouches)){const pt=p(t.clientX,t.clientY); if(!pt)continue;
+            map.set(tId(t),{sx:t.clientX,sy:t.clientY,cx:t.clientX,cy:t.clientY,pos:pt,last:pt,moved:false,down:false,right:false});
+            snd({type:'mouse',x:pt.x,y:pt.y});}
+        if(map.size===1){clearTimeout(longT); const first=Array.from(map.values())[0];
+            longT=setTimeout(()=>{if(map.size===1&&first&&!first.moved&&first.last){click(first.last,3);first.right=true;}longT=0;},620);}
+        else if(map.size===2){clearTimeout(longT);const a=Array.from(map.values());tf={x:(a[0].cx+a[1].cx)/2,y:(a[0].cy+a[1].cy)/2};}
+        e.preventDefault();
+    },{passive:false,signal:sig});
+    canvas.addEventListener('touchmove', (e) => {
+        if(Date.now()-pointerTouchTs<450)return;
+        for(const t of Array.from(e.changedTouches)){
+            const id=tId(t),st=map.get(id); if(!st)continue;
+            const pt=p(t.clientX,t.clientY); st.cx=t.clientX;st.cy=t.clientY; if(pt)st.last=pt;
+            if(!st.moved&&Math.hypot(t.clientX-st.sx,t.clientY-st.sy)>10){st.moved=true;clearTimeout(longT);}
+            if(map.size===2){const a=Array.from(map.values());const cx=(a[0].cx+a[1].cx)/2,cy=(a[0].cy+a[1].cy)/2;if(tf){const dy=cy-tf.y,dx=cx-tf.x;if(Math.abs(dy)>12||Math.abs(dx)>18){snd({type:'scroll',deltaY:-dy,deltaX:-dx});tf={x:cx,y:cy};}}}
+            else if(pt&&!st.right){
+                if(st.moved&&!st.down){snd({type:'mouse',x:pt.x,y:pt.y});down(1);st.down=true;}
+                else if(st.down)snd({type:'mouse',x:pt.x,y:pt.y});}
         }
-        return true;
-    };
-    const moveOne = (id, x, y) => {
-        const t = active.get(id);
-        if (!t) return false;
-        const pos = posFromXY(x, y);
-        t.cx = x; t.cy = y;
-        if (pos) t.last = pos;
-        updateRdpPointer(x, y, true);
-        const dist = Math.hypot(x - t.sx, y - t.sy);
-        if (!t.moved && dist > 10) { t.moved = true; clearLP(); }
-        if (active.size === 2) {
-            const arr = Array.from(active.values());
-            const cx = (arr[0].cx + arr[1].cx) / 2;
-            const cy = (arr[0].cy + arr[1].cy) / 2;
-            if (twoFinger) {
-                const dy = cy - twoFinger.y;
-                const dx = cx - twoFinger.x;
-                if (Math.abs(dy) > 12 || Math.abs(dx) > 18) {
-                    send({ type: 'scroll', deltaY: -dy, deltaX: -dx });
-                    twoFinger = { x: cx, y: cy };
-                }
-            }
-            return true;
-        }
-        if (t.rightClicked || !pos) return true;
-        if (t.moved && !t.downSent) { sendMove(pos); sendDown(1); t.downSent = true; }
-        else if (t.downSent) sendMove(pos);
-        return true;
-    };
-    document.addEventListener('pointerdown', (e) => {
-        if (!isTouchPointer(e)) return;
-        if (!beginOne(e.pointerId ?? 'p0', e.clientX, e.clientY, e.target)) return;
-        pointerTouchAt = Date.now();
-        e.preventDefault(); e.stopPropagation();
-        try { canvas.setPointerCapture?.(e.pointerId); } catch {}
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('pointermove', (e) => {
-        if (!isTouchPointer(e) || !active.has(e.pointerId ?? 'p0')) return;
-        pointerTouchAt = Date.now();
-        if (moveOne(e.pointerId ?? 'p0', e.clientX, e.clientY)) { e.preventDefault(); e.stopPropagation(); }
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('pointerup', (e) => {
-        if (!isTouchPointer(e) || !active.has(e.pointerId ?? 'p0')) return;
-        pointerTouchAt = Date.now();
-        e.preventDefault(); e.stopPropagation();
-        finishOne(e.pointerId ?? 'p0', e.clientX, e.clientY);
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('pointercancel', (e) => {
-        const id = e.pointerId ?? 'p0';
-        const t = active.get(id);
-        if (t?.downSent) sendUp(1);
-        active.delete(id);
-        if (!active.size) clearLP();
-    }, { capture: true, passive: true, signal });
-    const tid = (t) => `t${t.identifier}`;
-    document.addEventListener('touchstart', (e) => {
-        if (Date.now() - pointerTouchAt < 450) return;
-        let handled = false;
-        for (const t of Array.from(e.changedTouches || [])) handled = beginOne(tid(t), t.clientX, t.clientY, e.target) || handled;
-        if (handled) { e.preventDefault(); e.stopPropagation(); }
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('touchmove', (e) => {
-        if (Date.now() - pointerTouchAt < 450) return;
-        let handled = false;
-        for (const t of Array.from(e.changedTouches || [])) handled = moveOne(tid(t), t.clientX, t.clientY) || handled;
-        if (handled) { e.preventDefault(); e.stopPropagation(); }
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('touchend', (e) => {
-        if (Date.now() - pointerTouchAt < 450) return;
-        let handled = false;
-        for (const t of Array.from(e.changedTouches || [])) {
-            if (active.has(tid(t))) { finishOne(tid(t), t.clientX, t.clientY); handled = true; }
-        }
-        if (handled) { e.preventDefault(); e.stopPropagation(); }
-    }, { capture: true, passive: false, signal });
-    document.addEventListener('touchcancel', (e) => {
-        for (const t of Array.from(e.changedTouches || [])) {
-            const id = tid(t);
-            const st = active.get(id);
-            if (st?.downSent) sendUp(1);
-            active.delete(id);
-        }
-        if (!active.size) clearLP();
-    }, { capture: true, passive: true, signal });
-    document.addEventListener('wheel', (e) => {
-        if (!pointInCanvas(e.clientX, e.clientY)) return;
-        const pos = posFromXY(e.clientX, e.clientY);
-        if (!pos) return;
-        e.preventDefault(); e.stopPropagation();
-        sendMove(pos);
-        send({ type: 'scroll', deltaY: e.deltaY, deltaX: e.deltaX });
-    }, { capture: true, passive: false, signal });
-    console.info('[guac-client]', 'rdp direct canvas input bound', { touch: isTouchEnv(), width: canvas.width, height: canvas.height });
+        e.preventDefault();
+    },{passive:false,signal:sig});
+    canvas.addEventListener('touchend', (e) => {
+        if(Date.now()-pointerTouchTs<450)return;
+        for(const t of Array.from(e.changedTouches)){const id=tId(t),st=map.get(id); if(!st)continue;
+            const pt=p(t.clientX,t.clientY)||st.last||st.pos; map.delete(id);
+            if(st.down) up(1);
+            else if(!st.moved&&!st.right&&pt){const now=Date.now();const dbl=lastTap&&now-lastTapAt<360&&Math.hypot(pt.x-lastTap.x,pt.y-lastTap.y)<36;
+                click(pt,1); if(dbl)setTimeout(()=>click(pt,1),70); lastTapAt=now; lastTap=pt;}}
+        if(map.size<2)tf=null; if(!map.size)clearTimeout(longT);
+        e.preventDefault();
+    },{passive:false,signal:sig});
+    canvas.addEventListener('touchcancel', () => {if(!map.size)clearTimeout(longT); map.clear();tf=null;},{passive:true,signal:sig});
+    canvas.addEventListener('wheel', (e) => {
+        const pt=p(e.clientX,e.clientY); if(!pt)return;
+        e.preventDefault(); snd({type:'mouse',x:pt.x,y:pt.y}); snd({type:'scroll',deltaY:e.deltaY,deltaX:e.deltaX});
+    },{passive:false,signal:sig});
+    console.info('[guac-client]', 'canvas touch bound', {w:canvas.width,h:canvas.height});
 }
 
 class WebCodecsH264Display {
@@ -1316,8 +1123,7 @@ async function connect() {
         displayRoot.style.pointerEvents = 'auto';
         displayShell && (displayShell.style.pointerEvents = 'auto');
         canvas.style.pointerEvents = 'auto';
-        bindRdpInputLayer(canvas, wsInput);
-        bindRdpDirectCanvasInput(canvas, wsInput);
+        bindCanvasTouch(canvas);
 
         const parser = new AnnexBH264AccessUnitParser(async (description) => {
             if (!window.VideoDecoder || !window.EncodedVideoChunk) {
@@ -1453,11 +1259,8 @@ function disconnect(userInitiated = true) {
     }
     tunnel = null;
     rdpInputSender = null;
-    try { rdpDirectInputAbort?.abort(); } catch {}
-    rdpDirectInputAbort = null;
-    try { rdpLayerInputAbort?.abort(); } catch {}
-    rdpLayerInputAbort = null;
-    stage?.classList.remove('rdp-canvas-active');
+    try { canvasTouchAbort?.abort(); } catch {}
+    canvasTouchAbort = null;
     guacTouches.clear();
     updateRdpPointer(0, 0, false);
     connected = false;

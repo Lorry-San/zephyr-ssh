@@ -4525,28 +4525,6 @@ html.keyboard-open .terminal-page {
     max-height: none;
 }
 
-
-.rdp-input-layer {
-    position: absolute;
-    inset: 0;
-    z-index: 6;
-    display: none;
-    touch-action: none;
-    -webkit-user-select: none;
-    user-select: none;
-    cursor: none;
-    background: transparent;
-}
-.guac-stage.rdp-canvas-active .rdp-input-layer {
-    display: block;
-    pointer-events: auto;
-}
-.guac-stage.rdp-canvas-active .guac-display-shell,
-.guac-stage.rdp-canvas-active .guac-display,
-.guac-stage.rdp-canvas-active #rdp-canvas {
-    pointer-events: none !important;
-}
-
 .guac-stage .terminal-overlay {
     z-index: 10;
 }
