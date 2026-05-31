@@ -748,7 +748,7 @@ class AnnexBH264AccessUnitParser {
     }
 }
 
-class Fmp4RdpSink {
+class WebmRdpSink {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -763,10 +763,6 @@ class Fmp4RdpSink {
         this._rafId = 0;
         this._onConnected = null;
         this._queued = [];
-        this._segNum = 0;
-        this._timescale = 90000;
-        this._baseTime = 0;
-        this._frameDur = 3000; // 90000/30
         document.body.appendChild(this.video);
         const loop = () => {
             this._rafId = requestAnimationFrame(loop);
@@ -786,7 +782,7 @@ class Fmp4RdpSink {
         };
         loop();
     }
-    init(codec = 'video/mp4; codecs="avc1.42E01E"') {
+    init(codec = 'video/webm; codecs="vp8"') {
         if (this.inited) return;
         if (!window.MediaSource) throw new Error('MSE not supported');
         this.ms = new MediaSource();
@@ -800,21 +796,17 @@ class Fmp4RdpSink {
                 if (self._queued.length) { try { self.sb.appendBuffer(self._queued.shift()); } catch { self._queued.length = 0; } }
             });
             self.inited = true;
+            for (const chunk of self._queued.splice(0)) { try { self.sb.appendBuffer(chunk); } catch {} }
         }, { once: true });
     }
-    feedInit(sps, pps, w, h) {
-        if (!this.sb || this.sb.updating) { this._queued.push(MP4.buildInitSegment(sps, pps, w, h)); return; }
-        try { this.sb.appendBuffer(MP4.buildInitSegment(sps, pps, w, h)); } catch { this._queued.push(MP4.buildInitSegment(sps, pps, w, h)); }
+    feed(buf) {
+        if (!this.sb || this.sb.updating) {
+            if (this._queued.length > 60) this._queued.splice(0, this._queued.length - 60);
+            this._queued.push(buf);
+        } else {
+            try { this.sb.appendBuffer(buf); } catch { this._queued.push(buf); }
+        }
     }
-    feedFrame(data, key) {
-        const seg = MP4.buildFragment(this._baseTime, data, key, this._frameDur);
-        this._baseTime += this._frameDur;
-        this._segNum++;
-        if (this._queued.length > 60) this._queued.splice(0, this._queued.length - 60);
-        if (!this.sb || this.sb.updating) { this._queued.push(seg); return; }
-        try { this.sb.appendBuffer(seg); } catch { this._queued.push(seg); }
-    }
-    setFrameDuration(fps) { this._frameDur = Math.round(90000 / Math.max(1, fps || 30)); }
     onConnected(cb) { this._onConnected = cb; }
     destroy() {
         if (this._rafId) cancelAnimationFrame(this._rafId);
@@ -848,7 +840,7 @@ async function connect() {
         canvas.style.cssText = 'display:block;width:100%;height:auto;image-rendering:auto;cursor:none;touch-action:none;-webkit-user-select:none;user-select:none;outline:none';
         displayRoot.appendChild(canvas);
 
-        const sink = new Fmp4RdpSink(canvas);
+        const sink = new WebmRdpSink(canvas);
         const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/rdp-h264`;
         rdpScaleZoom = 1;
         zoomBtn && (zoomBtn.textContent = '🔍 100%');
@@ -860,11 +852,8 @@ async function connect() {
         tunnel.binaryType = 'arraybuffer';
         sink.init();
 
-        let parser = null;
-        let initSent = false;
-
         sink.onConnected(() => {
-            setStatus('connected', `${label} 已连接 [MSE H.264]`);
+            setStatus('connected', `${label} 已连接 [MSE WebM]`);
             connected = true;
             startClipboardAutoSync();
             startRdpAudio();
@@ -879,7 +868,6 @@ async function connect() {
             notifyParentStatus('connecting');
         };
         tunnel.onclose = (event) => {
-            if (parser) { try { parser = null; } catch {} }
             connected = false;
             notifyParentStatus('disconnected');
             if (event.code === 1012) {
@@ -906,7 +894,6 @@ async function connect() {
                             displayHeight = Number(msg.height);
                             requestedRdpWidth = Number(msg.width) || requestedRdpWidth;
                             requestedRdpHeight = Number(msg.height) || requestedRdpHeight;
-                            if (msg.fps) sink.setFrameDuration(Number(msg.fps));
                             window.setTimeout(() => requestRdpCanvasSize(fitModes[fitModeIdx], true), 300);
                         }
                     }
@@ -915,22 +902,7 @@ async function connect() {
             }
             const buf = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data instanceof Blob ? new Uint8Array(await ev.data.arrayBuffer()) : null;
             if (!buf || buf.byteLength < 5) return;
-            if (!parser) {
-                parser = new AnnexBH264AccessUnitParser(
-                    (description) => {
-                        if (!initSent) {
-                            const sps = parser.sps;
-                            const pps = parser.pps;
-                            if (sps && pps) {
-                                sink.feedInit(sps, pps, displayWidth || 1280, displayHeight || 720);
-                                initSent = true;
-                            }
-                        }
-                    },
-                    (data, key) => { if (initSent) sink.feedFrame(data, key); }
-                );
-            }
-            parser.push(buf);
+            sink.feed(buf);
         };
 
         function wsInput(msg) { if (tunnel && tunnel.readyState === WebSocket.OPEN) tunnel.send(JSON.stringify(msg)); }
