@@ -3454,7 +3454,17 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
     const env = { ...process.env, DISPLAY: xvfbDisp, ZEPHYR_RDP_H264_PIPE: fifoPath, PULSE_SERVER: `unix:/tmp/zephyr-pulse-${connId}/native` };
 
     let pulseaudio = null;
-    const hasPulseRdpPlugin = fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-pulse.so') || fs.existsSync('/usr/lib/freerdp2/rdpsnd-client-pulse.so');
+    const hasPulseRdpPlugin = (() => {
+        const paths = ['/usr/lib/freerdp2/librdpsnd-client-pulse.so', '/usr/lib/freerdp2/rdpsnd-client-pulse.so'];
+        for (const p of paths) {
+            if (!fs.existsSync(p)) continue;
+            try {
+                const out = require('child_process').execFileSync('nm', ['-D', p], { encoding: 'utf8', timeout: 3000 });
+                if (/^\S+ T freerdp_rdpsnd_client_subsystem_entry$/m.test(out)) return true;
+            } catch {}
+        }
+        return false;
+    })();
     if (process.env.RDP_AUDIO !== 'false' && hasPulseRdpPlugin) {
         try { fs.rmSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true, force: true }); } catch {}
         try { fs.mkdirSync(`/tmp/zephyr-pulse-${connId}`, { recursive: true }); } catch {}
@@ -3478,7 +3488,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
         ...(RDP_ALLOW_GFX_FALLBACK ? [] : ['/gfx:AVC444']),
         '+fonts',
         '+clipboard',
-        ...(process.env.RDP_AUDIO === 'false' ? [] : (fs.existsSync('/usr/lib/freerdp2/librdpsnd-client-pulse.so') || fs.existsSync('/usr/lib/freerdp2/rdpsnd-client-pulse.so') ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
+        ...(process.env.RDP_AUDIO === 'false' ? [] : (hasPulseRdpPlugin ? ['/sound:sys:pulse,format:1,rate:44100,channel:2'] : [])),
         '+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims',
         '/dynamic-resolution',
         '/log-level:WARN',
