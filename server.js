@@ -3620,7 +3620,7 @@ function pasteTextIntoRdp(pipe, text, { paste = true } = {}) {
     const quoted = shQuote(text);
     const pasteCmd = pipe?.activeWindowId ? `xdotool windowactivate --sync ${pipe.activeWindowId} key --clearmodifiers ctrl+v` : `xdotool key --clearmodifiers ctrl+v`;
     const xclipSet = `printf %s ${quoted} | xclip -selection clipboard -i && printf %s ${quoted} | xclip -selection primary -i`;
-    const script = paste ? `(${xclipSet} && ${pasteCmd}; sleep 0.12; ${pasteCmd})` : `(${xclipSet})`;
+    const script = paste ? `(${xclipSet} && ${pasteCmd})` : `(${xclipSet})`;
     const child = spawn('sh', ['-c', script], { env: pipe.env, stdio: ['ignore', 'ignore', 'pipe'] });
     let errText = '';
     child.stderr.on('data', (d) => { errText += d.toString('utf8'); });

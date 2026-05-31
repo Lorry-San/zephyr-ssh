@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.11-rdp-landscape-even';
+const GUAC_CLIENT_VERSION = '2026-05-31.12-rdp-input-resize-debounce';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -59,6 +59,10 @@ let resizeTimer = 0;
 let requestedRdpWidth = 0;
 let requestedRdpHeight = 0;
 let rdpScaleZoom = 1;
+let rdpReconnectTimer = 0;
+let rdpReconnectPending = false;
+let rdpReconnectSeq = 0;
+let rdpLastReconnectAt = 0;
 let mobileInputMirror = '';
 let lastRemoteClipboard = '';
 let clipboardAutoWriteOk = false;
@@ -973,7 +977,9 @@ async function connect() {
                 stopClipboardAutoSync();
                 stopRdpAudio();
                 setStatus('connecting', event.reason || '正在切换 RDP 分辨率...');
-                window.setTimeout(() => connect(), 250);
+                rdpReconnectPending = false;
+                const seq = ++rdpReconnectSeq;
+                window.setTimeout(() => { if (seq === rdpReconnectSeq) connect(); }, 650);
                 return;
             }
             setStatus('disconnected', event.reason || `${label} 已断开`);
@@ -2079,6 +2085,19 @@ function toggleMobileKeyboard() {
 function setupMobileKeyboard() {
     if (!mobileKeyboardInput) return;
     let composing = false;
+    let suppressInputUntil = 0;
+    let lastSentText = '';
+    let lastSentAt = 0;
+    const sendMobileTextOnce = (text) => {
+        if (!text) return false;
+        const now = Date.now();
+        if (text === lastSentText && now - lastSentAt < 250) return false;
+        lastSentText = text;
+        lastSentAt = now;
+        suppressInputUntil = now + 250;
+        sendTextToRemote(text);
+        return true;
+    };
     const resetMobileInput = () => {
         mobileKeyboardInput.value = '';
         mobileInputMirror = '';
@@ -2104,7 +2123,7 @@ function setupMobileKeyboard() {
     mobileKeyboardInput.addEventListener('compositionend', (event) => {
         composing = false;
         const text = event.data || mobileKeyboardInput.value || '';
-        if (text) sendTextToRemote(text);
+        if (text) sendMobileTextOnce(text);
         resetMobileInput();
     });
 
@@ -2126,15 +2145,16 @@ function setupMobileKeyboard() {
         }
         if (inputType.startsWith('insert')) {
             const text = event.data || mobileKeyboardInput.value || '';
-            if (text) sendTextToRemote(text);
+            if (text) sendMobileTextOnce(text);
             resetMobileInput();
         }
     });
 
     mobileKeyboardInput.addEventListener('input', () => {
         if (composing) return;
+        if (Date.now() < suppressInputUntil) { resetMobileInput(); return; }
         const text = mobileKeyboardInput.value || '';
-        if (text) sendTextToRemote(text);
+        if (text) sendMobileTextOnce(text);
         resetMobileInput();
     });
 
@@ -2155,7 +2175,7 @@ function setupMobileKeyboard() {
         const text = event.clipboardData?.getData('text/plain') || '';
         if (!text) return;
         event.preventDefault();
-        sendTextToRemote(text);
+        sendMobileTextOnce(text);
         resetMobileInput();
     });
 }
@@ -2244,8 +2264,19 @@ fitBtn.addEventListener('click', () => {
     if (rdpInputSender && !client) {
         rdpScaleZoom = 1;
         const target = computeRdpTargetSize(m);
-        rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode });
-        setTransientStatus(`正在切换 ${target.width}×${target.height}`);
+        applyDisplayScale();
+        requestedRdpWidth = target.width;
+        requestedRdpHeight = target.height;
+        window.clearTimeout(rdpReconnectTimer);
+        rdpReconnectTimer = window.setTimeout(() => {
+            const now = Date.now();
+            if (!rdpInputSender || client || !connected || rdpReconnectPending) return;
+            if (now - rdpLastReconnectAt < 1200) return;
+            rdpReconnectPending = true;
+            rdpLastReconnectAt = now;
+            rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode });
+            setTransientStatus(`正在切换 ${target.width}×${target.height}`);
+        }, 360);
     } else {
         switchFitMode(m);
         applyDisplayScale();
