@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.26-rdp-input-stable';
+const GUAC_CLIENT_VERSION = '2026-05-31.27-rdp-close-tab';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -140,6 +140,19 @@ function notifyParentStatus(status) {
 function notifyParentActivity() {
     if (embeddedMode && window.parent && window.parent !== window) {
         window.parent.postMessage({ source: 'zephyr-terminal', type: 'activity', tabId: params?.tabId || tabId }, '*');
+    }
+}
+
+function notifyParentCloseRequest(reason = 'remote-desktop-closed') {
+    if (embeddedMode && window.parent && window.parent !== window) {
+        console.info('[guac-client]', 'request parent to close tab', {
+            tabId: params?.tabId || tabId,
+            reason,
+            connected,
+            hasTunnel: !!tunnel,
+            hasRdpInput: !!rdpInputSender,
+        });
+        window.parent.postMessage({ source: 'zephyr-terminal', type: 'close-request', tabId: params?.tabId || tabId, reason }, '*');
     }
 }
 
@@ -2630,7 +2643,15 @@ if (qualityBtn) {
     });
 }
 reconnectBtn.addEventListener('click', () => connect());
-disconnectBtn.addEventListener('click', () => disconnect(true));
+disconnectBtn.addEventListener('click', () => {
+    disconnect(true);
+    if (embeddedMode) {
+        notifyParentCloseRequest('user-disconnect-button');
+        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">远程桌面已断开，正在关闭此窗口...</div>';
+    } else {
+        window.location.href = '/';
+    }
+});
 window.addEventListener('resize', scheduleResize, { passive: true });
 window.addEventListener('beforeunload', () => disconnect(false));
 window.addEventListener('message', (event) => {
