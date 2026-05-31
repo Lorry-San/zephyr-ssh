@@ -641,7 +641,7 @@ const MP4 = (() => {
         const profile = sps[1];
         const compat  = sps[2];
         const level   = sps[3];
-        const avcc = new Uint8Array(7 + sps.byteLength + pps.byteLength);
+        const avcc = new Uint8Array(11 + sps.byteLength + pps.byteLength);
         avcc[0]=1; avcc[1]=profile; avcc[2]=compat; avcc[3]=level; avcc[4]=0xff; avcc[5]=0xe1;
         avcc[6]=(sps.byteLength>>>8)&255; avcc[7]=sps.byteLength&255; avcc.set(new Uint8Array(sps.buffer, sps.byteOffset, sps.byteLength), 8);
         const aoff = 8 + sps.byteLength;
@@ -675,25 +675,18 @@ const MP4 = (() => {
     }
 
     function buildFragment(baseDecodeTime, data, key, duration) {
-        const w = data.byteLength;
-        const tfFlags = key ? 0x2000000 : 0x1000000;
-        const trunHeader = new Uint8Array(28);
-        trunHeader[0] = (w>>>24)&255; trunHeader[1]=(w>>>16)&255; trunHeader[2]=(w>>>8)&255; trunHeader[3]=w&255;
-        trunHeader[4] = (duration>>>24)&255; trunHeader[5]=(duration>>>16)&255; trunHeader[6]=(duration>>>8)&255; trunHeader[7]=duration&255;
-        const trunFlags = 0x100 | 0x200 | 0x400; // data-offset, first-sample-flags, sample-duration
-        const trun = box('trun', u32(trunFlags), u32(1), u32(28+8), trunHeader);
+        const flags = key ? 0x2000000 : 0x1000000;
+        const sampleEntry = new Uint8Array(8);
+        sampleEntry[0] = (duration>>>24)&255; sampleEntry[1]=(duration>>>16)&255; sampleEntry[2]=(duration>>>8)&255; sampleEntry[3]=duration&255;
+        sampleEntry[4] = (data.byteLength>>>24)&255; sampleEntry[5]=(data.byteLength>>>16)&255; sampleEntry[6]=(data.byteLength>>>8)&255; sampleEntry[7]=data.byteLength&255;
+        const trun = box('trun', u32(1), u32(0x100|0x200), u32(1), u32(0), sampleEntry);
         const tfdt = box('tfdt', u32(1), u64h(baseDecodeTime));
-        const tfhd = box('tfhd', u32(0x38), u32(1), zero8.slice(0,8), u32(1), u32(1));
+        const tfhd = box('tfhd', u32(0x20000), u32(1), zero8.slice(0,8), u32(1), u32(1));
         const traf = box('traf', tfhd, tfdt, trun);
-        let mfhd;
-        if (key) {
-            mfhd = box('mfhd', u32(baseDecodeTime & 0xffffffff));
-        } else {
-            mfhd = box('mfhd', u32(0));
-        }
+        const mfhd = box('mfhd', u32(key ? (baseDecodeTime & 0xffffffff) : 0));
         const moof = box('moof', mfhd, traf);
         const mdat = box('mdat', data);
-        return box('\0\0\0\0', moof, mdat);
+        return box('\0'.repeat(4), moof, mdat);
     }
 
     return { buildInitSegment, buildFragment, u32, u16, box };
