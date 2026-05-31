@@ -1994,6 +1994,12 @@ function updateTransferMetrics(item, loaded) {
     const now = Date.now();
     const previousLoaded = Number(item.loaded) || 0;
     const previousAt = Number(item.updatedAt) || now;
+    if (Number(loaded || 0) < previousLoaded) {
+        item.speed = 0;
+        item.loaded = Number(loaded) || 0;
+        item.updatedAt = now;
+        return;
+    }
     // Use at least 1s window to avoid spike from rapid server updates
     const deltaTime = Math.max(1, (now - previousAt) / 1000);
     const deltaBytes = Math.max(0, Number(loaded || 0) - previousLoaded);
@@ -2182,6 +2188,15 @@ function transferStatusText(item) {
     if (item.status === 'pending') return '等待中';
     if (item.direction === 'copy') return '复制中';
     if (item.direction === 'move') return '移动中';
+    if (item.direction === 'archive') {
+        const phase = item.phase || '';
+        if (phase === 'scan') return '扫描中';
+        if (phase === 'download') return '拉取到主端';
+        if (phase === 'compress') return '主端压缩中';
+        if (phase === 'extract') return '主端解压中';
+        if (phase === 'upload') return '传回远端';
+        return '处理中';
+    }
     const loaded = Number(item.loaded ?? 0) || 0;
     const total = Number(item.size ?? 0) || 0;
     if (!total && (item.status === 'active' || item.status === 'pending')) return '准备中';
@@ -3406,15 +3421,21 @@ function handleFileMenuAction(action) {
         const defaultName = selected.length === 1 ? `${selected[0].name}.zip` : `archive-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}.zip`;
         const targetPath = chooseArchiveTargetPath(defaultName);
         if (!targetPath) return;
-        wsConnection.send(JSON.stringify({ type: 'sftp-compress', items: selected, targetPath }));
-        showToast('正在压缩...', 'info');
+        const transferId = `archive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        markDownloadProgress(transferId, { name: `压缩: ${targetPath.split('/').pop() || '压缩包'}`, path: targetPath, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: false });
+        showTransferPopover({ autoHide: true });
+        wsConnection.send(JSON.stringify({ type: 'sftp-compress', items: selected, targetPath, transferId }));
+        showToast('正在压缩，进度可在传输面板查看', 'info');
         return;
     }
     if (action === 'extract' && single) {
         const targetDir = prompt('解压到:', currentPath);
         if (!targetDir) return;
-        wsConnection.send(JSON.stringify({ type: 'sftp-extract', path: single.path, targetDir }));
-        showToast('正在解压...', 'info');
+        const transferId = `archive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        markDownloadProgress(transferId, { name: `解压: ${single.name || '压缩包'}`, path: single.path, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: false });
+        showTransferPopover({ autoHide: true });
+        wsConnection.send(JSON.stringify({ type: 'sftp-extract', path: single.path, targetDir, transferId }));
+        showToast('正在解压，进度可在传输面板查看', 'info');
         return;
     }
     if (action === 'download') {
@@ -5172,6 +5193,10 @@ function handleSFTPMessage(msg) {
                 const label = msg.direction === 'move' ? '移动' : '复制';
                 markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '文件'}`, path: msg.path, direction: msg.direction, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active', cancellable: msg.cancellable !== false });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
+            } else if (msg.direction === 'archive') {
+                const label = msg.phase === 'upload' ? '传回远端' : msg.phase === 'download' ? '拉取到主端' : msg.phase === 'extract' ? '主端解压' : msg.phase === 'compress' ? '主端压缩' : '归档处理';
+                markDownloadProgress(id, { name: `${label}: ${(msg.path || '').split('/').pop() || '压缩包'}`, path: msg.path, direction: 'archive', phase: msg.phase || '', size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active', cancellable: msg.cancellable !== false });
+                if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
             } else if (msg.direction === 'upload') {
                 markUploadProgress(id, { path: msg.path, size: Number(msg.size) || 0, loaded: Number(msg.loaded) || 0, status: msg.status || 'active' });
                 if (msg.status === 'done' || msg.status === 'error') window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, msg.status === 'done' ? 5000 : 8000);
@@ -5245,10 +5270,22 @@ function handleSFTPMessage(msg) {
             else alert('粘贴失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-compress':
+            if (msg.transferId) {
+                const current = activeSftpDownloads.get(msg.transferId) || {};
+                const finalSize = Number(msg.size) || Number(current.size) || 0;
+                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize });
+                window.setTimeout(() => { activeSftpDownloads.delete(msg.transferId); scheduleTransferRender(); }, msg.success ? 5000 : 8000);
+            }
             if (msg.success) { showToast('压缩完成', 'success'); refreshAllOpenFileManagers(); }
             else alert('压缩失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-extract':
+            if (msg.transferId) {
+                const current = activeSftpDownloads.get(msg.transferId) || {};
+                const finalSize = Number(msg.size) || Number(current.size) || 0;
+                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize });
+                window.setTimeout(() => { activeSftpDownloads.delete(msg.transferId); scheduleTransferRender(); }, msg.success ? 5000 : 8000);
+            }
             if (msg.success) { showToast('解压完成', 'success'); refreshAllOpenFileManagers(); }
             else alert('解压失败: ' + (msg.error || '未知错误'));
             break;

@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const os = require('os');
 const { spawn } = require('child_process');
 const { pipeline: streamPipeline } = require('stream/promises');
+const { Transform } = require('stream');
 const nodemailer = require('nodemailer');
 const { TOTP, generateSecret, generateURI, verifySync } = require('otplib');
 const QRCode = require('qrcode');
@@ -1967,6 +1968,37 @@ function remoteSameFileSafeCopyCommand(sourcePath, targetPath, { move = false, c
     ]);
 }
 
+function createProgressReporter({ transferId, username, direction, path: targetPath, phase = '', size = 0 }) {
+    const id = transferId || `archive-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const total = Number(size) || 0;
+    let loaded = 0;
+    let lastSent = 0;
+    const send = (status = 'active', extra = {}) => {
+        if (!username) return;
+        const now = Date.now();
+        if (status === 'active' && now - lastSent < 300 && loaded < total) return;
+        lastSent = now;
+        sendTransferEvent(username, { transferId: id, direction, path: targetPath, loaded, size: total, status, phase, cancellable: false, ...extra });
+    };
+    return {
+        id,
+        add(bytes = 0, extra = {}) { loaded += Number(bytes) || 0; send('active', extra); },
+        status(status, extra = {}) { send(status, extra); },
+        setPhase(nextPhase, extra = {}) { phase = nextPhase || phase; send('active', extra); },
+        get loaded() { return loaded; },
+        get size() { return total; },
+    };
+}
+
+function progressTransform(onChunk) {
+    return new Transform({
+        transform(chunk, encoding, callback) {
+            try { onChunk?.(chunk.length || 0); } catch {}
+            callback(null, chunk);
+        }
+    });
+}
+
 function isTarArchivePath(targetPath = '') {
     const lower = String(targetPath || '').toLowerCase();
     return lower.endsWith('.tar') || /\.(tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$/.test(lower);
@@ -2010,33 +2042,54 @@ function ensureLocalChildPath(root, relativePath) {
     return target;
 }
 
-async function downloadRemotePathToLocal(sftp, remotePath, localPath) {
+async function getRemoteTreeSize(sftp, remotePath) {
+    const stats = await sftpStat(sftp, remotePath);
+    if (!stats.isDirectory?.()) return Number(stats.size) || 0;
+    const list = await sftpReaddir(sftp, remotePath);
+    let total = 0;
+    for (const entry of list) {
+        if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
+        total += await getRemoteTreeSize(sftp, remoteJoin(remotePath, entry.filename));
+    }
+    return total;
+}
+
+async function getLocalTreeSize(localPath) {
+    const stats = await fs.promises.stat(localPath);
+    if (!stats.isDirectory()) return Number(stats.size) || 0;
+    const list = await fs.promises.readdir(localPath, { withFileTypes: true });
+    let total = 0;
+    for (const entry of list) total += await getLocalTreeSize(path.join(localPath, entry.name));
+    return total;
+}
+
+async function downloadRemotePathToLocal(sftp, remotePath, localPath, progress = null) {
     const stats = await sftpStat(sftp, remotePath);
     if (stats.isDirectory?.()) {
         await fs.promises.mkdir(localPath, { recursive: true });
         const list = await sftpReaddir(sftp, remotePath);
         for (const entry of list) {
             if (!entry.filename || entry.filename === '.' || entry.filename === '..') continue;
-            await downloadRemotePathToLocal(sftp, remoteJoin(remotePath, entry.filename), path.join(localPath, entry.filename));
+            await downloadRemotePathToLocal(sftp, remoteJoin(remotePath, entry.filename), path.join(localPath, entry.filename), progress);
         }
         return;
     }
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-    await streamPipeline(sftp.createReadStream(remotePath), fs.createWriteStream(localPath));
+    await streamPipeline(sftp.createReadStream(remotePath), progressTransform((bytes) => progress?.add?.(bytes, { phase: 'download' })), fs.createWriteStream(localPath));
 }
 
-async function uploadLocalPathToRemote(sftp, localPath, remotePath) {
+async function uploadLocalPathToRemote(sftp, localPath, remotePath, progress = null) {
     const stats = await fs.promises.stat(localPath);
     if (stats.isDirectory()) {
         await ensureRemoteDirRecursive(sftp, remotePath);
         const list = await fs.promises.readdir(localPath, { withFileTypes: true });
         for (const entry of list) {
-            await uploadLocalPathToRemote(sftp, path.join(localPath, entry.name), remoteJoin(remotePath, entry.name));
+            await uploadLocalPathToRemote(sftp, path.join(localPath, entry.name), remoteJoin(remotePath, entry.name), progress);
         }
         return;
     }
     await ensureRemoteDirRecursive(sftp, dirnameRemote(remotePath));
-    await streamPipeline(fs.createReadStream(localPath), sftp.createWriteStream(remotePath));
+    await streamPipeline(fs.createReadStream(localPath), progressTransform((bytes) => progress?.add?.(bytes, { phase: 'upload' })), sftp.createWriteStream(remotePath));
 }
 
 async function createZipArchiveFromLocal(sourceDir, rootNames, outputPath) {
@@ -2067,20 +2120,25 @@ async function createSingleFileCompressedArchive(inputPath, outputPath, format) 
     await runLocalArchiveShell(`command -v ${tool} >/dev/null 2>&1 || { echo '主端未安装 ${tool}，无法创建 ${format}' >&2; exit 127; }; ${tool} -c -- ${shellQuote(inputPath)} > ${shellQuote(outputPath)}`);
 }
 
-async function createMainSideArchiveFromRemote(sftp, items, targetPath) {
+async function createMainSideArchiveFromRemote(sftp, items, targetPath, { username = '', transferId = '' } = {}) {
     const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'zephyr-sftp-archive-'));
+    const progress = createProgressReporter({ transferId, username, direction: 'archive', path: targetPath, phase: 'prepare', size: 0 });
     try {
         const sourceDir = path.join(tmpRoot, 'src');
         const outDir = path.join(tmpRoot, 'out');
         await fs.promises.mkdir(sourceDir, { recursive: true });
         await fs.promises.mkdir(outDir, { recursive: true });
+        progress.status('active', { phase: 'scan' });
+        const inputSize = (await Promise.all(items.map((remotePath) => getRemoteTreeSize(sftp, remotePath)))).reduce((sum, value) => sum + value, 0);
+        const downloadProgress = createProgressReporter({ transferId: progress.id, username, direction: 'archive', path: targetPath, phase: 'download', size: inputSize });
         const rootNames = [];
         for (const remotePath of items) {
             const name = basenameRemote(remotePath);
             if (!name || name === '/' || rootNames.includes(name)) throw new Error(`压缩项目名称冲突或无效: ${remotePath}`);
             rootNames.push(name);
-            await downloadRemotePathToLocal(sftp, remotePath, path.join(sourceDir, name));
+            await downloadRemotePathToLocal(sftp, remotePath, path.join(sourceDir, name), downloadProgress);
         }
+        progress.status('active', { phase: 'compress', loaded: inputSize, size: inputSize });
         const ext = archiveExtensionOfPath(targetPath);
         const outputPath = path.join(outDir, basenameRemote(targetPath));
         if (ext === '.zip') await createZipArchiveFromLocal(sourceDir, rootNames, outputPath);
@@ -2094,7 +2152,10 @@ async function createMainSideArchiveFromRemote(sftp, items, targetPath) {
             if (stats.isDirectory()) throw new Error(`${ext} 只支持单个文件，不能压缩目录`);
             await createSingleFileCompressedArchive(inputPath, outputPath, ext);
         } else throw new Error('暂不支持该压缩格式');
-        await uploadLocalPathToRemote(sftp, outputPath, targetPath);
+        const outputSize = await getLocalTreeSize(outputPath);
+        const uploadProgress = createProgressReporter({ transferId: progress.id, username, direction: 'archive', path: targetPath, phase: 'upload', size: outputSize });
+        await uploadLocalPathToRemote(sftp, outputPath, targetPath, uploadProgress);
+        uploadProgress.status('done', { phase: 'done', loaded: outputSize, size: outputSize });
     } finally {
         await fs.promises.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -2126,13 +2187,18 @@ async function extractSingleFileCompressedArchive(archivePath, destDir, ext) {
     await runLocalArchiveShell(`command -v ${tool} >/dev/null 2>&1 || { echo '主端未安装 ${tool}，无法解压 ${ext}' >&2; exit 127; }; ${tool} -dc -- ${shellQuote(archivePath)} > ${shellQuote(outputPath)}`);
 }
 
-async function extractMainSideArchiveToRemote(sftp, archivePath, targetDir) {
+async function extractMainSideArchiveToRemote(sftp, archivePath, targetDir, { username = '', transferId = '' } = {}) {
     const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'zephyr-sftp-extract-'));
+    const progress = createProgressReporter({ transferId, username, direction: 'archive', path: archivePath, phase: 'prepare', size: 0 });
     try {
         const archiveLocal = path.join(tmpRoot, 'archive' + (archiveExtensionOfPath(archivePath) || path.extname(basenameRemote(archivePath)) || '.bin'));
         const outDir = path.join(tmpRoot, 'out');
         await fs.promises.mkdir(outDir, { recursive: true });
-        await downloadRemotePathToLocal(sftp, archivePath, archiveLocal);
+        const archiveStats = await sftpStat(sftp, archivePath);
+        const archiveSize = Number(archiveStats?.size) || 0;
+        const downloadProgress = createProgressReporter({ transferId: progress.id, username, direction: 'archive', path: archivePath, phase: 'download', size: archiveSize });
+        await downloadRemotePathToLocal(sftp, archivePath, archiveLocal, downloadProgress);
+        progress.status('active', { phase: 'extract', loaded: archiveSize, size: archiveSize });
         const ext = archiveExtensionOfPath(archivePath);
         if (ext === '.zip') await extractZipArchiveToLocal(archiveLocal, outDir);
         else if (ext === '.7z') {
@@ -2144,10 +2210,13 @@ async function extractMainSideArchiveToRemote(sftp, archivePath, targetDir) {
         } else if (ext === '.gz' || ext === '.bz2' || ext === '.xz') await extractSingleFileCompressedArchive(archiveLocal, outDir, ext);
         else throw new Error('暂不支持该压缩格式');
         await ensureRemoteDirRecursive(sftp, targetDir);
+        const outputSize = await getLocalTreeSize(outDir);
+        const uploadProgress = createProgressReporter({ transferId: progress.id, username, direction: 'archive', path: archivePath, phase: 'upload', size: outputSize });
         const entries = await fs.promises.readdir(outDir, { withFileTypes: true });
         for (const entry of entries) {
-            await uploadLocalPathToRemote(sftp, path.join(outDir, entry.name), remoteJoin(targetDir, entry.name));
+            await uploadLocalPathToRemote(sftp, path.join(outDir, entry.name), remoteJoin(targetDir, entry.name), uploadProgress);
         }
+        uploadProgress.status('done', { phase: 'done', loaded: outputSize, size: outputSize });
     } finally {
         await fs.promises.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -5099,11 +5168,11 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 try { cmd = remoteArchiveCommand(items, targetPath); }
                 catch (err) { sendJSON({ type: 'sftp-compress', success: false, error: err.message }); return; }
                 execRemoteCommand(sshClient, cmd).then(() => {
-                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'remote-tar' });
+                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'remote-tar', transferId: msg.transferId || '' });
                 }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
             } else {
-                createMainSideArchiveFromRemote(sftpStream, items, targetPath).then(() => {
-                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'main-side' });
+                createMainSideArchiveFromRemote(sftpStream, items, targetPath, { username: currentSession(req)?.username || '', transferId: msg.transferId || '' }).then(() => {
+                    sendJSON({ type: 'sftp-compress', success: true, path: targetPath, mode: 'main-side', transferId: msg.transferId || '' });
                 }).catch((err) => sendJSON({ type: 'sftp-compress', success: false, error: err.message }));
             }
             return;
@@ -5125,11 +5194,11 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                 else if (lower.endsWith('.tar')) cmd += `tar -xf ${shellQuote(archivePath)} -C ${shellQuote(targetDir)}`;
                 else { sendJSON({ type: 'sftp-extract', success: false, error: '暂不支持该压缩格式' }); return; }
                 execRemoteCommand(sshClient, cmd).then(() => {
-                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'remote-tar' });
+                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'remote-tar', transferId: msg.transferId || '' });
                 }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
             } else {
-                extractMainSideArchiveToRemote(sftpStream, archivePath, targetDir).then(() => {
-                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'main-side' });
+                extractMainSideArchiveToRemote(sftpStream, archivePath, targetDir, { username: currentSession(req)?.username || '', transferId: msg.transferId || '' }).then(() => {
+                    sendJSON({ type: 'sftp-extract', success: true, path: archivePath, targetDir, mode: 'main-side', transferId: msg.transferId || '' });
                 }).catch((err) => sendJSON({ type: 'sftp-extract', success: false, error: err.message }));
             }
             return;
