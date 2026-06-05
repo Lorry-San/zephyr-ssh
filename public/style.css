@@ -6790,33 +6790,23 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
-/* Mobile SSH: equalize terminal viewport gutters without changing input position or keyboard flow. */
+
+/* Mobile SSH: one source of truth for symmetric terminal gutters. */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     html.mobile-stable-input .terminal-container {
         box-sizing: border-box;
-        width: auto !important;
-        max-width: none !important;
-        margin-left: 6px !important;
-        margin-right: 6px !important;
-        border-left-width: 1px;
-        border-right-width: 1px;
+        flex: 1 1 auto !important;
+        align-self: stretch !important;
+        width: calc(100% - 12px) !important;
+        max-width: calc(100% - 12px) !important;
+        min-width: 0 !important;
+        margin: 6px 6px 6px 6px !important;
+        transform: none !important;
     }
     html.mobile-stable-input .terminal-container .wterm-wrapper,
     html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
         box-sizing: border-box;
         width: 100% !important;
         max-width: 100% !important;
-    }
-}
-
-/* Mobile SSH: center the existing terminal panel; do not stretch it to parent width or reserve keyboard whitespace. */
-@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    html.mobile-stable-input .terminal-container {
-        width: auto !important;
-        max-width: none !important;
-        min-width: 0 !important;
-        align-self: stretch !important;
-        box-sizing: border-box;
-        margin: 6px !important;
     }
 }
