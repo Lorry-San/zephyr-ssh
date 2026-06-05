@@ -1553,14 +1553,6 @@ function commitTerminalWorkspaceKeyboard(metrics = {}) {
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
-    const activeSession = getTerminalSession(activeTerminalTab);
-    const activeSshStableInput = activeSession?.protocol === 'SSH'
-        && isCompactTerminalWorkspace()
-        && window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
-    if (metrics.stableInput || activeSshStableInput) {
-        // 移动端 SSH 稳定输入模式由 iframe 内部裁剪可见区和避让键盘；父页面不再改 workspace/iframe 高度，避免双层 resize 导致文本乱飞。
-        return;
-    }
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;

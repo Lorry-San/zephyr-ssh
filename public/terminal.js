@@ -59,7 +59,6 @@ const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const wtermThemeToggle = $('#wtermThemeToggle');
 const cmdInput = $('#cmdInput');
-const terminalInputPanel = $('#terminalInputPanel');
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const pasteBtn = $('#pasteBtn');
@@ -243,14 +242,6 @@ let terminalTouchStartX = 0;
 let terminalTouchStartY = 0;
 let terminalTouchMoved = false;
 const TERMINAL_COPY_DIAGNOSTICS = false;
-const MOBILE_STABLE_INPUT_MODE = isMobileStableInputCandidate();
-const MOBILE_KEYBOARD_RESIZE_REASONS = /keyboard|viewport|visual|ime|focus|input|fallback/i;
-let mobileStableInputEnabled = false;
-let mobileKeyboardInset = 0;
-let mobileImeProxy = null;
-let mobileImeComposing = false;
-let mobileStableLastBottomIntent = true;
-let mobileStableOrientationResizeUntil = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -476,11 +467,6 @@ function isTouchKeyboardDevice() {
         || window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
 }
 
-function isMobileStableInputCandidate() {
-    return !!window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches
-        || ((navigator.maxTouchPoints || 0) > 0 && !!window.matchMedia?.('(max-width: 700px)')?.matches);
-}
-
 function getKeyboardBaselineHeight() {
     return Math.round(Math.max(
         keyboardViewportBaseline || 0,
@@ -507,7 +493,6 @@ function notifyParentKeyboardMetrics(metrics) {
             viewportHeight: metrics.viewportHeight || 0,
             layoutHeight: metrics.layoutHeight || 0,
             offsetTop: metrics.offsetTop || 0,
-            stableInput: isMobileStableInputMode(),
         }, '*');
     }
 }
@@ -560,12 +545,6 @@ function isKeyboardAvoidanceTarget(element = document.activeElement) {
 }
 
 function setViewportCssMetrics(height, offsetTop) {
-    if (isMobileStableInputMode()) {
-        const roundedHeight = Math.max(1, Math.round(getKeyboardBaselineHeight() || height || window.innerHeight || document.documentElement.clientHeight || 1));
-        document.documentElement.style.setProperty('--visual-vh', `${roundedHeight}px`);
-        document.documentElement.style.setProperty('--visual-offset-top', '0px');
-        return;
-    }
     const roundedHeight = Math.max(1, Math.round(height));
     const roundedOffset = Math.round(offsetTop);
     document.documentElement.style.setProperty('--visual-vh', `${roundedHeight}px`);
@@ -647,20 +626,6 @@ function animateViewportCssMetricsOld(targetHeight, targetOffsetTop, { immediate
 }
 
 function setStableViewportHeight({ force = false } = {}) {
-    if (isMobileStableInputMode()) {
-        const height = Math.round(Math.max(
-            getCssPxVar('--stable-vh') || 0,
-            window.innerHeight || 0,
-            document.documentElement.clientHeight || 0,
-            window.screen?.height ? Math.min(window.screen.height, window.screen.width || window.screen.height) : 0,
-        ));
-        if (height > 0) {
-            document.documentElement.style.setProperty('--stable-vh', `${height}px`);
-            document.documentElement.style.setProperty('--visual-vh', `${height}px`);
-            document.documentElement.style.setProperty('--visual-offset-top', '0px');
-        }
-        return;
-    }
     if (embeddedMode) {
         document.documentElement.style.setProperty('--stable-vh', '100vh');
         document.documentElement.style.setProperty('--visual-vh', '100vh');
@@ -1305,16 +1270,7 @@ function terminalLayoutMatchesSnapshot(tolerance = 1) {
         && Math.abs(measured.height - terminalFitSnapshot.height) <= Math.max(TERMINAL_LAYOUT_SIGNATURE_PX * 2, 4);
 }
 
-function isMobileStableInputMode() {
-    return !!mobileStableInputEnabled;
-}
-
-function shouldIgnoreMobileKeyboardResizeReason(reason = '') {
-    return isMobileStableInputMode() && MOBILE_KEYBOARD_RESIZE_REASONS.test(String(reason));
-}
-
 function shouldSuppressTerminalGridResize(reason = '') {
-    if (shouldIgnoreMobileKeyboardResizeReason(reason)) return true;
     if (!isTouchKeyboardDevice()) return false;
     const label = String(reason);
     if (label.includes(':settled') || label.includes(':fit')) return false;
@@ -1324,11 +1280,6 @@ function shouldSuppressTerminalGridResize(reason = '') {
 }
 
 function scheduleStableTerminalGridResize(reason = 'stable-terminal-grid-resize', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
-    if (shouldIgnoreMobileKeyboardResizeReason(reason)) {
-        scheduleTerminalScrollbarUpdate();
-        ensureMobileStableCursorVisible(`${reason}:visible-only`);
-        return;
-    }
     window.clearTimeout(terminalStableResizeTimer);
     terminalStableResizeTimer = window.setTimeout(() => {
         terminalStableResizeTimer = 0;
@@ -1554,26 +1505,11 @@ function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') 
 }
 
 function scheduleKeyboardCloseFit(reason = 'keyboard-close-fit', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
-    if (isMobileStableInputMode()) {
-        freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
-        window.clearTimeout(scheduleKeyboardCloseFit._mobileTimer);
-        scheduleKeyboardCloseFit._mobileTimer = window.setTimeout(() => {
-            ensureMobileStableCursorVisible(`${reason}:visible-only`);
-            scheduleTerminalScrollbarUpdate();
-        }, Math.max(80, delay));
-        return;
-    }
     freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
     scheduleStableTerminalGridResize(`${reason}:settled-fit`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS + 80));
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
-    if (shouldIgnoreMobileKeyboardResizeReason(reason)) {
-        logTerminalLayoutDiagnostics('resize:blocked-mobile-stable-keyboard', { reason });
-        ensureMobileStableCursorVisible(`${reason}:visible-only`);
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
     if (shouldSuppressTerminalGridResize(reason)) {
         logTerminalLayoutDiagnostics('resize:blocked-mobile-viewport-settling', { reason, frozen: isTerminalViewportResizeFrozen() });
         if (isTouchKeyboardDevice()) stabilizeWTermAfterViewportOnlyChange(`resize-blocked:${reason}`);
@@ -5988,186 +5924,6 @@ function sendTerminalAltScroll(deltaY) {
     return true;
 }
 
-function updateTerminalInputPanelMetrics() {
-    if (!terminalInputPanel) return;
-    const rect = terminalInputPanel.getBoundingClientRect?.();
-    const height = Math.max(42, Math.round(rect?.height || terminalInputPanel.offsetHeight || 52));
-    document.documentElement.style.setProperty('--terminal-input-panel-height', `${height}px`);
-}
-
-function setupTerminalInputPanelMetrics() {
-    updateTerminalInputPanelMetrics();
-    if (window.ResizeObserver && terminalInputPanel) {
-        const observer = new ResizeObserver(updateTerminalInputPanelMetrics);
-        observer.observe(terminalInputPanel);
-    }
-    window.addEventListener('resize', updateTerminalInputPanelMetrics, { passive: true });
-}
-
-function enableMobileStableInputMode() {
-    if (!MOBILE_STABLE_INPUT_MODE || mobileStableInputEnabled) return;
-    mobileStableInputEnabled = true;
-    mobileKeyboardUserControlled = true;
-    document.documentElement.classList.add('mobile-stable-input');
-    document.body?.classList.add('mobile-stable-input');
-    try { if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true; } catch (_) {}
-    setStableViewportHeight({ force: true });
-}
-
-function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason = 'keyboard-inset') {
-    const safeInset = Math.max(0, Math.round(Number(inset) || 0));
-    mobileKeyboardInset = safeInset;
-    document.documentElement.style.setProperty('--keyboard-inset', `${safeInset}px`);
-    document.documentElement.classList.toggle('keyboard-open', !!keyboardOpen && safeInset > 0);
-    terminalContainer?.classList.toggle('mobile-keyboard-open', !!keyboardOpen && safeInset > 0);
-    if (!isMobileStableInputMode()) return;
-    document.documentElement.classList.remove('viewport-updating');
-    setStableViewportHeight();
-    requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
-}
-
-function getMobileStableSafeGap() {
-    return Math.max(18, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 1.5));
-}
-
-function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
-    if (!isMobileStableInputMode()) return false;
-    const el = getTerminalScrollElement();
-    if (!el) return false;
-    const keyboardActive = mobileKeyboardOpen || mobileKeyboardInset > 8 || document.documentElement.classList.contains('keyboard-open');
-    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || mobileStableLastBottomIntent;
-    if (!keyboardActive && !shouldFollow) {
-        scheduleTerminalScrollbarUpdate();
-        return false;
-    }
-    if (!shouldFollow && hasLiveTerminalSelection()) return false;
-    const maxScroll = getTerminalMaxScroll(el);
-    if (maxScroll <= 0) {
-        scheduleTerminalScrollbarUpdate();
-        return false;
-    }
-    isProgrammaticTerminalScroll = true;
-    try {
-        el.scrollTop = maxScroll;
-        if (shouldFollow) setTerminalAutoFollow(true, `${reason}:visible`);
-    } finally {
-        scheduleTerminalScrollbarUpdate();
-        requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
-    }
-    return true;
-}
-
-function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
-    if (!isMobileStableInputMode()) return false;
-    setupMobileStableImeProxy();
-    if (!mobileImeProxy) return false;
-    const el = getTerminalScrollElement();
-    const previousTop = el ? el.scrollTop : 0;
-    mobileStableLastBottomIntent = !el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
-    keyboardFocusLikely = true;
-    keyboardViewportBaseline = Math.max(getKeyboardBaselineHeight(), keyboardViewportBaseline || 0);
-    try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
-    if (el && !mobileStableLastBottomIntent) el.scrollTop = previousTop;
-    markKeyboardFocusActive();
-    ensureMobileStableCursorVisible(reason);
-    return true;
-}
-
-function setupMobileStableImeProxy() {
-    if (!isMobileStableInputMode() || mobileImeProxy) return;
-    const proxy = document.createElement('textarea');
-    proxy.id = 'mobileTerminalImeProxy';
-    proxy.className = 'mobile-terminal-ime-proxy';
-    proxy.rows = 1;
-    proxy.autocomplete = 'off';
-    proxy.autocorrect = 'off';
-    proxy.autocapitalize = 'off';
-    proxy.spellcheck = false;
-    proxy.setAttribute('aria-label', '移动端终端输入代理');
-    proxy.addEventListener('focus', () => {
-        mobileKeyboardUserControlled = true;
-        mobileTerminalSelectionMode = false;
-        document.documentElement.classList.remove('terminal-selection-mode');
-        markKeyboardFocusActive();
-        updateViewportInsets();
-        [60, 160, 320, 560].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
-    });
-    proxy.addEventListener('blur', () => {
-        markKeyboardFocusInactive();
-        [80, 200, 420, 680].forEach((delay) => window.setTimeout(updateViewportInsets, delay));
-    });
-    proxy.addEventListener('compositionstart', () => { mobileImeComposing = true; });
-    proxy.addEventListener('compositionend', (e) => {
-        mobileImeComposing = false;
-        const text = e.data || proxy.value || '';
-        if (text) sendData(text, { source: 'mobile-ime-composition', forceFollow: true, applyModifiers: false });
-        proxy.value = '';
-        ensureMobileStableCursorVisible('mobile-ime-composition');
-    });
-    proxy.addEventListener('keydown', (e) => {
-        if (mobileImeComposing || e.isComposing || isModifierOnlyKeyEvent(e)) return;
-        const seqMap = {
-            Enter: '\r',
-            Backspace: '\x7f',
-            Tab: '\t',
-            Escape: '\x1b',
-            ArrowUp: '\x1b[A',
-            ArrowDown: '\x1b[B',
-            ArrowLeft: '\x1b[D',
-            ArrowRight: '\x1b[C',
-            Home: '\x1b[1~',
-            End: '\x1b[4~',
-            PageUp: '\x1b[5~',
-            PageDown: '\x1b[6~',
-            Delete: '\x1b[3~',
-        };
-        const seq = seqMap[e.key];
-        if (!seq) return;
-        e.preventDefault();
-        sendData(seq, { source: `mobile-ime-key:${e.key}`, forceFollow: true, applyModifiers: false });
-        proxy.value = '';
-        ensureMobileStableCursorVisible(`mobile-ime-key:${e.key}`);
-    });
-    proxy.addEventListener('beforeinput', (e) => {
-        if (mobileImeComposing || e.isComposing) return;
-        const type = e.inputType || '';
-        if (type === 'insertText' || type === 'insertCompositionText') {
-            const text = e.data || '';
-            if (text) {
-                e.preventDefault();
-                sendData(text, { source: 'mobile-ime-beforeinput', forceFollow: true, applyModifiers: false });
-                proxy.value = '';
-                ensureMobileStableCursorVisible('mobile-ime-input');
-            }
-        } else if (type === 'deleteContentBackward') {
-            e.preventDefault();
-            sendData('\x7f', { source: 'mobile-ime-backspace', forceFollow: true, applyModifiers: false });
-            proxy.value = '';
-            ensureMobileStableCursorVisible('mobile-ime-backspace');
-        } else if (type === 'insertLineBreak' || type === 'insertParagraph') {
-            e.preventDefault();
-            sendData('\r', { source: 'mobile-ime-enter', forceFollow: true, applyModifiers: false });
-            proxy.value = '';
-            ensureMobileStableCursorVisible('mobile-ime-enter');
-        }
-    });
-    proxy.addEventListener('input', () => {
-        if (mobileImeComposing) return;
-        const text = proxy.value || '';
-        if (text) sendData(text, { source: 'mobile-ime-input-fallback', forceFollow: true, applyModifiers: false });
-        proxy.value = '';
-        ensureMobileStableCursorVisible('mobile-ime-input-fallback');
-    });
-    document.body.appendChild(proxy);
-    mobileImeProxy = proxy;
-    const textarea = term?.input?.textarea;
-    if (textarea) {
-        textarea.setAttribute('readonly', 'readonly');
-        textarea.setAttribute('tabindex', '-1');
-        textarea.style.pointerEvents = 'none';
-    }
-}
-
 function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     stopTerminalAutoScrollObserver();
     resetTerminalScrollState();
@@ -6293,10 +6049,11 @@ function applyKeyboardFallbackAvoidance() {
     keyboardFallbackActive = true;
     keyboardFallbackAppliedAt = performance.now();
     notifyParentKeyboardMetrics(metrics);
-    applyMobileStableKeyboardInset(metrics.keyboardInset, true, 'keyboard-fallback-applied');
+    document.documentElement.style.setProperty('--keyboard-inset', `${metrics.keyboardInset}px`);
+    document.documentElement.classList.add('keyboard-open');
     requestTerminalAutoFollow('keyboard-fallback-applied');
     scheduleTerminalScrollbarUpdate();
-    if (!isMobileStableInputMode()) scheduleTerminalResize('keyboard-fallback-applied', 650);
+    scheduleTerminalResize('keyboard-fallback-applied', 650);
     return true;
 }
 
@@ -6330,7 +6087,7 @@ function markKeyboardFocusInactive() {
 }
 
 function updateViewportInsets() {
-    if (embeddedMode && !isMobileStableInputMode()) return;
+    if (embeddedMode) return;
     if (mobileTerminalSelectionMode && !mobileClipboardActionInProgress) return;
     if (mobileClipboardActionInProgress) return;
     if (!isTouchKeyboardDevice()) return;
@@ -6338,7 +6095,7 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
-    const keyboardOpen = metrics.keyboardInset >= 80 && (mobileKeyboardUserControlled || isMobileStableInputMode());
+    const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled;
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
         // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
         // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
@@ -6356,7 +6113,8 @@ function updateViewportInsets() {
     }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
-        applyMobileStableKeyboardInset(inset, keyboardOpen, keyboardOpen ? 'keyboard-open' : 'keyboard-close');
+        document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`);
+        document.documentElement.classList.toggle('keyboard-open', keyboardOpen);
         if (isTouchKeyboardDevice()) requestInitialMobileRenderFlush(keyboardOpen ? 'keyboard-open' : 'keyboard-close');
         notifyParentKeyboardMetrics({
             keyboardOpen,
@@ -6369,7 +6127,6 @@ function updateViewportInsets() {
         scheduleTerminalScrollbarUpdate();
         // 移动端键盘开关只改变 CSS 可视区域；等键盘关闭后再刷新 WTerm 视图，避免远端内容重排出空行/截断。
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-close-settled', 650);
-        else ensureMobileStableCursorVisible('keyboard-open-settled');
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
@@ -6421,8 +6178,8 @@ function finalizeKeyboardClose({ force = false } = {}) {
     keyboardFallbackActive = false;
     keyboardFallbackAppliedAt = 0;
     keyboardViewportBaseline = 0;
-    applyMobileStableKeyboardInset(0, false, 'keyboard-close-final');
-    document.documentElement.classList.remove('viewport-updating');
+    document.documentElement.style.setProperty('--keyboard-inset', '0px');
+    document.documentElement.classList.remove('keyboard-open', 'viewport-updating');
     notifyParentKeyboardMetrics({
         keyboardOpen: false,
         keyboardInset: 0,
@@ -6436,10 +6193,6 @@ function finalizeKeyboardClose({ force = false } = {}) {
 }
 
 function restoreMobileWTermNativeInput() {
-    if (isMobileStableInputMode()) {
-        setupMobileStableImeProxy();
-        return;
-    }
     if (!isTouchKeyboardDevice() || !term?.input?.textarea) return;
     const textarea = term.input.textarea;
     textarea.removeAttribute('readonly');
@@ -6481,8 +6234,7 @@ function setupHorizontalScrollbarVisibility(...elements) {
 }
 
 function setupMobileKeyboardAvoidance() {
-    enableMobileStableInputMode();
-    if (embeddedMode && !isMobileStableInputMode()) return;
+    if (embeddedMode) return;
     if (!window.visualViewport && !navigator.virtualKeyboard && !isTouchKeyboardDevice()) return;
     try {
         if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;
@@ -6787,7 +6539,6 @@ function writeTerminalData(data = '') {
     term.write(data);
     if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('terminal-data'));
     else requestAnimationFrame(scheduleTerminalScrollbarUpdate);
-    if (isMobileStableInputMode()) requestAnimationFrame(() => ensureMobileStableCursorVisible('terminal-data-visible'));
 }
 
 function hideInfoModal() {
@@ -7294,7 +7045,6 @@ setupPanelLayoutMenu();
 setupPanelDrag();
 setupPanelResize();
 setupTerminalInputActivityHooks();
-setupTerminalInputPanelMetrics();
 setupMobileKeyboardAvoidance();
 setupHorizontalScrollbarVisibility(topbarActions, toolbar);
 window.addEventListener('resize', () => {
@@ -7378,7 +7128,6 @@ function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFo
         wsConnection.send(JSON.stringify({ type: 'input', data: input }));
         if (forceFollow) requestTerminalAutoFollow(`${source}:sent`);
         else scheduleTerminalScrollbarUpdate();
-        if (isMobileStableInputMode()) requestAnimationFrame(() => ensureMobileStableCursorVisible(`${source}:sent-visible`));
     }
 }
 function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {
@@ -7409,9 +7158,7 @@ function resizeCommandInput() {
     cmdInput.style.height = 'auto';
     const maxHeight = parseFloat(getComputedStyle(cmdInput).maxHeight) || 112;
     cmdInput.style.height = `${Math.min(maxHeight, Math.max(34, cmdInput.scrollHeight))}px`;
-    updateTerminalInputPanelMetrics();
 }
-
 function sendCommand() {
     const text = cmdInput.value;
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
@@ -7644,20 +7391,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             e.preventDefault();
             return;
         }
-        if (isMobileStableInputMode() && !mobileTerminalSelectionMode && !hasLiveTerminalSelection()) {
-            // 软键盘必须在用户触摸手势内聚焦才可靠弹出；后续 touchmove/selection guard 仍会维护滚动/选择状态。
-            focusMobileStableImeProxy('terminal-touch-immediate');
-        }
         terminalTouchFocusTimer = window.setTimeout(() => {
             const hasSelection = hasLiveTerminalSelection();
             if (mobileTerminalSelectionMode || terminalTouchMoved || hasSelection) {
                 if (hasSelection) enterMobileTerminalSelectionMode('touch-has-selection');
-                notifyParentActivity();
-                return;
-            }
-            if (isMobileStableInputMode()) {
-                focusMobileStableImeProxy('terminal-touch');
-                ensureMobileStableCursorVisible('terminal-touch-focus');
                 notifyParentActivity();
                 return;
             }
@@ -8136,12 +7873,10 @@ if (typeof visualViewport !== 'undefined') {
 }
 
 window.addEventListener('orientationchange', () => {
-    mobileStableOrientationResizeUntil = Date.now() + 1800;
     setTimeout(() => {
         setStableViewportHeight({ force: true });
         handleKeyboardHide();
         if (!isTouchKeyboardDevice()) scheduleTerminalResize();
-        else if (isMobileStableInputMode()) scheduleTerminalResize('orientationchange-settled', 900);
     }, 300);
 });
 disconnectBtn.addEventListener('click', () => {
