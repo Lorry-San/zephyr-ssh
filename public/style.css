@@ -6685,3 +6685,21 @@ body.smartbar-trash-hover .smartbar-trash-target {
     .guac-page .zoom-control { min-width: 146px; }
     .guac-page .zoom-control input[type="range"] { width: 56px; }
 }
+
+/* Mobile SSH terminal viewport final alignment: equal left/right gutters without changing height or input position. */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page .terminal-container {
+        box-sizing: border-box;
+        width: auto !important;
+        max-width: none !important;
+        margin-left: max(6px, env(safe-area-inset-left)) !important;
+        margin-right: max(6px, env(safe-area-inset-right)) !important;
+        overflow: hidden;
+    }
+    .terminal-page .terminal-container .wterm-wrapper,
+    .terminal-page .terminal-container .wterm-wrapper.wterm {
+        box-sizing: border-box;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+}
