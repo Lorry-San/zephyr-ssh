@@ -7670,10 +7670,8 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             e.preventDefault();
             return;
         }
-        if (isMobileStableInputMode() && !mobileTerminalSelectionMode && !hasLiveTerminalSelection()) {
-            // 软键盘必须在用户触摸手势内聚焦才可靠弹出；后续 touchmove/selection guard 仍会维护滚动/选择状态。
-            focusMobileStableImeProxy('terminal-touch-immediate');
-        }
+        // 移动端不能在 touchstart 立即唤键盘；否则用户上滑历史/长按选择复制也会弹键盘并被拉回底部。
+        // 只在 touchend/pointerup 确认为轻点后再聚焦 IME。
         terminalTouchFocusTimer = window.setTimeout(() => {
             const hasSelection = hasLiveTerminalSelection();
             if (mobileTerminalSelectionMode || terminalTouchMoved || hasSelection) {
@@ -7721,7 +7719,18 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
         if (eventName === 'pointerup' && e.pointerType !== 'touch' && sendTerminalMouseEvent(e, 'release')) {
             e.preventDefault();
         }
+        const point = e.changedTouches?.[0] || e;
+        const x = point.clientX ?? terminalTouchStartX;
+        const y = point.clientY ?? terminalTouchStartY;
+        const moved = terminalTouchMoved || Math.hypot(x - terminalTouchStartX, y - terminalTouchStartY) > 8;
+        const cancelled = eventName === 'touchcancel';
         window.clearTimeout(mobileTerminalSelectionTimer);
+        window.clearTimeout(terminalTouchFocusTimer);
+        if (isMobileStableInputMode() && !cancelled && !moved && !mobileTerminalSelectionMode && !hasLiveTerminalSelection()) {
+            focusMobileStableImeProxy('terminal-tap');
+            ensureMobileStableCursorVisible('terminal-tap-focus');
+            notifyParentActivity();
+        }
         window.setTimeout(() => {
             if (hasLiveTerminalSelection()) enterMobileTerminalSelectionMode(eventName);
             else if (mobileTerminalSelectionMode) scheduleExitMobileTerminalSelectionMode(900);
