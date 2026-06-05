@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Zephyr - 远程桌面</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260605-rdp-joystick-dark-metal">
+    <link rel="stylesheet" href="style.css?v=20260605-rdp-css-toolbar-icons">
 </head>
 <body>
     <div class="guac-page">
@@ -16,16 +16,16 @@
             </div>
             <span class="info" id="connInfo"></span>
             <div class="topbar-actions">
-                <button class="btn-sm" id="qualityBtn" title="切换性能/画质模式">⚡ 平衡</button>
-                <button class="btn-sm" id="fitBtn" title="适应窗口">↔ 适应</button>
-                <button class="btn-sm zoom-control" id="zoomBtn" title="拖动无极缩放远程画面"><span aria-hidden="true">🔍</span><input id="zoomSlider" type="range" min="50" max="250" step="1" value="100" aria-label="远程画面无极缩放"><em id="zoomValue">100%</em></button>
-                <button class="btn-sm" id="clipboardBtn" title="打开跨设备剪贴板面板">📋 剪贴板</button>
-                <button class="btn-sm" id="keyboardBtn" title="手机软键盘输入">⌨ 键盘</button>
-                <button class="btn-sm" id="shortcutsBtn" title="打开常用快捷键">⚡ 快捷键</button>
-                <button class="btn-sm" id="joystickBtn" title="视区">🕹 视区</button>
-                <button class="btn-sm" id="ctrlAltDelBtn" title="发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
-                <button class="btn-sm" id="reconnectBtn" title="重新连接">🔄 重连</button>
-                <button class="btn-sm danger" id="disconnectBtn" title="断开连接">✕ 断开</button>
+                <button class="btn-sm" id="qualityBtn" data-rdp-icon="quality" title="切换性能/画质模式">平衡</button>
+                <button class="btn-sm" id="fitBtn" data-rdp-icon="fit" title="适应窗口">适应</button>
+                <button class="btn-sm zoom-control" id="zoomBtn" data-rdp-icon="zoom" title="拖动无极缩放远程画面"><input id="zoomSlider" type="range" min="50" max="250" step="1" value="100" aria-label="远程画面无极缩放"><em id="zoomValue">100%</em></button>
+                <button class="btn-sm" id="clipboardBtn" data-rdp-icon="clipboard" title="打开跨设备剪贴板面板">剪贴板</button>
+                <button class="btn-sm" id="keyboardBtn" data-rdp-icon="keyboard" title="手机软键盘输入">键盘</button>
+                <button class="btn-sm" id="shortcutsBtn" data-rdp-icon="shortcuts" title="打开常用快捷键">快捷键</button>
+                <button class="btn-sm" id="joystickBtn" data-rdp-icon="joystick" title="视区">视区</button>
+                <button class="btn-sm" id="ctrlAltDelBtn" data-rdp-icon="security" title="发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+                <button class="btn-sm" id="reconnectBtn" data-rdp-icon="reconnect" title="重新连接">重连</button>
+                <button class="btn-sm danger" id="disconnectBtn" data-rdp-icon="disconnect" title="断开连接">断开</button>
             </div>
         </div>
         <div class="guac-stage" id="guacStage" tabindex="0">

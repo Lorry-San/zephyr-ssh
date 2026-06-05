@@ -453,7 +453,7 @@ function setRdpScaleZoom(nextZoom, { preserveViewport = true } = {}) {
     const pct = Math.round(rdpScaleZoom * 100);
     if (zoomSlider && Number(zoomSlider.value) !== pct) zoomSlider.value = String(pct);
     if (zoomValue) zoomValue.textContent = `${pct}%`;
-    else if (zoomBtn) zoomBtn.textContent = `🔍 ${pct}%`;
+    else if (zoomBtn) zoomBtn.textContent = `${pct}%`;
     applyDisplayScale();
 }
 
@@ -2765,7 +2765,7 @@ fitBtn.addEventListener('click', () => {
     fitModeIdx = (fitModeIdx + 1) % fitModes.length;
     const m = fitModes[fitModeIdx];
     fitBtn.classList.toggle('active', m !== '1:1');
-    fitBtn.textContent = m === 'fit' ? '↔ 适应' : m === '1:1' ? '1:1 原始' : m;
+    fitBtn.textContent = m === 'fit' ? '适应' : m === '1:1' ? '1:1 原始' : m;
     if (rdpInputSender && !client) {
         setRdpScaleZoom(1, { preserveViewport: false });
         const target = computeRdpTargetSize(m);
@@ -2873,10 +2873,10 @@ stage?.addEventListener('pointerdown', (event) => {
 ctrlAltDelBtn.addEventListener('click', sendCtrlAltDel);
 const qualityBtn = document.getElementById('qualityBtn');
 if (qualityBtn) {
-    qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '⚡ 平衡' : qualityModes[qualityIdx] === 'performance' ? '⚡ 性能' : '⚡ 画质';
+    qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质';
     qualityBtn.addEventListener('click', () => {
         qualityIdx = (qualityIdx + 1) % qualityModes.length;
-        qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '⚡ 平衡' : qualityModes[qualityIdx] === 'performance' ? '⚡ 性能' : '⚡ 画质';
+        qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质';
         // 保存 quality 到 params 和 sessionStorage
         params.quality = qualityModes[qualityIdx];
         const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
