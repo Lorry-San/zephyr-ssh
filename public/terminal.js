@@ -242,9 +242,6 @@ let terminalTouchStartX = 0;
 let terminalTouchStartY = 0;
 let terminalTouchMoved = false;
 const TERMINAL_COPY_DIAGNOSTICS = false;
-const MOBILE_STABLE_KEYBOARD_MODE = isMobileStableKeyboardDevice();
-const MOBILE_KEYBOARD_ONLY_REASONS = /keyboard|viewport|visual|ime|focus|fallback/i;
-
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -470,11 +467,6 @@ function isTouchKeyboardDevice() {
         || window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
 }
 
-function isMobileStableKeyboardDevice() {
-    return !!window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches
-        || ((navigator.maxTouchPoints || 0) > 0 && !!window.matchMedia?.('(max-width: 700px)')?.matches);
-}
-
 function getKeyboardBaselineHeight() {
     return Math.round(Math.max(
         keyboardViewportBaseline || 0,
@@ -501,7 +493,6 @@ function notifyParentKeyboardMetrics(metrics) {
             viewportHeight: metrics.viewportHeight || 0,
             layoutHeight: metrics.layoutHeight || 0,
             offsetTop: metrics.offsetTop || 0,
-            stableInput: MOBILE_STABLE_KEYBOARD_MODE,
         }, '*');
     }
 }
@@ -1279,12 +1270,7 @@ function terminalLayoutMatchesSnapshot(tolerance = 1) {
         && Math.abs(measured.height - terminalFitSnapshot.height) <= Math.max(TERMINAL_LAYOUT_SIGNATURE_PX * 2, 4);
 }
 
-function isMobileKeyboardOnlyReason(reason = '') {
-    return MOBILE_STABLE_KEYBOARD_MODE && MOBILE_KEYBOARD_ONLY_REASONS.test(String(reason));
-}
-
 function shouldSuppressTerminalGridResize(reason = '') {
-    if (isMobileKeyboardOnlyReason(reason)) return true;
     if (!isTouchKeyboardDevice()) return false;
     const label = String(reason);
     if (label.includes(':settled') || label.includes(':fit')) return false;
@@ -1294,10 +1280,6 @@ function shouldSuppressTerminalGridResize(reason = '') {
 }
 
 function scheduleStableTerminalGridResize(reason = 'stable-terminal-grid-resize', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
-    if (isMobileKeyboardOnlyReason(reason)) {
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
     window.clearTimeout(terminalStableResizeTimer);
     terminalStableResizeTimer = window.setTimeout(() => {
         terminalStableResizeTimer = 0;
@@ -1524,20 +1506,10 @@ function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') 
 
 function scheduleKeyboardCloseFit(reason = 'keyboard-close-fit', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
     freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
-    if (MOBILE_STABLE_KEYBOARD_MODE) {
-        window.clearTimeout(scheduleKeyboardCloseFit._mobileTimer);
-        scheduleKeyboardCloseFit._mobileTimer = window.setTimeout(scheduleTerminalScrollbarUpdate, Math.max(120, delay));
-        return;
-    }
     scheduleStableTerminalGridResize(`${reason}:settled-fit`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS + 80));
 }
 
 function scheduleTerminalResize(reason = 'scheduled', delay = 120) {
-    if (isMobileKeyboardOnlyReason(reason)) {
-        logTerminalLayoutDiagnostics('resize:blocked-mobile-keyboard-only', { reason });
-        scheduleTerminalScrollbarUpdate();
-        return;
-    }
     if (shouldSuppressTerminalGridResize(reason)) {
         logTerminalLayoutDiagnostics('resize:blocked-mobile-viewport-settling', { reason, frozen: isTerminalViewportResizeFrozen() });
         if (isTouchKeyboardDevice()) stabilizeWTermAfterViewportOnlyChange(`resize-blocked:${reason}`);
@@ -6115,7 +6087,7 @@ function markKeyboardFocusInactive() {
 }
 
 function updateViewportInsets() {
-    if (embeddedMode && !MOBILE_STABLE_KEYBOARD_MODE) return;
+    if (embeddedMode) return;
     if (mobileTerminalSelectionMode && !mobileClipboardActionInProgress) return;
     if (mobileClipboardActionInProgress) return;
     if (!isTouchKeyboardDevice()) return;
@@ -6123,7 +6095,7 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const metrics = getViewportKeyboardMetrics();
-    const keyboardOpen = metrics.keyboardInset >= 80 && (mobileKeyboardUserControlled || MOBILE_STABLE_KEYBOARD_MODE);
+    const keyboardOpen = metrics.keyboardInset >= 80 && mobileKeyboardUserControlled;
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
         // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
         // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
@@ -6151,14 +6123,14 @@ function updateViewportInsets() {
             layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
             offsetTop: Math.round(viewport?.offsetTop || 0)
         });
-        if (!MOBILE_STABLE_KEYBOARD_MODE) requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
+        requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
         scheduleTerminalScrollbarUpdate();
         // 移动端键盘开关只改变 CSS 可视区域；等键盘关闭后再刷新 WTerm 视图，避免远端内容重排出空行/截断。
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-close-settled', 650);
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
-        if (!MOBILE_STABLE_KEYBOARD_MODE) requestTerminalAutoFollow('keyboard-final-settled');
+        requestTerminalAutoFollow('keyboard-final-settled');
         scheduleTerminalScrollbarUpdate();
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-final-settled', 360);
     }, keyboardOpen ? 720 : 360);
@@ -6262,7 +6234,7 @@ function setupHorizontalScrollbarVisibility(...elements) {
 }
 
 function setupMobileKeyboardAvoidance() {
-    if (embeddedMode && !MOBILE_STABLE_KEYBOARD_MODE) return;
+    if (embeddedMode) return;
     if (!window.visualViewport && !navigator.virtualKeyboard && !isTouchKeyboardDevice()) return;
     try {
         if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;

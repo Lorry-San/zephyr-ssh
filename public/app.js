@@ -1553,7 +1553,6 @@ function commitTerminalWorkspaceKeyboard(metrics = {}) {
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
-    if (metrics.stableInput) return;
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
