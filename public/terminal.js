@@ -6050,13 +6050,13 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     const el = getTerminalScrollElement();
     if (!el) return false;
     const label = String(reason || '');
-    const userInputReason = /terminal-touch|mobile-ime|command-box|keypad/.test(label);
-    if (!userInputReason && isTerminalUserReadingHistory()) {
+    const actualInputReason = /mobile-ime|command-box|keypad|:sent-visible|:sent|beforeinput|composition|backspace|enter/.test(label);
+    if (!actualInputReason && isTerminalUserReadingHistory()) {
         scheduleTerminalScrollbarUpdate();
         return false;
     }
     const keyboardActive = mobileKeyboardOpen || mobileKeyboardInset > 8 || document.documentElement.classList.contains('keyboard-open');
-    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || (mobileStableLastBottomIntent && userInputReason);
+    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || actualInputReason;
     if (!keyboardActive && !shouldFollow) {
         scheduleTerminalScrollbarUpdate();
         return false;
@@ -6097,7 +6097,8 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
     if (el && !mobileStableLastBottomIntent) el.scrollTop = previousTop;
     markKeyboardFocusActive();
-    ensureMobileStableCursorVisible(reason);
+    // Focus/keyboard open alone must not pull a user out of history. Actual input handlers call ensureMobileStableCursorVisible().
+    if (!isTerminalUserReadingHistory()) ensureMobileStableCursorVisible(reason);
     return true;
 }
 
@@ -7683,7 +7684,6 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             }
             if (isMobileStableInputMode()) {
                 focusMobileStableImeProxy('terminal-touch');
-                ensureMobileStableCursorVisible('terminal-touch-focus');
                 notifyParentActivity();
                 return;
             }
