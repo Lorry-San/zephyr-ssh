@@ -6791,18 +6791,26 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 
 
-/* Mobile SSH: one source of truth for symmetric terminal gutters. */
+
+/* Mobile SSH final viewport fix: symmetric gutters, keyboard avoidance, no white spacer. */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    html.mobile-stable-input.keyboard-open .terminal-page {
+        background: var(--wterm-bg) !important;
+    }
+
     html.mobile-stable-input .terminal-container {
         box-sizing: border-box;
-        flex: 1 1 auto !important;
         align-self: stretch !important;
-        width: calc(100% - 12px) !important;
-        max-width: calc(100% - 12px) !important;
+        width: auto !important;
+        max-width: none !important;
         min-width: 0 !important;
-        margin: 6px 6px 6px 6px !important;
+        margin-top: 6px !important;
+        margin-right: 6px !important;
+        margin-bottom: calc(6px + var(--keyboard-inset, 0px)) !important;
+        margin-left: 6px !important;
         transform: none !important;
     }
+
     html.mobile-stable-input .terminal-container .wterm-wrapper,
     html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
         box-sizing: border-box;
