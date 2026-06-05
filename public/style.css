@@ -6722,13 +6722,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
         order: 2;
         flex: 1 1 auto !important;
         min-height: 96px;
-        width: calc(100% - 12px);
-        max-width: calc(100% - 12px);
-        box-sizing: border-box;
-        align-self: center;
         height: auto !important;
         max-height: none !important;
-        margin: 6px auto calc(6px + var(--keyboard-inset, 0px));
+        margin-bottom: calc(6px + var(--keyboard-inset, 0px));
         transform: none !important;
         transition: margin-bottom 0.16s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
