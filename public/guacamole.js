@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-05-31.30-rdp-continuous-zoom';
+const GUAC_CLIENT_VERSION = '2026-06-05.1-rdp-h264-quality-modes';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -368,8 +368,8 @@ function guacamoleConnectQuery() {
     const rect = stage.getBoundingClientRect();
     const rawDpr = window.devicePixelRatio || 1;
     const effDpr = Math.min(rawDpr, 2);
-    const width = Math.round(Math.max(800, Math.min(1920, (rect.width || innerWidth || 1280) * effDpr)));
-    const height = Math.round(Math.max(600, Math.min(1200, ((rect.height || innerHeight || 720) - 2) * effDpr)));
+    const width = Math.round(Math.max(800, Math.min(2560, (rect.width || innerWidth || 1280) * effDpr)));
+    const height = Math.round(Math.max(600, Math.min(1600, ((rect.height || innerHeight || 720) - 2) * effDpr)));
     const dpi = Math.max(72, Math.round(96 * rawDpr));
     const query = new URLSearchParams({
         connectionId: params.connectionId || '',
@@ -436,7 +436,7 @@ function requestRdpCanvasSize(mode = fitModes[fitModeIdx], force = false) {
     if (!force && !changed) return false;
     requestedRdpWidth = target.width;
     requestedRdpHeight = target.height;
-    rdpInputSender({ type: 'resize', width: target.width, height: target.height, mode: target.mode });
+    rdpInputSender({ type: 'resize', width: target.width, height: target.height, mode: target.mode, quality: qualityModes[qualityIdx] });
     console.info('[guac-client]', 'rdp canvas remote resize requested', target);
     return true;
 }
@@ -1217,7 +1217,7 @@ async function connect() {
         const initialTarget = computeRdpTargetSize(fitModes[fitModeIdx]);
         requestedRdpWidth = initialTarget.width;
         requestedRdpHeight = initialTarget.height;
-        const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode });
+        const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode, quality: qualityModes[qualityIdx] });
         tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
         tunnel.binaryType = 'arraybuffer';
 
@@ -2779,7 +2779,7 @@ fitBtn.addEventListener('click', () => {
             if (now - rdpLastReconnectAt < 1200) return;
             rdpReconnectPending = true;
             rdpLastReconnectAt = now;
-            rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode });
+            rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode, quality: qualityModes[qualityIdx] });
             setTransientStatus(`正在切换 ${target.width}×${target.height}`);
         }, 360);
     } else {
@@ -2881,7 +2881,16 @@ if (qualityBtn) {
         params.quality = qualityModes[qualityIdx];
         const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
         try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
-        // 用 false 避免清除 sessionStorage
+        // H.264/Canvas 模式必须让服务端重建编码管线，否则 5 秒内重连会复用旧管线，清晰度看起来不会变。
+        if (rdpInputSender && !client && connected) {
+            const target = computeRdpTargetSize(fitModes[fitModeIdx]);
+            rdpReconnectPending = true;
+            rdpLastReconnectAt = Date.now();
+            rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode, quality: qualityModes[qualityIdx] });
+            setTransientStatus(`正在切换到${qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质'}模式`);
+            return;
+        }
+        // Guacamole fallback 模式用 false 避免清除 sessionStorage
         disconnect(false);
         setTimeout(() => connect(), 300);
     });
