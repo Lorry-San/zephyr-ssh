@@ -6808,3 +6808,15 @@ body.smartbar-trash-hover .smartbar-trash-target {
         max-width: 100% !important;
     }
 }
+
+/* Mobile SSH: center the existing terminal panel; do not stretch it to parent width or reserve keyboard whitespace. */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    html.mobile-stable-input .terminal-container {
+        width: auto !important;
+        max-width: none !important;
+        min-width: 0 !important;
+        align-self: stretch !important;
+        box-sizing: border-box;
+        margin: 6px !important;
+    }
+}
