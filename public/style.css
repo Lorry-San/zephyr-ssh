@@ -6789,3 +6789,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform: translateZ(0);
     }
 }
+
+/* Mobile SSH: keep terminal content box centered; do not change height/input/keyboard flow. */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    html.mobile-stable-input .terminal-container .wterm-wrapper,
+    html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
+        box-sizing: border-box;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+}
