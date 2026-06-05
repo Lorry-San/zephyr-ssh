@@ -6046,13 +6046,6 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
         scheduleTerminalScrollbarUpdate();
         return false;
     }
-    const bottomDistance = getTerminalBottomDistance(el);
-    const meaningfulGap = Math.max(12, getMobileStableSafeGap() * 0.5);
-    if (bottomDistance <= meaningfulGap) {
-        if (shouldFollow) setTerminalAutoFollow(true, `${reason}:already-visible`);
-        scheduleTerminalScrollbarUpdate();
-        return false;
-    }
     isProgrammaticTerminalScroll = true;
     try {
         el.scrollTop = maxScroll;
@@ -6794,6 +6787,7 @@ function writeTerminalData(data = '') {
     term.write(data);
     if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('terminal-data'));
     else requestAnimationFrame(scheduleTerminalScrollbarUpdate);
+    if (isMobileStableInputMode()) requestAnimationFrame(() => ensureMobileStableCursorVisible('terminal-data-visible'));
 }
 
 function hideInfoModal() {
@@ -7384,6 +7378,7 @@ function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFo
         wsConnection.send(JSON.stringify({ type: 'input', data: input }));
         if (forceFollow) requestTerminalAutoFollow(`${source}:sent`);
         else scheduleTerminalScrollbarUpdate();
+        if (isMobileStableInputMode()) requestAnimationFrame(() => ensureMobileStableCursorVisible(`${source}:sent-visible`));
     }
 }
 function preserveTerminalScrollWhileEditingCommandInput(reason = 'command-input-edit', callback = () => {}) {

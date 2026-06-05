@@ -6719,14 +6719,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-container {
-        order: 2;
         flex: 1 1 auto !important;
         min-height: 96px;
         height: auto !important;
         max-height: none !important;
-        margin-bottom: calc(6px + var(--keyboard-inset, 0px));
+        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px) + var(--keyboard-inset, 0px));
         transform: none !important;
-        transition: margin-bottom 0.16s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+        transition: margin-bottom 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
     }
 
@@ -6745,23 +6744,21 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-input-panel {
-        position: relative;
-        left: auto;
-        right: auto;
-        bottom: auto;
-        z-index: 20;
-        order: 1;
-        flex: 0 0 auto;
-        padding-bottom: 0;
-        transform: none !important;
-        transition: background-color 0.2s ease, border-color 0.2s ease !important;
-        will-change: auto;
-        box-shadow: none;
+        position: fixed;
+        left: env(safe-area-inset-left);
+        right: env(safe-area-inset-right);
+        bottom: var(--keyboard-inset, 0px);
+        z-index: 80;
+        order: initial;
+        padding-bottom: max(4px, env(safe-area-inset-bottom));
+        transform: translate3d(0, 0, 0) !important;
+        transition: bottom 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease, border-color 0.2s ease !important;
+        will-change: bottom;
+        box-shadow: 0 -12px 28px rgba(0,0,0,.18), 0 -1px 0 var(--border);
     }
 
     html.mobile-stable-input.keyboard-open .terminal-input-panel {
-        bottom: auto;
-        transform: none !important;
+        bottom: var(--keyboard-inset, 0px);
     }
 
     html.mobile-stable-input .mobile-terminal-ime-proxy {
