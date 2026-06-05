@@ -3706,7 +3706,7 @@ async function startRdpH264Pipeline(connId, conn, options = {}) {
             ? ['-wallpaper', '-themes', '-aero', '-window-drag', '-menu-anims']
             : isQual
                 ? ['+wallpaper', '+themes', '+aero', '+window-drag', '+menu-anims']
-                : ['-wallpaper', '+themes', '+aero', '-window-drag', '-menu-anims']),
+                : ['+wallpaper', '+themes', '+aero', '-window-drag', '-menu-anims']),
         '-fast-path',
         ...(isQual ? [] : ['-mouse-motion']),
         '/log-level:WARN',
