@@ -6790,8 +6790,17 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
-/* Mobile SSH: keep terminal content box centered; do not change height/input/keyboard flow. */
+/* Mobile SSH: equalize terminal viewport gutters without changing input position or keyboard flow. */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    html.mobile-stable-input .terminal-container {
+        box-sizing: border-box;
+        width: auto !important;
+        max-width: none !important;
+        margin-left: 6px !important;
+        margin-right: 6px !important;
+        border-left-width: 1px;
+        border-right-width: 1px;
+    }
     html.mobile-stable-input .terminal-container .wterm-wrapper,
     html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
         box-sizing: border-box;

@@ -5873,6 +5873,12 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = TERMINA
     return getTerminalBottomDistance(el) <= threshold;
 }
 
+function isTerminalUserReadingHistory() {
+    const el = getTerminalScrollElement();
+    if (!el) return false;
+    return !terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+}
+
 function setTerminalAutoFollow(enabled, reason = 'unknown') {
     terminalAutoFollowEnabled = !!enabled;
     terminalUserScrolledAway = !terminalAutoFollowEnabled;
@@ -5885,9 +5891,13 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
     const el = getTerminalScrollElement();
     if (!el) return true;
     const atBottom = isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
-    if (atBottom) setTerminalAutoFollow(true, reason);
+    if (atBottom) {
+        mobileStableLastBottomIntent = true;
+        setTerminalAutoFollow(true, reason);
+    }
     else if (!isProgrammaticTerminalScroll) {
         terminalLastUserScrollAt = Date.now();
+        mobileStableLastBottomIntent = false;
         setTerminalAutoFollow(false, reason);
     }
     return terminalAutoFollowEnabled;
@@ -5945,6 +5955,11 @@ function scheduleTerminalScrollbarUpdate() {
 function requestTerminalAutoFollow(reason = 'auto-follow') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (isMobileStableInputMode() && isTerminalUserReadingHistory()) {
+        logTerminalScrollDiagnostics('auto-follow:mobile-history-locked', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (hasLiveTerminalSelection() || mobileTerminalSelectionMode) {
         logTerminalScrollDiagnostics('auto-follow:selection-active', { reason });
         scheduleTerminalScrollbarUpdate();
@@ -6034,8 +6049,14 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     if (!isMobileStableInputMode()) return false;
     const el = getTerminalScrollElement();
     if (!el) return false;
+    const label = String(reason || '');
+    const userInputReason = /terminal-touch|mobile-ime|command-box|keypad/.test(label);
+    if (!userInputReason && isTerminalUserReadingHistory()) {
+        scheduleTerminalScrollbarUpdate();
+        return false;
+    }
     const keyboardActive = mobileKeyboardOpen || mobileKeyboardInset > 8 || document.documentElement.classList.contains('keyboard-open');
-    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || mobileStableLastBottomIntent;
+    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || (mobileStableLastBottomIntent && userInputReason);
     if (!keyboardActive && !shouldFollow) {
         scheduleTerminalScrollbarUpdate();
         return false;
