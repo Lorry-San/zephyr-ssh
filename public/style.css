@@ -6792,22 +6792,40 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
 
 
-/* Mobile SSH final viewport fix: symmetric gutters, keyboard avoidance, no white spacer. */
+
+
+/* Mobile SSH measured layout fix: symmetric gutters and real keyboard avoidance. */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-page,
+    html.mobile-stable-input .terminal-page {
+        box-sizing: border-box;
+        grid-template-columns: minmax(0, 1fr);
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        background: var(--bg) !important;
+    }
+
     html.mobile-stable-input.keyboard-open .terminal-page {
-        background: var(--wterm-bg) !important;
+        height: calc(var(--stable-vh, 100svh) - var(--keyboard-inset, 0px)) !important;
+        max-height: calc(var(--stable-vh, 100svh) - var(--keyboard-inset, 0px)) !important;
+    }
+
+    .terminal-page .terminal-input-panel,
+    .terminal-page .terminal-topbar,
+    .terminal-page .terminal-container,
+    html.mobile-stable-input .terminal-input-panel,
+    html.mobile-stable-input .terminal-topbar,
+    html.mobile-stable-input .terminal-container {
+        min-width: 0 !important;
+        max-width: 100% !important;
+        justify-self: stretch !important;
+        box-sizing: border-box;
     }
 
     html.mobile-stable-input .terminal-container {
-        box-sizing: border-box;
-        align-self: stretch !important;
         width: auto !important;
-        max-width: none !important;
-        min-width: 0 !important;
-        margin-top: 6px !important;
-        margin-right: 6px !important;
-        margin-bottom: calc(6px + var(--keyboard-inset, 0px)) !important;
-        margin-left: 6px !important;
+        align-self: stretch !important;
+        margin: 6px !important;
         transform: none !important;
     }
 
@@ -6816,5 +6834,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
         box-sizing: border-box;
         width: 100% !important;
         max-width: 100% !important;
+        min-width: 0 !important;
     }
 }
