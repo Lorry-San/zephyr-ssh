@@ -218,6 +218,8 @@ let terminalScrollCleanup = null;
 let terminalResizeCleanup = null;
 let suppressWTermResizeEvent = false;
 let terminalFontSize = 14;
+// Mobile devices get a larger default for readability
+const TERMINAL_FONT_MOBILE_DEFAULT = 16;
 let mobileKeyboardOpen = false;
 let mobileKeyboardUserControlled = false;
 let mobileWTermInputGuard = null;
@@ -827,7 +829,9 @@ function clampTerminalFontSize(size) {
 
 function getStoredTerminalFontSize() {
     const saved = Number(localStorage.getItem(TERMINAL_FONT_STORAGE_KEY));
-    return Number.isFinite(saved) ? clampTerminalFontSize(saved) : terminalFontSize;
+    if (Number.isFinite(saved)) return clampTerminalFontSize(saved);
+    // Mobile defaults to larger font
+    return isTouchKeyboardDevice() ? TERMINAL_FONT_MOBILE_DEFAULT : terminalFontSize;
 }
 
 function updateFontSizeButtons() {
@@ -5995,8 +5999,15 @@ function updateTerminalScrollbarNow() {
     if (!el || !terminalContainer || !terminalScrollbar || !terminalScrollbarThumb) return;
     const maxScroll = getTerminalMaxScroll(el);
     const scrollable = maxScroll > 1;
+    const atBottom = isTerminalAtBottom(el, 8);
     terminalContainer.classList.toggle('scrollable', scrollable);
+    terminalContainer.classList.toggle('terminal-following', atBottom && scrollable);
     el.classList.toggle('terminal-scrollable', scrollable);
+    // Bottom scroll fade: visible when scrolled away from bottom
+    if (isMobileStableInputMode()) {
+        const fadeOpacity = scrollable && !atBottom ? '1' : '0';
+        terminalContainer.style.setProperty('--scroll-fade-opacity', fadeOpacity);
+    }
     if (terminalScrollbar) terminalScrollbar.style.display = scrollable ? 'block' : 'none';
     if (!scrollable) {
         terminalScrollbar.style.setProperty('--terminal-scroll-thumb-top', '0px');
@@ -6397,6 +6408,15 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
 
     const onScroll = () => {
         updateTerminalAutoFollowFromScroll('user-scroll');
+        // Toggle scrolling class to prevent text selection during active scroll
+        if (isMobileStableInputMode()) {
+            const el = getTerminalScrollElement();
+            if (el) {
+                el.classList.add('is-scrolling');
+                window.clearTimeout(onScroll._clearTimer);
+                onScroll._clearTimer = window.setTimeout(() => el.classList.remove('is-scrolling'), 220);
+            }
+        }
         scheduleTerminalScrollbarUpdate();
     };
 

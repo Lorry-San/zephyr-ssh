@@ -6786,7 +6786,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
        above the keyboard. No layout changes, no margin tricks. */
     html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper,
     html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper.wterm {
-        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
+        padding-bottom: calc(8px + var(--keyboard-inset, 0px));
+        transition: padding-bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     html.mobile-stable-input .terminal-input-panel {
@@ -6845,6 +6846,10 @@ body.smartbar-trash-hover .smartbar-trash-target {
         color: #fff;
         border-color: var(--accent);
         transform: scale(0.94);
+        transition: transform 0.08s ease, background 0.08s ease, color 0.08s ease;
+    }
+    html.mobile-stable-input .aux-key {
+        transition: transform 0.12s ease, background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
     }
     html.mobile-stable-input .aux-key.aux-active {
         background: var(--accent);
@@ -6867,6 +6872,42 @@ body.smartbar-trash-hover .smartbar-trash-target {
     html.mobile-stable-input.keyboard-open .terminal-input-panel {
         bottom: auto;
         transform: none !important;
+    }
+
+    /* ── WTerm mobile grid optimizations ── */
+    html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
+        padding: 8px;  /* edge-to-edge: reclaim screen space */
+    }
+    html.mobile-stable-input .terminal-container .wterm-wrapper .term-grid {
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+    }
+    html.mobile-stable-input .terminal-container .wterm-wrapper .term-row,
+    html.mobile-stable-input .terminal-container .wterm-wrapper .term-scrollback-row {
+        line-height: 1.35;
+        letter-spacing: 0.005em;
+    }
+    /* Prevent accidental text selection during active scrolling */
+    html.mobile-stable-input .terminal-container .wterm-wrapper.is-scrolling .term-grid,
+    html.mobile-stable-input .terminal-container .wterm-wrapper.is-scrolling .term-row,
+    html.mobile-stable-input .terminal-container .wterm-wrapper.is-scrolling .term-scrollback-row {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+    }
+    /* Bottom scroll fade: hints there's more content below (iOS-style) */
+    html.mobile-stable-input .terminal-container {
+        --scroll-fade-opacity: 0;
+    }
+    html.mobile-stable-input .terminal-container::before {
+        content: '';
+        position: absolute;
+        bottom: 0; left: 0; right: 0;
+        height: 24px;
+        z-index: 5;
+        pointer-events: none;
+        background: linear-gradient(to top, var(--wterm-bg), transparent);
+        opacity: var(--scroll-fade-opacity);
+        transition: opacity 0.28s ease;
     }
 
     html.mobile-stable-input .mobile-terminal-ime-proxy {
