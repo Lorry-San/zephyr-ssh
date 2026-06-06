@@ -6904,7 +6904,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
         -webkit-tap-highlight-color: transparent;
         transition: background 0.1s;
     }
-    html.mobile-stable-input .aux-key:active {
+    html.mobile-stable-input .aux-key:active,
+    html.mobile-stable-input .aux-key.aux-pressing {
         background: var(--accent);
         color: #fff;
         border-color: var(--accent);

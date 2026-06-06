@@ -7977,32 +7977,59 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
 // ── Mobile auxiliary keys handler ──
 const mobileAuxKeys = $('#mobileAuxKeys');
 if (mobileAuxKeys) {
-    // Keep keyboard open: clicks on aux keys must not steal focus from the IME proxy.
-    mobileAuxKeys.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.aux-key')) {
-            requestAnimationFrame(() => {
-                if (isMobileStableInputMode() && mobileImeProxy && document.activeElement !== mobileImeProxy) {
-                    try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
-                }
-            });
-        }
-    }, { passive: true });
     const auxSeqMap = {
         esc: '\x1b', tab: '\t',
         up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
         home: '\x1b[1~', end: '\x1b[4~',
         pgup: '\x1b[5~', pgdn: '\x1b[6~',
     };
-    mobileAuxKeys.addEventListener('click', (e) => {
-        const btn = e.target.closest('.aux-key');
-        if (!btn) return;
+    let auxPointerState = null;
+    let auxLastHandledAt = -Infinity;
+
+    mobileAuxKeys.querySelectorAll('.aux-key').forEach((btn) => {
+        btn.type = 'button';
+        btn.tabIndex = -1;
+        btn.addEventListener('focus', () => keepMobileAuxImeFocused('mobile-aux-focus-guard'));
+    });
+
+    function keepMobileAuxImeFocused(reason = 'mobile-aux-focus') {
+        if (!isMobileStableInputMode()) return false;
+        mobileKeyboardUserControlled = true;
+        keyboardFocusLikely = true;
+        const focus = (label) => {
+            try { focusMobileStableImeProxy(label); } catch (_) {}
+        };
+        focus(reason);
+        requestAnimationFrame(() => focus(`${reason}:raf`));
+        window.setTimeout(() => focus(`${reason}:settle-80`), 80);
+        window.setTimeout(updateViewportInsets, 120);
+        return true;
+    }
+
+    function releaseMobileAuxModifiers() {
+        if (modifierState.ctrl) {
+            modifierState.ctrl = false;
+            const ctrlBtn = mobileAuxKeys.querySelector('.aux-key[data-key="ctrl"]');
+            if (ctrlBtn) ctrlBtn.classList.remove('aux-active');
+            document.querySelectorAll('.modifier[data-key="ctrl"]').forEach(b => b.classList.remove('active'));
+        }
+        if (modifierState.alt) {
+            modifierState.alt = false;
+            document.querySelectorAll('.modifier[data-key="alt"]').forEach(b => b.classList.remove('active'));
+        }
+    }
+
+    function handleMobileAuxKey(btn, trigger = 'mobile-aux-key') {
+        if (!btn) return false;
+        keepMobileAuxImeFocused(`${trigger}:before`);
         const key = btn.dataset.key;
         if (key === 'ctrl') {
             modifierState.ctrl = !modifierState.ctrl;
             btn.classList.toggle('aux-active', modifierState.ctrl);
             // Keep the floating shortcut panel Ctrl button in sync
             document.querySelectorAll('.modifier[data-key="ctrl"]').forEach(b => b.classList.toggle('active', modifierState.ctrl));
-            return;
+            keepMobileAuxImeFocused(`${trigger}:ctrl`);
+            return true;
         }
         const seq = auxSeqMap[key];
         if (seq) {
@@ -8028,17 +8055,84 @@ if (mobileAuxKeys) {
             }
         }
         // Auto-release Ctrl, Alt after one non-modifier key press (sticky modifier)
-        if (modifierState.ctrl) {
-            modifierState.ctrl = false;
-            const ctrlBtn = mobileAuxKeys.querySelector('.aux-key[data-key="ctrl"]');
-            if (ctrlBtn) ctrlBtn.classList.remove('aux-active');
-            document.querySelectorAll('.modifier[data-key="ctrl"]').forEach(b => b.classList.remove('active'));
+        releaseMobileAuxModifiers();
+        keepMobileAuxImeFocused(`${trigger}:after`);
+        return true;
+    }
+
+    function pointInsideAuxButton(btn, e) {
+        if (!btn || typeof e.clientX !== 'number' || typeof e.clientY !== 'number') return true;
+        const rect = btn.getBoundingClientRect();
+        const pad = 8;
+        return e.clientX >= rect.left - pad && e.clientX <= rect.right + pad
+            && e.clientY >= rect.top - pad && e.clientY <= rect.bottom + pad;
+    }
+
+    // Keep keyboard open: aux buttons must never take focus away from the hidden IME proxy.
+    // pointerdown is intentionally non-passive so preventDefault can stop Android/WebView
+    // from focusing the button and closing the soft keyboard before click runs.
+    mobileAuxKeys.addEventListener('pointerdown', (e) => {
+        const btn = e.target.closest('.aux-key');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        auxPointerState = {
+            pointerId: e.pointerId,
+            btn,
+            x: e.clientX,
+            y: e.clientY,
+            scrollLeft: mobileAuxKeys.scrollLeft,
+            moved: false,
+        };
+        btn.classList.add('aux-pressing');
+        try { btn.setPointerCapture?.(e.pointerId); } catch (_) {}
+        keepMobileAuxImeFocused('mobile-aux-pointerdown');
+    }, { passive: false });
+
+    mobileAuxKeys.addEventListener('pointermove', (e) => {
+        if (!auxPointerState || auxPointerState.pointerId !== e.pointerId) return;
+        const dx = e.clientX - auxPointerState.x;
+        const dy = e.clientY - auxPointerState.y;
+        if (Math.abs(dx) > 6 || Math.abs(dy) > 8) auxPointerState.moved = true;
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 4) {
+            e.preventDefault();
+            e.stopPropagation();
+            mobileAuxKeys.scrollLeft = auxPointerState.scrollLeft - dx;
         }
-        if (modifierState.alt) {
-            modifierState.alt = false;
-            document.querySelectorAll('.modifier[data-key="alt"]').forEach(b => b.classList.remove('active'));
+    }, { passive: false });
+
+    mobileAuxKeys.addEventListener('pointerup', (e) => {
+        if (!auxPointerState || auxPointerState.pointerId !== e.pointerId) return;
+        const state = auxPointerState;
+        auxPointerState = null;
+        e.preventDefault();
+        e.stopPropagation();
+        state.btn.classList.remove('aux-pressing');
+        try { state.btn.releasePointerCapture?.(e.pointerId); } catch (_) {}
+        if (!state.moved && pointInsideAuxButton(state.btn, e)) {
+            auxLastHandledAt = performance.now();
+            handleMobileAuxKey(state.btn, 'mobile-aux-pointerup');
         }
-    });
+        keepMobileAuxImeFocused('mobile-aux-pointerup');
+    }, { passive: false });
+
+    mobileAuxKeys.addEventListener('pointercancel', (e) => {
+        if (!auxPointerState || auxPointerState.pointerId !== e.pointerId) return;
+        auxPointerState.btn?.classList.remove('aux-pressing');
+        auxPointerState = null;
+        keepMobileAuxImeFocused('mobile-aux-pointercancel');
+    }, { passive: true });
+
+    mobileAuxKeys.addEventListener('click', (e) => {
+        const btn = e.target.closest('.aux-key');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        keepMobileAuxImeFocused('mobile-aux-click');
+        if (performance.now() - auxLastHandledAt < 350) return;
+        auxLastHandledAt = performance.now();
+        handleMobileAuxKey(btn, 'mobile-aux-click');
+    }, { passive: false });
 }
 
 const keySequences = {
