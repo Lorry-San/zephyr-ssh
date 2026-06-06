@@ -6755,14 +6755,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-container {
-        order: 2;
         flex: 1 1 auto !important;
         min-height: 96px;
         height: auto !important;
         max-height: none !important;
-        /* NO margin-bottom here. Keyboard is a pure overlay — the terminal scroll container
-           uses scroll-padding-bottom to keep the cursor visible above the keyboard. */
         margin: 6px;
+        /* Reserve space for the fixed input panel at the bottom */
+        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px));
         transform: none !important;
         transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
@@ -6791,18 +6790,22 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-input-panel {
-        position: relative;
-        left: auto;
-        right: auto;
-        bottom: auto;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: var(--keyboard-inset, 0px);
         z-index: 20;
-        order: 1;
         flex: 0 0 auto;
-        padding-bottom: max(4px, env(safe-area-inset-bottom));
+        padding-bottom: max(2px, env(safe-area-inset-bottom));
         transform: none !important;
-        transition: none !important;
+        transition: bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
         will-change: auto;
-        box-shadow: none;
+        box-shadow: 0 -2px 12px rgba(0,0,0,0.18);
+    }
+
+    html.mobile-stable-input.keyboard-open .terminal-input-panel {
+        bottom: var(--keyboard-inset, 0px);
+        transform: none !important;
     }
 
     /* ── Mobile auxiliary keys: compact horizontal bar, always on top ── */
@@ -6973,8 +6976,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
-        /* NO margin-bottom keyboard avoidance — keyboard is pure overlay. */
-        transform: none !important;
+        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px)) !important;
     }
 
     html.mobile-stable-input .terminal-container .wterm-wrapper,
