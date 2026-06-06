@@ -1570,11 +1570,11 @@ function runWithMobileStableResizeBypass(callback) {
 
 function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') {
     freezeTerminalViewportResize(reason);
-    // Mobile stable input is a visual clipping problem, not a PTY/grid resize problem.
-    // Never touch WTerm bridge rows during keyboard/viewport animation; doing so is what
-    // creates phantom blank rows, row inversions and the ugly slide-down recovery.
+    // Mobile stable input: keyboard/viewport changes are purely visual clipping.
+    // Touching WTerm bridge rows here is the root cause of phantom blank rows,
+    // text reordering, and the ugly slide-down recovery after IME close.
     if (isMobileStableInputMode() && MOBILE_KEYBOARD_RESIZE_REASONS.test(String(reason))) {
-        normalizeWTermContainerLayout(`${reason}:normalize-only`);
+        normalizeWTermContainerLayout(`${reason}:visual-only`);
         requestInitialMobileRenderFlush(reason);
         scheduleTerminalScrollbarUpdate();
         return;
@@ -1588,15 +1588,17 @@ function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') 
 function scheduleKeyboardCloseFit(reason = 'keyboard-close-fit', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
     if (isMobileStableInputMode()) {
         freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
+        // Keyboard close in stable mode is purely visual — the page height never changed.
+        // Do NOT restore/repair the WTerm grid. Just normalize the flex container and flush.
         window.clearTimeout(scheduleKeyboardCloseFit._mobileTimer);
         scheduleKeyboardCloseFit._mobileTimer = window.setTimeout(() => {
-            normalizeWTermContainerLayout(`${reason}:visible-only`);
-            requestInitialMobileRenderFlush(`${reason}:visible-only`);
+            normalizeWTermContainerLayout(`${reason}:settled`);
+            requestInitialMobileRenderFlush(`${reason}:settled`);
             if (isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory()) {
                 lockMobileTerminalAutoFollow(`${reason}:history-preserved`, 1600);
                 scheduleTerminalScrollbarUpdate();
             } else {
-                ensureMobileStableCursorVisible(`${reason}:visible-only`);
+                ensureMobileStableCursorVisible(`${reason}:settled`);
                 scheduleTerminalScrollbarUpdate();
             }
         }, Math.max(80, delay));
@@ -6160,13 +6162,14 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     return true;
 }
 
-function sendMobileStableImeData(text = '', source = 'mobile-ime', { paste = false } = {}) {
+function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = false } = {}) {
     const payload = String(text || '');
     if (!payload) return false;
     const now = performance.now();
+    // Only dedupe when different source fires the same text within a short window.
+    // Same source (e.g. repeated key) is allowed — users type "aa" intentionally.
     const duplicateWindow = paste ? 260 : 140;
     if (mobileImeLastSent.text === payload && mobileImeLastSent.source !== source && now - mobileImeLastSent.at < duplicateWindow) {
-        logTerminalScrollDiagnostics('mobile-ime:dedupe', { source, previousSource: mobileImeLastSent.source, length: payload.length });
         return false;
     }
     mobileImeLastSent = { text: payload, source, at: now };
@@ -6175,12 +6178,11 @@ function sendMobileStableImeData(text = '', source = 'mobile-ime', { paste = fal
     return true;
 }
 
-function sendMobileStableControlData(seq = '', source = 'mobile-ime-control') {
+function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     const payload = String(seq || '');
     if (!payload) return false;
     const now = performance.now();
     if (mobileImeLastControl.seq === payload && mobileImeLastControl.source !== source && now - mobileImeLastControl.at < 90) {
-        logTerminalScrollDiagnostics('mobile-ime-control:dedupe', { source, previousSource: mobileImeLastControl.source });
         return false;
     }
     mobileImeLastControl = { seq: payload, source, at: now };
@@ -6312,7 +6314,7 @@ function setupMobileStableImeProxy() {
     proxy.addEventListener('compositionend', (e) => {
         mobileImeComposing = false;
         const text = e.data || proxy.value || '';
-        if (text) sendMobileStableImeData(text, 'mobile-ime-composition');
+        if (text) sendMobileStableImeText(text, 'mobile-ime-composition');
         proxy.value = '';
     });
     proxy.addEventListener('keydown', (e) => {
@@ -6335,7 +6337,7 @@ function setupMobileStableImeProxy() {
         const seq = seqMap[e.key];
         if (!seq) return;
         e.preventDefault();
-        sendMobileStableControlData(seq, `mobile-ime-key:${e.key}`);
+        sendMobileStableControl(seq, `mobile-ime-key:${e.key}`);
         proxy.value = '';
     });
     proxy.addEventListener('beforeinput', (e) => {
@@ -6345,37 +6347,37 @@ function setupMobileStableImeProxy() {
             const text = e.data || '';
             if (text) {
                 e.preventDefault();
-                sendMobileStableImeData(text, 'mobile-ime-beforeinput');
+                sendMobileStableImeText(text, 'mobile-ime-beforeinput');
                 proxy.value = '';
             }
         } else if (type === 'insertFromPaste') {
             const text = e.dataTransfer?.getData?.('text/plain') || e.data || '';
             if (text) {
                 e.preventDefault();
-                sendMobileStableImeData(text, 'mobile-ime-paste', { paste: true });
+                sendMobileStableImeText(text, 'mobile-ime-paste', { paste: true });
                 proxy.value = '';
             }
         } else if (type === 'deleteContentBackward') {
             e.preventDefault();
-            sendMobileStableControlData('\x7f', 'mobile-ime-backspace');
+            sendMobileStableControl('\x7f', 'mobile-ime-backspace');
             proxy.value = '';
         } else if (type === 'insertLineBreak' || type === 'insertParagraph') {
             e.preventDefault();
-            sendMobileStableControlData('\r', 'mobile-ime-enter');
+            sendMobileStableControl('\r', 'mobile-ime-enter');
             proxy.value = '';
         }
     });
     proxy.addEventListener('input', () => {
         if (mobileImeComposing) return;
         const text = proxy.value || '';
-        if (text) sendMobileStableImeData(text, 'mobile-ime-input-fallback');
+        if (text) sendMobileStableImeText(text, 'mobile-ime-input-fallback');
         proxy.value = '';
     });
     proxy.addEventListener('paste', (e) => {
         const text = e.clipboardData?.getData?.('text/plain') || '';
         if (!text) return;
         e.preventDefault();
-        sendMobileStableImeData(text, 'mobile-ime-paste-event', { paste: true });
+        sendMobileStableImeText(text, 'mobile-ime-paste-event', { paste: true });
         proxy.value = '';
     });
     document.body.appendChild(proxy);
@@ -6578,7 +6580,8 @@ function updateViewportInsets() {
     if (keyboardOpen !== wasKeyboardOpen) {
         mobileKeyboardResizeFreezeUntil = Date.now() + 1600;
         if (keyboardOpen) rememberMobileStableKeyboardGrid('keyboard-open-start');
-        // Closing the IME is still viewport animation; defer any grid sanity repair until it is fully settled.
+        // Keyboard-close in stable mode is handled by scheduleKeyboardCloseFit later;
+        // do not attempt an immediate grid restore that would fight the visual rollback.
         stabilizeWTermAfterViewportOnlyChange(keyboardOpen ? 'keyboard-open-start' : 'keyboard-close-start');
     }
     cancelAnimationFrame(updateViewportInsets._raf);
@@ -7905,7 +7908,6 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             return;
         }
         if (isMobileStableInputMode() && !mobileTerminalSelectionMode && !hasLiveTerminalSelection()) {
-            // 软键盘必须在用户触摸手势内聚焦才可靠弹出；同一手势只聚焦一次，避免 Android IME 反复开合触发布局抖动。
             const now = performance.now();
             if (now - mobileStableLastFocusGestureAt > 260) {
                 mobileStableLastFocusGestureAt = now;
