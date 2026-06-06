@@ -6143,6 +6143,11 @@ function enableMobileStableInputMode() {
     setStableViewportHeight({ force: true });
 }
 
+function isMobileStableActualInputReason(reason = '') {
+    const label = String(reason || '').toLowerCase();
+    return /beforeinput|composition|input-fallback|paste|backspace|enter|mobile-ime-key:|mobile-ime-control|command-box|keypad|:sent-visible|:sent/.test(label);
+}
+
 function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason = 'keyboard-inset') {
     const safeInset = Math.max(0, Math.round(Number(inset) || 0));
     mobileKeyboardInset = safeInset;
@@ -6155,7 +6160,7 @@ function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason 
     setStableViewportHeight();
     // Keyboard open/close alone should not move terminal content. Only real input handlers
     // call ensureMobileStableCursorVisible(), and only then do the minimum scroll needed.
-    if (/mobile-ime|command-box|keypad|:sent-visible|:sent|beforeinput|composition|backspace|enter/.test(String(reason || ''))) {
+    if (isMobileStableActualInputReason(reason)) {
         requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
     } else {
         scheduleTerminalScrollbarUpdate();
@@ -6186,7 +6191,7 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     const el = getTerminalScrollElement();
     if (!el) return false;
     const label = String(reason || '');
-    const actualInputReason = /mobile-ime|command-box|keypad|:sent-visible|:sent|beforeinput|composition|backspace|enter/.test(label);
+    const actualInputReason = isMobileStableActualInputReason(label);
     if (!actualInputReason && isMobileTerminalAutoFollowLocked()) {
         scheduleTerminalScrollbarUpdate();
         return false;
@@ -6305,8 +6310,8 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (document.activeElement !== mobileImeProxy) {
         try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
     }
-    // Focus/keyboard open alone must not pull a user out of history. Actual input handlers call ensureMobileStableCursorVisible().
-    if (!isMobileTerminalAutoFollowLocked() && !isTerminalUserReadingHistory()) ensureMobileStableCursorVisible(reason);
+    // Focus/keyboard open alone must not move terminal content; real input handlers scroll if needed.
+    scheduleTerminalScrollbarUpdate();
     return true;
 }
 
@@ -6688,15 +6693,18 @@ function updateViewportInsets() {
     mobileKeyboardOpen = keyboardOpen;
     if (keyboardOpen !== wasKeyboardOpen) {
         mobileKeyboardResizeFreezeUntil = Date.now() + 1600;
-        if (keyboardOpen) rememberMobileStableKeyboardGrid('keyboard-open-start');
-        // Keyboard-close in stable mode is handled by scheduleKeyboardCloseFit later;
-        // do not attempt an immediate grid restore that would fight the visual rollback.
-        stabilizeWTermAfterViewportOnlyChange(keyboardOpen ? 'keyboard-open-start' : 'keyboard-close-start');
+        if (!isMobileStableInputMode()) {
+            stabilizeWTermAfterViewportOnlyChange(keyboardOpen ? 'keyboard-open-start' : 'keyboard-close-start');
+        } else {
+            // Stable mobile SSH: keyboard transition is parent-side clipping only.
+            // Do not touch WTerm layout/grid or scroll position on open/close.
+            scheduleTerminalScrollbarUpdate();
+        }
     }
     cancelAnimationFrame(updateViewportInsets._raf);
     updateViewportInsets._raf = requestAnimationFrame(() => {
         applyMobileStableKeyboardInset(inset, keyboardOpen, keyboardOpen ? 'keyboard-open' : 'keyboard-close');
-        if (isTouchKeyboardDevice()) requestInitialMobileRenderFlush(keyboardOpen ? 'keyboard-open' : 'keyboard-close');
+        if (!isMobileStableInputMode() && isTouchKeyboardDevice()) requestInitialMobileRenderFlush(keyboardOpen ? 'keyboard-open' : 'keyboard-close');
         notifyParentKeyboardMetrics({
             keyboardOpen,
             keyboardInset: inset,
@@ -6708,13 +6716,9 @@ function updateViewportInsets() {
             requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
         } else if (wasReadingHistory) {
             lockMobileTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 1800);
-        } else if (keyboardOpen && wasAtBottom) {
-            ensureMobileStableCursorVisible('keyboard-open-settled');
         }
         scheduleTerminalScrollbarUpdate();
-        // 移动端键盘开关只改变 CSS 可视区域；等键盘关闭后再刷新 WTerm 视图，避免远端内容重排出空行/截断。
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-close-settled', 650);
-        else ensureMobileStableCursorVisible('keyboard-open-settled');
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
