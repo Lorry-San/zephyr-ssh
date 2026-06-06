@@ -6133,6 +6133,15 @@ function setupTerminalInputPanelMetrics() {
     window.addEventListener('resize', updateTerminalInputPanelMetrics, { passive: true });
 }
 
+function mountMobileStableBarsInFlow() {
+    if (!isMobileStableInputMode() || !topbarActions || !terminalInputPanel) return;
+    const page = document.querySelector('.terminal-page');
+    if (!page) return;
+    if (topbarActions.parentElement !== page || topbarActions.nextElementSibling !== terminalInputPanel) {
+        page.insertBefore(topbarActions, terminalInputPanel);
+    }
+}
+
 function enableMobileStableInputMode() {
     if (!MOBILE_STABLE_INPUT_MODE || mobileStableInputEnabled) return;
     mobileStableInputEnabled = true;
@@ -6141,6 +6150,7 @@ function enableMobileStableInputMode() {
     document.body?.classList.add('mobile-stable-input');
     try { if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true; } catch (_) {}
     setStableViewportHeight({ force: true });
+    mountMobileStableBarsInFlow();
 }
 
 function isMobileStableActualInputReason(reason = '') {

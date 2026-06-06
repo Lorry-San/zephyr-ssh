@@ -6774,6 +6774,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
     html.mobile-stable-input .terminal-topbar {
         flex: 0 0 auto;
+        order: 0;
     }
     html.mobile-stable-input {
         --mobile-bottom-actions-height: 46px;
@@ -6783,12 +6784,12 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
     html.mobile-stable-input .terminal-container {
         flex: 1 1 auto !important;
+        order: 2;
         min-height: 0;
         height: auto !important;
         max-height: none !important;
         margin: 6px;
-        /* Fixed function bars occupy this bottom area; SSH content must stop above them. */
-        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px));
+        margin-bottom: 6px;
         transform: none !important;
         transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
@@ -6824,44 +6825,46 @@ body.smartbar-trash-hover .smartbar-trash-target {
     /* ── Bottom aux keys: fixed directly above the system keyboard ── */
     html.mobile-stable-input .terminal-bottom-bar {
         display: block;
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        position: static;
+        flex: 0 0 auto;
+        order: 4;
+        left: auto;
+        right: auto;
+        bottom: auto;
         z-index: 21;
         padding-bottom: max(2px, env(safe-area-inset-bottom));
         transform: none !important;
-        transition: bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: none;
         will-change: auto;
         background: var(--surface);
         box-shadow: 0 -2px 12px rgba(0,0,0,0.18);
     }
 
     html.mobile-stable-input.keyboard-open .terminal-bottom-bar {
-        bottom: 0;
+        bottom: auto;
         transform: none !important;
     }
 
     /* Reuse the original topbar CSS-icon actions row; move it above the aux keys on mobile. */
-    html.mobile-stable-input .terminal-topbar .topbar-actions {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: var(--terminal-input-panel-height, 44px);
+    html.mobile-stable-input .topbar-actions {
+        position: static;
+        left: auto;
+        right: auto;
+        bottom: auto;
         z-index: 22;
         display: flex;
         flex-wrap: nowrap;
         gap: 8px;
         margin: 0;
         padding: 6px 8px;
-        flex-basis: auto;
-        order: unset;
+        flex: 0 0 auto;
+        order: 3;
         background: var(--surface);
         border-top: 1px solid var(--border);
         border-bottom: 1px solid var(--border);
         box-shadow: 0 -2px 10px rgba(0,0,0,0.12);
         transform: none !important;
-        transition: bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: none;
     }
 
     /* ── Mobile auxiliary keys: compact horizontal bar, always on top ── */
@@ -7012,7 +7015,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
-        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px)) !important;
+        margin-bottom: 6px !important;
         min-height: 0 !important;
     }
 
