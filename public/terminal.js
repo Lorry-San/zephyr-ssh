@@ -261,6 +261,7 @@ let mobileImeLastSent = { text: '', source: '', at: 0 };
 let mobileImeLastControl = { seq: '', source: '', at: 0 };
 let mobileStableLastFocusGestureAt = 0;
 let mobileStableLastActualInputAt = 0;
+let mobileStableSuppressScrollUntil = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -6036,6 +6037,10 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
 function scrollTerminalToBottom(reason = 'scroll-bottom') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil) {
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (shouldBlockMobileStableAutoFollowReason(reason)) {
         logTerminalScrollDiagnostics('scroll-bottom:blocked-mobile-stable-layout', { reason });
         scheduleTerminalScrollbarUpdate();
@@ -6110,6 +6115,10 @@ function shouldBlockMobileStableAutoFollowReason(reason = '') {
 function requestTerminalAutoFollow(reason = 'auto-follow') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil) {
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (shouldBlockMobileStableAutoFollowReason(reason)) {
         logTerminalScrollDiagnostics('auto-follow:blocked-mobile-stable-layout', { reason });
         scheduleTerminalScrollbarUpdate();
@@ -6344,19 +6353,26 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
 }
 
 function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = false } = {}) {
-    const payload = String(text || '');
+    let payload = String(text || '');
     if (!payload) return false;
+    // Ctrl modifier: convert typed character to control code and release the modifier.
+    if (!paste && modifierState.ctrl && payload.length === 1 && payload >= 'a' && payload <= 'z') {
+        payload = String.fromCharCode(payload.charCodeAt(0) - 96);
+        modifierState.ctrl = false;
+        const ctrlBtn = document.querySelector('.aux-key[data-key="ctrl"], .modifier[data-key="ctrl"]');
+        if (ctrlBtn) ctrlBtn.classList.remove('aux-active', 'active');
+    }
     const now = performance.now();
-    // Only dedupe when different source fires the same text within a short window.
-    // Same source (e.g. repeated key) is allowed — users type "aa" intentionally.
     const duplicateWindow = paste ? 260 : 140;
     if (mobileImeLastSent.text === payload && mobileImeLastSent.source !== source && now - mobileImeLastSent.at < duplicateWindow) {
         return false;
     }
     mobileImeLastSent = { text: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
+    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 500);
+    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
     sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
-    return true;
+    restoreMobileStableScrollTop(previousTop, `${source}:restore-after`);
     return true;
 }
 
@@ -6369,7 +6385,10 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     }
     mobileImeLastControl = { seq: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
+    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 500);
+    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
     sendData(payload, { source, forceFollow: false, applyModifiers: false });
+    restoreMobileStableScrollTop(previousTop, `${source}:restore-after`);
     return true;
 }
 
@@ -7152,6 +7171,10 @@ function patchWTermScrollBehavior() {
                 return;
             }
             const scrollReason = fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom';
+            if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil) {
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
             if (shouldBlockMobileStableAutoFollowReason(scrollReason)) {
                 scheduleTerminalScrollbarUpdate();
                 return;
@@ -7975,7 +7998,10 @@ if (mobileAuxKeys) {
         if (seq) {
             const payload = modifierState.ctrl && key.length === 1 ? String.fromCharCode(key.charCodeAt(0) - 96) : seq;
             mobileStableLastActualInputAt = Date.now();
+            mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 400);
+            const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
             sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
+            restoreMobileStableScrollTop(previousTop, 'mobile-aux-key:restore-after');
         } else {
             // Direct character keys: /, |, etc.
             const ch = String(key || '');
@@ -7985,7 +8011,10 @@ if (mobileAuxKeys) {
                     payload = String.fromCharCode(ch.charCodeAt(0) - 96);
                 }
                 mobileStableLastActualInputAt = Date.now();
+                mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 400);
+                const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
                 sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
+                restoreMobileStableScrollTop(previousTop, 'mobile-aux-key-char:restore-after');
             }
         }
         // Auto-release Ctrl, Alt after one non-modifier key press (sticky modifier)
