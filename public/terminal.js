@@ -6355,9 +6355,8 @@ function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = fal
     }
     mobileImeLastSent = { text: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
-    clearMobileTerminalHistoryLock(`${source}:actual-input`);
     sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
-    ensureMobileStableCursorVisible(source);
+    return true;
     return true;
 }
 
@@ -6370,9 +6369,7 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     }
     mobileImeLastControl = { seq: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
-    clearMobileTerminalHistoryLock(`${source}:actual-control`);
     sendData(payload, { source, forceFollow: false, applyModifiers: false });
-    ensureMobileStableCursorVisible(source);
     return true;
 }
 
@@ -7911,7 +7908,6 @@ function sendCommand() {
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         logTerminalPasteDiagnostics('command-box-send', text);
         mobileStableLastActualInputAt = Date.now();
-        clearMobileTerminalHistoryLock('command-box-send');
         sendData(text + '\r', { normalizeNewlines: true, source: 'command-box-send' });
     }
     cmdInput.value = '';
@@ -7958,9 +7954,6 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
 // ── Mobile auxiliary keys handler ──
 const mobileAuxKeys = $('#mobileAuxKeys');
 if (mobileAuxKeys) {
-    mobileAuxKeys.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.aux-key')) e.preventDefault();
-    }, { passive: false });
     const auxSeqMap = {
         esc: '\x1b', tab: '\t',
         up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
@@ -7982,7 +7975,6 @@ if (mobileAuxKeys) {
         if (seq) {
             const payload = modifierState.ctrl && key.length === 1 ? String.fromCharCode(key.charCodeAt(0) - 96) : seq;
             mobileStableLastActualInputAt = Date.now();
-            clearMobileTerminalHistoryLock('mobile-aux-key');
             sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
         } else {
             // Direct character keys: /, |, etc.
@@ -7993,7 +7985,6 @@ if (mobileAuxKeys) {
                     payload = String.fromCharCode(ch.charCodeAt(0) - 96);
                 }
                 mobileStableLastActualInputAt = Date.now();
-                clearMobileTerminalHistoryLock('mobile-aux-key-char');
                 sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
             }
         }
