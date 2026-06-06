@@ -260,6 +260,7 @@ let mobileStableKeyboardOpenGrid = null;
 let mobileImeLastSent = { text: '', source: '', at: 0 };
 let mobileImeLastControl = { seq: '', source: '', at: 0 };
 let mobileStableLastFocusGestureAt = 0;
+let mobileStableLastActualInputAt = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -5951,13 +5952,31 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = TERMINA
 function isTerminalUserReadingHistory() {
     const el = getTerminalScrollElement();
     if (!el) return false;
-    return !terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
+        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+        : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
+    return !terminalAutoFollowEnabled && !isTerminalAtBottom(el, threshold);
+}
+
+function clearMobileTerminalHistoryLock(reason = 'clear-history-lock') {
+    if (!isMobileStableInputMode()) return;
+    mobileTerminalAutoFollowLockUntil = 0;
+    mobileTerminalAutoFollowLockReason = '';
+    terminalUserScrolledAway = false;
+    terminalAutoFollowEnabled = true;
+    mobileStableLastBottomIntent = true;
+    terminalContainer?.classList.remove('terminal-follow-paused');
+    terminalContainer?.classList.add('terminal-following');
+    logTerminalScrollDiagnostics('auto-follow:mobile-lock-clear', { reason });
 }
 
 function lockMobileTerminalAutoFollow(reason = 'mobile-history-lock', duration = 1800) {
     if (!isMobileStableInputMode()) return;
     const el = getTerminalScrollElement();
-    if (!el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) return;
+    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
+        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+        : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
+    if (!el || isTerminalAtBottom(el, threshold)) return;
     const lockDuration = Math.max(300, Math.min(6000, Number(duration) || 1800));
     mobileTerminalAutoFollowLockUntil = Math.max(mobileTerminalAutoFollowLockUntil || 0, Date.now() + lockDuration);
     mobileTerminalAutoFollowLockReason = String(reason || 'mobile-history-lock');
@@ -5973,9 +5992,12 @@ function lockMobileTerminalAutoFollow(reason = 'mobile-history-lock', duration =
 }
 
 function isMobileTerminalAutoFollowLocked() {
+    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
+        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+        : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
     return isMobileStableInputMode()
         && Date.now() < (mobileTerminalAutoFollowLockUntil || 0)
-        && !isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+        && !isTerminalAtBottom(undefined, threshold);
 }
 
 function setTerminalAutoFollow(enabled, reason = 'unknown') {
@@ -5989,10 +6011,18 @@ function setTerminalAutoFollow(enabled, reason = 'unknown') {
 function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
     const el = getTerminalScrollElement();
     if (!el) return true;
-    const atBottom = isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
+        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+        : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
+    const atBottom = isTerminalAtBottom(el, threshold);
     if (atBottom) {
         mobileStableLastBottomIntent = true;
         setTerminalAutoFollow(true, reason);
+    }
+    else if (isMobileStableInputMode() && Date.now() - (mobileStableLastActualInputAt || 0) < 700) {
+        // IME / aux-key input can produce synthetic scroll events while the keyboard is animating.
+        // Do not interpret those as the user reading history.
+        scheduleTerminalScrollbarUpdate();
     }
     else if (!isProgrammaticTerminalScroll) {
         terminalLastUserScrollAt = Date.now();
@@ -6324,6 +6354,8 @@ function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = fal
         return false;
     }
     mobileImeLastSent = { text: payload, source, at: now };
+    mobileStableLastActualInputAt = Date.now();
+    clearMobileTerminalHistoryLock(`${source}:actual-input`);
     sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
     ensureMobileStableCursorVisible(source);
     return true;
@@ -6337,6 +6369,8 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
         return false;
     }
     mobileImeLastControl = { seq: payload, source, at: now };
+    mobileStableLastActualInputAt = Date.now();
+    clearMobileTerminalHistoryLock(`${source}:actual-control`);
     sendData(payload, { source, forceFollow: false, applyModifiers: false });
     ensureMobileStableCursorVisible(source);
     return true;
@@ -7876,6 +7910,8 @@ function sendCommand() {
     const text = cmdInput.value;
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         logTerminalPasteDiagnostics('command-box-send', text);
+        mobileStableLastActualInputAt = Date.now();
+        clearMobileTerminalHistoryLock('command-box-send');
         sendData(text + '\r', { normalizeNewlines: true, source: 'command-box-send' });
     }
     cmdInput.value = '';
@@ -7922,6 +7958,9 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
 // ── Mobile auxiliary keys handler ──
 const mobileAuxKeys = $('#mobileAuxKeys');
 if (mobileAuxKeys) {
+    mobileAuxKeys.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.aux-key')) e.preventDefault();
+    }, { passive: false });
     const auxSeqMap = {
         esc: '\x1b', tab: '\t',
         up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
@@ -7942,7 +7981,9 @@ if (mobileAuxKeys) {
         const seq = auxSeqMap[key];
         if (seq) {
             const payload = modifierState.ctrl && key.length === 1 ? String.fromCharCode(key.charCodeAt(0) - 96) : seq;
-            sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: true });
+            mobileStableLastActualInputAt = Date.now();
+            clearMobileTerminalHistoryLock('mobile-aux-key');
+            sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
         } else {
             // Direct character keys: /, |, etc.
             const ch = String(key || '');
@@ -7951,7 +7992,9 @@ if (mobileAuxKeys) {
                 if (modifierState.ctrl && ch.length === 1 && ch >= 'a' && ch <= 'z') {
                     payload = String.fromCharCode(ch.charCodeAt(0) - 96);
                 }
-                sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: true });
+                mobileStableLastActualInputAt = Date.now();
+                clearMobileTerminalHistoryLock('mobile-aux-key-char');
+                sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: false });
             }
         }
         // Auto-release Ctrl, Alt after one non-modifier key press (sticky modifier)
