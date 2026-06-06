@@ -6006,10 +6006,21 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
 function scrollTerminalToBottom(reason = 'scroll-bottom') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (shouldBlockMobileStableAutoFollowReason(reason)) {
+        logTerminalScrollDiagnostics('scroll-bottom:blocked-mobile-stable-layout', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     isProgrammaticTerminalScroll = true;
     try {
         if (term?._zephyrOriginalScrollToBottom) term._zephyrOriginalScrollToBottom();
         else el.scrollTop = getTerminalMaxScroll(el);
+        const maxScroll = getTerminalMaxScroll(el);
+        if (el.scrollTop > maxScroll) el.scrollTop = maxScroll;
+        if (wtermWrapper && wtermWrapper !== el) {
+            const maxWrapperScroll = getTerminalMaxScroll(wtermWrapper);
+            if (wtermWrapper.scrollTop > maxWrapperScroll) wtermWrapper.scrollTop = maxWrapperScroll;
+        }
         mobileTerminalAutoFollowLockUntil = 0;
         mobileTerminalAutoFollowLockReason = '';
         setTerminalAutoFollow(true, reason);
@@ -6056,9 +6067,24 @@ function scheduleTerminalScrollbarUpdate() {
     });
 }
 
+function shouldBlockMobileStableAutoFollowReason(reason = '') {
+    if (!isMobileStableInputMode()) return false;
+    const label = String(reason || '').toLowerCase();
+    if (isMobileStableActualInputReason(label)) return false;
+    // Rendering, resize, layout, keyboard and focus events must not scroll WTerm.
+    // They can otherwise push the viewport into WTerm's bottom blank space, producing
+    // the all-black terminal on first connect / keyboard reopen.
+    return /render|resize|layout|keyboard|viewport|visual|focus|ready|repair|scheduled|suppressed/.test(label);
+}
+
 function requestTerminalAutoFollow(reason = 'auto-follow') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (shouldBlockMobileStableAutoFollowReason(reason)) {
+        logTerminalScrollDiagnostics('auto-follow:blocked-mobile-stable-layout', { reason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (isMobileTerminalAutoFollowLocked()) {
         logTerminalScrollDiagnostics('auto-follow:mobile-history-transient-locked', { reason, lockReason: mobileTerminalAutoFollowLockReason });
         scheduleTerminalScrollbarUpdate();
@@ -7085,10 +7111,18 @@ function patchWTermScrollBehavior() {
                 scheduleTerminalScrollbarUpdate();
                 return;
             }
+            const scrollReason = fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom';
+            if (shouldBlockMobileStableAutoFollowReason(scrollReason)) {
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
             isProgrammaticTerminalScroll = true;
             try {
                 originalScrollToBottom();
-                setTerminalAutoFollow(true, fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom');
+                const el = getTerminalScrollElement();
+                if (el) el.scrollTop = Math.min(el.scrollTop, getTerminalMaxScroll(el));
+                if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = Math.min(wtermWrapper.scrollTop, getTerminalMaxScroll(wtermWrapper));
+                setTerminalAutoFollow(true, scrollReason);
             } finally {
                 scheduleTerminalScrollbarUpdate();
                 requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
@@ -8517,7 +8551,9 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                             }
                         }
                         setStatus('connected', '已连接');
-                        window.setTimeout(() => repairOversizedWTermRows('ready-oversized-rows', { force: true }), 120);
+                        if (!isMobileStableInputMode()) {
+                            window.setTimeout(() => repairOversizedWTermRows('ready-oversized-rows', { force: true }), 120);
+                        }
                         if (!isTouchKeyboardDevice() && term?.focus) term.focus();
                         reconnectAttempts = 0;
                         if (followOnConnect) {
