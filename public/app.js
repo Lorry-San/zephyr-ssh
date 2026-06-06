@@ -1623,16 +1623,12 @@ function commitTerminalWorkspaceKeyboard(metrics = {}) {
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
-    const activeSession = getTerminalSession(activeTerminalTab);
-    const activeSshStableInput = activeSession?.protocol === 'SSH'
-        && isCompactTerminalWorkspace()
-        && window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
-    if (metrics.stableInput || activeSshStableInput) {
-        // 移动端 SSH 稳定输入模式由 iframe 内部裁剪可见区和避让键盘；父页面不再改 workspace/iframe 高度，避免双层 resize 导致文本乱飞。
-        return;
-    }
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
+    const activeSession = getTerminalSession(activeTerminalTab);
+    const isCompact = isCompactTerminalWorkspace();
+    const isTouchDevice = window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
+    const isStableInput = !!(metrics.stableInput || (activeSession?.protocol === 'SSH' && isCompact && isTouchDevice));
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     const fullscreenWindow = activeTerminalTab ? workspace.querySelector(`.terminal-window[data-window="${CSS.escape(activeTerminalTab)}"]`) : null;
     const isFullscreenTerminalSurface = fullscreenElement === workspace || fullscreenElement === fullscreenWindow || workspace.classList.contains('custom-fullscreen');
@@ -1640,6 +1636,46 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     const viewportHeight = Math.round(Number(metrics.viewportHeight) || window.visualViewport?.height || window.innerHeight || 0);
     const offsetTop = Math.round(Number(metrics.offsetTop) || window.visualViewport?.offsetTop || 0);
     const keyboardOpen = !!metrics.keyboardOpen && inset >= 100;
+
+    // 移动端非全屏模式（compact + stable input）：父页面收缩 workspace
+    // 高度到 visible 区域底部，iframe 内部拿到正确容器后再做光标可见。
+    // 用 getBoundingClientRect 精确计算可用高度，避免 flex:1 撑满父容器。
+    // 不发送 freeze 消息——xterm.js 需要响应 layout-stabilize 正常 resize。
+    if (isStableInput && isCompact) {
+        if (keyboardOpen) {
+            const wsRect = workspace.getBoundingClientRect();
+            const usableHeight = Math.max(240, viewportHeight - wsRect.top);
+            workspace.style.flex = '0 0 auto';
+            workspace.style.height = `${usableHeight}px`;
+            workspace.style.maxHeight = `${usableHeight}px`;
+            workspace.style.minHeight = `${usableHeight}px`;
+            const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
+            if (frame) {
+                frame.style.height = '100%';
+                frame.style.maxHeight = '100%';
+            }
+            document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
+            document.documentElement.style.setProperty('--app-visual-vh', `${usableHeight}px`);
+            document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
+        } else {
+            workspace.style.flex = '';
+            workspace.style.height = '';
+            workspace.style.maxHeight = '';
+            workspace.style.minHeight = '';
+            workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
+                frame.style.height = '';
+                frame.style.maxHeight = '';
+            });
+            document.documentElement.style.setProperty('--app-keyboard-inset', '0px');
+            document.documentElement.style.setProperty('--app-visual-vh', '100vh');
+            document.documentElement.style.setProperty('--app-visual-offset-top', '0px');
+        }
+        workspace.classList.toggle('keyboard-open', keyboardOpen);
+        appKeyboardOpen = keyboardOpen;
+        // 通知 iframe 重新 fit，确保 xterm.js 按新容器尺寸计算 cols/rows
+        scheduleTerminalLayoutStabilize(keyboardOpen ? 'parent-keyboard-compact-open' : 'parent-keyboard-compact-close', { focus: false });
+        return;
+    }
 
     if (!keyboardOpen || !isFullscreenTerminalSurface) {
         if (!keyboardOpen) resetTerminalWorkspaceKeyboard();
@@ -1665,7 +1701,12 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
 function updateFullscreenKeyboardFromViewport() {
     const workspace = $('#terminalWorkspace');
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    if (!workspace || (!workspace.classList.contains('custom-fullscreen') && fullscreenElement !== workspace && !fullscreenElement?.classList?.contains('terminal-window')) || !window.visualViewport) return;
+    const isCompact = isCompactTerminalWorkspace();
+    const isKeyboardRelevant = workspace?.classList.contains('custom-fullscreen')
+        || fullscreenElement === workspace
+        || fullscreenElement?.classList?.contains('terminal-window')
+        || (isCompact && document.body.classList.contains('terminal-mode'));
+    if (!workspace || !isKeyboardRelevant || !window.visualViewport) return;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
     if (!appKeyboardOpen) appKeyboardBaseline = Math.max(appKeyboardBaseline || 0, layoutHeight, Math.round(window.visualViewport.height || 0));
     const baseline = Math.max(appKeyboardBaseline || 0, layoutHeight);
