@@ -126,6 +126,8 @@ function applyTheme(theme, { persist = false } = {}) {
         document.body?.classList.remove('theme-ripple-active');
     }, 460);
     root.setAttribute('data-theme', theme);
+    SMARTBAR_TEXT_IMAGE_CACHE.clear();
+    if (terminalTabs.length) renderTerminalSmartbar();
     if (persist) localStorage.setItem('zephyr-theme', theme);
     $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
     $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
@@ -892,6 +894,74 @@ function terminalInitials(name = '') {
     const raw = parts.length > 1 ? parts.slice(0, 2).map((x) => x[0]).join('') : (parts[0] || 'T').slice(0, 2);
     return raw.toUpperCase();
 }
+function escapeSvgText(str) { return String(str || '').replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m])); }
+const SMARTBAR_TEXT_IMAGE_CACHE = new Map();
+function smartbarTextThemeColor(kind = 'label') {
+    if (kind === 'plus') return '#0969da';
+    const theme = document.documentElement.getAttribute('data-theme') || getPreferredTheme();
+    if (kind === 'initials') return theme === 'dark' ? '#f0f6fc' : '#1f2328';
+    return theme === 'dark' ? '#f0f6fc' : '#24292f';
+}
+function smartbarTextMeasureContext(font) {
+    const canvas = smartbarTextMeasureContext.canvas || (smartbarTextMeasureContext.canvas = document.createElement('canvas'));
+    const ctx = canvas.getContext('2d');
+    ctx.font = font;
+    return ctx;
+}
+function measureSmartbarText(text, font) {
+    return smartbarTextMeasureContext(font).measureText(String(text || '')).width;
+}
+function fitSmartbarTextToWidth(text, maxWidth, font) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim() || 'Terminal';
+    if (measureSmartbarText(raw, font) <= maxWidth) return raw;
+    const chars = Array.from(raw);
+    let lo = 0, hi = chars.length;
+    while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (measureSmartbarText(`${chars.slice(0, mid).join('')}…`, font) <= maxWidth) lo = mid;
+        else hi = mid - 1;
+    }
+    return `${chars.slice(0, Math.max(1, lo)).join('')}…`;
+}
+function smartbarSvgDataUrl(svg) {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+function smartbarTextImage(text, { kind = 'label', maxWidth = 82, width = null, height = null, fontSize = 11, fontWeight = 700, letterSpacing = 0 } = {}) {
+    const fontFamily = '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    const canvasFont = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    const rawText = String(text || (kind === 'initials' ? 'T' : 'Terminal')).trim() || (kind === 'initials' ? 'T' : 'Terminal');
+    const fittedText = kind === 'label' ? fitSmartbarTextToWidth(rawText, maxWidth, canvasFont) : rawText;
+    const measuredWidth = Math.ceil(measureSmartbarText(fittedText, canvasFont));
+    const cssWidth = width || Math.min(maxWidth, Math.max(kind === 'initials' ? 42 : 8, measuredWidth + (kind === 'label' ? 2 : 0)));
+    const cssHeight = height || (kind === 'initials' ? 30 : 14);
+    const color = smartbarTextThemeColor(kind);
+    const cacheKey = [kind, fittedText, cssWidth, cssHeight, fontSize, fontWeight, letterSpacing, color].join('|');
+    const cached = SMARTBAR_TEXT_IMAGE_CACHE.get(cacheKey);
+    if (cached) return cached;
+    const scale = Math.min(3, Math.max(2, Math.ceil(window.devicePixelRatio || 1)));
+    const viewWidth = Math.ceil(cssWidth * scale);
+    const viewHeight = Math.ceil(cssHeight * scale);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${viewWidth}" height="${viewHeight}" viewBox="0 0 ${viewWidth} ${viewHeight}"><text x="50%" y="52%" text-anchor="middle" dominant-baseline="central" font-family="${fontFamily}" font-size="${fontSize * scale}" font-weight="${fontWeight}" letter-spacing="${letterSpacing * scale}" fill="${color}">${escapeSvgText(fittedText)}</text></svg>`;
+    const image = { src: smartbarSvgDataUrl(svg), width: cssWidth, height: cssHeight, text: fittedText };
+    SMARTBAR_TEXT_IMAGE_CACHE.set(cacheKey, image);
+    return image;
+}
+function smartbarPlusImage() {
+    const color = smartbarTextThemeColor('plus');
+    const cacheKey = `plus|${color}`;
+    const cached = SMARTBAR_TEXT_IMAGE_CACHE.get(cacheKey);
+    if (cached) return cached;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><path d="M30 12v36M12 30h36" stroke="${color}" stroke-width="7" stroke-linecap="round"/></svg>`;
+    const image = { src: smartbarSvgDataUrl(svg), width: 30, height: 30, text: '+' };
+    SMARTBAR_TEXT_IMAGE_CACHE.set(cacheKey, image);
+    return image;
+}
+function smartbarImageHtml(image, className) {
+    return `<span class="${className} smartbar-rendered-image" style="width:${image.width}px;height:${image.height}px;background-image:url(&quot;${escapeHtml(image.src)}&quot;)" aria-hidden="true"></span>`;
+}
+function smartbarSessionInitialsHtml(name) { return smartbarImageHtml(smartbarTextImage(terminalInitials(name), { kind: 'initials', maxWidth: 46, width: 46, height: 30, fontSize: 20, fontWeight: 900, letterSpacing: .2 }), 'smartbar-session-initials-img'); }
+function smartbarSessionLabelHtml(name) { return smartbarImageHtml(smartbarTextImage(name || 'Terminal', { kind: 'label', maxWidth: 82, height: 14, fontSize: 11, fontWeight: 700 }), 'smartbar-session-label-img'); }
+function smartbarPlusHtml() { return `<span class="smartbar-add-icon">${smartbarImageHtml(smartbarPlusImage(), 'smartbar-plus-img')}</span>`; }
 function touchTerminalSession(id) { const t = getTerminalSession(id); if (t) t.lastUsedAt = Date.now(); recentUseStack = [id, ...recentUseStack.filter((x) => x !== id)].filter((x) => getTerminalSession(x)); }
 function orderedVisibleIds() { return openOrderStack.filter((id) => visibleTerminalTabs().some((t) => t.id === id)); }
 function computeDefaultVisualLayout() {
@@ -1010,7 +1080,7 @@ function renderTerminalSmartbar() {
         seen.add(t.id);
         return true;
     });
-    const icon = (t, index) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" style="--dock-index:${index}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span><b>${escapeHtml(terminalInitials(t.name))}</b></span><strong>${escapeHtml(t.name || 'Terminal')}</strong></button>`;
+    const icon = (t, index) => `<button class="smartbar-session ${t.id === activeTerminalTab ? 'active' : ''} ${t.minimized ? 'minimized' : ''}" style="--dock-index:${index}" data-smartbar-tab="${t.id}" title="${escapeHtml(t.protocol)} · ${escapeHtml(t.name)} · ${escapeHtml(t.status)}" aria-label="${escapeHtml(t.name || 'Terminal')}"><span class="smartbar-session-icon"><span class="proto-dot ${terminalProtocolClass(t.protocol)}"></span>${smartbarSessionInitialsHtml(t.name)}</span><span class="smartbar-session-label" aria-hidden="true">${smartbarSessionLabelHtml(t.name || 'Terminal')}</span></button>`;
     const launchableConnections = connections.filter((c) => ['SSH', 'RDP', 'VNC'].includes(String(c.protocol || 'SSH').toUpperCase()));
     const picker = terminalSmartbarPickerOpen ? `
         <div class="smartbar-picker" role="dialog" aria-label="选择服务器连接">
@@ -1039,7 +1109,7 @@ function renderTerminalSmartbar() {
         <div class="smartbar-panel">
             <div class="smartbar-dock" aria-label="终端 Dock">
                 ${sessions.map(icon).join('') || '<span class="smartbar-empty">暂无会话</span>'}
-                <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接">＋</button>
+                <button class="smartbar-add" style="--dock-index:${sessions.length}" data-smartbar-add title="选择服务器连接" aria-label="选择服务器连接">${smartbarPlusHtml()}</button>
             </div>
         </div>`;
     requestAnimationFrame(() => {
@@ -1921,6 +1991,8 @@ function startSmartbarIconDrag(e, tabId) {
         const dx = ev.clientX - smartbarDragState.startX;
         const dy = ev.clientY - smartbarDragState.startY;
         if (Math.hypot(dx, dy) > 5) smartbarDragState.moved = true;
+        ev.preventDefault?.();
+        window.getSelection?.()?.removeAllRanges?.();
         schedulePaint();
         ghost.style.pointerEvents = 'none';
         const trashRect = trash.getBoundingClientRect();
@@ -1996,17 +2068,19 @@ function startSmartbarIconDrag(e, tabId) {
             { transform: 'translate(-50%, -50%) scale(.78)', opacity: 0 }
         ], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' }).onfinish = () => ghost.remove();
     };
-    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp, { once: true });
     window.addEventListener('pointercancel', onCancel, { once: true });
 }
 
 function startSmartbarPress(e, tabBtn) {
     if (!tabBtn || e.button === 2) return;
+    e.preventDefault?.();
+    window.getSelection?.()?.removeAllRanges?.();
     const tabId = tabBtn.dataset.smartbarTab;
     if (!tabId) return;
     const isDesktopLike = window.matchMedia?.('(hover: hover) and (pointer: fine)')?.matches;
-    const holdMs = isDesktopLike && e.pointerType !== 'touch' ? 260 : SMARTBAR_TOUCH_DRAG_HOLD_MS;
+    const holdMs = isDesktopLike && e.pointerType !== 'touch' ? 260 : 420;
     window.clearTimeout(smartbarPressState?.timer);
     smartbarPressState = {
         tabId,
@@ -2052,8 +2126,10 @@ function startSmartbarPress(e, tabBtn) {
         if (!smartbarPressState || ev.pointerId !== smartbarPressState.pointerId) return;
         const dx = ev.clientX - smartbarPressState.startX;
         const dy = ev.clientY - smartbarPressState.startY;
+        ev.preventDefault?.();
+        window.getSelection?.()?.removeAllRanges?.();
         if (!smartbarPressState.dragStarted && Math.hypot(dx, dy) > 24) {
-            // <2s 时移动只当作用户想滚动/点按，不提前进入拖拽。
+            beginDrag(ev);
             return;
         }
     };
@@ -2076,7 +2152,7 @@ function startSmartbarPress(e, tabBtn) {
         smartbarPressState?.tabBtn?.classList.remove('dock-press-armed');
         cleanup();
     };
-    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp, { once: true });
     window.addEventListener('pointercancel', onCancel, { once: true });
 }
@@ -2487,8 +2563,11 @@ function bindEvents() {
     });
     $('#sessionTabs').addEventListener('pointermove', (e) => {
         const dock = e.target.closest('.smartbar-dock');
-        if (dock) updateDockMagnification(e.clientX, dock, e.clientY);
-    });
+        if (dock) {
+            if (e.target.closest('[data-smartbar-tab]')) e.preventDefault?.();
+            updateDockMagnification(e.clientX, dock, e.clientY);
+        }
+    }, { passive: false });
     $('#sessionTabs').addEventListener('pointerleave', (e) => {
         resetDockMagnification(e.currentTarget.querySelector('.smartbar-dock'));
     });
