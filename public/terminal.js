@@ -6257,6 +6257,7 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     const activeRect = getMobileStableActiveLineRect();
     const viewportRect = el.getBoundingClientRect?.();
     const safeGap = Math.max(8, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 0.7));
+    const maxStep = Math.max(10, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 1.5));
     if (activeRect && viewportRect) {
         const visibleBottom = viewportRect.bottom - safeGap;
         const overlap = Math.ceil(activeRect.bottom - visibleBottom);
@@ -6265,7 +6266,14 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
             scheduleTerminalScrollbarUpdate();
             return false;
         }
-        const nextTop = Math.min(maxScroll, el.scrollTop + overlap + safeGap);
+        // Bad cursor/row rects can report huge overlaps during keyboard animation.
+        // Never let one keystroke yank the terminal by hundreds of pixels.
+        if (overlap > Math.max(maxStep * 3, viewportRect.height * 0.35)) {
+            scheduleTerminalScrollbarUpdate();
+            return false;
+        }
+        const delta = Math.min(maxStep, overlap + safeGap);
+        const nextTop = Math.min(maxScroll, el.scrollTop + delta);
         if (nextTop <= el.scrollTop + 1) {
             scheduleTerminalScrollbarUpdate();
             return false;
@@ -6295,7 +6303,8 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     }
     isProgrammaticTerminalScroll = true;
     try {
-        el.scrollTop = Math.min(maxScroll, el.scrollTop + Math.min(bottomDistance, getMobileStableSafeGap()));
+        const fallbackDelta = Math.min(maxStep, bottomDistance, getMobileStableSafeGap());
+        el.scrollTop = Math.min(maxScroll, el.scrollTop + fallbackDelta);
         if (shouldFollow) setTerminalAutoFollow(true, `${reason}:visible-fallback`);
     } finally {
         scheduleTerminalScrollbarUpdate();
@@ -6315,7 +6324,7 @@ function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = fal
         return false;
     }
     mobileImeLastSent = { text: payload, source, at: now };
-    sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: true, applyModifiers: false });
+    sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
     ensureMobileStableCursorVisible(source);
     return true;
 }
@@ -6328,7 +6337,7 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
         return false;
     }
     mobileImeLastControl = { seq: payload, source, at: now };
-    sendData(payload, { source, forceFollow: true, applyModifiers: false });
+    sendData(payload, { source, forceFollow: false, applyModifiers: false });
     ensureMobileStableCursorVisible(source);
     return true;
 }
