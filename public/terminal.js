@@ -6159,6 +6159,7 @@ function isMobileStableActualInputReason(reason = '') {
 }
 
 function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason = 'keyboard-inset') {
+    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
     const safeInset = Math.max(0, Math.round(Number(inset) || 0));
     mobileKeyboardInset = safeInset;
     document.documentElement.style.setProperty('--keyboard-inset', `${safeInset}px`);
@@ -6173,7 +6174,7 @@ function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason 
     if (isMobileStableActualInputReason(reason)) {
         requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
     } else {
-        scheduleTerminalScrollbarUpdate();
+        restoreMobileStableScrollTop(previousTop, reason);
     }
 }
 
@@ -6306,12 +6307,35 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     return true;
 }
 
+function restoreMobileStableScrollTop(previousTop = 0, reason = 'restore-scroll') {
+    if (!isMobileStableInputMode() || !Number.isFinite(previousTop)) return;
+    const target = Math.max(0, previousTop);
+    const restore = () => {
+        if (!isMobileStableActualInputReason(reason)) {
+            isProgrammaticTerminalScroll = true;
+            try {
+                const primary = getTerminalScrollElement();
+                if (primary) primary.scrollTop = target;
+                if (wtermWrapper && wtermWrapper !== primary) wtermWrapper.scrollTop = target;
+            } finally {
+                requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+            }
+        }
+        scheduleTerminalScrollbarUpdate();
+    };
+    restore();
+    requestAnimationFrame(restore);
+    window.setTimeout(restore, 80);
+    window.setTimeout(restore, 180);
+    window.setTimeout(restore, 360);
+}
+
 function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (!isMobileStableInputMode()) return false;
     setupMobileStableImeProxy();
     if (!mobileImeProxy) return false;
     const el = getTerminalScrollElement();
-    const previousTop = el ? el.scrollTop : 0;
+    const previousTop = wtermWrapper?.scrollTop ?? el?.scrollTop ?? 0;
     mobileStableLastBottomIntent = !el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
     keyboardFocusLikely = true;
     keyboardViewportBaseline = Math.max(getKeyboardBaselineHeight(), keyboardViewportBaseline || 0);
@@ -6321,7 +6345,7 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
         try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
     }
     // Focus/keyboard open alone must not move terminal content; real input handlers scroll if needed.
-    scheduleTerminalScrollbarUpdate();
+    restoreMobileStableScrollTop(previousTop, reason);
     return true;
 }
 
