@@ -835,6 +835,14 @@ window.addEventListener('message', (e) => {
         );
         logTerminalLayoutDiagnostics('parent-layout-stabilize-message', { payload: e.data });
         if (keyboardRelated) {
+            // Mobile stable mode: keyboard open/close is only bottom clipping in the parent.
+            // Do not resize, repair, flush, or scroll WTerm here; those cause the black blank
+            // area and the up/down jump at the bottom. Real input paths call
+            // ensureMobileStableCursorVisible() and will scroll only if the cursor is covered.
+            if (isMobileStableInputMode()) {
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
             stabilizeWTermAfterViewportOnlyChange(`keyboard-related:${reason}`);
             scheduleTerminalScrollbarUpdate();
             window.setTimeout(() => repairOversizedWTermRows(`keyboard-related:${reason}`, { force: false }), 900);
@@ -6145,7 +6153,13 @@ function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason 
     updateTerminalInputPanelMetrics();
     document.documentElement.classList.remove('viewport-updating');
     setStableViewportHeight();
-    requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
+    // Keyboard open/close alone should not move terminal content. Only real input handlers
+    // call ensureMobileStableCursorVisible(), and only then do the minimum scroll needed.
+    if (/mobile-ime|command-box|keypad|:sent-visible|:sent|beforeinput|composition|backspace|enter/.test(String(reason || ''))) {
+        requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
+    } else {
+        scheduleTerminalScrollbarUpdate();
+    }
 }
 
 function getMobileStableSafeGap() {
@@ -6705,11 +6719,9 @@ function updateViewportInsets() {
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
         if (!isMobileStableInputMode()) {
-            requestTerminalAutoFollow('keyboard-final-settled');
+            requestTerminalAutoFollow(keyboardOpen ? 'keyboard-final-settled' : 'keyboard-close-settled');
         } else if (wasReadingHistory) {
             lockMobileTerminalAutoFollow('keyboard-final-settled', 1600);
-        } else if (keyboardOpen && wasAtBottom) {
-            ensureMobileStableCursorVisible('keyboard-final-settled');
         }
         scheduleTerminalScrollbarUpdate();
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-final-settled', 360);
