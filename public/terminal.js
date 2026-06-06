@@ -251,6 +251,10 @@ let mobileImeProxy = null;
 let mobileImeComposing = false;
 let mobileStableLastBottomIntent = true;
 let mobileStableOrientationResizeUntil = 0;
+let mobileTerminalAutoFollowLockUntil = 0;
+let mobileTerminalAutoFollowLockReason = '';
+let mobileStableKeyboardGridRepairTimers = [];
+let mobileStableKeyboardOpenGrid = null;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -305,6 +309,11 @@ function enterMobileTerminalSelectionMode(reason = 'selection') {
         }
     }
     document.documentElement.classList.add('terminal-selection-mode');
+    const scrollEl = getTerminalScrollElement();
+    if (isMobileStableInputMode() && scrollEl && !isTerminalAtBottom(scrollEl, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) {
+        setTerminalAutoFollow(false, `${reason}:selection-history`);
+        lockMobileTerminalAutoFollow(`${reason}:selection-history`, 3200);
+    }
     logTerminalCopyDiagnostics(wasActive ? 'selection-mode-keep' : 'selection-mode-enter', { reason });
 }
 
@@ -1314,6 +1323,7 @@ function shouldIgnoreMobileKeyboardResizeReason(reason = '') {
 }
 
 function shouldSuppressTerminalGridResize(reason = '') {
+    if (runWithMobileStableResizeBypass.active) return false;
     if (shouldIgnoreMobileKeyboardResizeReason(reason)) return true;
     if (!isTouchKeyboardDevice()) return false;
     const label = String(reason);
@@ -1545,6 +1555,16 @@ function syncWTermGridToLastPty(reason = 'sync-grid-to-pty') {
     return updateWTermLocalGridSize(lastSentTerminalSize.cols, lastSentTerminalSize.rows, reason);
 }
 
+function runWithMobileStableResizeBypass(callback) {
+    const previous = runWithMobileStableResizeBypass.active;
+    runWithMobileStableResizeBypass.active = true;
+    try {
+        return callback?.();
+    } finally {
+        runWithMobileStableResizeBypass.active = previous;
+    }
+}
+
 function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') {
     freezeTerminalViewportResize(reason);
     syncWTermGridToLastPty(`${reason}:keep-pty-size`);
@@ -1556,10 +1576,17 @@ function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') 
 function scheduleKeyboardCloseFit(reason = 'keyboard-close-fit', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
     if (isMobileStableInputMode()) {
         freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
+        scheduleMobileStableKeyboardGridRepair(reason);
         window.clearTimeout(scheduleKeyboardCloseFit._mobileTimer);
         scheduleKeyboardCloseFit._mobileTimer = window.setTimeout(() => {
-            ensureMobileStableCursorVisible(`${reason}:visible-only`);
-            scheduleTerminalScrollbarUpdate();
+            restoreMobileStableKeyboardGrid(`${reason}:visible-only`);
+            if (isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory()) {
+                lockMobileTerminalAutoFollow(`${reason}:history-preserved`, 1600);
+                scheduleTerminalScrollbarUpdate();
+            } else {
+                ensureMobileStableCursorVisible(`${reason}:visible-only`);
+                scheduleTerminalScrollbarUpdate();
+            }
         }, Math.max(80, delay));
         return;
     }
@@ -5879,6 +5906,30 @@ function isTerminalUserReadingHistory() {
     return !terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
 }
 
+function lockMobileTerminalAutoFollow(reason = 'mobile-history-lock', duration = 1800) {
+    if (!isMobileStableInputMode()) return;
+    const el = getTerminalScrollElement();
+    if (!el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) return;
+    const lockDuration = Math.max(300, Math.min(6000, Number(duration) || 1800));
+    mobileTerminalAutoFollowLockUntil = Math.max(mobileTerminalAutoFollowLockUntil || 0, Date.now() + lockDuration);
+    mobileTerminalAutoFollowLockReason = String(reason || 'mobile-history-lock');
+    terminalUserScrolledAway = true;
+    terminalAutoFollowEnabled = false;
+    terminalContainer?.classList.toggle('terminal-follow-paused', true);
+    terminalContainer?.classList.toggle('terminal-following', false);
+    logTerminalScrollDiagnostics('auto-follow:mobile-lock-set', {
+        reason: mobileTerminalAutoFollowLockReason,
+        lockDuration,
+        until: mobileTerminalAutoFollowLockUntil,
+    });
+}
+
+function isMobileTerminalAutoFollowLocked() {
+    return isMobileStableInputMode()
+        && Date.now() < (mobileTerminalAutoFollowLockUntil || 0)
+        && !isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+}
+
 function setTerminalAutoFollow(enabled, reason = 'unknown') {
     terminalAutoFollowEnabled = !!enabled;
     terminalUserScrolledAway = !terminalAutoFollowEnabled;
@@ -5899,6 +5950,7 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
         terminalLastUserScrollAt = Date.now();
         mobileStableLastBottomIntent = false;
         setTerminalAutoFollow(false, reason);
+        lockMobileTerminalAutoFollow(reason, 2200);
     }
     return terminalAutoFollowEnabled;
 }
@@ -5910,6 +5962,8 @@ function scrollTerminalToBottom(reason = 'scroll-bottom') {
     try {
         if (term?._zephyrOriginalScrollToBottom) term._zephyrOriginalScrollToBottom();
         else el.scrollTop = getTerminalMaxScroll(el);
+        mobileTerminalAutoFollowLockUntil = 0;
+        mobileTerminalAutoFollowLockReason = '';
         setTerminalAutoFollow(true, reason);
     } finally {
         scheduleTerminalScrollbarUpdate();
@@ -5955,6 +6009,11 @@ function scheduleTerminalScrollbarUpdate() {
 function requestTerminalAutoFollow(reason = 'auto-follow') {
     const el = getTerminalScrollElement();
     if (!el) return;
+    if (isMobileTerminalAutoFollowLocked()) {
+        logTerminalScrollDiagnostics('auto-follow:mobile-history-transient-locked', { reason, lockReason: mobileTerminalAutoFollowLockReason });
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     if (isMobileStableInputMode() && isTerminalUserReadingHistory()) {
         logTerminalScrollDiagnostics('auto-follow:mobile-history-locked', { reason });
         scheduleTerminalScrollbarUpdate();
@@ -6051,6 +6110,10 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     if (!el) return false;
     const label = String(reason || '');
     const actualInputReason = /mobile-ime|command-box|keypad|:sent-visible|:sent|beforeinput|composition|backspace|enter/.test(label);
+    if (!actualInputReason && isMobileTerminalAutoFollowLocked()) {
+        scheduleTerminalScrollbarUpdate();
+        return false;
+    }
     if (!actualInputReason && isTerminalUserReadingHistory()) {
         scheduleTerminalScrollbarUpdate();
         return false;
@@ -6061,7 +6124,7 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
         scheduleTerminalScrollbarUpdate();
         return false;
     }
-    if (!shouldFollow && hasLiveTerminalSelection()) return false;
+    if ((isMobileTerminalAutoFollowLocked() || hasLiveTerminalSelection() || mobileTerminalSelectionMode) && !actualInputReason) return false;
     const maxScroll = getTerminalMaxScroll(el);
     if (maxScroll <= 0) {
         scheduleTerminalScrollbarUpdate();
@@ -6098,8 +6161,83 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (el && !mobileStableLastBottomIntent) el.scrollTop = previousTop;
     markKeyboardFocusActive();
     // Focus/keyboard open alone must not pull a user out of history. Actual input handlers call ensureMobileStableCursorVisible().
-    if (!isTerminalUserReadingHistory()) ensureMobileStableCursorVisible(reason);
+    if (!isMobileTerminalAutoFollowLocked() && !isTerminalUserReadingHistory()) ensureMobileStableCursorVisible(reason);
     return true;
+}
+
+function rememberMobileStableKeyboardGrid(reason = 'mobile-keyboard-open-grid') {
+    if (!isMobileStableInputMode() || !term) return null;
+    const cols = Math.floor(Number(term.cols ?? term.bridge?.getCols?.() ?? lastSentTerminalSize.cols ?? 0));
+    const rows = Math.floor(Number(term.rows ?? term.bridge?.getRows?.() ?? lastSentTerminalSize.rows ?? 0));
+    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols < 20 || rows < 2) return null;
+    mobileStableKeyboardOpenGrid = {
+        cols,
+        rows,
+        sentCols: lastSentTerminalSize.cols || cols,
+        sentRows: lastSentTerminalSize.rows || rows,
+        at: Date.now(),
+        reason,
+    };
+    logTerminalLayoutDiagnostics('mobile-stable-grid:remember', mobileStableKeyboardOpenGrid);
+    return mobileStableKeyboardOpenGrid;
+}
+
+function restoreMobileStableKeyboardGrid(reason = 'mobile-stable-grid-restore') {
+    if (!isMobileStableInputMode() || !term || !wtermWrapper || !mobileStableKeyboardOpenGrid) return false;
+    if (Date.now() < mobileStableOrientationResizeUntil) return false;
+    const target = mobileStableKeyboardOpenGrid;
+    const nextCols = Math.floor(Number(target.cols || target.sentCols));
+    const nextRows = Math.floor(Number(target.rows || target.sentRows));
+    if (!Number.isFinite(nextCols) || !Number.isFinite(nextRows) || nextCols < 20 || nextRows < 2) return false;
+    const currentCols = Math.floor(Number(term.cols ?? term.bridge?.getCols?.() ?? 0));
+    const currentRows = Math.floor(Number(term.rows ?? term.bridge?.getRows?.() ?? 0));
+    const sentChanged = lastSentTerminalSize.cols !== nextCols || lastSentTerminalSize.rows !== nextRows;
+    const gridChanged = Math.abs(currentCols - nextCols) > 0 || Math.abs(currentRows - nextRows) > 0;
+    if (!gridChanged && !sentChanged) return false;
+
+    const el = getTerminalScrollElement();
+    const preserveHistory = Boolean(el && (isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory()));
+    const previousTop = preserveHistory ? el.scrollTop : 0;
+    const shouldFollow = !preserveHistory && (terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD));
+    if (gridChanged) runWithMobileStableResizeBypass(() => updateWTermLocalGridSize(nextCols, nextRows, `${reason}:local`));
+    if (sentChanged && wsConnection?.readyState === WebSocket.OPEN && isConnected) {
+        lastSentTerminalSize = { cols: nextCols, rows: nextRows };
+        wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
+    }
+    requestAnimationFrame(() => {
+        normalizeWTermContainerLayout(`${reason}:raf`);
+        if (preserveHistory && el) {
+            isProgrammaticTerminalScroll = true;
+            try { el.scrollTop = previousTop; }
+            finally { requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; }); }
+            lockMobileTerminalAutoFollow(`${reason}:preserve-history`, 1800);
+        } else if (shouldFollow) {
+            requestTerminalAutoFollow(`${reason}:follow`);
+        } else {
+            scheduleTerminalScrollbarUpdate();
+        }
+    });
+    logTerminalLayoutDiagnostics('mobile-stable-grid:restored', {
+        reason,
+        previousCols: currentCols,
+        previousRows: currentRows,
+        nextCols,
+        nextRows,
+        sentChanged,
+        gridChanged,
+        preserveHistory,
+    });
+    return true;
+}
+
+function scheduleMobileStableKeyboardGridRepair(reason = 'mobile-stable-grid-repair') {
+    if (!isMobileStableInputMode()) return;
+    mobileStableKeyboardGridRepairTimers.forEach((timer) => window.clearTimeout(timer));
+    mobileStableKeyboardGridRepairTimers = [80, 220, 520, 900].map((delay) => window.setTimeout(() => {
+        restoreMobileStableKeyboardGrid(`${reason}:phase-${delay}`);
+        requestInitialMobileRenderFlush(`${reason}:render-${delay}`);
+        scheduleTerminalScrollbarUpdate();
+    }, delay));
 }
 
 function setupMobileStableImeProxy() {
@@ -6318,12 +6456,15 @@ function applyKeyboardFallbackAvoidance() {
     updateViewportInsets._lastSignature = signature;
     updateViewportInsets._lastViewportHeight = metrics.viewportHeight;
     updateViewportInsets._lastKeyboardInset = metrics.keyboardInset;
+    const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
+    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
     mobileKeyboardOpen = true;
     keyboardFallbackActive = true;
     keyboardFallbackAppliedAt = performance.now();
     notifyParentKeyboardMetrics(metrics);
     applyMobileStableKeyboardInset(metrics.keyboardInset, true, 'keyboard-fallback-applied');
-    requestTerminalAutoFollow('keyboard-fallback-applied');
+    if (wasReadingHistory) lockMobileTerminalAutoFollow('keyboard-fallback-applied', 1800);
+    if (wasAtBottom && !wasReadingHistory) requestTerminalAutoFollow('keyboard-fallback-applied');
     scheduleTerminalScrollbarUpdate();
     if (!isMobileStableInputMode()) scheduleTerminalResize('keyboard-fallback-applied', 650);
     return true;
@@ -6366,6 +6507,8 @@ function updateViewportInsets() {
     const wasKeyboardOpen = mobileKeyboardOpen;
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
+    const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
+    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
     const metrics = getViewportKeyboardMetrics();
     const keyboardOpen = metrics.keyboardInset >= 80 && (mobileKeyboardUserControlled || isMobileStableInputMode());
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
@@ -6381,6 +6524,8 @@ function updateViewportInsets() {
     mobileKeyboardOpen = keyboardOpen;
     if (keyboardOpen !== wasKeyboardOpen) {
         mobileKeyboardResizeFreezeUntil = Date.now() + 1200;
+        if (keyboardOpen) rememberMobileStableKeyboardGrid('keyboard-open-start');
+        else restoreMobileStableKeyboardGrid('keyboard-close-start');
         stabilizeWTermAfterViewportOnlyChange(keyboardOpen ? 'keyboard-open-start' : 'keyboard-close-start');
     }
     cancelAnimationFrame(updateViewportInsets._raf);
@@ -6394,7 +6539,13 @@ function updateViewportInsets() {
             layoutHeight: Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
             offsetTop: Math.round(viewport?.offsetTop || 0)
         });
-        requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
+        if (!isMobileStableInputMode()) {
+            requestTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled');
+        } else if (wasReadingHistory) {
+            lockMobileTerminalAutoFollow(keyboardOpen ? 'keyboard-open-settled' : 'keyboard-close-settled', 1800);
+        } else if (keyboardOpen && wasAtBottom) {
+            ensureMobileStableCursorVisible('keyboard-open-settled');
+        }
         scheduleTerminalScrollbarUpdate();
         // 移动端键盘开关只改变 CSS 可视区域；等键盘关闭后再刷新 WTerm 视图，避免远端内容重排出空行/截断。
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-close-settled', 650);
@@ -6402,7 +6553,13 @@ function updateViewportInsets() {
     });
     window.clearTimeout(updateViewportInsets._settleTimer);
     updateViewportInsets._settleTimer = window.setTimeout(() => {
-        requestTerminalAutoFollow('keyboard-final-settled');
+        if (!isMobileStableInputMode()) {
+            requestTerminalAutoFollow('keyboard-final-settled');
+        } else if (wasReadingHistory) {
+            lockMobileTerminalAutoFollow('keyboard-final-settled', 1600);
+        } else if (keyboardOpen && wasAtBottom) {
+            ensureMobileStableCursorVisible('keyboard-final-settled');
+        }
         scheduleTerminalScrollbarUpdate();
         if (!keyboardOpen) scheduleKeyboardCloseFit('keyboard-final-settled', 360);
     }, keyboardOpen ? 720 : 360);
@@ -6443,6 +6600,9 @@ function finalizeKeyboardClose({ force = false } = {}) {
         return;
     }
 
+    const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
+    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
+    if (mobileKeyboardOpen && !mobileStableKeyboardOpenGrid) rememberMobileStableKeyboardGrid('keyboard-close-final-before');
     updateViewportInsets._lastSignature = '';
     mobileKeyboardOpen = false;
     if (force) keyboardFocusLikely = false;
@@ -6460,6 +6620,8 @@ function finalizeKeyboardClose({ force = false } = {}) {
         offsetTop: Math.round(window.visualViewport?.offsetTop || 0),
     });
     scheduleTerminalScrollbarUpdate();
+    if (wasReadingHistory) lockMobileTerminalAutoFollow('keyboard-close-final', 1800);
+    else if (wasAtBottom && !isMobileStableInputMode()) requestTerminalAutoFollow('keyboard-close-final');
     // 键盘完全收起后再允许一次稳定 resize，避免恢复旧 viewport/buffer 高度。
     scheduleKeyboardCloseFit('keyboard-close-final', 500);
 }
@@ -6699,6 +6861,16 @@ function patchWTermScrollBehavior() {
         term._scrollToBottom = () => {
             const fromRender = term._zephyrRenderingDepth > 0;
             const alreadyAtBottom = originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom();
+            const lockedAwayFromBottom = !alreadyAtBottom && (
+                isMobileTerminalAutoFollowLocked()
+                || mobileTerminalSelectionMode
+                || hasLiveTerminalSelection()
+                || (isMobileStableInputMode() && !terminalAutoFollowEnabled)
+            );
+            if (lockedAwayFromBottom) {
+                scheduleTerminalScrollbarUpdate();
+                return;
+            }
             if (!fromRender && !alreadyAtBottom && !terminalAutoFollowEnabled) {
                 scheduleTerminalScrollbarUpdate();
                 return;
@@ -6720,7 +6892,8 @@ function patchWTermScrollBehavior() {
 
     if (originalWrite) {
         term.write = (data) => {
-            const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            const blockedByHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory() || mobileTerminalSelectionMode || hasLiveTerminalSelection();
+            const shouldFollow = !blockedByHistory && (terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom()));
             term._zephyrShouldFollowAfterRender = shouldFollow;
             const result = originalWrite(data);
             requestAnimationFrame(() => snapshotWTermVisualLines('write-after-render'));
@@ -6805,8 +6978,9 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
 function writeTerminalData(data = '') {
     if (!term?.write) return;
     updateTerminalMouseTrackingFromData(data);
-    const wasAtBottom = Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
-    const shouldFollow = terminalAutoFollowEnabled || wasAtBottom;
+    const historyLocked = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory() || mobileTerminalSelectionMode || hasLiveTerminalSelection();
+    const wasAtBottom = !historyLocked && Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
+    const shouldFollow = !historyLocked && (terminalAutoFollowEnabled || wasAtBottom);
     logTerminalScrollDiagnostics('terminal-data:before-write-xterm-follow', {
         length: String(data).length,
         wasAtBottom,
@@ -7968,11 +8142,17 @@ async function initWTerm(connectionToken = activeConnectionToken, { followOnConn
     applyTerminalFontSize(terminalFontSize, { persist: false });
     patchWTermScrollBehavior();
     restoreMobileWTermNativeInput();
+    if (isMobileStableInputMode()) {
+        rememberMobileStableKeyboardGrid('init-wterm-grid');
+    }
 
     // 滚动逻辑使用 @wterm/dom 官方实现；项目层只在 iframe/页面可见且尺寸稳定时调用 term.resize，并同步 ssh2 setWindow。
     terminalResizeCleanup = setupStableTerminalResizeObserver();
     scheduleTerminalResize('initial-visible-resize', 80);
     setupTerminalScrollHooks({ followOnConnect });
+    if (isMobileStableInputMode()) {
+        [180, 520].forEach((delay) => window.setTimeout(() => rememberMobileStableKeyboardGrid(`initial-visible-grid:${delay}`), delay));
+    }
 }
 
 // ---------- WebSocket 连接 ----------
@@ -8047,8 +8227,14 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                                 const measured = getInitialTerminalSize();
                                 const sameAsCurrentView = Math.abs(measured.cols - readyCols) <= 1 && Math.abs(measured.rows - readyRows) <= 1;
                                 const attachedReady = !!msg.attached;
+                                const mobileStableReady = isMobileStableInputMode();
                                 lastSentTerminalSize = { cols: readyCols, rows: readyRows };
-                                if (attachedReady || sameAsCurrentView) resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty');
+                                if (mobileStableReady) {
+                                    runWithMobileStableResizeBypass(() => resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty'));
+                                    rememberMobileStableKeyboardGrid('ready-pty');
+                                } else if (attachedReady || sameAsCurrentView) {
+                                    resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty');
+                                }
                                 rememberTerminalFitSnapshot('ready-pty');
                             }
                         }
@@ -8163,6 +8349,7 @@ if (typeof visualViewport !== 'undefined') {
 
 window.addEventListener('orientationchange', () => {
     mobileStableOrientationResizeUntil = Date.now() + 1800;
+    mobileStableKeyboardOpenGrid = null;
     setTimeout(() => {
         setStableViewportHeight({ force: true });
         handleKeyboardHide();
