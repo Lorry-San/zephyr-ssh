@@ -6755,7 +6755,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
         min-height: 96px;
         height: auto !important;
         max-height: none !important;
-        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px) + var(--keyboard-inset, 0px));
+        /* NO margin-bottom here. Keyboard is a pure overlay — the terminal scroll container
+           uses scroll-padding-bottom to keep the cursor visible above the keyboard. */
+        margin: 6px;
         transform: none !important;
         transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
@@ -6769,10 +6771,17 @@ body.smartbar-trash-hover .smartbar-trash-target {
         overflow-y: auto !important;
         overflow-x: hidden !important;
         -webkit-overflow-scrolling: touch;
-        scroll-padding-bottom: max(24px, env(safe-area-inset-bottom));
         overscroll-behavior: contain !important;
         transform: none !important;
         will-change: auto !important;
+    }
+
+    /* Keyboard is pure overlay. Extra padding-bottom on the scroll container
+       increases scrollHeight so when scrolled to bottom, the cursor is naturally
+       above the keyboard. No layout changes, no margin tricks. */
+    html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper,
+    html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper.wterm {
+        padding-bottom: calc(12px + var(--keyboard-inset, 0px));
     }
 
     html.mobile-stable-input .terminal-input-panel {
@@ -6783,9 +6792,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
         z-index: 20;
         order: 1;
         flex: 0 0 auto;
-        padding-bottom: 0;
+        padding-bottom: max(4px, env(safe-area-inset-bottom));
         transform: none !important;
-        transition: background-color 0.2s ease, border-color 0.2s ease !important;
+        transition: none !important;
         will-change: auto;
         box-shadow: none;
     }
@@ -6858,7 +6867,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
-        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px) + var(--keyboard-inset, 0px)) !important;
+        /* NO margin-bottom keyboard avoidance — keyboard is pure overlay. */
         transform: none !important;
     }
 
