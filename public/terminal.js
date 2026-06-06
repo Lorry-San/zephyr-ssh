@@ -59,7 +59,7 @@ const disconnectBtn = $('#disconnectBtn');
 const themeToggle = $('#themeToggle');
 const wtermThemeToggle = $('#wtermThemeToggle');
 const cmdInput = $('#cmdInput');
-const terminalInputPanel = $('#terminalBottomBar');  // mobile: bottom bar with icons + aux keys
+const terminalInputPanel = $('#terminalBottomBar');  // mobile: bottom aux-key bar
 const cmdSendBtn = $('#cmdSendBtn');
 const copyBtn = $('#copyBtn');
 const pasteBtn = $('#pasteBtn');
@@ -157,7 +157,7 @@ const dockerLogPauseBtn = $('#dockerLogPauseBtn');
 const dockerLogDownloadBtn = $('#dockerLogDownloadBtn');
 const dockerLogCloseBtn = $('#dockerLogCloseBtn');
 const dockerContainerLog = $('#dockerContainerLog');
-const toolbar = $('#bottomIconRow');  // mobile: scrollable icon row
+const toolbar = topbarActions;  // mobile: original CSS-icon actions row
 
 // ---------- 全局变量 ----------
 let term = null;
@@ -7787,33 +7787,6 @@ if (mobileAuxKeys) {
         if (modifierState.alt) {
             modifierState.alt = false;
             document.querySelectorAll('.modifier[data-key="alt"]').forEach(b => b.classList.remove('active'));
-        }
-    });
-}
-
-// ── Bottom icon row: mirror topbar-actions on mobile ──
-const bottomIconRow = $('#bottomIconRow');
-if (bottomIconRow) {
-    bottomIconRow.addEventListener('click', (e) => {
-        const btn = e.target.closest('.aux-icon');
-        if (!btn) return;
-        const action = btn.dataset.action;
-        // Map actions to existing button click triggers
-        const actionMap = {
-            file: fileBtn,
-            stats: infoBtn,
-            docker: dockerBtn,
-            snippet: snippetBtn,
-            keyboard: shortcutBtn,
-            copy: copyBtn,
-            paste: pasteBtn,
-            theme: themeToggle,
-            reconnect: reconnectBtn,
-            disconnect: disconnectBtn,
-        };
-        const target = actionMap[action];
-        if (target && typeof target.click === 'function') {
-            target.click();
         }
     });
 }

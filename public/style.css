@@ -2563,46 +2563,9 @@ html.keyboard-open .terminal-page {
     border-bottom: 1px solid var(--border);
 }
 
-/* ── Bottom bar: icon row + aux keys, fixed above keyboard on mobile ── */
+/* ── Bottom bar: auxiliary keys, fixed above keyboard on mobile ── */
 .terminal-bottom-bar {
     display: none;
-}
-
-/* ===== Bottom icon row (mobile) ===== */
-.bottom-icon-row {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
-    padding: 5px 8px;
-    background: var(--surface);
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-x: contain;
-}
-.bottom-icon-row::-webkit-scrollbar { height: 0; }
-.aux-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 38px;
-    height: 34px;
-    padding: 0 8px;
-    font-size: 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg);
-    cursor: pointer;
-    white-space: nowrap;
-    flex: 0 0 auto;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-    transition: background 0.1s;
-}
-.aux-icon:active {
-    background: var(--accent);
-    transform: scale(0.94);
 }
 
 /* ===== 辅助工具栏 (desktop) ===== */
@@ -6793,6 +6756,11 @@ body.smartbar-trash-hover .smartbar-trash-target {
     html.mobile-stable-input .terminal-topbar {
         flex: 0 0 auto;
     }
+    html.mobile-stable-input {
+        --mobile-bottom-actions-height: 46px;
+        --mobile-aux-keys-height: 44px;
+    }
+
 
     html.mobile-stable-input .terminal-container {
         flex: 1 1 auto !important;
@@ -6801,7 +6769,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         max-height: none !important;
         margin: 6px;
         /* Reserve space for the fixed bottom bar at the bottom */
-        margin-bottom: calc(6px + var(--terminal-input-panel-height, 72px));
+        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px) + var(--keyboard-inset, 0px));
         transform: none !important;
         transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
@@ -6825,7 +6793,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
        above the keyboard. No layout changes, no margin tricks. */
     html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper,
     html.mobile-stable-input.keyboard-open .terminal-container .wterm-wrapper.wterm {
-        padding-bottom: calc(8px + var(--keyboard-inset, 0px));
+        padding-bottom: 8px;
         transition: padding-bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
@@ -6834,14 +6802,14 @@ body.smartbar-trash-hover .smartbar-trash-target {
         display: block;
         order: 1;
     }
-    /* ── Bottom bar: icon row + aux keys, fixed above keyboard ── */
+    /* ── Bottom aux keys: fixed directly above the system keyboard ── */
     html.mobile-stable-input .terminal-bottom-bar {
         display: block;
         position: fixed;
         left: 0;
         right: 0;
         bottom: var(--keyboard-inset, 0px);
-        z-index: 20;
+        z-index: 21;
         padding-bottom: max(2px, env(safe-area-inset-bottom));
         transform: none !important;
         transition: bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
@@ -6855,14 +6823,37 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform: none !important;
     }
 
+    /* Reuse the original topbar CSS-icon actions row; move it above the aux keys on mobile. */
+    html.mobile-stable-input .terminal-topbar .topbar-actions {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: calc(var(--keyboard-inset, 0px) + var(--terminal-input-panel-height, 44px));
+        z-index: 22;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 8px;
+        margin: 0;
+        padding: 6px 8px;
+        flex-basis: auto;
+        order: unset;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.12);
+        transform: none !important;
+        transition: bottom 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
     /* ── Mobile auxiliary keys: compact horizontal bar, always on top ── */
     html.mobile-stable-input .mobile-aux-keys {
         display: flex;
         flex-wrap: nowrap;
         gap: 4px;
+        min-height: var(--mobile-aux-keys-height, 44px);
         padding: 5px 8px;
         background: var(--surface);
-        border-bottom: 1px solid var(--border);
+        border-top: 1px solid var(--border);
         overflow-x: auto;
         overflow-y: hidden;
         scrollbar-width: none;
@@ -6917,11 +6908,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
         background: var(--border);
         margin: 4px 2px;
         flex-shrink: 0;
-    }
-
-    html.mobile-stable-input.keyboard-open .terminal-bottom-bar {
-        bottom: var(--keyboard-inset, 0px);
-        transform: none !important;
     }
 
     /* ── WTerm mobile grid optimizations ── */
@@ -7023,7 +7009,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
-        margin-bottom: calc(6px + var(--terminal-input-panel-height, 72px)) !important;
+        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px) + var(--keyboard-inset, 0px)) !important;
     }
 
     html.mobile-stable-input .terminal-container .wterm-wrapper,
