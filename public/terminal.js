@@ -6129,6 +6129,21 @@ function getMobileStableSafeGap() {
     return Math.max(18, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 1.5));
 }
 
+function getMobileStableActiveLineRect() {
+    if (!wtermWrapper) return null;
+    const cursor = wtermWrapper.querySelector('.cursor, .term-cursor, .terminal-cursor, [data-cursor="true"], [data-cursor]');
+    const cursorRect = cursor?.getBoundingClientRect?.();
+    if (cursorRect?.height && cursorRect?.width) return cursorRect;
+    const rows = Array.from(wtermWrapper.querySelectorAll('.term-row, .term-scrollback-row'));
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+        const row = rows[i];
+        if (!String(row.textContent || '').trim()) continue;
+        const rect = row.getBoundingClientRect?.();
+        if (rect?.height && rect.bottom > 0) return rect;
+    }
+    return null;
+}
+
 function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     if (!isMobileStableInputMode()) return false;
     const el = getTerminalScrollElement();
@@ -6150,8 +6165,45 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
         return false;
     }
     if ((isMobileTerminalAutoFollowLocked() || hasLiveTerminalSelection() || mobileTerminalSelectionMode) && !actualInputReason) return false;
+
     const maxScroll = getTerminalMaxScroll(el);
     if (maxScroll <= 0) {
+        scheduleTerminalScrollbarUpdate();
+        return false;
+    }
+
+    // Termius-like rule: keyboard opening must not yank visible text upward when the
+    // active prompt is already visible. Only consume bottom blank space. Scroll only
+    // when the active cursor/last text line would be actually covered by the bottom bars.
+    const activeRect = getMobileStableActiveLineRect();
+    const viewportRect = el.getBoundingClientRect?.();
+    const safeGap = Math.max(8, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 0.7));
+    if (activeRect && viewportRect) {
+        const visibleBottom = viewportRect.bottom - safeGap;
+        const overlap = Math.ceil(activeRect.bottom - visibleBottom);
+        if (overlap <= 0) {
+            if (shouldFollow && isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) setTerminalAutoFollow(true, `${reason}:already-visible`);
+            scheduleTerminalScrollbarUpdate();
+            return false;
+        }
+        const nextTop = Math.min(maxScroll, el.scrollTop + overlap + safeGap);
+        if (nextTop <= el.scrollTop + 1) {
+            scheduleTerminalScrollbarUpdate();
+            return false;
+        }
+        isProgrammaticTerminalScroll = true;
+        try {
+            el.scrollTop = nextTop;
+            if (shouldFollow) setTerminalAutoFollow(true, `${reason}:visible-minimal`);
+        } finally {
+            scheduleTerminalScrollbarUpdate();
+            requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+        }
+        return true;
+    }
+
+    // Fallback: only scroll on real input, and only by the remaining bottom overlap.
+    if (!actualInputReason) {
         scheduleTerminalScrollbarUpdate();
         return false;
     }
@@ -6164,8 +6216,8 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     }
     isProgrammaticTerminalScroll = true;
     try {
-        el.scrollTop = maxScroll;
-        if (shouldFollow) setTerminalAutoFollow(true, `${reason}:visible`);
+        el.scrollTop = Math.min(maxScroll, el.scrollTop + Math.min(bottomDistance, getMobileStableSafeGap()));
+        if (shouldFollow) setTerminalAutoFollow(true, `${reason}:visible-fallback`);
     } finally {
         scheduleTerminalScrollbarUpdate();
         requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
