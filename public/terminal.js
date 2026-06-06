@@ -7722,6 +7722,55 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
     });
 });
 
+// ── Mobile auxiliary keys handler ──
+const mobileAuxKeys = $('#mobileAuxKeys');
+if (mobileAuxKeys) {
+    const auxSeqMap = {
+        esc: '\x1b', tab: '\t',
+        up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+        home: '\x1b[1~', end: '\x1b[4~',
+        pgup: '\x1b[5~', pgdn: '\x1b[6~',
+    };
+    mobileAuxKeys.addEventListener('click', (e) => {
+        const btn = e.target.closest('.aux-key');
+        if (!btn) return;
+        const key = btn.dataset.key;
+        if (key === 'ctrl') {
+            modifierState.ctrl = !modifierState.ctrl;
+            btn.classList.toggle('aux-active', modifierState.ctrl);
+            // Keep the floating shortcut panel Ctrl button in sync
+            document.querySelectorAll('.modifier[data-key="ctrl"]').forEach(b => b.classList.toggle('active', modifierState.ctrl));
+            return;
+        }
+        const seq = auxSeqMap[key];
+        if (seq) {
+            const payload = modifierState.ctrl && key.length === 1 ? String.fromCharCode(key.charCodeAt(0) - 96) : seq;
+            sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: true });
+        } else {
+            // Direct character keys: /, |, etc.
+            const ch = String(key || '');
+            if (ch) {
+                let payload = ch;
+                if (modifierState.ctrl && ch.length === 1 && ch >= 'a' && ch <= 'z') {
+                    payload = String.fromCharCode(ch.charCodeAt(0) - 96);
+                }
+                sendData(modifierState.alt ? '\x1b' + payload : payload, { source: 'mobile-aux-key', forceFollow: true });
+            }
+        }
+        // Auto-release Ctrl, Alt after one non-modifier key press (sticky modifier)
+        if (modifierState.ctrl) {
+            modifierState.ctrl = false;
+            const ctrlBtn = mobileAuxKeys.querySelector('.aux-key[data-key="ctrl"]');
+            if (ctrlBtn) ctrlBtn.classList.remove('aux-active');
+            document.querySelectorAll('.modifier[data-key="ctrl"]').forEach(b => b.classList.remove('active'));
+        }
+        if (modifierState.alt) {
+            modifierState.alt = false;
+            document.querySelectorAll('.modifier[data-key="alt"]').forEach(b => b.classList.remove('active'));
+        }
+    });
+}
+
 const keySequences = {
     esc: '\x1b', tab: '\t', home: '\x1b[1~', end: '\x1b[4~',
     up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
@@ -7911,7 +7960,14 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             const now = performance.now();
             if (now - mobileStableLastFocusGestureAt > 260) {
                 mobileStableLastFocusGestureAt = now;
-                focusMobileStableImeProxy('terminal-touch-immediate');
+                // Toggle keyboard: if already open, dismiss; otherwise open.
+                if (mobileKeyboardOpen || document.documentElement.classList.contains('keyboard-open')) {
+                    try { mobileImeProxy?.blur?.(); } catch (_) {}
+                    cmdInput?.blur?.();
+                    document.activeElement?.blur?.();
+                } else {
+                    focusMobileStableImeProxy('terminal-touch-immediate');
+                }
             }
         }
         terminalTouchFocusTimer = window.setTimeout(() => {
@@ -7922,7 +7978,10 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
                 return;
             }
             if (isMobileStableInputMode()) {
-                focusMobileStableImeProxy('terminal-touch');
+                // Only focus if keyboard wasn't just dismissed by the immediate handler
+                if (!mobileKeyboardOpen && !document.documentElement.classList.contains('keyboard-open')) {
+                    focusMobileStableImeProxy('terminal-touch');
+                }
                 notifyParentActivity();
                 return;
             }
