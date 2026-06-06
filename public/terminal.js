@@ -255,6 +255,9 @@ let mobileTerminalAutoFollowLockUntil = 0;
 let mobileTerminalAutoFollowLockReason = '';
 let mobileStableKeyboardGridRepairTimers = [];
 let mobileStableKeyboardOpenGrid = null;
+let mobileImeLastSent = { text: '', source: '', at: 0 };
+let mobileImeLastControl = { seq: '', source: '', at: 0 };
+let mobileStableLastFocusGestureAt = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -1567,6 +1570,15 @@ function runWithMobileStableResizeBypass(callback) {
 
 function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') {
     freezeTerminalViewportResize(reason);
+    // Mobile stable input is a visual clipping problem, not a PTY/grid resize problem.
+    // Never touch WTerm bridge rows during keyboard/viewport animation; doing so is what
+    // creates phantom blank rows, row inversions and the ugly slide-down recovery.
+    if (isMobileStableInputMode() && MOBILE_KEYBOARD_RESIZE_REASONS.test(String(reason))) {
+        normalizeWTermContainerLayout(`${reason}:normalize-only`);
+        requestInitialMobileRenderFlush(reason);
+        scheduleTerminalScrollbarUpdate();
+        return;
+    }
     syncWTermGridToLastPty(`${reason}:keep-pty-size`);
     normalizeWTermContainerLayout(`${reason}:normalize`);
     requestInitialMobileRenderFlush(reason);
@@ -1576,10 +1588,10 @@ function stabilizeWTermAfterViewportOnlyChange(reason = 'viewport-only-change') 
 function scheduleKeyboardCloseFit(reason = 'keyboard-close-fit', delay = TERMINAL_KEYBOARD_STABLE_RESIZE_DELAY) {
     if (isMobileStableInputMode()) {
         freezeTerminalViewportResize(`${reason}:freeze`, Math.max(delay, TERMINAL_KEYBOARD_RESIZE_FREEZE_MS));
-        scheduleMobileStableKeyboardGridRepair(reason);
         window.clearTimeout(scheduleKeyboardCloseFit._mobileTimer);
         scheduleKeyboardCloseFit._mobileTimer = window.setTimeout(() => {
-            restoreMobileStableKeyboardGrid(`${reason}:visible-only`);
+            normalizeWTermContainerLayout(`${reason}:visible-only`);
+            requestInitialMobileRenderFlush(`${reason}:visible-only`);
             if (isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory()) {
                 lockMobileTerminalAutoFollow(`${reason}:history-preserved`, 1600);
                 scheduleTerminalScrollbarUpdate();
@@ -6148,6 +6160,35 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     return true;
 }
 
+function sendMobileStableImeData(text = '', source = 'mobile-ime', { paste = false } = {}) {
+    const payload = String(text || '');
+    if (!payload) return false;
+    const now = performance.now();
+    const duplicateWindow = paste ? 260 : 140;
+    if (mobileImeLastSent.text === payload && mobileImeLastSent.source !== source && now - mobileImeLastSent.at < duplicateWindow) {
+        logTerminalScrollDiagnostics('mobile-ime:dedupe', { source, previousSource: mobileImeLastSent.source, length: payload.length });
+        return false;
+    }
+    mobileImeLastSent = { text: payload, source, at: now };
+    sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: true, applyModifiers: false });
+    ensureMobileStableCursorVisible(source);
+    return true;
+}
+
+function sendMobileStableControlData(seq = '', source = 'mobile-ime-control') {
+    const payload = String(seq || '');
+    if (!payload) return false;
+    const now = performance.now();
+    if (mobileImeLastControl.seq === payload && mobileImeLastControl.source !== source && now - mobileImeLastControl.at < 90) {
+        logTerminalScrollDiagnostics('mobile-ime-control:dedupe', { source, previousSource: mobileImeLastControl.source });
+        return false;
+    }
+    mobileImeLastControl = { seq: payload, source, at: now };
+    sendData(payload, { source, forceFollow: true, applyModifiers: false });
+    ensureMobileStableCursorVisible(source);
+    return true;
+}
+
 function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (!isMobileStableInputMode()) return false;
     setupMobileStableImeProxy();
@@ -6157,9 +6198,11 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     mobileStableLastBottomIntent = !el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
     keyboardFocusLikely = true;
     keyboardViewportBaseline = Math.max(getKeyboardBaselineHeight(), keyboardViewportBaseline || 0);
-    try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
     if (el && !mobileStableLastBottomIntent) el.scrollTop = previousTop;
     markKeyboardFocusActive();
+    if (document.activeElement !== mobileImeProxy) {
+        try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
+    }
     // Focus/keyboard open alone must not pull a user out of history. Actual input handlers call ensureMobileStableCursorVisible().
     if (!isMobileTerminalAutoFollowLocked() && !isTerminalUserReadingHistory()) ensureMobileStableCursorVisible(reason);
     return true;
@@ -6249,6 +6292,8 @@ function setupMobileStableImeProxy() {
     proxy.autocomplete = 'off';
     proxy.autocorrect = 'off';
     proxy.autocapitalize = 'off';
+    proxy.inputMode = 'text';
+    proxy.enterKeyHint = 'enter';
     proxy.spellcheck = false;
     proxy.setAttribute('aria-label', '移动端终端输入代理');
     proxy.addEventListener('focus', () => {
@@ -6267,9 +6312,8 @@ function setupMobileStableImeProxy() {
     proxy.addEventListener('compositionend', (e) => {
         mobileImeComposing = false;
         const text = e.data || proxy.value || '';
-        if (text) sendData(text, { source: 'mobile-ime-composition', forceFollow: true, applyModifiers: false });
+        if (text) sendMobileStableImeData(text, 'mobile-ime-composition');
         proxy.value = '';
-        ensureMobileStableCursorVisible('mobile-ime-composition');
     });
     proxy.addEventListener('keydown', (e) => {
         if (mobileImeComposing || e.isComposing || isModifierOnlyKeyEvent(e)) return;
@@ -6291,9 +6335,8 @@ function setupMobileStableImeProxy() {
         const seq = seqMap[e.key];
         if (!seq) return;
         e.preventDefault();
-        sendData(seq, { source: `mobile-ime-key:${e.key}`, forceFollow: true, applyModifiers: false });
+        sendMobileStableControlData(seq, `mobile-ime-key:${e.key}`);
         proxy.value = '';
-        ensureMobileStableCursorVisible(`mobile-ime-key:${e.key}`);
     });
     proxy.addEventListener('beforeinput', (e) => {
         if (mobileImeComposing || e.isComposing) return;
@@ -6302,28 +6345,38 @@ function setupMobileStableImeProxy() {
             const text = e.data || '';
             if (text) {
                 e.preventDefault();
-                sendData(text, { source: 'mobile-ime-beforeinput', forceFollow: true, applyModifiers: false });
+                sendMobileStableImeData(text, 'mobile-ime-beforeinput');
                 proxy.value = '';
-                ensureMobileStableCursorVisible('mobile-ime-input');
+            }
+        } else if (type === 'insertFromPaste') {
+            const text = e.dataTransfer?.getData?.('text/plain') || e.data || '';
+            if (text) {
+                e.preventDefault();
+                sendMobileStableImeData(text, 'mobile-ime-paste', { paste: true });
+                proxy.value = '';
             }
         } else if (type === 'deleteContentBackward') {
             e.preventDefault();
-            sendData('\x7f', { source: 'mobile-ime-backspace', forceFollow: true, applyModifiers: false });
+            sendMobileStableControlData('\x7f', 'mobile-ime-backspace');
             proxy.value = '';
-            ensureMobileStableCursorVisible('mobile-ime-backspace');
         } else if (type === 'insertLineBreak' || type === 'insertParagraph') {
             e.preventDefault();
-            sendData('\r', { source: 'mobile-ime-enter', forceFollow: true, applyModifiers: false });
+            sendMobileStableControlData('\r', 'mobile-ime-enter');
             proxy.value = '';
-            ensureMobileStableCursorVisible('mobile-ime-enter');
         }
     });
     proxy.addEventListener('input', () => {
         if (mobileImeComposing) return;
         const text = proxy.value || '';
-        if (text) sendData(text, { source: 'mobile-ime-input-fallback', forceFollow: true, applyModifiers: false });
+        if (text) sendMobileStableImeData(text, 'mobile-ime-input-fallback');
         proxy.value = '';
-        ensureMobileStableCursorVisible('mobile-ime-input-fallback');
+    });
+    proxy.addEventListener('paste', (e) => {
+        const text = e.clipboardData?.getData?.('text/plain') || '';
+        if (!text) return;
+        e.preventDefault();
+        sendMobileStableImeData(text, 'mobile-ime-paste-event', { paste: true });
+        proxy.value = '';
     });
     document.body.appendChild(proxy);
     mobileImeProxy = proxy;
@@ -6523,9 +6576,9 @@ function updateViewportInsets() {
     updateViewportInsets._lastSignature = signature;
     mobileKeyboardOpen = keyboardOpen;
     if (keyboardOpen !== wasKeyboardOpen) {
-        mobileKeyboardResizeFreezeUntil = Date.now() + 1200;
+        mobileKeyboardResizeFreezeUntil = Date.now() + 1600;
         if (keyboardOpen) rememberMobileStableKeyboardGrid('keyboard-open-start');
-        else restoreMobileStableKeyboardGrid('keyboard-close-start');
+        // Closing the IME is still viewport animation; defer any grid sanity repair until it is fully settled.
         stabilizeWTermAfterViewportOnlyChange(keyboardOpen ? 'keyboard-open-start' : 'keyboard-close-start');
     }
     cancelAnimationFrame(updateViewportInsets._raf);
@@ -6909,6 +6962,12 @@ function patchWTermScrollBehavior() {
                 const keepCols = lastSentTerminalSize.cols || Number(term.cols ?? term.bridge?.getCols?.() ?? cols);
                 const keepRows = lastSentTerminalSize.rows || Number(term.rows ?? term.bridge?.getRows?.() ?? rows);
                 logTerminalLayoutDiagnostics('wterm-layout:resize-suppressed-during-keyboard', { requestedCols: cols, requestedRows: rows, keepCols, keepRows });
+                if (isMobileStableInputMode()) {
+                    normalizeWTermContainerLayout('suppressed-wterm-resize:visual-only');
+                    requestInitialMobileRenderFlush('suppressed-wterm-resize');
+                    scheduleTerminalScrollbarUpdate();
+                    return false;
+                }
                 return updateWTermLocalGridSize(keepCols, keepRows, 'suppressed-wterm-resize');
             }
             const shouldFollow = terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
@@ -6964,7 +7023,7 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
     // 移动端页面/键盘恢复只刷新渲染和滚动条；不强制滚到底、不改变远端 PTY。
     // 这避免 iOS/Android WebView 恢复后 viewport 与 buffer 错配造成空白撑开、截断和光标漂移。
     const keyboardRelated = /keyboard|viewport|visual/.test(String(reason));
-    if (keyboardRelated) syncWTermGridToLastPty(`${reason}:render-flush-keep-pty`);
+    if (keyboardRelated && !isMobileStableInputMode()) syncWTermGridToLastPty(`${reason}:render-flush-keep-pty`);
     const delays = keyboardRelated ? [0, 80, 220, 520] : [0, 40, 120, 260, 520];
     delays.forEach((delay) => {
         window.setTimeout(() => {
@@ -7846,8 +7905,12 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
             return;
         }
         if (isMobileStableInputMode() && !mobileTerminalSelectionMode && !hasLiveTerminalSelection()) {
-            // 软键盘必须在用户触摸手势内聚焦才可靠弹出；后续 touchmove/selection guard 仍会维护滚动/选择状态。
-            focusMobileStableImeProxy('terminal-touch-immediate');
+            // 软键盘必须在用户触摸手势内聚焦才可靠弹出；同一手势只聚焦一次，避免 Android IME 反复开合触发布局抖动。
+            const now = performance.now();
+            if (now - mobileStableLastFocusGestureAt > 260) {
+                mobileStableLastFocusGestureAt = now;
+                focusMobileStableImeProxy('terminal-touch-immediate');
+            }
         }
         terminalTouchFocusTimer = window.setTimeout(() => {
             const hasSelection = hasLiveTerminalSelection();
