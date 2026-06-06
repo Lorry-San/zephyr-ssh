@@ -1623,50 +1623,26 @@ function commitTerminalWorkspaceKeyboard(metrics = {}) {
 }
 
 function applyTerminalWorkspaceKeyboard(metrics = {}) {
+    const activeSession = getTerminalSession(activeTerminalTab);
+    const activeSshStableInput = activeSession?.protocol === 'SSH'
+        && isCompactTerminalWorkspace()
+        && window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
+    if (metrics.stableInput || activeSshStableInput) {
+        // 移动端 SSH 稳定输入模式由 iframe 内部裁剪可见区和避让键盘；父页面不再改 workspace/iframe 高度，避免双层 resize 导致文本乱飞。
+        return;
+    }
     const workspace = $('#terminalWorkspace');
     if (!workspace) return;
-    const activeSession = getTerminalSession(activeTerminalTab);
-    const isCompact = isCompactTerminalWorkspace();
-    const isTouchDevice = window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
-    const activeSshStableInput = activeSession?.protocol === 'SSH' && isCompact && isTouchDevice;
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     const fullscreenWindow = activeTerminalTab ? workspace.querySelector(`.terminal-window[data-window="${CSS.escape(activeTerminalTab)}"]`) : null;
     const isFullscreenTerminalSurface = fullscreenElement === workspace || fullscreenElement === fullscreenWindow || workspace.classList.contains('custom-fullscreen');
-    const shouldResizeWorkspace = isFullscreenTerminalSurface || isCompact;
     const inset = Math.round(Number(metrics.keyboardInset) || 0);
     const viewportHeight = Math.round(Number(metrics.viewportHeight) || window.visualViewport?.height || window.innerHeight || 0);
     const offsetTop = Math.round(Number(metrics.offsetTop) || window.visualViewport?.offsetTop || 0);
     const keyboardOpen = !!metrics.keyboardOpen && inset >= 100;
 
-    if (!keyboardOpen || !shouldResizeWorkspace) {
+    if (!keyboardOpen || !isFullscreenTerminalSurface) {
         if (!keyboardOpen) resetTerminalWorkspaceKeyboard();
-        return;
-    }
-
-    // 移动端 SSH 稳定输入：父页面只调整容器高度，不发送 keyboard-freeze 消息，
-    // 让 iframe 内部自行处理光标滚动和可见区裁剪，避免双层 resize 导致文本乱飞。
-    if (activeSshStableInput) {
-        const innerHeight = Math.max(240, viewportHeight);
-        appKeyboardOpen = true;
-        workspace.classList.add('keyboard-open');
-        workspace.classList.remove('keyboard-settling');
-        document.documentElement.style.setProperty('--app-keyboard-inset', `${inset}px`);
-        document.documentElement.style.setProperty('--app-visual-vh', `${innerHeight}px`);
-        document.documentElement.style.setProperty('--app-visual-offset-top', `${offsetTop}px`);
-        workspace.style.height = `${innerHeight}px`;
-        workspace.style.maxHeight = `${innerHeight}px`;
-        const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
-        if (frame) {
-            frame.style.height = '100%';
-            frame.style.maxHeight = '100%';
-        }
-        console.info('[TerminalLayoutDiagnostics]', {
-            event: 'parent:keyboard-stable-commit',
-            inset,
-            viewportHeight,
-            offsetTop,
-            activeTerminalTab,
-        });
         return;
     }
 
@@ -1689,12 +1665,7 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
 function updateFullscreenKeyboardFromViewport() {
     const workspace = $('#terminalWorkspace');
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
-    const isCompact = isCompactTerminalWorkspace();
-    const isKeyboardRelevant = workspace.classList.contains('custom-fullscreen')
-        || fullscreenElement === workspace
-        || fullscreenElement?.classList?.contains('terminal-window')
-        || (isCompact && document.body.classList.contains('terminal-mode'));
-    if (!workspace || !isKeyboardRelevant || !window.visualViewport) return;
+    if (!workspace || (!workspace.classList.contains('custom-fullscreen') && fullscreenElement !== workspace && !fullscreenElement?.classList?.contains('terminal-window')) || !window.visualViewport) return;
     const layoutHeight = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
     if (!appKeyboardOpen) appKeyboardBaseline = Math.max(appKeyboardBaseline || 0, layoutHeight, Math.round(window.visualViewport.height || 0));
     const baseline = Math.max(appKeyboardBaseline || 0, layoutHeight);

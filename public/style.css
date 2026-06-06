@@ -1821,11 +1821,6 @@ body.terminal-custom-fullscreen-open .main-nav {
     max-height: var(--app-visual-vh) !important;
     transform: translate3d(0, var(--app-visual-offset-top), 0);
 }
-.terminal-workspace.compact.keyboard-open {
-    height: var(--app-visual-vh) !important;
-    min-height: var(--app-visual-vh) !important;
-    max-height: var(--app-visual-vh) !important;
-}
 .terminal-workspace.keyboard-settling,
 .terminal-workspace.keyboard-settling * {
     transition: none !important;
