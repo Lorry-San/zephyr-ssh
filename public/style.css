@@ -6842,38 +6842,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform: none !important;
     }
 
-    html.mobile-stable-input .terminal-topbar .topbar-actions {
-        flex: 0 0 auto;
-    }
-    html.mobile-stable-input.keyboard-open .terminal-topbar .topbar-actions {
-        max-height: 36px;
-        padding-top: 4px;
-        padding-bottom: 4px;
-    }
-    html.mobile-stable-input.keyboard-open .terminal-topbar .topbar-actions .btn-sm {
-        min-width: 34px;
-        min-height: 28px;
-        padding: 3px 7px;
-    }
-    html.mobile-stable-input.keyboard-open .terminal-top-input {
-        padding-top: 3px;
-        padding-bottom: 3px;
-    }
-    html.mobile-stable-input.keyboard-open .cmd-input {
-        min-height: 30px;
-        max-height: 48px;
-        padding-top: 5px;
-        padding-bottom: 5px;
-    }
-    html.mobile-stable-input.keyboard-open .mobile-aux-keys {
-        min-height: 38px;
-        padding-top: 3px;
-        padding-bottom: 3px;
-    }
-    html.mobile-stable-input.keyboard-open .aux-key {
-        height: 30px;
-    }
-
     /* Reuse the original topbar CSS-icon actions row; move it above the aux keys on mobile. */
     html.mobile-stable-input .terminal-topbar .topbar-actions {
         position: fixed;
