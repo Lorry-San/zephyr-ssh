@@ -4,6 +4,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [], settings = {};
 let editingId = null;
 let editingSecretLoaded = false;
+let editingConnectionSecretState = { hasPassword: false, hasPrivateKey: false, sshKeyId: '' };
 let connectionModalTrigger = null;
 let connectionModalOriginRect = null;
 let terminalTabs = [], activeTerminalTab = null;
@@ -342,6 +343,21 @@ function addJumpRouteRow() {
     console.debug('[route-ui]', 'add jump row', { before: ids.slice(0, -1), after: ids });
     renderJumpRouteRows(ids);
 }
+function updateConnectionSecretRevealChrome(protocol = $('#connProtocol')?.value || 'SSH') {
+    const revealGroup = $('#connSecretRevealGroup');
+    const revealBtn = $('#revealConnSecrets');
+    const hint = $('#connSecretRevealHint');
+    const isSsh = String(protocol || 'SSH').toUpperCase() === 'SSH';
+    const hasSavedSecret = !!editingId && (
+        !!editingConnectionSecretState.hasPassword
+        || (isSsh && (!!editingConnectionSecretState.hasPrivateKey || !!editingConnectionSecretState.sshKeyId))
+    );
+    revealGroup?.classList.toggle('force-hidden', !hasSavedSecret);
+    if (revealBtn) revealBtn.textContent = isSsh ? '查看已保存密码/私钥' : '查看已保存密码';
+    if (hint) hint.textContent = isSsh
+        ? '编辑时默认隐藏敏感信息；留空或保持星号不会覆盖已保存凭据。'
+        : '编辑时默认隐藏已保存密码；留空或保持星号不会覆盖已保存密码。';
+}
 function updateProtocolFields({ preservePort = true } = {}) {
     const protocol = $('#connProtocol')?.value || 'SSH';
     const portInput = $('#connPort');
@@ -354,6 +370,7 @@ function updateProtocolFields({ preservePort = true } = {}) {
     }
     $('#connSshKey')?.closest('.form-group')?.classList.toggle('force-hidden', protocol !== 'SSH');
     $('#connPrivateKey')?.closest('.form-group')?.classList.toggle('force-hidden', protocol !== 'SSH');
+    updateConnectionSecretRevealChrome(protocol);
     $('.advanced-route-panel')?.classList.remove('force-hidden');
     console.debug('[guac-client]', 'protocol fields updated', { protocol, defaultPort, usernameRequired: protocol === 'SSH', routePanelEnabled: true });
 }
@@ -542,12 +559,19 @@ function resetConnectionTransitionLayer(layer) {
     layer.classList.remove('source-visual-hidden');
 }
 function prepareConnectionModalForm(conn = null) {
-    editingId = conn?.id || null; editingSecretLoaded = false; $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
+    editingId = conn?.id || null;
+    editingSecretLoaded = false;
+    editingConnectionSecretState = {
+        hasPassword: !!conn?.hasPassword,
+        hasPrivateKey: !!conn?.hasPrivateKey,
+        sshKeyId: conn?.sshKeyId || '',
+    };
+    $('#modalTitle').textContent = editingId ? '编辑服务器' : '添加服务器'; $('#connectionId').value = editingId || '';
     setConnectionTestLatency();
     $('#connName').value = conn?.name || ''; $('#connProtocol').value = conn?.protocol || 'SSH'; $('#connHost').value = conn?.host || ''; $('#connPort').value = conn?.port || ($('#connProtocol').value === 'RDP' ? 3389 : $('#connProtocol').value === 'VNC' ? 5900 : 22); $('#connUsername').value = conn?.username || '';
     renderSshKeyOptions(conn?.sshKeyId || '');
     $('#connTags').value = (conn?.tags || []).join(', '); setRouteMode(conn?.connectionMode || 'direct', conn?.connectionMode === 'jump' ? (conn?.jumpHostIds || (conn?.jumpHostId ? [conn.jumpHostId] : [])) : (conn?.proxyId || ''));
-    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#revealConnSecrets').classList.toggle('force-hidden', !editingId || (!conn?.hasPassword && !conn?.hasPrivateKey && !conn?.sshKeyId)); $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn });
+    $('#connPassword').type = 'password'; $('#toggleConnPassword').textContent = '👁️'; $('#connPassword').value = conn?.hasPassword ? '******' : ''; $('#connPrivateKey').value = conn?.hasPrivateKey ? '******' : ''; $('#connRemark').value = conn?.remark || ''; updateProtocolFields({ preservePort: !!conn });
 }
 function openModal(conn = null, trigger = null) {
     const modal = $('#connectionModal');
@@ -789,13 +813,16 @@ async function testConnection() {
 
 async function revealConnectionSecrets() {
     if (!editingId || editingSecretLoaded) return;
-    const secret = requestSensitiveSecret('查看已保存连接密码/私钥');
+    const protocol = String($('#connProtocol')?.value || 'SSH').toUpperCase();
+    const isSsh = protocol === 'SSH';
+    const actionText = isSsh ? '查看已保存连接密码/私钥' : '查看已保存连接密码';
+    const secret = requestSensitiveSecret(actionText);
     const data = await api(`/api/connections/${editingId}/open`, { method: 'POST', body: JSON.stringify({ purpose: 'reveal', secret }) });
     $('#connPassword').value = data.connection?.password || '';
-    $('#connPrivateKey').value = data.connection?.privateKey || '';
+    if (isSsh) $('#connPrivateKey').value = data.connection?.privateKey || '';
     editingSecretLoaded = true;
-    console.debug('[secret-open]', 'connection secrets loaded', { connectionId: editingId, hasPassword: !!data.connection?.password, hasPrivateKey: !!data.connection?.privateKey });
-    toast('已载入保存的密码/私钥');
+    console.debug('[secret-open]', 'connection secrets loaded', { connectionId: editingId, protocol, hasPassword: !!data.connection?.password, hasPrivateKey: !!data.connection?.privateKey });
+    toast(isSsh ? '已载入保存的密码/私钥' : '已载入保存的密码');
 }
 
 async function openConnection(id) {
