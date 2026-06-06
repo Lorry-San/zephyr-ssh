@@ -6003,11 +6003,6 @@ function updateTerminalScrollbarNow() {
     terminalContainer.classList.toggle('scrollable', scrollable);
     terminalContainer.classList.toggle('terminal-following', atBottom && scrollable);
     el.classList.toggle('terminal-scrollable', scrollable);
-    // Bottom scroll fade: visible when scrolled away from bottom
-    if (isMobileStableInputMode()) {
-        const fadeOpacity = scrollable && !atBottom ? '1' : '0';
-        terminalContainer.style.setProperty('--scroll-fade-opacity', fadeOpacity);
-    }
     if (terminalScrollbar) terminalScrollbar.style.display = scrollable ? 'block' : 'none';
     if (!scrollable) {
         terminalScrollbar.style.setProperty('--terminal-scroll-thumb-top', '0px');

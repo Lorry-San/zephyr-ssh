@@ -6930,22 +6930,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
         user-select: none !important;
         -webkit-user-select: none !important;
     }
-    /* Bottom scroll fade: hints there's more content below (iOS-style) */
-    html.mobile-stable-input .terminal-container {
-        --scroll-fade-opacity: 0;
-    }
-    html.mobile-stable-input .terminal-container::before {
-        content: '';
-        position: absolute;
-        bottom: 0; left: 0; right: 0;
-        height: 24px;
-        z-index: 5;
-        pointer-events: none;
-        background: linear-gradient(to top, var(--wterm-bg), transparent);
-        opacity: var(--scroll-fade-opacity);
-        transition: opacity 0.28s ease;
-    }
-
     html.mobile-stable-input .mobile-terminal-ime-proxy {
         position: fixed;
         left: max(8px, env(safe-area-inset-left));
