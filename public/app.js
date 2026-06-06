@@ -1675,9 +1675,7 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     if (isStableInput && isCompact) {
         if (keyboardOpen) {
             const wsRect = workspace.getBoundingClientRect();
-            const currentHeight = Math.round(wsRect.height || workspace.offsetHeight || 0);
-            const targetHeight = Math.max(180, Math.round(keyboardTop - wsRect.top - 2));
-            const usableHeight = currentHeight > 0 ? Math.min(currentHeight, targetHeight) : targetHeight;
+            const usableHeight = Math.max(180, Math.round(keyboardTop - wsRect.top - 2));
             workspace.style.flex = '0 0 auto';
             workspace.style.height = `${usableHeight}px`;
             workspace.style.maxHeight = `${usableHeight}px`;
