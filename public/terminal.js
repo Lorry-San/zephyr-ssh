@@ -6087,6 +6087,10 @@ function updateTerminalInputPanelMetrics() {
     const rect = terminalInputPanel.getBoundingClientRect?.();
     const height = Math.max(42, Math.round(rect?.height || terminalInputPanel.offsetHeight || 52));
     document.documentElement.style.setProperty('--terminal-input-panel-height', `${height}px`);
+    const actionsRect = topbarActions?.getBoundingClientRect?.();
+    const actionsHeight = Math.max(42, Math.round(actionsRect?.height || topbarActions?.offsetHeight || 46));
+    document.documentElement.style.setProperty('--mobile-bottom-actions-height', `${actionsHeight}px`);
+    scheduleTerminalScrollbarUpdate?.();
 }
 
 function setupTerminalInputPanelMetrics() {
@@ -6094,6 +6098,7 @@ function setupTerminalInputPanelMetrics() {
     if (window.ResizeObserver && terminalInputPanel) {
         const observer = new ResizeObserver(updateTerminalInputPanelMetrics);
         observer.observe(terminalInputPanel);
+        if (topbarActions) observer.observe(topbarActions);
     }
     window.addEventListener('resize', updateTerminalInputPanelMetrics, { passive: true });
 }
@@ -6115,6 +6120,7 @@ function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason 
     document.documentElement.classList.toggle('keyboard-open', !!keyboardOpen && safeInset > 0);
     terminalContainer?.classList.toggle('mobile-keyboard-open', !!keyboardOpen && safeInset > 0);
     if (!isMobileStableInputMode()) return;
+    updateTerminalInputPanelMetrics();
     document.documentElement.classList.remove('viewport-updating');
     setStableViewportHeight();
     requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
