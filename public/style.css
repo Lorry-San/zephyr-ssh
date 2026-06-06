@@ -6769,7 +6769,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         max-height: none !important;
         margin: 6px;
         /* Reserve space for the fixed bottom bar at the bottom */
-        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px) + var(--keyboard-inset, 0px));
+        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px));
         transform: none !important;
         transition: background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
         contain: layout paint;
@@ -6808,7 +6808,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         position: fixed;
         left: 0;
         right: 0;
-        bottom: var(--keyboard-inset, 0px);
+        bottom: 0;
         z-index: 21;
         padding-bottom: max(2px, env(safe-area-inset-bottom));
         transform: none !important;
@@ -6819,7 +6819,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input.keyboard-open .terminal-bottom-bar {
-        bottom: var(--keyboard-inset, 0px);
+        bottom: 0;
         transform: none !important;
     }
 
@@ -6828,7 +6828,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         position: fixed;
         left: 0;
         right: 0;
-        bottom: calc(var(--keyboard-inset, 0px) + var(--terminal-input-panel-height, 44px));
+        bottom: var(--terminal-input-panel-height, 44px);
         z-index: 22;
         display: flex;
         flex-wrap: nowrap;
@@ -7009,7 +7009,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
-        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px) + var(--keyboard-inset, 0px)) !important;
+        margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px)) !important;
     }
 
     html.mobile-stable-input .terminal-container .wterm-wrapper,
