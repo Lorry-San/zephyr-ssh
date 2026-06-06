@@ -6750,14 +6750,14 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-container {
-        order: 2;
+        order: 1;
         flex: 1 1 auto !important;
         min-height: 96px;
         height: auto !important;
         max-height: none !important;
-        margin-bottom: calc(6px + var(--keyboard-inset, 0px));
+        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px) + var(--keyboard-inset, 0px));
         transform: none !important;
-        transition: margin-bottom 0.16s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.34s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+        transition: none !important;
         contain: layout paint;
     }
 
@@ -6776,22 +6776,22 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-input-panel {
-        position: relative;
-        left: auto;
-        right: auto;
-        bottom: auto;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: var(--keyboard-inset, 0px);
         z-index: 20;
-        order: 1;
+        order: 3;
         flex: 0 0 auto;
         padding-bottom: 0;
         transform: none !important;
-        transition: background-color 0.2s ease, border-color 0.2s ease !important;
+        transition: none !important;
         will-change: auto;
         box-shadow: none;
     }
 
     html.mobile-stable-input.keyboard-open .terminal-input-panel {
-        bottom: auto;
+        bottom: var(--keyboard-inset, 0px);
         transform: none !important;
     }
 
@@ -6837,8 +6837,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input.keyboard-open .terminal-page {
-        height: calc(var(--stable-vh, 100svh) - var(--keyboard-inset, 0px)) !important;
-        max-height: calc(var(--stable-vh, 100svh) - var(--keyboard-inset, 0px)) !important;
+        height: var(--stable-vh, 100svh) !important;
+        max-height: var(--stable-vh, 100svh) !important;
     }
 
     .terminal-page .terminal-input-panel,
@@ -6857,6 +6857,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         width: auto !important;
         align-self: stretch !important;
         margin: 6px !important;
+        margin-bottom: calc(6px + var(--terminal-input-panel-height, 52px) + var(--keyboard-inset, 0px)) !important;
         transform: none !important;
     }
 
