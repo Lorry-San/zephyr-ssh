@@ -806,6 +806,28 @@ window.addEventListener('message', (e) => {
     }
     if (e.data.type === 'layout-stabilize') {
         const reason = e.data.reason || 'parent-layout-stabilize';
+        // 如果 parent 发来了 keyboard 指标（parent 的 visualViewport 可靠检测键盘打开），
+        // 即使 iframe 自身因 overlays-content 无法检测，也应用正确的键盘状态。
+        if (e.data.keyboardOpen !== undefined) {
+            const parentKeyboardOpen = !!e.data.keyboardOpen;
+            const parentInset = Math.max(0, Math.round(Number(e.data.keyboardInset) || 0));
+            // Parent 的 visualViewport 在嵌入场景里比 iframe 更可靠；iframe 自身若检测不到键盘，
+            // 就用 parent 的状态驱动 mobile stable 布局。关闭消息必须无条件清理，避免残留白框。
+            if (parentKeyboardOpen && parentInset >= 80 && !getViewportKeyboardMetrics().keyboardOpen) {
+                mobileKeyboardOpen = true;
+                mobileKeyboardInset = parentInset;
+                applyMobileStableKeyboardInset(parentInset, true, `parent-layout:${reason}`);
+                notifyParentKeyboardMetrics({
+                    keyboardOpen: true,
+                    keyboardInset: parentInset,
+                    viewportHeight: Math.round(window.visualViewport?.height || window.innerHeight || 0),
+                    layoutHeight: Math.round(window.innerHeight || 0),
+                    offsetTop: Math.round(window.visualViewport?.offsetTop || 0)
+                });
+            } else if (!parentKeyboardOpen && mobileKeyboardOpen) {
+                finalizeKeyboardClose({ force: true });
+            }
+        }
         const keyboardRelated = isTouchKeyboardDevice() && (
             String(reason).includes('keyboard')
             || String(reason).includes('viewport')
@@ -6807,7 +6829,16 @@ function setupMobileKeyboardAvoidance() {
     try {
         if (navigator.virtualKeyboard) navigator.virtualKeyboard.overlaysContent = true;
     } catch (_) {}
+    // 如果 navigator.virtualKeyboard 不可用，用 window.resize 作为后备
+    // （即使 overlays-content 下 visualViewport 不变化，某些 WebView 仍会触发 window.resize）
     window.visualViewport?.addEventListener('resize', updateViewportInsets, { passive: true });
+    window.addEventListener('resize', () => {
+        if (!navigator.virtualKeyboard) {
+            // safeDebounce: 避免 window.resize 高频触发时重复计算
+            window.clearTimeout(setupMobileKeyboardAvoidance._windowResizeTimer);
+            setupMobileKeyboardAvoidance._windowResizeTimer = window.setTimeout(updateViewportInsets, 40);
+        }
+    }, { passive: true });
     window.visualViewport?.addEventListener('scroll', updateViewportInsets, { passive: true });
     navigator.virtualKeyboard?.addEventListener?.('geometrychange', updateViewportInsets);
     document.addEventListener('focusin', (e) => {

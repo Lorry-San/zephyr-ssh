@@ -1763,6 +1763,25 @@ body.terminal-mode-entering .terminal-smartbar .smartbar-handle {
     min-height: calc(100dvh - 12px);
     border-radius: var(--radius);
 }
+.terminal-workspace.compact.keyboard-open {
+    min-height: 0 !important;
+    overflow: hidden;
+}
+.terminal-workspace.compact.keyboard-open .terminal-window,
+.terminal-workspace.compact.keyboard-open .terminal-window-body,
+.terminal-workspace.compact.keyboard-open .terminal-frame {
+    min-height: 0 !important;
+    height: 100% !important;
+    max-height: 100% !important;
+}
+.terminal-workspace.compact.keyboard-open .terminal-window {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+}
+.terminal-workspace.compact.keyboard-open .terminal-window-body {
+    flex: 1 1 auto;
+    overflow: hidden;
+}
 .terminal-workspace-grid.compact.layout-1,
 .terminal-workspace-grid.compact.layout-2,
 .terminal-workspace-grid.compact.layout-3 {
@@ -6735,8 +6754,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input .terminal-page {
-        height: var(--stable-vh, 100svh) !important;
-        max-height: var(--stable-vh, 100svh) !important;
+        height: 100% !important;
+        max-height: 100% !important;
         min-height: 0 !important;
         transform: none !important;
         transition: background-color 0.24s ease, border-color 0.24s ease !important;
@@ -6747,8 +6766,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
     html.mobile-stable-input.viewport-updating .terminal-page,
     html.mobile-stable-input.keyboard-open .terminal-page {
-        height: var(--stable-vh, 100svh) !important;
-        max-height: var(--stable-vh, 100svh) !important;
+        height: 100% !important;
+        max-height: 100% !important;
         transform: none !important;
         transition: background-color 0.24s ease, border-color 0.24s ease !important;
     }
@@ -6764,7 +6783,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
     html.mobile-stable-input .terminal-container {
         flex: 1 1 auto !important;
-        min-height: 96px;
+        min-height: 0;
         height: auto !important;
         max-height: none !important;
         margin: 6px;
@@ -6821,6 +6840,38 @@ body.smartbar-trash-hover .smartbar-trash-target {
     html.mobile-stable-input.keyboard-open .terminal-bottom-bar {
         bottom: 0;
         transform: none !important;
+    }
+
+    html.mobile-stable-input .terminal-topbar .topbar-actions {
+        flex: 0 0 auto;
+    }
+    html.mobile-stable-input.keyboard-open .terminal-topbar .topbar-actions {
+        max-height: 36px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+    }
+    html.mobile-stable-input.keyboard-open .terminal-topbar .topbar-actions .btn-sm {
+        min-width: 34px;
+        min-height: 28px;
+        padding: 3px 7px;
+    }
+    html.mobile-stable-input.keyboard-open .terminal-top-input {
+        padding-top: 3px;
+        padding-bottom: 3px;
+    }
+    html.mobile-stable-input.keyboard-open .cmd-input {
+        min-height: 30px;
+        max-height: 48px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+    }
+    html.mobile-stable-input.keyboard-open .mobile-aux-keys {
+        min-height: 38px;
+        padding-top: 3px;
+        padding-bottom: 3px;
+    }
+    html.mobile-stable-input.keyboard-open .aux-key {
+        height: 30px;
     }
 
     /* Reuse the original topbar CSS-icon actions row; move it above the aux keys on mobile. */
@@ -6972,9 +7023,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 
     html.mobile-stable-input.keyboard-open .terminal-page {
-        /* Page height stays full; keyboard is a visual overlay, not a layout shrink. */
-        height: var(--stable-vh, 100svh) !important;
-        max-height: var(--stable-vh, 100svh) !important;
+        /* The parent app shrinks the iframe to the area above the keyboard. */
+        height: 100% !important;
+        max-height: 100% !important;
     }
 
     .terminal-page .terminal-topbar,
@@ -6994,6 +7045,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         align-self: stretch !important;
         margin: 6px !important;
         margin-bottom: calc(6px + var(--mobile-bottom-actions-height, 46px) + var(--terminal-input-panel-height, 44px)) !important;
+        min-height: 0 !important;
     }
 
     html.mobile-stable-input .terminal-container .wterm-wrapper,
