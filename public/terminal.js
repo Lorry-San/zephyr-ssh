@@ -7977,6 +7977,16 @@ document.querySelectorAll('.func, .arrow, .combo, .modifier').forEach(btn => {
 // ── Mobile auxiliary keys handler ──
 const mobileAuxKeys = $('#mobileAuxKeys');
 if (mobileAuxKeys) {
+    // Keep keyboard open: clicks on aux keys must not steal focus from the IME proxy.
+    mobileAuxKeys.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.aux-key')) {
+            requestAnimationFrame(() => {
+                if (isMobileStableInputMode() && mobileImeProxy && document.activeElement !== mobileImeProxy) {
+                    try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
+                }
+            });
+        }
+    }, { passive: true });
     const auxSeqMap = {
         esc: '\x1b', tab: '\t',
         up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
