@@ -295,6 +295,14 @@
             <div class="panel-resize-handle right" data-resize-panel="shortcutPanel" data-resize-edge="right" title="拖动调整大小"></div>
         </div>
 
+        <!-- 顶部命令输入栏（移动端始终可见） -->
+        <div class="terminal-top-input" id="terminalTopInput">
+            <div class="cmd-input-row">
+                <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+                <button class="cmd-send-btn" id="cmdSendBtn">发送</button>
+            </div>
+        </div>
+
         <!-- 终端容器 -->
         <div class="terminal-container" id="terminalContainer">
             <div class="terminal-overlay" id="terminalOverlay">
@@ -309,8 +317,22 @@
             </div>
         </div>
 
-        <!-- 底部输入面板 -->
-        <div class="terminal-input-panel" id="terminalInputPanel">
+        <!-- 移动端底部固定栏：图标行 + 辅助键，骑在键盘上方 -->
+        <div class="terminal-bottom-bar" id="terminalBottomBar" aria-label="移动端底部工具栏">
+            <div class="bottom-icon-row" id="bottomIconRow" aria-label="快捷操作">
+                <button class="aux-icon" data-action="file" title="文件管理">📁</button>
+                <button class="aux-icon" data-action="stats" title="实时监控">📊</button>
+                <button class="aux-icon" data-action="docker" title="Docker">🐳</button>
+                <button class="aux-icon" data-action="snippet" title="代码片段">⚡</button>
+                <button class="aux-icon" data-action="keyboard" title="快捷键">⌨</button>
+                <span class="aux-sep"></span>
+                <button class="aux-icon" data-action="copy" title="复制">📋</button>
+                <button class="aux-icon" data-action="paste" title="粘贴">📎</button>
+                <span class="aux-sep"></span>
+                <button class="aux-icon" data-action="theme" title="主题">🎨</button>
+                <button class="aux-icon" data-action="reconnect" title="重连">🔄</button>
+                <button class="aux-icon" data-action="disconnect" title="断开">⏻</button>
+            </div>
             <div class="mobile-aux-keys" id="mobileAuxKeys" aria-label="移动端辅助键">
                 <button class="aux-key" data-key="ctrl" title="Ctrl">Ctrl</button>
                 <button class="aux-key" data-key="esc" title="Esc">Esc</button>
@@ -328,12 +350,6 @@
                 <span class="aux-sep"></span>
                 <button class="aux-key" data-key="/" title="/">/</button>
                 <button class="aux-key" data-key="|" title="|">|</button>
-            </div>
-            <div class="toolbar" id="toolbar">
-                <div class="cmd-input-row">
-                    <textarea class="cmd-input" id="cmdInput" rows="1" placeholder="在此输入命令，Enter 发送，Shift+Enter 换行..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
-                    <button class="cmd-send-btn" id="cmdSendBtn">发送</button>
-                </div>
             </div>
         </div>
     </div>
