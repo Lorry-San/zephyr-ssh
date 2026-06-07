@@ -42,6 +42,7 @@ if (!params) {
     if (!embeddedMode) window.location.href = '/';
     throw new Error('缺少连接参数');
 }
+// Glyph defs are inserted after DOM bindings are ready.
 
 // ---------- DOM 元素 ----------
 const statusDot = $('#statusDot');
@@ -194,6 +195,48 @@ const SFTP_AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg'
 function sftpFileExt(filePath = '') { const base = String(filePath || '').split(/[\\/]/).pop() || ''; const idx = base.lastIndexOf('.'); return idx > -1 ? base.slice(idx + 1).toLowerCase() : ''; }
 function isSftpMediaFile(filePath = '') { const ext = sftpFileExt(filePath); return SFTP_VIDEO_EXTENSIONS.has(ext) || SFTP_AUDIO_EXTENSIONS.has(ext); }
 function isSftpVideoFile(filePath = '') { return SFTP_VIDEO_EXTENSIONS.has(sftpFileExt(filePath)); }
+
+const ZEPHYR_GLYPH_DEFS = `<svg width="0" height="0" class="zephyr-glyph-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="macBlue" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#5AC8FA"/><stop offset="100%" stop-color="#007AFF"/></linearGradient><linearGradient id="macGold" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FFD60A"/><stop offset="100%" stop-color="#FF9F0A"/></linearGradient><linearGradient id="macCyan" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#32ADE6"/><stop offset="100%" stop-color="#007AFF"/></linearGradient><linearGradient id="macGreen" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#34C759"/><stop offset="100%" stop-color="#248A3D"/></linearGradient><linearGradient id="macPurple" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#AF52DE"/><stop offset="100%" stop-color="#5E5CE6"/></linearGradient><linearGradient id="macIndigo" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#5E5CE6"/><stop offset="100%" stop-color="#403EAB"/></linearGradient><linearGradient id="macRed" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FF5252"/><stop offset="100%" stop-color="#E53935"/></linearGradient><linearGradient id="macDark" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#48484A"/><stop offset="100%" stop-color="#1C1C1E"/></linearGradient></defs></svg>`;
+const ZEPHYR_GLYPHS = {
+    folder: '<path d="M2 7C2 5.3 3.3 4 5 4H9.3C10.1 4 10.9 4.4 11.5 5L12.5 6.1C12.8 6.4 13.2 6.6 13.6 6.6H19C20.7 6.6 22 7.9 22 9.6V17C22 18.7 20.7 20 19 20H5C3.3 20 2 18.7 2 17V7Z" fill="url(#macBlue)"/>',
+    file: '<path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2Z" fill="#FFFFFF" stroke="#C7C7CC" stroke-width="1.5" stroke-linejoin="round"/><path d="M14 2V8H20" fill="#E5E5EA" stroke="#C7C7CC" stroke-width="1.5" stroke-linejoin="round"/><line x1="8" y1="13" x2="16" y2="13" stroke="#007AFF" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="17" x2="14" y2="17" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/>',
+    upload: '<path d="M17.5 19C20 19 22 17 22 14.5C22 12.1 20.2 10.2 17.9 10C17.4 6.6 14.5 4 11 4C7.1 4 4 7.1 4 11C4 11.2 4 11.5 4.1 11.7C2.3 12.3 1 14 1 16C1 18.2 2.8 20 5 20" fill="url(#macCyan)"/><path d="M11 16V9M8 12L11 9L14 12" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    download: '<path d="M17.5 19C20 19 22 17 22 14.5C22 12.1 20.2 10.2 17.9 10C17.4 6.6 14.5 4 11 4C7.1 4 4 7.1 4 11C4 11.2 4 11.5 4.1 11.7C2.3 12.3 1 14 1 16C1 18.2 2.8 20 5 20" fill="url(#macGreen)"/><path d="M11 9V16M8 13L11 16L14 13" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    copy: '<rect x="5" y="5" width="12" height="13" rx="2" fill="url(#macIndigo)"/><rect x="9" y="9" width="12" height="13" rx="2" fill="#FFFFFF" stroke="#C7C7CC" stroke-width="1.5"/><line x1="12" y1="13" x2="18" y2="13" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="17" x2="16" y2="17" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/>',
+    video: '<rect x="2" y="7" width="14" height="10" rx="3" fill="url(#macPurple)"/><path d="M16 10L21 7.5C21.6 7.2 22 7.4 22 8V16C22 16.6 21.6 16.8 21 16.5L16 14V10Z" fill="url(#macPurple)"/>',
+    audio: '<path d="M8 16V4C8 3.4 8.4 3 9 3H19C19.6 3 20 3.4 20 4V14" fill="none" stroke="#FF2D55" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="8" y1="6" x2="20" y2="4" stroke="#FF2D55" stroke-width="3" stroke-linecap="round"/><circle cx="6" cy="16" r="3" fill="#D30F3B"/><circle cx="18" cy="14" r="3" fill="#D30F3B"/>',
+    delete: '<path d="M4 6H20" stroke="#FF5252" stroke-width="2" stroke-linecap="round"/><path d="M9 6V4C9 3.4 9.4 3 10 3H14C14.6 3 15 3.4 15 4V6" fill="none" stroke="#FF5252" stroke-width="2" stroke-linecap="round"/><path d="M5 6L6.5 19.5C6.5 20.9 7.6 22 9 22H15C16.4 22 17.5 20.9 17.5 19.5L19 6H5Z" fill="url(#macRed)"/><line x1="10" y1="10" x2="10" y2="18" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="10" x2="14" y2="18" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>',
+    status: '<rect x="2" y="4" width="20" height="16" rx="4" fill="url(#macDark)"/><path d="M 3 12 H 8.5 L 10.5 7 L 13.5 17 L 15.5 12 H 21" fill="none" stroke="#32D74B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+};
+function ensureZephyrGlyphDefs() {
+    const target = document.body || document.documentElement;
+    if (!target || document.getElementById('zephyrGlyphDefs')) return;
+    const holder = document.createElement('div');
+    holder.id = 'zephyrGlyphDefs';
+    holder.innerHTML = ZEPHYR_GLYPH_DEFS;
+    target.prepend(holder);
+}
+function zephyrGlyph(name, className = 'zephyr-glyph', label = '') {
+    const body = ZEPHYR_GLYPHS[name] || ZEPHYR_GLYPHS.file;
+    const aria = label ? ` role="img" aria-label="${escapeHtml(label)}"` : ' aria-hidden="true" focusable="false"';
+    return `<svg class="${className}" viewBox="0 0 24 24"${aria}>${body}</svg>`;
+}
+function zephyrFileGlyph(file) {
+    ensureZephyrGlyphDefs();
+    if (file?.type === 'd') return zephyrGlyph('folder', 'zephyr-glyph fm-file-glyph', '文件夹');
+    if (isSftpMediaFile(file?.name || '')) return zephyrGlyph(isSftpVideoFile(file.name) ? 'video' : 'audio', 'zephyr-glyph fm-file-glyph', isSftpVideoFile(file.name) ? '视频' : '音乐');
+    return zephyrGlyph('file', 'zephyr-glyph fm-file-glyph', '文件');
+}
+function zephyrButtonGlyph(name, label = '') {
+    ensureZephyrGlyphDefs();
+    return zephyrGlyph(name, 'zephyr-glyph fm-button-glyph', label);
+}
+function setZephyrIconButton(button, iconName, label) {
+    if (!button) return;
+    button.innerHTML = zephyrButtonGlyph(iconName, label);
+    if (label) button.setAttribute('aria-label', label);
+}
+
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
@@ -2873,9 +2916,9 @@ function createFileManagerWindow({ path = currentPath } = {}) {
             item.dataset.fileType = file.type;
             item.dataset.filePath = itemPath;
             item.classList.toggle('selected', state.selectedFilePaths.has(itemPath));
-            const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
             const nameSpan = document.createElement('span');
-            nameSpan.textContent = `${icon} ${file.name}`;
+            nameSpan.className = 'fm-item-name';
+            nameSpan.innerHTML = `${zephyrFileGlyph(file)}<span class="fm-item-filename">${escapeHtml(file.name)}</span>`;
             nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
             nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); selectSingle(itemPath); });
             nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); openItem(itemPath, file.type); });
@@ -2883,17 +2926,18 @@ function createFileManagerWindow({ path = currentPath } = {}) {
             actions.className = 'fm-item-actions';
             if (file.type !== 'd') {
                 const downloadBtn = document.createElement('button');
-                downloadBtn.textContent = '⬇️';
+                setZephyrIconButton(downloadBtn, 'download', '下载');
                 downloadBtn.title = '下载';
                 downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadBtn.disabled = true; window.setTimeout(() => { downloadBtn.disabled = false; }, 2400); requestDownload({ ...file, path: itemPath }); });
                 actions.appendChild(downloadBtn);
             }
             const renameBtn = document.createElement('button');
-            renameBtn.textContent = '✏️';
+            renameBtn.innerHTML = svgIcon('rename');
+            renameBtn.setAttribute('aria-label', '重命名');
             renameBtn.title = '重命名';
             renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (!newName) return; wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: fullPath(newName) })); });
             const deleteBtn = document.createElement('button');
-            deleteBtn.textContent = '🗑️';
+            setZephyrIconButton(deleteBtn, 'delete', '删除');
             deleteBtn.title = '删除';
             deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
             actions.appendChild(renameBtn); actions.appendChild(deleteBtn);
@@ -3002,14 +3046,16 @@ function handleExtraFileManagerListMessage(msg) {
                 item.className = 'fm-item';
                 const itemPath = state.currentPath.replace(/\/+$/, '') + '/' + file.name;
                 item.dataset.fileName = file.name; item.dataset.fileType = file.type; item.dataset.filePath = itemPath;
-                const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
-                const nameSpan = document.createElement('span'); nameSpan.textContent = `${icon} ${file.name}`; nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
+                const nameSpan = document.createElement('span'); nameSpan.className = 'fm-item-name'; nameSpan.innerHTML = `${zephyrFileGlyph(file)}<span class="fm-item-filename">${escapeHtml(file.name)}</span>`; nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
                 nameSpan.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); state.selectedFilePaths = new Set([itemPath]); listEl.querySelectorAll('.fm-item').forEach((el) => el.classList.toggle('selected', el.dataset.filePath === itemPath)); });
                 nameSpan.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); if (file.type === 'd') { state.currentPath = itemPath; state.searchQuery = ''; const si = state.panel.querySelector('.fm-search-input'); if (si) si.value = ''; const rid = `${state.requestPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`; fileManagerWindowsByRequestId.set(rid, state); wsConnection.send(JSON.stringify({ type: 'sftp-list', requestId: rid, path: state.currentPath })); } else openFileItem(itemPath, file.type); });
                 const actions = document.createElement('div'); actions.className = 'fm-item-actions';
-                if (file.type !== 'd') { const downloadBtn = document.createElement('button'); downloadBtn.textContent = '⬇️'; downloadBtn.title = '下载'; downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDownload({ ...file, path: itemPath }); }); actions.appendChild(downloadBtn); }
-                const renameBtn = document.createElement('button'); renameBtn.textContent = '✏️'; renameBtn.title = '重命名'; renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (newName) wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: state.currentPath.replace(/\/+$/, '') + '/' + newName })); });
-                const deleteBtn = document.createElement('button'); deleteBtn.textContent = '🗑️'; deleteBtn.title = '删除'; deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
+                if (file.type !== 'd') { const downloadBtn = document.createElement('button'); setZephyrIconButton(downloadBtn, 'download', '下载'); downloadBtn.title = '下载'; downloadBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDownload({ ...file, path: itemPath }); }); actions.appendChild(downloadBtn); }
+                const renameBtn = document.createElement('button');
+                renameBtn.innerHTML = svgIcon('rename');
+                renameBtn.setAttribute('aria-label', '重命名');
+                renameBtn.title = '重命名'; renameBtn.addEventListener('click', (e) => { e.stopPropagation(); const newName = prompt('新名称:', file.name); if (newName) wsConnection.send(JSON.stringify({ type: 'sftp-rename', oldPath: itemPath, newPath: state.currentPath.replace(/\/+$/, '') + '/' + newName })); });
+                const deleteBtn = document.createElement('button'); setZephyrIconButton(deleteBtn, 'delete', '删除'); deleteBtn.title = '删除'; deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); if (confirm(`确认删除 ${file.name}?`)) wsConnection.send(JSON.stringify({ type: 'sftp-delete', path: itemPath })); });
                 actions.appendChild(renameBtn); actions.appendChild(deleteBtn); item.appendChild(nameSpan); item.appendChild(actions); listEl.appendChild(item);
             });
         }
@@ -3686,9 +3732,9 @@ function renderFileList(files) {
         item.dataset.fileType = file.type;
         item.dataset.filePath = itemPath;
         item.classList.toggle('selected', selectedFilePaths.has(itemPath));
-        const icon = file.type === 'd' ? '📁' : (window.ZephyrImagePreview?.isImage?.(file.name) ? '🖼️' : (isSftpMediaFile(file.name) ? (isSftpVideoFile(file.name) ? '🎬' : '🎵') : '📄'));
         const nameSpan = document.createElement('span');
-        nameSpan.textContent = `${icon} ${file.name}`;
+        nameSpan.className = 'fm-item-name';
+        nameSpan.innerHTML = `${zephyrFileGlyph(file)}<span class="fm-item-filename">${escapeHtml(file.name)}</span>`;
         nameSpan.title = file.type === 'd' ? '打开文件夹' : '打开文件';
         nameSpan.addEventListener('click', (e) => {
             e.preventDefault();
@@ -3704,7 +3750,8 @@ function renderFileList(files) {
         actions.className = 'fm-item-actions';
 
         const renameBtn = document.createElement('button');
-        renameBtn.textContent = '✏️';
+        renameBtn.innerHTML = svgIcon('rename');
+        renameBtn.setAttribute('aria-label', '重命名');
         renameBtn.title = '重命名';
         renameBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3716,7 +3763,7 @@ function renderFileList(files) {
         });
 
         const deleteBtn = document.createElement('button');
-        deleteBtn.textContent = '🗑️';
+        setZephyrIconButton(deleteBtn, 'delete', '删除');
         deleteBtn.title = '删除';
         deleteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3730,7 +3777,7 @@ function renderFileList(files) {
 
         if (file.type !== 'd') {
             const downloadBtn = document.createElement('button');
-            downloadBtn.textContent = '⬇️';
+            setZephyrIconButton(downloadBtn, 'download', '下载');
             downloadBtn.title = '下载';
             downloadBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -7326,8 +7373,8 @@ function renderStats(d) {
             </div>
         </div>
         <div class="ip-section">
-            <div class="ip-box"><span>IPv4</span><code>${ipv4}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${ipv4}')">📋</button></div>
-            <div class="ip-box"><span>IPv6</span><code>${ipv6}</code><button class="copy-ip-btn" onclick="navigator.clipboard.writeText('${ipv6}')">📋</button></div>
+            <div class="ip-box"><span>IPv4</span><code>${ipv4}</code><button class="copy-ip-btn" aria-label="复制 IPv4" onclick="navigator.clipboard.writeText('${ipv4}')">${zephyrButtonGlyph('copy', '复制')}</button></div>
+            <div class="ip-box"><span>IPv6</span><code>${ipv6}</code><button class="copy-ip-btn" aria-label="复制 IPv6" onclick="navigator.clipboard.writeText('${ipv6}')">${zephyrButtonGlyph('copy', '复制')}</button></div>
         </div>
     `;
 
