@@ -241,6 +241,29 @@ function setZephyrIconButton(button, iconName, label) {
     if (label) button.setAttribute('aria-label', label);
 }
 
+const DOCKER_ACTION_GLYPH_DEFS = `<svg width="0" height="0" class="docker-action-glyph-defs" aria-hidden="true" focusable="false"><defs><linearGradient id="dockerStartGreen" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#34C759"/><stop offset="100%" stop-color="#28A745"/></linearGradient><linearGradient id="dockerRestartBlue" x1="0%" y1="20%" x2="100%" y2="80%"><stop offset="0%" stop-color="#007AFF"/><stop offset="100%" stop-color="#5E5CE8"/></linearGradient><linearGradient id="dockerLogDark" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#2C2C2E"/><stop offset="100%" stop-color="#1C1C1E"/></linearGradient><linearGradient id="dockerStopRed" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FF453A"/><stop offset="100%" stop-color="#D70015"/></linearGradient><linearGradient id="dockerDeleteRed" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FF5252"/><stop offset="100%" stop-color="#E53935"/></linearGradient></defs></svg>`;
+const DOCKER_ACTION_GLYPHS = {
+    start: '<circle cx="12" cy="12" r="10" fill="url(#dockerStartGreen)"/><path d="M10 8L16 12L10 16V8Z" fill="#FFFFFF"/>',
+    restart: '<path d="M12 4C7.58 4 4 7.58 4 12C4 16.42 7.58 20 12 20C16.42 20 20 16.42 20 12H18C18 15.31 15.31 18 12 18C8.69 18 6 15.31 6 12C6 8.69 8.69 6 12 6V9L16 5.5L12 2V4Z" fill="url(#dockerRestartBlue)"/>',
+    logs: '<rect x="4" y="3" width="16" height="18" rx="2" fill="url(#dockerLogDark)"/><line x1="7" y1="7" x2="17" y2="7" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/><line x1="7" y1="11" x2="17" y2="11" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/><line x1="7" y1="15" x2="13" y2="15" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>',
+    stop: '<circle cx="12" cy="12" r="10" fill="url(#dockerStopRed)"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.5" fill="#FFFFFF"/>',
+    remove: '<path d="M4 6H20" stroke="#FF5252" stroke-width="2" stroke-linecap="round"/><path d="M9 6V4C9 3.4 9.4 3 10 3H14C14.6 3 15 3.4 15 4V6" fill="none" stroke="#FF5252" stroke-width="2" stroke-linecap="round"/><path d="M5 6L6.5 19.5C6.5 20.9 7.6 22 9 22H15C16.4 22 17.5 20.9 17.5 19.5L19 6H5Z" fill="url(#dockerDeleteRed)"/><line x1="10" y1="10" x2="10" y2="18" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/><line x1="14" y1="10" x2="14" y2="18" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>'
+};
+function ensureDockerActionGlyphDefs() {
+    const target = document.body || document.documentElement;
+    if (!target || document.getElementById('dockerActionGlyphDefs')) return;
+    const holder = document.createElement('div');
+    holder.id = 'dockerActionGlyphDefs';
+    holder.innerHTML = DOCKER_ACTION_GLYPH_DEFS;
+    target.prepend(holder);
+}
+function dockerActionGlyph(action, label = '') {
+    ensureDockerActionGlyphDefs();
+    const body = DOCKER_ACTION_GLYPHS[action] || DOCKER_ACTION_GLYPHS.logs;
+    const aria = label ? ` role="img" aria-label="${escapeHtml(label)}"` : ' aria-hidden="true" focusable="false"';
+    return `<svg class="docker-action-glyph" viewBox="0 0 24 24"${aria}>${body}</svg>`;
+}
+
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let activeConnectionToken = 0;
@@ -5672,16 +5695,16 @@ function renderDockerContainers(containers = []) {
         `;
         const actions = tr.querySelector('.docker-actions');
         const actionButtons = [
-            ['start', '启动', '▶️'],
-            ['stop', '停止', '⏹️'],
-            ['restart', '重启', '🔄'],
-            ['logs', '日志', '📜'],
-            ['remove', '删除', '🗑️'],
+            ['start', '启动'],
+            ['stop', '停止'],
+            ['restart', '重启'],
+            ['logs', '日志'],
+            ['remove', '删除'],
         ];
-        actionButtons.forEach(([action, label, icon]) => {
+        actionButtons.forEach(([action, label]) => {
             const btn = document.createElement('button');
-            btn.className = `tool-btn ${action === 'remove' ? 'danger-text' : ''}`;
-            btn.textContent = `${icon} ${label}`;
+            btn.className = `tool-btn docker-action-btn ${action === 'remove' ? 'danger-text' : ''}`;
+            btn.innerHTML = `${dockerActionGlyph(action, label)}<span>${escapeHtml(label)}</span>`;
             btn.disabled = (action === 'start' && running) || (action === 'stop' && !running);
             btn.addEventListener('click', () => {
                 if (action === 'logs') return openDockerLogs(target, container.name);
@@ -5713,8 +5736,8 @@ function renderDockerImages(images = []) {
             <td><div class="docker-actions"></div></td>
         `;
         const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'tool-btn danger-text';
-        deleteBtn.textContent = '🗑️ 删除';
+        deleteBtn.className = 'tool-btn docker-action-btn danger-text';
+        deleteBtn.innerHTML = `${dockerActionGlyph('remove', '删除')}<span>删除</span>`;
         deleteBtn.addEventListener('click', () => {
             if (!confirm(`确认删除镜像 ${imageRef}?`)) return;
             setDockerStatus('正在检查镜像使用情况...', true);

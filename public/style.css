@@ -4123,6 +4123,22 @@ html.keyboard-open .terminal-page {
 .docker-table tr:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .docker-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .docker-actions .tool-btn { padding: 3px 7px; }
+.docker-action-glyph-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.docker-actions .docker-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    line-height: 1;
+}
+.docker-action-glyph {
+    width: 18px;
+    height: 18px;
+    display: block;
+    flex: 0 0 18px;
+    overflow: visible;
+    filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .12));
+}
 .danger-text { color: var(--danger) !important; border-color: rgba(248,81,73,0.35) !important; }
 .danger-text:hover { background: rgba(248,81,73,0.1) !important; }
 .docker-badge {
