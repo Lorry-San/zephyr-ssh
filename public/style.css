@@ -512,6 +512,9 @@ body.terminal-mode-entering .main-nav {
 .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
 .protocol-badge { padding: 4px 9px; border-radius: 999px; background: rgba(88,166,255,.15); color: var(--accent-hover); font-size: 12px; font-weight: 800; }
 .last-time, .muted { color: var(--text-secondary); font-size: 12px; }
+.muted-link { color: inherit; text-decoration-color: currentColor; }
+.muted-link:visited { color: inherit; }
+.muted-link:hover { color: var(--text); }
 .connection-card h2 { font-size: 19px; margin-bottom: 5px; }
 .host-line { color: var(--text-secondary); font-family: var(--font-mono); font-size: 13px; margin-bottom: 12px; }
 .remark-md { min-height: 56px; padding: 10px; border-radius: var(--radius); background: var(--bg); color: var(--text-secondary); font-size: 13px; line-height: 1.55; overflow: auto; }
