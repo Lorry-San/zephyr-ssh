@@ -259,11 +259,30 @@ function currentSession(req) {
     return sid ? sessions.get(sid) : null;
 }
 
+function isPasswordChangeAllowedPath(req) {
+    return req.path === '/api/auth/me' || req.path === '/api/auth/change-password' || req.path === '/api/auth/logout';
+}
+
 function requireAuth(req, res, next) {
     const session = currentSession(req);
     if (!session) return res.status(401).json({ error: '未登录' });
+    if (session.mustChangePassword && !isPasswordChangeAllowedPath(req)) {
+        return res.status(403).json({ error: '请先修改默认密码', mustChangePassword: true });
+    }
     req.session = session;
     next();
+}
+
+function requirePageAuth(req, res, next) {
+    const session = currentSession(req);
+    if (!session || session.mustChangePassword) return res.redirect('/');
+    req.session = session;
+    next();
+}
+
+function rejectSocket(socket, statusCode = 401, statusText = 'Unauthorized') {
+    try { socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`); } catch {}
+    try { socket.destroy(); } catch {}
 }
 
 function publicConnection(conn) {
@@ -3568,7 +3587,11 @@ app.get('/vendor/@wterm/dom/terminal.css', (req, res) => {
     res.type('text/css').sendFile(path.join(__dirname, 'node_modules', '@wterm', 'dom', 'src', 'terminal.css'));
 });
 app.use('/vendor/@wterm', express.static(path.join(__dirname, 'node_modules', '@wterm')));
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('/app.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
+app.get('/terminal.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'terminal.html')));
+app.get('/guacamole.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'guacamole.html')));
+app.get('/player.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'player.html')));
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
 // 健康检查
 app.get('/healthz', (req, res) => res.status(200).send('OK'));
@@ -3604,13 +3627,12 @@ server.on('upgrade', (req, socket, head) => {
     const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/editor-lsp' ? editorLspWss : pathname === '/rdp-h264' ? rdpH264Wss : pathname === '/rdp-audio' ? rdpAudioWss : null;
     if (!targetWss) {
         console.warn('[WS-DIAG] rejected websocket upgrade for unknown path', { url: req.url || '' });
-        try { socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); } catch {}
-        try { socket.destroy(); } catch {}
+        rejectSocket(socket, 404, 'Not Found');
         return;
     }
-    if (targetWss === editorLspWss && !currentSession(req)) {
-        try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); } catch {}
-        try { socket.destroy(); } catch {}
+    const session = currentSession(req);
+    if (!session || session.mustChangePassword) {
+        rejectSocket(socket, session?.mustChangePassword ? 403 : 401, session?.mustChangePassword ? 'Forbidden' : 'Unauthorized');
         return;
     }
 
@@ -4637,10 +4659,21 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
 
         // ------------------------- SSH 连接 -------------------------
         if (msg.type === 'connect') {
+            const sessionUser = currentSession(req);
+            if (!sessionUser) {
+                sendJSON({ type: 'error', message: '未登录或会话已过期' });
+                try { ws.close(1008, 'unauthorized'); } catch {}
+                return;
+            }
             const { host, port, username, password, privateKey, init, connectionId } = msg;
             const requestedSessionId = String(msg.sessionId || msg.terminalSessionId || msg.tabId || connectionId || crypto.randomUUID());
             const existingSession = sshTerminalSessions.get(requestedSessionId);
             if (existingSession && !existingSession.closed) {
+                if (existingSession.username && existingSession.username !== sessionUser.username) {
+                    sendJSON({ type: 'error', message: '会话不属于当前用户' });
+                    try { ws.close(1008, 'session-owner-mismatch'); } catch {}
+                    return;
+                }
                 attachSshSession(existingSession, { replay: true });
                 return;
             }
@@ -4766,7 +4799,7 @@ echo "Docker registry-mirrors 已更新，请重启 Docker 服务使配置生效
                     createdAt: Date.now(),
                     lastActive: Date.now(),
                     lastDetachedAt: 0,
-                    username: currentSession(req)?.username || '',
+                    username: sessionUser.username || '',
                     connectionConfig: conn,
                     closed: false,
                 };
