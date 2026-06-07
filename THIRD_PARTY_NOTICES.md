@@ -12,6 +12,7 @@ The Zephyr-SSH project itself is licensed under the GNU General Public License v
 | ws | MIT | WebSocket server/client support | <https://github.com/websockets/ws> |
 | ssh2 | MIT | SSH/SFTP client functionality | <https://github.com/mscdex/ssh2> |
 | better-sqlite3 | MIT | SQLite database access | <https://github.com/WiseLibs/better-sqlite3> |
+| @noble/post-quantum | MIT | ML-KEM-768 post-quantum key encapsulation for encrypted data fields | <https://github.com/paulmillr/noble-post-quantum> |
 | SimpleWebAuthn | MIT | Passkey/WebAuthn server support | <https://simplewebauthn.dev/> |
 | nodemailer | MIT | Email delivery support | <https://nodemailer.com/> |
 | otplib | MIT | TOTP/OTP generation and verification | <https://github.com/yeojz/otplib> |

@@ -25,6 +25,7 @@ const {
 } = require('@simplewebauthn/server');
 const { getRemoteStats } = require('./stats');
 const storage = require('./storage');
+const secretCrypto = require('./secret-crypto');
 const { handleEditorLspConnection } = require('./editor-lsp-server');
 const { getAppVersion } = require('./version');
 const {
@@ -227,6 +228,23 @@ function initData() {
 }
 
 storage.init({ hashPassword });
+
+function reopenStorage() {
+    storage.close();
+    storage.init({ hashPassword });
+}
+
+function parseBackupKeyFile(buffer) {
+    if (!buffer?.length) return null;
+    try { return JSON.parse(buffer.toString('utf8')); } catch { return null; }
+}
+
+function restoredKeyMatchesCurrent(currentBuffer, incomingBuffer) {
+    if (!incomingBuffer?.length) return false;
+    const current = parseBackupKeyFile(currentBuffer);
+    const incoming = parseBackupKeyFile(incomingBuffer);
+    return Boolean(current?.publicKey && current?.secretKey && incoming?.publicKey && incoming?.secretKey && current.publicKey === incoming.publicKey && current.secretKey === incoming.secretKey);
+}
 
 function parseCookies(req) {
     return String(req.headers.cookie || '').split(';').reduce((acc, part) => {
@@ -1743,7 +1761,9 @@ app.post('/api/passkeys/login/verify', async (req, res) => {
 
 app.get('/api/data/export', requireAuth, async (req, res) => {
     try { storage.rawDb().pragma('wal_checkpoint(FULL)'); } catch (err) { console.error('[DB] WAL checkpoint failed:', err.message); }
-    const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: APP_VERSION, exportedAt: Date.now() }, null, 2) };
+    const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: APP_VERSION, exportedAt: Date.now(), dataEncryption: secretCrypto.ALG }, null, 2) };
+    const keyBackup = secretCrypto.getKeyBackupFile();
+    if (keyBackup) files[keyBackup.archivePath] = fs.readFileSync(keyBackup.filePath);
     const encrypted = encryptBuffer(await zipBuffer(files), process.env.ENCRYPTION_KEY);
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('Content-Disposition', `attachment; filename="zephyr-backup-${stamp}.zip.enc"`); res.end(encrypted);
@@ -1755,11 +1775,23 @@ app.post('/api/data/import', requireAuth, upload.single('backup'), async (req, r
         if (!req.file?.buffer) return res.status(400).json({ error: '请上传备份文件' });
         const zip = decryptBuffer(req.file.buffer, backupPassword || process.env.ENCRYPTION_KEY); const dir = await unzipper.Open.buffer(zip); const dbEntry = dir.files.find((f) => f.path === 'zephyr.db');
         if (!dbEntry) return res.status(400).json({ error: '备份包缺少 zephyr.db' });
+        const keyEntry = dir.files.find((f) => f.path === 'crypto/ml-kem-768-keypair.json');
+        const incomingKeyBuffer = keyEntry ? await keyEntry.buffer() : null;
+        const oldKeyBackup = secretCrypto.getKeyBackupFile();
+        const oldKeyBackupBuffer = oldKeyBackup ? fs.readFileSync(oldKeyBackup.filePath) : null;
         try { storage.rawDb().pragma('wal_checkpoint(FULL)'); } catch {}
         const backupName = path.join(DATA_DIR, `zephyr-before-import-${Date.now()}.db`); fs.copyFileSync(path.join(DATA_DIR, 'zephyr.db'), backupName);
-        storage.rawDb().close();
-        fs.writeFileSync(path.join(DATA_DIR, 'zephyr.db'), await dbEntry.buffer());
-        storage.init({ hashPassword });
+        storage.close();
+        try {
+            if (incomingKeyBuffer && !restoredKeyMatchesCurrent(oldKeyBackupBuffer, incomingKeyBuffer)) secretCrypto.restoreKeyBackup(incomingKeyBuffer);
+            fs.writeFileSync(path.join(DATA_DIR, 'zephyr.db'), await dbEntry.buffer());
+            storage.init({ hashPassword });
+        } catch (err) {
+            if (oldKeyBackupBuffer) secretCrypto.restoreKeyBackup(oldKeyBackupBuffer);
+            fs.copyFileSync(backupName, path.join(DATA_DIR, 'zephyr.db'));
+            reopenStorage();
+            throw err;
+        }
         addActivity('导入数据备份');
         res.json({ ok: true, message: '导入完成，数据已重新加载' });
     } catch (err) { res.status(400).json({ error: err.message || '导入失败' }); }

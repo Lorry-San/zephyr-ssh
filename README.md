@@ -49,6 +49,7 @@
 ### 数据与部署
 
 - 💾 **SQLite 数据存储**：使用 `better-sqlite3` 持久化用户、连接、设置、安全事件等数据。
+- 🔐 **敏感数据加密**：连接密码/私钥、代理密码、SSH 密钥、TOTP Secret、SMTP/CAPTCHA 密钥等字段使用 ML-KEM-768 + AES-256-GCM 混合加密后落盘。
 - 📦 **数据备份**：支持加密备份导出、备份导入，并在导入前自动生成本地数据库备份。
 - 🐳 **Docker 部署**：Docker 镜像内置 Node.js 运行时与 `guacd`，可直接部署使用。
 
@@ -160,6 +161,8 @@ PORT=3000
 | --- | --- | --- |
 | `PORT` | Web 服务监听端口；Docker 内通常保持 `3000` | `3000` |
 | `ENCRYPTION_KEY` | 备份导出/导入加密密钥，生产环境必须改为强随机字符串 | `please-change-this-key` |
+| `ZEPHYR_DATA_MLKEM768_PUBLIC_KEY_B64` / `ZEPHYR_DATA_MLKEM768_SECRET_KEY_B64` | 可选：外部注入 ML-KEM-768 数据字段加密密钥对；未设置时会自动生成到 `data/crypto/ml-kem-768-keypair.json` | 自动生成 |
+| `ZEPHYR_DATA_MLKEM768_KEY_FILE` | 可选：自动生成/读取 ML-KEM-768 数据字段加密密钥文件路径 | `data/crypto/ml-kem-768-keypair.json` |
 | `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，应与浏览器访问地址一致 | `http://localhost:3000` |
 | `GUACD_HOST` | guacd 地址；Docker 镜像默认使用内置本机 guacd | `127.0.0.1` |
 | `GUACD_PORT` | guacd 监听端口 | `4822` |
@@ -172,6 +175,7 @@ PORT=3000
 - 使用 Passkey / WebAuthn 时，生产环境建议启用 HTTPS。
 - `PUBLIC_ORIGIN` 必须与实际访问地址一致，例如 `https://ssh.example.com`。
 - `ENCRYPTION_KEY` 用于加密备份文件。旧备份需要使用导出时的旧密钥才能解密导入。
+- Zephyr 首次启动会生成 ML-KEM-768 数据字段加密密钥对，默认保存在 `data/crypto/ml-kem-768-keypair.json`。数据库内的敏感字段会使用该密钥派生的混合加密方案落盘；迁移、备份或恢复时必须同时保留该密钥文件，或通过 `ZEPHYR_DATA_MLKEM768_PUBLIC_KEY_B64` / `ZEPHYR_DATA_MLKEM768_SECRET_KEY_B64` 外部注入同一密钥对。使用默认文件密钥时，后台导出的 `.zip.enc` 备份会把该密钥文件一起放入 `ENCRYPTION_KEY` 加密包中，便于跨机器恢复。
 - 程序首次启动如果发现 `data/.env` 不存在，会生成默认占位文件；生产环境不要长期使用默认密钥。
 
 ---
@@ -541,6 +545,7 @@ zephyr-ssh/
 │   └── style.css        # 全局样式
 ├── data/                # 运行数据目录
 │   ├── .env             # 环境变量配置
+│   ├── crypto/          # ML-KEM-768 数据字段加密密钥（必须随数据目录持久化和备份）
 │   └── zephyr.db        # SQLite 数据库
 ├── preview/image/       # 图片预览后端模块（Sharp 转码、ImageMagick 兜底、缓存）
 ├── server.js            # 后端服务、API、WebSocket、协议路由
@@ -558,13 +563,14 @@ zephyr-ssh/
 
 1. 首次登录后立即修改默认管理员密码。
 2. 生产环境必须修改 `ENCRYPTION_KEY`。
-3. 启用 Passkey / TOTP 前，确认服务器系统时间准确。
-4. Passkey / WebAuthn 推荐在 HTTPS 环境下使用。
-5. 开启 IP 白名单前，确认当前访问 IP 已包含在白名单内，避免误锁。
-6. 不要提交 `data/.env`、数据库文件、备份文件和真实连接凭据。
-7. 不要把 Zephyr 直接暴露在不可信网络中，建议放在 HTTPS 反向代理之后。
-8. 定期导出加密备份，并妥善保存备份密钥。
-9. 删除或重建 Docker 容器前，确认 `/app/data` 已正确持久化。
+3. 妥善备份 `data/crypto/ml-kem-768-keypair.json`（或外部注入的 ML-KEM-768 密钥对）；丢失后已加密的连接密码、私钥、TOTP Secret 等敏感字段无法解密。
+4. 启用 Passkey / TOTP 前，确认服务器系统时间准确。
+5. Passkey / WebAuthn 推荐在 HTTPS 环境下使用。
+6. 开启 IP 白名单前，确认当前访问 IP 已包含在白名单内，避免误锁。
+7. 不要提交 `data/.env`、`data/crypto/`、数据库文件、备份文件和真实连接凭据。
+8. 不要把 Zephyr 直接暴露在不可信网络中，建议放在 HTTPS 反向代理之后。
+9. 定期导出加密备份，并妥善保存备份密钥。
+10. 删除或重建 Docker 容器前，确认 `/app/data` 已正确持久化。
 
 ---
 
@@ -583,6 +589,7 @@ zephyr-ssh/
 ```gitignore
 node_modules/
 data/.env
+data/crypto/
 data/*.db
 data/*.db-shm
 data/*.db-wal
