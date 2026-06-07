@@ -6493,6 +6493,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
         0 8px 20px rgba(0, 0, 0, 0.08);
     transform: scale(1.08) translateY(-2px);
 }
+.fm-editor-save-icon:active {
+    transform: scale(0.95);
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    box-shadow: none;
+}
 
 
 .rdp-touch-hud {
