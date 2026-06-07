@@ -6438,9 +6438,12 @@ body.smartbar-trash-hover .smartbar-trash-target {
 /* User-provided macOS-style save icon */
 .fm-editor-save-icon {
     color: #475569;
-    background: rgba(255, 255, 255, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
+    background: color-mix(in srgb, var(--surface) 82%, rgba(255, 255, 255, 0.62));
+    border: 1px solid color-mix(in srgb, var(--text) 18%, rgba(255, 255, 255, 0.5));
+    border-radius: 14px;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.65),
+        0 4px 10px rgba(0, 0, 0, 0.05);
     overflow: visible;
     display: inline-flex;
     align-items: center;
@@ -6466,11 +6469,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
     transition: all 0.2s ease;
 }
 .fm-editor-save-icon:hover {
-    background: rgba(255, 255, 255, 0.9);
+    background: color-mix(in srgb, #ffffff 92%, var(--surface));
     color: #007aff;
-    border-color: rgba(0, 122, 255, 0.26);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-    transform: translateY(-1px) scale(1.03);
+    border-color: rgba(0, 122, 255, 0.36);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.75),
+        0 8px 20px rgba(0, 0, 0, 0.08);
+    transform: scale(1.08) translateY(-2px);
 }
 
 
@@ -7031,3 +7036,19 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .copy-ip-btn .fm-button-glyph { width: 18px; height: 18px; display: block; }
 .monitor-title { display: inline-flex; align-items: center; gap: 8px; }
 .monitor-title-icon { width: 23px; height: 23px; display: inline-flex; flex: 0 0 23px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='macDark' x1='0%25' y1='0%25' x2='0%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2348484A'/%3E%3Cstop offset='100%25' stop-color='%231C1C1E'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='2' y='4' width='20' height='16' rx='4' fill='url(%23macDark)'/%3E%3Cpath d='M 3 12 H 8.5 L 10.5 7 L 13.5 17 L 15.5 12 H 21' fill='none' stroke='%2332D74B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; filter: drop-shadow(0 2px 3px rgba(0,0,0,.14)); }
+
+
+/* Polish file-manager toolbar alignment on compact touch screens. */
+.fm-toolbar .tool-btn,
+.fm-toolbar .fm-upload-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+.fm-toolbar .fm-select-btn,
+.fm-toolbar .fm-paste-btn {
+    min-height: 31px;
+    padding-top: 0;
+    padding-bottom: 0;
+}
