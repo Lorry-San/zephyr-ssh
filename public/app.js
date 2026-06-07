@@ -2847,17 +2847,15 @@ function bindEvents() {
                 console.warn('[terminal-download]', 'ignored invalid download url', { message: err.message });
                 return;
             }
-            const frame = document.createElement('iframe');
-            frame.style.position = 'fixed';
-            frame.style.width = '1px';
-            frame.style.height = '1px';
-            frame.style.opacity = '0';
-            frame.style.pointerEvents = 'none';
-            frame.style.inset = 'auto 0 0 auto';
-            frame.referrerPolicy = 'same-origin';
-            frame.src = downloadUrl.href;
-            document.body.appendChild(frame);
-            window.setTimeout(() => frame.remove(), 60000);
+            const a = document.createElement('a');
+            a.href = downloadUrl.href;
+            a.download = String(e.data.name || 'download');
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            window.setTimeout(() => { try { a.remove(); } catch {} }, 1000);
             return;
         }
         const t = terminalTabs.find((x) => x.id === e.data.tabId);

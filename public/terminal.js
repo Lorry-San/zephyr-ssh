@@ -2468,25 +2468,24 @@ function canUseVerifiedChunkedDownload(download, totalSize, fileName = '') {
     return true;
 }
 
-function triggerNativeDownloadUrl(url) {
+function triggerNativeDownloadUrl(url, fileName = 'download') {
     const absoluteUrl = new URL(url, location.href).href;
     if (embeddedMode && window.parent && window.parent !== window) {
-        window.parent.postMessage({ source: 'zephyr-terminal', type: 'download-url', url: absoluteUrl }, '*');
+        window.parent.postMessage({ source: 'zephyr-terminal', type: 'download-url', url: absoluteUrl, name: fileName }, '*');
         return;
     }
-    const frame = document.createElement('iframe');
-    frame.style.position = 'fixed';
-    frame.style.width = '1px';
-    frame.style.height = '1px';
-    frame.style.opacity = '0';
-    frame.style.pointerEvents = 'none';
-    frame.style.inset = 'auto 0 0 auto';
-    frame.src = absoluteUrl;
-    document.body.appendChild(frame);
-    window.setTimeout(() => { try { frame.remove(); } catch {} }, 60000);
+    const a = document.createElement('a');
+    a.href = absoluteUrl;
+    a.download = fileName;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => { try { a.remove(); } catch {} }, 1000);
 }
 
-// === 浏览器原生下载：通过父页面/隐藏 iframe 触发，避免终端 iframe 被下载响应替换 ===
+// === 浏览器原生下载：通过父页面打开独立下载目标，避免当前 app/terminal 被下载响应替换 ===
 // 传输面板通过服务端进度轮询反映真实进度
 // 暂停：终止服务端流（浏览器会看到下载失败）
 // 继续：重新发起下载（从零开始，服务端支持 Range）
@@ -2569,9 +2568,8 @@ function nativeDownload(id, fileName, url, totalSize) {
     const entry = activeSftpDownloads.get(id);
     if (!entry) return;
 
-    // 触发浏览器原生下载。嵌入在主页 iframe 时必须交给父页面创建隐藏 iframe，
-    // 否则部分浏览器会把 terminal iframe 导航到下载响应，表现为文件管理器断开/自动回登录页。
-    triggerNativeDownloadUrl(url);
+    // 触发浏览器原生下载。必须避免隐藏 iframe：部分 Android/HTTP 环境会把下载响应当成页面导航，导致看起来像退出登录。
+    triggerNativeDownloadUrl(url, fileName);
 
     // 开始轮询服务端进度
     startProgressPoll(id, totalSize, entry.progressUrl || '');
@@ -3567,6 +3565,8 @@ function showFilePropertiesModal(selected) {
     filePropertiesModal.classList.add('show');
     requestRemoteProperties(selected);
 }
+// Native download target is opened only after the signed URL is ready.
+
 function requestDownload(file) {
     const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     markDownloadProgress(downloadId, { name: file.name, path: file.path, size: file.size, loaded: 0, status: 'pending', controlUrl: '', progressUrl: '' });
