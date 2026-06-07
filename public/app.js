@@ -1803,11 +1803,7 @@ function updateFullscreenKeyboardFromViewport() {
     const viewportHeight = vvHeight;
     const offsetTop = Math.round(window.visualViewport.offsetTop || 0);
     const inset = Math.max(0, baseline - viewportHeight - offsetTop);
-    if (inset < 80 && appKeyboardOpen && appKeyboardPendingMetrics?.keyboardOpen && Number(appKeyboardPendingMetrics.keyboardInset || 0) >= 80) {
-        applyTerminalWorkspaceKeyboard(appKeyboardPendingMetrics);
-        return;
-    }
-    if (inset >= 100 || appKeyboardOpen || workspace.classList.contains('keyboard-open')) {
+    if (inset >= 100 || workspace.classList.contains('keyboard-open')) {
         applyTerminalWorkspaceKeyboard({ keyboardOpen: inset >= 16 || appKeyboardOpen, keyboardInset: inset, viewportHeight, layoutHeight: baseline, offsetTop });
     }
 }

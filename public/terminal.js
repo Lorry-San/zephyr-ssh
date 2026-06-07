@@ -267,6 +267,8 @@ let mobileStableScrollRestoreTimers = [];
 let terminalBottomFollowToken = 0;
 let terminalBottomFollowTimers = [];
 let terminalUserScrollGestureUntil = 0;
+let mobileStableTypingUntil = 0;
+let mobileStableEchoSuppressUntil = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -6057,15 +6059,10 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
         setTerminalAutoFollow(false, reason);
         lockMobileTerminalAutoFollow(reason, 3200);
     }
-    else if (isMobileStableInputMode() && isProgrammaticTerminalScroll) {
-        // Programmatic bottom following may land a few px/rows above the new visual bottom
-        // while Android is animating the fullscreen keyboard. Do not convert that into a
-        // user-history lock, otherwise following output is immediately disabled.
-        scheduleTerminalScrollbarUpdate();
-    }
-    else if (isMobileStableInputMode() && Date.now() - (mobileStableLastActualInputAt || 0) < 700) {
-        // IME / aux-key input can produce synthetic scroll events while the keyboard is animating.
-        // Do not interpret those as the user reading history.
+    else if (isMobileStableInputMode()) {
+        // Android/WebView emits scroll events during keyboard animation, WTerm render,
+        // and our own visibility repairs. Treat mobile stable scroll-away as history
+        // only when a real touch/wheel/scrollbar gesture marked terminalUserScrollGestureUntil.
         scheduleTerminalScrollbarUpdate();
     }
     else if (!isProgrammaticTerminalScroll) {
@@ -6095,17 +6092,19 @@ function scrollTerminalToBottom(reason = 'scroll-bottom') {
     try {
         const maxScroll = getTerminalMaxScroll(el);
         if (isMobileStableInputMode()) {
-            el.scrollTop = maxScroll;
+            const activeTarget = getMobileStableActiveLineScrollTarget(el, reason);
+            el.scrollTop = Number.isFinite(activeTarget) ? activeTarget : maxScroll;
         } else if (term?._zephyrOriginalScrollToBottom) {
             term._zephyrOriginalScrollToBottom();
         } else {
             el.scrollTop = maxScroll;
         }
         const nextMaxScroll = getTerminalMaxScroll(el);
-        el.scrollTop = nextMaxScroll;
+        if (!isMobileStableInputMode()) el.scrollTop = nextMaxScroll;
+        else el.scrollTop = Math.min(el.scrollTop, nextMaxScroll);
         if (wtermWrapper && wtermWrapper !== el) {
             const maxWrapperScroll = getTerminalMaxScroll(wtermWrapper);
-            wtermWrapper.scrollTop = maxWrapperScroll;
+            wtermWrapper.scrollTop = Math.min(wtermWrapper.scrollTop, maxWrapperScroll);
         }
         mobileTerminalAutoFollowLockUntil = 0;
         mobileTerminalAutoFollowLockReason = '';
@@ -6307,8 +6306,18 @@ function followTerminalBottomNow(reason = 'bottom-follow', { force = false } = {
     isProgrammaticTerminalScroll = true;
     try {
         const maxScroll = getTerminalMaxScroll(el);
-        el.scrollTop = maxScroll;
-        if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = getTerminalMaxScroll(wtermWrapper);
+        let target = maxScroll;
+        if (isMobileStableInputMode()) {
+            const activeTarget = getMobileStableActiveLineScrollTarget(el, reason);
+            if (Number.isFinite(activeTarget)) {
+                // In mobile stable mode WTerm can report large bottom blank space after
+                // fullscreen/keyboard transitions. Following DOM maxScroll jumps into that
+                // blank area. Follow the cursor/last real line instead, with a tiny tolerance.
+                target = activeTarget;
+            }
+        }
+        el.scrollTop = Math.max(0, Math.min(maxScroll, target));
+        if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = Math.max(0, Math.min(getTerminalMaxScroll(wtermWrapper), target));
         mobileTerminalAutoFollowLockUntil = 0;
         mobileTerminalAutoFollowLockReason = '';
         mobileStableLastBottomIntent = true;
@@ -6379,6 +6388,41 @@ function getMobileStableActiveLineRect() {
     return null;
 }
 
+function getMobileStableActiveLineScrollTarget(el = getTerminalScrollElement(), reason = 'active-line-target') {
+    if (!isMobileStableInputMode() || !el) return null;
+    const activeRect = getMobileStableActiveLineRect();
+    const viewportRect = el.getBoundingClientRect?.();
+    if (!activeRect || !viewportRect?.height) return null;
+    const lineHeight = getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35 || 20;
+    const topTolerance = Math.max(4, Math.round(lineHeight * 0.45));
+    const bottomTolerance = Math.max(3, Math.round(lineHeight * 0.18));
+    // Do not reserve a full line of bottom gap while typing: when the cursor is on
+    // the last visible line, every echoed character would otherwise scroll by the
+    // gap amount and then settle back, producing the observed up/down jitter.
+    // Scroll only when the active line is actually clipped.
+    const visibleTop = viewportRect.top + topTolerance;
+    const visibleBottom = viewportRect.bottom - bottomTolerance;
+    let target = el.scrollTop;
+    if (activeRect.bottom > visibleBottom) {
+        target += Math.ceil(activeRect.bottom - visibleBottom);
+    } else if (activeRect.top < visibleTop) {
+        target -= Math.ceil(visibleTop - activeRect.top);
+    }
+    const maxScroll = getTerminalMaxScroll(el);
+    const clamped = Math.max(0, Math.min(maxScroll, Math.round(target)));
+    logTerminalScrollDiagnostics('mobile-stable:active-line-target', {
+        reason,
+        currentTop: Math.round(el.scrollTop || 0),
+        target: clamped,
+        maxScroll,
+        activeTop: Math.round(activeRect.top),
+        activeBottom: Math.round(activeRect.bottom),
+        visibleTop: Math.round(visibleTop),
+        visibleBottom: Math.round(visibleBottom),
+    });
+    return clamped;
+}
+
 function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     if (!isMobileStableInputMode()) return false;
     const el = getTerminalScrollElement();
@@ -6412,8 +6456,12 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
     // when the active cursor/last text line would be actually covered by the bottom bars.
     const activeRect = getMobileStableActiveLineRect();
     const viewportRect = el.getBoundingClientRect?.();
-    const safeGap = Math.max(8, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 0.7));
-    const maxStep = Math.max(10, Math.round((getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35) * 1.5));
+    const lineHeight = getTerminalCharMetrics()?.lineHeight || terminalFontSize * 1.35;
+    const labelLower = String(reason || '').toLowerCase();
+    const plainTextInput = /beforeinput|input-fallback|composition|sent-visible/.test(labelLower)
+        && !/enter|return|backspace|control|keypad|command-box|paste/.test(labelLower);
+    const safeGap = plainTextInput ? 0 : Math.max(8, Math.round(lineHeight * 0.7));
+    const maxStep = plainTextInput ? Math.max(4, Math.round(lineHeight * 0.6)) : Math.max(10, Math.round(lineHeight * 1.5));
     if (activeRect && viewportRect) {
         const visibleBottom = viewportRect.bottom - safeGap;
         const overlap = Math.ceil(activeRect.bottom - visibleBottom);
@@ -6422,13 +6470,14 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
             scheduleTerminalScrollbarUpdate();
             return false;
         }
-        // Bad cursor/row rects can report huge overlaps during keyboard animation.
-        // Never let one keystroke yank the terminal by hundreds of pixels.
+        // Plain text input must not pre-scroll the prompt line. If the cursor is
+        // still visible, do nothing; if it is actually clipped, move only the clipped
+        // pixels. Enter/output paths may still keep the normal safety gap.
         if (overlap > Math.max(maxStep * 3, viewportRect.height * 0.35)) {
             scheduleTerminalScrollbarUpdate();
             return false;
         }
-        const delta = Math.min(maxStep, overlap + safeGap);
+        const delta = Math.min(maxStep, plainTextInput ? overlap : overlap + safeGap);
         const nextTop = Math.min(maxScroll, el.scrollTop + delta);
         if (nextTop <= el.scrollTop + 1) {
             scheduleTerminalScrollbarUpdate();
@@ -6486,12 +6535,14 @@ function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = fal
     }
     mobileImeLastSent = { text: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
-    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 160);
-    const el = getTerminalScrollElement();
-    const wasFollowing = !el || terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el);
+    mobileStableTypingUntil = Date.now() + (paste ? 260 : 180);
+    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 180);
+    cancelTerminalBottomFollow(`${source}:typing`);
+    cancelMobileStableScrollRestore(`${source}:typing`);
+    clearMobileTerminalHistoryLock(`${source}:input`);
     sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
-    if (wasFollowing) scheduleTerminalBottomFollow(`${source}:sent-visible`, { force: true });
-    else ensureMobileStableCursorVisible(`${source}:sent-visible`);
+    if (paste) scheduleTerminalBottomFollow(`${source}:sent-visible`, { force: true, phases: [80, 180, 320] });
+    else window.setTimeout(() => ensureMobileStableCursorVisible(`${source}:sent-visible`), 32);
     return true;
 }
 
@@ -6504,12 +6555,15 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     }
     mobileImeLastControl = { seq: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
+    const isEnterLike = payload === '\r' || /enter|return/i.test(source);
+    mobileStableTypingUntil = Date.now() + (isEnterLike ? 40 : 160);
     mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 160);
-    const el = getTerminalScrollElement();
-    const wasFollowing = !el || terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el);
+    cancelTerminalBottomFollow(`${source}:control`);
+    cancelMobileStableScrollRestore(`${source}:control`);
+    clearMobileTerminalHistoryLock(`${source}:control`);
     sendData(payload, { source, forceFollow: false, applyModifiers: false });
-    if (wasFollowing) scheduleTerminalBottomFollow(`${source}:sent-visible`, { force: true });
-    else ensureMobileStableCursorVisible(`${source}:sent-visible`);
+    if (isEnterLike) scheduleTerminalBottomFollow(`${source}:enter-visible`, { force: true, phases: [40, 120, 240] });
+    else requestAnimationFrame(() => ensureMobileStableCursorVisible(`${source}:control-visible`));
     return true;
 }
 
@@ -6564,7 +6618,10 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     }
     // Focus/keyboard open alone must not move history. If the terminal was following,
     // keep following the current visual bottom instead of restoring a stale pre-fullscreen top.
-    if (mobileStableLastBottomIntent) scheduleTerminalBottomFollow(`${reason}:focus-bottom`, { force: true, phases: [0, 80, 180, 360] });
+    if (mobileStableLastBottomIntent) {
+        ensureMobileStableCursorVisible(`${reason}:focus-visible`);
+        scheduleTerminalBottomFollow(`${reason}:focus-bottom`, { force: true, phases: [120, 260, 520] });
+    }
     else restoreMobileStableScrollTop(previousTop, reason);
     return true;
 }
@@ -7342,10 +7399,11 @@ function patchWTermScrollBehavior() {
     if (originalWrite) {
         term.write = (data) => {
             const blockedByHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory() || mobileTerminalSelectionMode || hasLiveTerminalSelection();
+            const plainEchoSuppressed = isMobileStableInputMode() && Date.now() < mobileStableEchoSuppressUntil;
             const wasAtBottom = isMobileStableInputMode()
                 ? isMobileStableAtVisualBottom()
                 : (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
-            const shouldFollow = !blockedByHistory && (terminalAutoFollowEnabled || wasAtBottom);
+            const shouldFollow = !plainEchoSuppressed && !blockedByHistory && (terminalAutoFollowEnabled || wasAtBottom);
             term._zephyrShouldFollowAfterRender = shouldFollow;
             const result = originalWrite(data);
             requestAnimationFrame(() => snapshotWTermVisualLines('write-after-render'));
@@ -7384,10 +7442,21 @@ function patchWTermScrollBehavior() {
     if (originalDoRender) {
         term._doRender = () => {
             term._zephyrRenderingDepth = (term._zephyrRenderingDepth || 0) + 1;
-            const shouldFollow = !!term._zephyrShouldFollowAfterRender || terminalAutoFollowEnabled;
+            const echoSuppressed = isMobileStableInputMode() && Date.now() < mobileStableEchoSuppressUntil;
+            const shouldFollow = !!term._zephyrShouldFollowAfterRender || (terminalAutoFollowEnabled && !echoSuppressed);
+            const previousWTermShouldScroll = term._shouldScrollToBottom;
+            // @wterm/dom _doRender() has an internal branch that writes scrollTop = 0
+            // when it believes there is no scrollback and _shouldScrollToBottom is false.
+            // On mobile stable input this can flash the top content for one frame, then
+            // our bottom-follow restores it. Keep WTerm in its own scroll-to-bottom path
+            // for frames where our state machine says we are following.
+            if (isMobileStableInputMode() && shouldFollow && !echoSuppressed) {
+                term._shouldScrollToBottom = true;
+            }
             try {
                 return originalDoRender();
             } finally {
+                term._shouldScrollToBottom = previousWTermShouldScroll;
                 term._zephyrRenderingDepth = Math.max(0, (term._zephyrRenderingDepth || 1) - 1);
                 term._zephyrShouldFollowAfterRender = false;
                 if (shouldFollow) scheduleTerminalBottomFollow('render-follow', { force: true, phases: [0, 32, 90, 180] });
@@ -7402,7 +7471,7 @@ function patchWTermScrollBehavior() {
         term._scheduleRender = () => {
             originalScheduleRender();
             requestAnimationFrame(() => requestAnimationFrame(() => {
-                if (terminalAutoFollowEnabled) scheduleTerminalBottomFollow('scheduled-render-follow', { force: true, phases: [0, 80, 180] });
+                if (terminalAutoFollowEnabled && !(isMobileStableInputMode() && Date.now() < mobileStableEchoSuppressUntil)) scheduleTerminalBottomFollow('scheduled-render-follow', { force: true, phases: [0, 80, 180] });
                 else scheduleTerminalScrollbarUpdate();
                 updateTerminalWebLinks();
                 snapshotWTermVisualLines('scheduled-render-after');
@@ -7433,12 +7502,24 @@ function requestInitialMobileRenderFlush(reason = 'mobile-initial-render') {
     });
 }
 
+function isMobileStablePlainEchoData(data = '') {
+    if (!isMobileStableInputMode()) return false;
+    if (Date.now() - (mobileStableLastActualInputAt || 0) > 450) return false;
+    const text = String(data || '');
+    if (!text || text.length > 16) return false;
+    // Printable echo only. Newlines, carriage returns, ANSI escapes and control
+    // sequences can create/move lines and must keep the normal follow path.
+    return !/[\r\n\x00-\x1f\x7f\x1b]/.test(text);
+}
+
 function writeTerminalData(data = '') {
     if (!term?.write) return;
     updateTerminalMouseTrackingFromData(data);
+    const plainEcho = isMobileStablePlainEchoData(data);
+    if (plainEcho) mobileStableEchoSuppressUntil = Date.now() + 180;
     const historyLocked = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory() || mobileTerminalSelectionMode || hasLiveTerminalSelection();
     const wasAtBottom = !historyLocked && Boolean(term._isScrolledToBottom ? term._isScrolledToBottom() : isTerminalAtBottom());
-    const shouldFollow = !historyLocked && (terminalAutoFollowEnabled || wasAtBottom);
+    const shouldFollow = !plainEcho && !historyLocked && (terminalAutoFollowEnabled || wasAtBottom);
     logTerminalScrollDiagnostics('terminal-data:before-write-xterm-follow', {
         length: String(data).length,
         wasAtBottom,
