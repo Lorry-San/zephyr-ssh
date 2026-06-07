@@ -262,6 +262,11 @@ let mobileImeLastControl = { seq: '', source: '', at: 0 };
 let mobileStableLastFocusGestureAt = 0;
 let mobileStableLastActualInputAt = 0;
 let mobileStableSuppressScrollUntil = 0;
+let mobileStableScrollRestoreToken = 0;
+let mobileStableScrollRestoreTimers = [];
+let terminalBottomFollowToken = 0;
+let terminalBottomFollowTimers = [];
+let terminalUserScrollGestureUntil = 0;
 
 function logTerminalCopyDiagnostics(event, details = {}) {
     if (!TERMINAL_COPY_DIAGNOSTICS) return;
@@ -790,6 +795,9 @@ window.addEventListener('message', (e) => {
     }
     if (e.data.type === 'focus-terminal') {
         requestStableTerminalLayout('parent-focus-terminal', { includeResize: true, focus: true });
+        if (isMobileStableInputMode() && (terminalAutoFollowEnabled || mobileStableLastBottomIntent || isMobileStableAtVisualBottom())) {
+            scheduleTerminalBottomFollow('parent-focus-terminal', { force: true, phases: [0, 80, 180, 360] });
+        }
     }
     if (e.data.type === 'reconnect-terminal') {
         reconnectBtn?.click?.();
@@ -826,6 +834,8 @@ window.addEventListener('message', (e) => {
                     layoutHeight: Math.round(window.innerHeight || 0),
                     offsetTop: Math.round(window.visualViewport?.offsetTop || 0)
                 });
+            } else if (parentKeyboardOpen && parentInset >= 80) {
+                applyMobileStableKeyboardInset(parentInset, true, `parent-layout:${reason}`);
             } else if (!parentKeyboardOpen && mobileKeyboardOpen) {
                 finalizeKeyboardClose({ force: true });
             }
@@ -842,7 +852,11 @@ window.addEventListener('message', (e) => {
             // area and the up/down jump at the bottom. Real input paths call
             // ensureMobileStableCursorVisible() and will scroll only if the cursor is covered.
             if (isMobileStableInputMode()) {
-                scheduleTerminalScrollbarUpdate();
+                if (terminalAutoFollowEnabled || mobileStableLastBottomIntent || isMobileStableAtVisualBottom()) {
+                    scheduleTerminalBottomFollow(`parent-layout:${reason}:stable`, { force: true, phases: [0, 80, 180, 360] });
+                } else {
+                    scheduleTerminalScrollbarUpdate();
+                }
                 return;
             }
             stabilizeWTermAfterViewportOnlyChange(`keyboard-related:${reason}`);
@@ -5950,11 +5964,26 @@ function isTerminalAtBottom(el = getTerminalScrollElement(), threshold = TERMINA
     return getTerminalBottomDistance(el) <= threshold;
 }
 
+function getMobileStableFollowThreshold() {
+    const lineHeight = getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35 || 20;
+    return Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round(lineHeight * 3));
+}
+
+function isMobileStableKeyboardActive() {
+    return isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8 || document.documentElement.classList.contains('keyboard-open'));
+}
+
+function isMobileStableAtVisualBottom(el = getTerminalScrollElement()) {
+    if (!el) return true;
+    const threshold = isMobileStableKeyboardActive() ? getMobileStableFollowThreshold() : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
+    return isTerminalAtBottom(el, threshold);
+}
+
 function isTerminalUserReadingHistory() {
     const el = getTerminalScrollElement();
     if (!el) return false;
-    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
-        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+    const threshold = isMobileStableKeyboardActive()
+        ? getMobileStableFollowThreshold()
         : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
     return !terminalAutoFollowEnabled && !isTerminalAtBottom(el, threshold);
 }
@@ -5974,8 +6003,8 @@ function clearMobileTerminalHistoryLock(reason = 'clear-history-lock') {
 function lockMobileTerminalAutoFollow(reason = 'mobile-history-lock', duration = 1800) {
     if (!isMobileStableInputMode()) return;
     const el = getTerminalScrollElement();
-    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
-        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+    const threshold = isMobileStableKeyboardActive()
+        ? getMobileStableFollowThreshold()
         : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
     if (!el || isTerminalAtBottom(el, threshold)) return;
     const lockDuration = Math.max(300, Math.min(6000, Number(duration) || 1800));
@@ -5993,8 +6022,8 @@ function lockMobileTerminalAutoFollow(reason = 'mobile-history-lock', duration =
 }
 
 function isMobileTerminalAutoFollowLocked() {
-    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
-        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+    const threshold = isMobileStableKeyboardActive()
+        ? getMobileStableFollowThreshold()
         : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
     return isMobileStableInputMode()
         && Date.now() < (mobileTerminalAutoFollowLockUntil || 0)
@@ -6012,13 +6041,27 @@ function setTerminalAutoFollow(enabled, reason = 'unknown') {
 function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
     const el = getTerminalScrollElement();
     if (!el) return true;
-    const threshold = isMobileStableInputMode() && (mobileKeyboardOpen || mobileKeyboardInset > 8)
-        ? Math.max(TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD, Math.round((getTerminalCharMetrics?.()?.lineHeight || terminalFontSize * 1.35) * 3))
+    const threshold = isMobileStableKeyboardActive()
+        ? getMobileStableFollowThreshold()
         : TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD;
     const atBottom = isTerminalAtBottom(el, threshold);
     if (atBottom) {
         mobileStableLastBottomIntent = true;
         setTerminalAutoFollow(true, reason);
+    }
+    else if (isMobileStableInputMode() && Date.now() < terminalUserScrollGestureUntil) {
+        cancelTerminalBottomFollow(`${reason}:user-scroll`);
+        cancelMobileStableScrollRestore(`${reason}:user-scroll`);
+        terminalLastUserScrollAt = Date.now();
+        mobileStableLastBottomIntent = false;
+        setTerminalAutoFollow(false, reason);
+        lockMobileTerminalAutoFollow(reason, 3200);
+    }
+    else if (isMobileStableInputMode() && isProgrammaticTerminalScroll) {
+        // Programmatic bottom following may land a few px/rows above the new visual bottom
+        // while Android is animating the fullscreen keyboard. Do not convert that into a
+        // user-history lock, otherwise following output is immediately disabled.
+        scheduleTerminalScrollbarUpdate();
     }
     else if (isMobileStableInputMode() && Date.now() - (mobileStableLastActualInputAt || 0) < 700) {
         // IME / aux-key input can produce synthetic scroll events while the keyboard is animating.
@@ -6026,6 +6069,8 @@ function updateTerminalAutoFollowFromScroll(reason = 'scroll') {
         scheduleTerminalScrollbarUpdate();
     }
     else if (!isProgrammaticTerminalScroll) {
+        cancelTerminalBottomFollow(`${reason}:user-scroll`);
+        cancelMobileStableScrollRestore(`${reason}:user-scroll`);
         terminalLastUserScrollAt = Date.now();
         mobileStableLastBottomIntent = false;
         setTerminalAutoFollow(false, reason);
@@ -6048,13 +6093,19 @@ function scrollTerminalToBottom(reason = 'scroll-bottom') {
     }
     isProgrammaticTerminalScroll = true;
     try {
-        if (term?._zephyrOriginalScrollToBottom) term._zephyrOriginalScrollToBottom();
-        else el.scrollTop = getTerminalMaxScroll(el);
         const maxScroll = getTerminalMaxScroll(el);
-        if (el.scrollTop > maxScroll) el.scrollTop = maxScroll;
+        if (isMobileStableInputMode()) {
+            el.scrollTop = maxScroll;
+        } else if (term?._zephyrOriginalScrollToBottom) {
+            term._zephyrOriginalScrollToBottom();
+        } else {
+            el.scrollTop = maxScroll;
+        }
+        const nextMaxScroll = getTerminalMaxScroll(el);
+        el.scrollTop = nextMaxScroll;
         if (wtermWrapper && wtermWrapper !== el) {
             const maxWrapperScroll = getTerminalMaxScroll(wtermWrapper);
-            if (wtermWrapper.scrollTop > maxWrapperScroll) wtermWrapper.scrollTop = maxWrapperScroll;
+            wtermWrapper.scrollTop = maxWrapperScroll;
         }
         mobileTerminalAutoFollowLockUntil = 0;
         mobileTerminalAutoFollowLockReason = '';
@@ -6106,6 +6157,9 @@ function shouldBlockMobileStableAutoFollowReason(reason = '') {
     if (!isMobileStableInputMode()) return false;
     const label = String(reason || '').toLowerCase();
     if (isMobileStableActualInputReason(label)) return false;
+    if (/terminal-data|write-follow|render-follow|scheduled-render-follow|wterm-render-scroll-bottom|wterm-scroll-bottom|manual-bottom|resize-observer-follow/.test(label)) {
+        return false;
+    }
     // Rendering, resize, layout, keyboard and focus events must not scroll WTerm.
     // They can otherwise push the viewport into WTerm's bottom blank space, producing
     // the all-black terminal on first connect / keyboard reopen.
@@ -6115,7 +6169,9 @@ function shouldBlockMobileStableAutoFollowReason(reason = '') {
 function requestTerminalAutoFollow(reason = 'auto-follow') {
     const el = getTerminalScrollElement();
     if (!el) return;
-    if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil) {
+    const actualInputReason = isMobileStableActualInputReason(reason);
+    const outputFollowReason = isMobileStableInputMode() && /terminal-data|write-follow|render-follow|scheduled-render-follow|wterm-render-scroll-bottom|wterm-scroll-bottom/.test(String(reason || '').toLowerCase());
+    if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil && !outputFollowReason) {
         scheduleTerminalScrollbarUpdate();
         return;
     }
@@ -6124,12 +6180,12 @@ function requestTerminalAutoFollow(reason = 'auto-follow') {
         scheduleTerminalScrollbarUpdate();
         return;
     }
-    if (isMobileTerminalAutoFollowLocked()) {
+    if (isMobileTerminalAutoFollowLocked() && !actualInputReason && !outputFollowReason) {
         logTerminalScrollDiagnostics('auto-follow:mobile-history-transient-locked', { reason, lockReason: mobileTerminalAutoFollowLockReason });
         scheduleTerminalScrollbarUpdate();
         return;
     }
-    if (isMobileStableInputMode() && isTerminalUserReadingHistory()) {
+    if (isMobileStableInputMode() && isTerminalUserReadingHistory() && !actualInputReason && !outputFollowReason) {
         logTerminalScrollDiagnostics('auto-follow:mobile-history-locked', { reason });
         scheduleTerminalScrollbarUpdate();
         return;
@@ -6139,7 +6195,7 @@ function requestTerminalAutoFollow(reason = 'auto-follow') {
         scheduleTerminalScrollbarUpdate();
         return;
     }
-    if (!terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) {
+    if (!terminalAutoFollowEnabled && !isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) && !actualInputReason && !outputFollowReason) {
         logTerminalScrollDiagnostics('auto-follow:paused', { reason });
         scheduleTerminalScrollbarUpdate();
         return;
@@ -6156,6 +6212,8 @@ function stopTerminalAutoScrollObserver() {
         cancelAnimationFrame(terminalScrollbarRaf);
         terminalScrollbarRaf = 0;
     }
+    cancelMobileStableScrollRestore('stop-scroll-observer');
+    cancelTerminalBottomFollow('stop-scroll-observer');
     terminalScrollCleanup?.();
     terminalScrollCleanup = null;
     isProgrammaticTerminalScroll = false;
@@ -6223,8 +6281,65 @@ function isMobileStableActualInputReason(reason = '') {
     return /beforeinput|composition|input-fallback|paste|backspace|enter|mobile-ime-key:|mobile-ime-control|command-box|keypad|:sent-visible|:sent/.test(label);
 }
 
+function cancelMobileStableScrollRestore(reason = 'cancel-mobile-restore') {
+    mobileStableScrollRestoreToken += 1;
+    mobileStableScrollRestoreTimers.forEach((timer) => window.clearTimeout(timer));
+    mobileStableScrollRestoreTimers = [];
+    logTerminalScrollDiagnostics('mobile-stable:restore-cancelled', { reason });
+}
+
+function cancelTerminalBottomFollow(reason = 'cancel-bottom-follow') {
+    terminalBottomFollowToken += 1;
+    terminalBottomFollowTimers.forEach((timer) => window.clearTimeout(timer));
+    terminalBottomFollowTimers = [];
+    logTerminalScrollDiagnostics('mobile-stable:bottom-follow-cancelled', { reason });
+}
+
+function followTerminalBottomNow(reason = 'bottom-follow', { force = false } = {}) {
+    const el = getTerminalScrollElement();
+    if (!el) return false;
+    if (hasLiveTerminalSelection() || mobileTerminalSelectionMode) return false;
+    const canFollow = force
+        || terminalAutoFollowEnabled
+        || isMobileStableAtVisualBottom(el)
+        || isMobileStableActualInputReason(reason);
+    if (!canFollow) return false;
+    isProgrammaticTerminalScroll = true;
+    try {
+        const maxScroll = getTerminalMaxScroll(el);
+        el.scrollTop = maxScroll;
+        if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = getTerminalMaxScroll(wtermWrapper);
+        mobileTerminalAutoFollowLockUntil = 0;
+        mobileTerminalAutoFollowLockReason = '';
+        mobileStableLastBottomIntent = true;
+        setTerminalAutoFollow(true, reason);
+    } finally {
+        scheduleTerminalScrollbarUpdate();
+        requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
+    }
+    return true;
+}
+
+function scheduleTerminalBottomFollow(reason = 'bottom-follow', { force = false, phases = [0, 32, 80, 160, 280, 420, 680] } = {}) {
+    const el = getTerminalScrollElement();
+    if (!el) return;
+    cancelMobileStableScrollRestore(`${reason}:bottom-follow`);
+    cancelTerminalBottomFollow(reason);
+    const token = terminalBottomFollowToken;
+    const run = () => {
+        if (token !== terminalBottomFollowToken) return;
+        followTerminalBottomNow(reason, { force });
+    };
+    phases.forEach((delay) => {
+        const timer = window.setTimeout(() => requestAnimationFrame(run), Math.max(0, delay));
+        terminalBottomFollowTimers.push(timer);
+    });
+}
+
 function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason = 'keyboard-inset') {
-    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
+    const el = getTerminalScrollElement();
+    const wasFollowing = Boolean(el && (terminalAutoFollowEnabled || mobileStableLastBottomIntent || isMobileStableAtVisualBottom(el)));
+    const previousTop = wtermWrapper?.scrollTop ?? el?.scrollTop ?? 0;
     const safeInset = Math.max(0, Math.round(Number(inset) || 0));
     mobileKeyboardInset = safeInset;
     document.documentElement.style.setProperty('--keyboard-inset', `${safeInset}px`);
@@ -6234,10 +6349,12 @@ function applyMobileStableKeyboardInset(inset = 0, keyboardOpen = false, reason 
     updateTerminalInputPanelMetrics();
     document.documentElement.classList.remove('viewport-updating');
     setStableViewportHeight();
-    // Keyboard open/close alone should not move terminal content. Only real input handlers
-    // call ensureMobileStableCursorVisible(), and only then do the minimum scroll needed.
-    if (isMobileStableActualInputReason(reason)) {
+    const actualInputReason = isMobileStableActualInputReason(reason);
+    if (actualInputReason) {
+        cancelMobileStableScrollRestore(`${reason}:actual-input`);
         requestAnimationFrame(() => ensureMobileStableCursorVisible(reason));
+    } else if (wasFollowing) {
+        scheduleTerminalBottomFollow(`${reason}:keep-bottom`, { force: true });
     } else {
         restoreMobileStableScrollTop(previousTop, reason);
     }
@@ -6277,7 +6394,7 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
         return false;
     }
     const keyboardActive = mobileKeyboardOpen || mobileKeyboardInset > 8 || document.documentElement.classList.contains('keyboard-open');
-    const shouldFollow = terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || actualInputReason;
+    const shouldFollow = terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el) || actualInputReason;
     if (!keyboardActive && !shouldFollow) {
         scheduleTerminalScrollbarUpdate();
         return false;
@@ -6301,7 +6418,7 @@ function ensureMobileStableCursorVisible(reason = 'mobile-stable-visible') {
         const visibleBottom = viewportRect.bottom - safeGap;
         const overlap = Math.ceil(activeRect.bottom - visibleBottom);
         if (overlap <= 0) {
-            if (shouldFollow && isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) setTerminalAutoFollow(true, `${reason}:already-visible`);
+            if (shouldFollow && isMobileStableAtVisualBottom(el)) setTerminalAutoFollow(true, `${reason}:already-visible`);
             scheduleTerminalScrollbarUpdate();
             return false;
         }
@@ -6369,10 +6486,12 @@ function sendMobileStableImeText(text = '', source = 'mobile-ime', { paste = fal
     }
     mobileImeLastSent = { text: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
-    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 500);
-    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
+    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 160);
+    const el = getTerminalScrollElement();
+    const wasFollowing = !el || terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el);
     sendData(paste ? prepareTerminalPastePayload(payload) : payload, { source, forceFollow: false, applyModifiers: false });
-    restoreMobileStableScrollTop(previousTop, `${source}:restore-after`);
+    if (wasFollowing) scheduleTerminalBottomFollow(`${source}:sent-visible`, { force: true });
+    else ensureMobileStableCursorVisible(`${source}:sent-visible`);
     return true;
 }
 
@@ -6385,34 +6504,48 @@ function sendMobileStableControl(seq = '', source = 'mobile-ime-control') {
     }
     mobileImeLastControl = { seq: payload, source, at: now };
     mobileStableLastActualInputAt = Date.now();
-    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 500);
-    const previousTop = wtermWrapper?.scrollTop ?? getTerminalScrollElement()?.scrollTop ?? 0;
+    mobileStableSuppressScrollUntil = Math.max(mobileStableSuppressScrollUntil, Date.now() + 160);
+    const el = getTerminalScrollElement();
+    const wasFollowing = !el || terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el);
     sendData(payload, { source, forceFollow: false, applyModifiers: false });
-    restoreMobileStableScrollTop(previousTop, `${source}:restore-after`);
+    if (wasFollowing) scheduleTerminalBottomFollow(`${source}:sent-visible`, { force: true });
+    else ensureMobileStableCursorVisible(`${source}:sent-visible`);
     return true;
 }
 
 function restoreMobileStableScrollTop(previousTop = 0, reason = 'restore-scroll') {
     if (!isMobileStableInputMode() || !Number.isFinite(previousTop)) return;
+    if (terminalAutoFollowEnabled || mobileStableLastBottomIntent || isMobileStableAtVisualBottom()) {
+        scheduleTerminalBottomFollow(`${reason}:restore-as-bottom`, { force: true, phases: [0, 80, 180] });
+        return;
+    }
     const target = Math.max(0, previousTop);
+    cancelTerminalBottomFollow(`${reason}:restore-history`);
+    cancelMobileStableScrollRestore(reason);
+    const token = mobileStableScrollRestoreToken;
     const restore = () => {
-        if (!isMobileStableActualInputReason(reason)) {
-            isProgrammaticTerminalScroll = true;
-            try {
-                const primary = getTerminalScrollElement();
-                if (primary) primary.scrollTop = target;
-                if (wtermWrapper && wtermWrapper !== primary) wtermWrapper.scrollTop = target;
-            } finally {
-                requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
-            }
+        if (token !== mobileStableScrollRestoreToken) return;
+        if (isMobileStableActualInputReason(reason)) {
+            scheduleTerminalScrollbarUpdate();
+            return;
+        }
+        isProgrammaticTerminalScroll = true;
+        try {
+            const primary = getTerminalScrollElement();
+            const clamped = primary ? Math.min(target, getTerminalMaxScroll(primary)) : target;
+            if (primary) primary.scrollTop = clamped;
+            if (wtermWrapper && wtermWrapper !== primary) wtermWrapper.scrollTop = Math.min(clamped, getTerminalMaxScroll(wtermWrapper));
+        } finally {
+            requestAnimationFrame(() => { isProgrammaticTerminalScroll = false; });
         }
         scheduleTerminalScrollbarUpdate();
     };
     restore();
     requestAnimationFrame(restore);
-    window.setTimeout(restore, 80);
-    window.setTimeout(restore, 180);
-    window.setTimeout(restore, 360);
+    [80, 180, 360].forEach((delay) => {
+        const timer = window.setTimeout(restore, delay);
+        mobileStableScrollRestoreTimers.push(timer);
+    });
 }
 
 function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
@@ -6421,7 +6554,7 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (!mobileImeProxy) return false;
     const el = getTerminalScrollElement();
     const previousTop = wtermWrapper?.scrollTop ?? el?.scrollTop ?? 0;
-    mobileStableLastBottomIntent = !el || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+    mobileStableLastBottomIntent = !el || isMobileStableAtVisualBottom(el) || terminalAutoFollowEnabled;
     keyboardFocusLikely = true;
     keyboardViewportBaseline = Math.max(getKeyboardBaselineHeight(), keyboardViewportBaseline || 0);
     if (el && !mobileStableLastBottomIntent) el.scrollTop = previousTop;
@@ -6429,8 +6562,10 @@ function focusMobileStableImeProxy(reason = 'mobile-ime-focus') {
     if (document.activeElement !== mobileImeProxy) {
         try { mobileImeProxy.focus({ preventScroll: true }); } catch (_) { try { mobileImeProxy.focus(); } catch (__) {} }
     }
-    // Focus/keyboard open alone must not move terminal content; real input handlers scroll if needed.
-    restoreMobileStableScrollTop(previousTop, reason);
+    // Focus/keyboard open alone must not move history. If the terminal was following,
+    // keep following the current visual bottom instead of restoring a stale pre-fullscreen top.
+    if (mobileStableLastBottomIntent) scheduleTerminalBottomFollow(`${reason}:focus-bottom`, { force: true, phases: [0, 80, 180, 360] });
+    else restoreMobileStableScrollTop(previousTop, reason);
     return true;
 }
 
@@ -6467,7 +6602,7 @@ function restoreMobileStableKeyboardGrid(reason = 'mobile-stable-grid-restore') 
     const el = getTerminalScrollElement();
     const preserveHistory = Boolean(el && (isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory()));
     const previousTop = preserveHistory ? el.scrollTop : 0;
-    const shouldFollow = !preserveHistory && (terminalAutoFollowEnabled || isTerminalAtBottom(el, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD));
+    const shouldFollow = !preserveHistory && (terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el));
     if (gridChanged) runWithMobileStableResizeBypass(() => updateWTermLocalGridSize(nextCols, nextRows, `${reason}:local`));
     if (sentChanged && wsConnection?.readyState === WebSocket.OPEN && isConnected) {
         lastSentTerminalSize = { cols: nextCols, rows: nextRows };
@@ -6643,6 +6778,7 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
             return;
         }
         terminalLastWheelAt = Date.now();
+        if (isMobileStableInputMode()) terminalUserScrollGestureUntil = Date.now() + 1200;
         scheduleTerminalScrollbarUpdate();
     };
 
@@ -6650,7 +6786,7 @@ function setupTerminalScrollHooks({ followOnConnect = true } = {}) {
     if (window.ResizeObserver) {
         resizeObserver = new ResizeObserver(() => {
             // 模仿 xterm.js：尺寸/内容变化时，如果用户原本在底部才跟随；历史区阅读时不抢滚动。
-            if (terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD)) {
+            if (terminalAutoFollowEnabled || isMobileStableAtVisualBottom()) {
                 requestTerminalAutoFollow('resize-observer-follow');
             } else {
                 scheduleTerminalScrollbarUpdate();
@@ -6694,6 +6830,7 @@ function setupTerminalCustomScrollbar() {
         const rect = terminalScrollbar.getBoundingClientRect();
         const thumbHeight = terminalScrollbarThumb.getBoundingClientRect().height || TERMINAL_SCROLLBAR_MIN_THUMB;
         const ratio = Math.min(1, Math.max(0, (clientY - rect.top - thumbHeight / 2) / Math.max(1, rect.height - thumbHeight)));
+        if (isMobileStableInputMode()) terminalUserScrollGestureUntil = Date.now() + 1200;
         isProgrammaticTerminalScroll = true;
         el.scrollTop = ratio * maxScroll;
         scheduleTerminalScrollbarUpdate();
@@ -6745,7 +6882,7 @@ function applyKeyboardFallbackAvoidance() {
     updateViewportInsets._lastViewportHeight = metrics.viewportHeight;
     updateViewportInsets._lastKeyboardInset = metrics.keyboardInset;
     const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
-    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
+    const wasAtBottom = isMobileStableAtVisualBottom() || terminalAutoFollowEnabled;
     mobileKeyboardOpen = true;
     keyboardFallbackActive = true;
     keyboardFallbackAppliedAt = performance.now();
@@ -6796,7 +6933,7 @@ function updateViewportInsets() {
     const viewport = window.visualViewport;
     if (!viewport && !navigator.virtualKeyboard) return;
     const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
-    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
+    const wasAtBottom = isMobileStableAtVisualBottom() || terminalAutoFollowEnabled;
     const metrics = getViewportKeyboardMetrics();
     const keyboardOpen = metrics.keyboardInset >= 80 && (mobileKeyboardUserControlled || isMobileStableInputMode());
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
@@ -6887,7 +7024,7 @@ function finalizeKeyboardClose({ force = false } = {}) {
     }
 
     const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
-    const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
+    const wasAtBottom = isMobileStableAtVisualBottom() || terminalAutoFollowEnabled;
     if (mobileKeyboardOpen && !mobileStableKeyboardOpenGrid) rememberMobileStableKeyboardGrid('keyboard-close-final-before');
     updateViewportInsets._lastSignature = '';
     mobileKeyboardOpen = false;
@@ -7155,8 +7292,12 @@ function patchWTermScrollBehavior() {
     if (originalScrollToBottom) {
         term._scrollToBottom = () => {
             const fromRender = term._zephyrRenderingDepth > 0;
-            const alreadyAtBottom = originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom();
-            const lockedAwayFromBottom = !alreadyAtBottom && (
+            const scrollReason = fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom';
+            const alreadyAtBottom = isMobileStableInputMode()
+                ? isMobileStableAtVisualBottom()
+                : (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            const outputFollowAllowed = isMobileStableInputMode() && terminalAutoFollowEnabled && !hasLiveTerminalSelection() && !mobileTerminalSelectionMode;
+            const lockedAwayFromBottom = !alreadyAtBottom && !outputFollowAllowed && (
                 isMobileTerminalAutoFollowLocked()
                 || mobileTerminalSelectionMode
                 || hasLiveTerminalSelection()
@@ -7170,9 +7311,8 @@ function patchWTermScrollBehavior() {
                 scheduleTerminalScrollbarUpdate();
                 return;
             }
-            const scrollReason = fromRender ? 'wterm-render-scroll-bottom' : 'wterm-scroll-bottom';
-            if (isMobileStableInputMode() && Date.now() < mobileStableSuppressScrollUntil) {
-                scheduleTerminalScrollbarUpdate();
+            if (isMobileStableInputMode()) {
+                followTerminalBottomNow(scrollReason, { force: outputFollowAllowed || alreadyAtBottom });
                 return;
             }
             if (shouldBlockMobileStableAutoFollowReason(scrollReason)) {
@@ -7183,8 +7323,8 @@ function patchWTermScrollBehavior() {
             try {
                 originalScrollToBottom();
                 const el = getTerminalScrollElement();
-                if (el) el.scrollTop = Math.min(el.scrollTop, getTerminalMaxScroll(el));
-                if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = Math.min(wtermWrapper.scrollTop, getTerminalMaxScroll(wtermWrapper));
+                if (el) el.scrollTop = getTerminalMaxScroll(el);
+                if (wtermWrapper && wtermWrapper !== el) wtermWrapper.scrollTop = getTerminalMaxScroll(wtermWrapper);
                 setTerminalAutoFollow(true, scrollReason);
             } finally {
                 scheduleTerminalScrollbarUpdate();
@@ -7194,17 +7334,22 @@ function patchWTermScrollBehavior() {
     }
 
     if (originalIsScrolledToBottom) {
-        term._isScrolledToBottom = () => originalIsScrolledToBottom() || isTerminalAtBottom(undefined, TERMINAL_BOTTOM_THRESHOLD);
+        term._isScrolledToBottom = () => isMobileStableInputMode()
+            ? isMobileStableAtVisualBottom()
+            : (originalIsScrolledToBottom() || isTerminalAtBottom(undefined, TERMINAL_BOTTOM_THRESHOLD));
     }
 
     if (originalWrite) {
         term.write = (data) => {
             const blockedByHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory() || mobileTerminalSelectionMode || hasLiveTerminalSelection();
-            const shouldFollow = !blockedByHistory && (terminalAutoFollowEnabled || (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom()));
+            const wasAtBottom = isMobileStableInputMode()
+                ? isMobileStableAtVisualBottom()
+                : (originalIsScrolledToBottom ? originalIsScrolledToBottom() : isTerminalAtBottom());
+            const shouldFollow = !blockedByHistory && (terminalAutoFollowEnabled || wasAtBottom);
             term._zephyrShouldFollowAfterRender = shouldFollow;
             const result = originalWrite(data);
             requestAnimationFrame(() => snapshotWTermVisualLines('write-after-render'));
-            if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('write-follow'));
+            if (shouldFollow) scheduleTerminalBottomFollow('write-follow', { force: true });
             else scheduleTerminalScrollbarUpdate();
             return result;
         };
@@ -7245,7 +7390,7 @@ function patchWTermScrollBehavior() {
             } finally {
                 term._zephyrRenderingDepth = Math.max(0, (term._zephyrRenderingDepth || 1) - 1);
                 term._zephyrShouldFollowAfterRender = false;
-                if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('render-follow'));
+                if (shouldFollow) scheduleTerminalBottomFollow('render-follow', { force: true, phases: [0, 32, 90, 180] });
                 else scheduleTerminalScrollbarUpdate();
                 updateTerminalWebLinks();
                 snapshotWTermVisualLines('render-after');
@@ -7257,8 +7402,8 @@ function patchWTermScrollBehavior() {
         term._scheduleRender = () => {
             originalScheduleRender();
             requestAnimationFrame(() => requestAnimationFrame(() => {
-                if (terminalAutoFollowEnabled) requestTerminalAutoFollow('scheduled-render-follow');
-                scheduleTerminalScrollbarUpdate();
+                if (terminalAutoFollowEnabled) scheduleTerminalBottomFollow('scheduled-render-follow', { force: true, phases: [0, 80, 180] });
+                else scheduleTerminalScrollbarUpdate();
                 updateTerminalWebLinks();
                 snapshotWTermVisualLines('scheduled-render-after');
             }));
@@ -7301,7 +7446,7 @@ function writeTerminalData(data = '') {
     });
     term._zephyrShouldFollowAfterRender = shouldFollow;
     term.write(data);
-    if (shouldFollow) requestAnimationFrame(() => requestTerminalAutoFollow('terminal-data'));
+    if (shouldFollow) scheduleTerminalBottomFollow('terminal-data', { force: true });
     else requestAnimationFrame(scheduleTerminalScrollbarUpdate);
 }
 
@@ -7931,7 +8076,13 @@ function sendCommand() {
     if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
         logTerminalPasteDiagnostics('command-box-send', text);
         mobileStableLastActualInputAt = Date.now();
-        sendData(text + '\r', { normalizeNewlines: true, source: 'command-box-send' });
+        if (isMobileStableInputMode()) {
+            mobileTerminalAutoFollowLockUntil = 0;
+            mobileTerminalAutoFollowLockReason = '';
+            setTerminalAutoFollow(true, 'command-box-send:before-send');
+            scheduleTerminalBottomFollow('command-box-send:before-send', { force: true, phases: [0, 80, 180] });
+        }
+        sendData(text + '\r', { normalizeNewlines: true, source: 'command-box-send', forceFollow: isMobileStableInputMode() });
     }
     cmdInput.value = '';
     resizeCommandInput();
@@ -8369,6 +8520,7 @@ wtermWrapper.addEventListener('contextmenu', async (e) => {
         const y = e.clientY ?? e.touches?.[0]?.clientY ?? terminalTouchStartY;
         if (Math.hypot(x - terminalTouchStartX, y - terminalTouchStartY) > 8) {
             terminalTouchMoved = true;
+            if (isMobileStableInputMode()) terminalUserScrollGestureUntil = Date.now() + 1400;
             if (eventName === 'pointermove' && e.pointerType !== 'touch' && terminalMouseState.buttonDown && sendTerminalMouseEvent(e, 'move')) {
                 e.preventDefault();
             }
@@ -8466,6 +8618,9 @@ function resetTerminalScrollState() {
     terminalUserScrolledAway = false;
     terminalLastUserScrollAt = 0;
     terminalLastWheelAt = 0;
+    terminalUserScrollGestureUntil = 0;
+    cancelMobileStableScrollRestore('reset-scroll-state');
+    cancelTerminalBottomFollow('reset-scroll-state');
     parentKeyboardResizeFreezeUntil = 0;
     terminalMouseState.enabled = false;
     terminalMouseState.sgr = false;

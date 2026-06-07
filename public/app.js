@@ -1690,9 +1690,18 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     const insetKeyboardTop = effectiveInset > 0 && layoutHeight > effectiveInset
         ? Math.max(0, layoutHeight - effectiveInset)
         : 0;
-    const keyboardTopCandidates = [parentKeyboardTop, metricsKeyboardTop, insetKeyboardTop]
-        .filter((value) => Number.isFinite(value) && value > 0 && value <= layoutHeight + 2);
-    const keyboardTop = Math.max(...keyboardTopCandidates, parentKeyboardTop || metricsKeyboardTop || layoutHeight);
+    const keyboardTopCandidates = [];
+    // Only trust a visualViewport bottom as a keyboard boundary when that same side
+    // actually detected an inset. In Android overlays-content/fullscreen, parent
+    // visualViewport can stay at the no-keyboard height; including that full-height
+    // value makes the terminal keep using the old (keyboard-closed) bottom limit.
+    if (parentInset >= 80 && parentKeyboardTop > 0) keyboardTopCandidates.push(parentKeyboardTop);
+    if ((metrics.keyboardOpen || inset >= 80) && metricsKeyboardTop > 0) keyboardTopCandidates.push(metricsKeyboardTop);
+    if (effectiveInset >= 80 && insetKeyboardTop > 0) keyboardTopCandidates.push(insetKeyboardTop);
+    const validKeyboardTopCandidates = keyboardTopCandidates.filter((value) => Number.isFinite(value) && value > 0 && value <= layoutHeight + 2);
+    const keyboardTop = validKeyboardTopCandidates.length
+        ? Math.max(...validKeyboardTopCandidates)
+        : (parentKeyboardTop || metricsKeyboardTop || layoutHeight);
     const keyboardOpen = (!!metrics.keyboardOpen || parentInset >= 100 || inset >= 100) && effectiveInset >= 80;
 
     // 移动端非全屏模式（compact + stable input）：父页面收缩 workspace
@@ -1702,7 +1711,11 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     if (isStableInput && isCompact) {
         if (keyboardOpen) {
             const wsRect = workspace.getBoundingClientRect();
-            const usableHeight = Math.max(180, Math.round(keyboardTop - wsRect.top - 2));
+            const currentHeight = Math.round(workspace.getBoundingClientRect?.().height || workspace.offsetHeight || 0);
+            const rawUsableHeight = Math.round(keyboardTop - wsRect.top - 2);
+            const fallbackUsableHeight = Math.round(Math.max(180, (metricsViewportHeight || parentVvHeight || layoutHeight) - wsRect.top - 2));
+            const maxHeightSource = Math.max(220, layoutHeight, wsRect.bottom, currentHeight + wsRect.top);
+            const usableHeight = Math.max(180, Math.min(Math.round(maxHeightSource - wsRect.top), rawUsableHeight > 0 ? rawUsableHeight : fallbackUsableHeight));
             workspace.style.flex = '0 0 auto';
             workspace.style.height = `${usableHeight}px`;
             workspace.style.maxHeight = `${usableHeight}px`;
@@ -1718,7 +1731,9 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
             document.documentElement.style.setProperty('--app-visual-vh', `${usableHeight}px`);
             document.documentElement.style.setProperty('--app-visual-offset-top', `${parentOffsetTop}px`);
             document.documentElement.style.setProperty('--app-keyboard-top', `${Math.round(keyboardTop)}px`);
+            appKeyboardPendingMetrics = { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop };
         } else {
+            appKeyboardPendingMetrics = null;
             workspace.style.flex = '';
             workspace.style.height = '';
             workspace.style.maxHeight = '';
@@ -1788,9 +1803,24 @@ function updateFullscreenKeyboardFromViewport() {
     const viewportHeight = vvHeight;
     const offsetTop = Math.round(window.visualViewport.offsetTop || 0);
     const inset = Math.max(0, baseline - viewportHeight - offsetTop);
+    if (inset < 80 && appKeyboardOpen && appKeyboardPendingMetrics?.keyboardOpen && Number(appKeyboardPendingMetrics.keyboardInset || 0) >= 80) {
+        applyTerminalWorkspaceKeyboard(appKeyboardPendingMetrics);
+        return;
+    }
     if (inset >= 100 || appKeyboardOpen || workspace.classList.contains('keyboard-open')) {
         applyTerminalWorkspaceKeyboard({ keyboardOpen: inset >= 16 || appKeyboardOpen, keyboardInset: inset, viewportHeight, layoutHeight: baseline, offsetTop });
     }
+}
+
+function scheduleTerminalKeyboardReflow(reason = 'terminal-keyboard-reflow') {
+    appKeyboardLastSignature = '';
+    [0, 80, 180, 360, 720].forEach((delay, index) => {
+        window.setTimeout(() => {
+            appKeyboardLastSignature = '';
+            updateFullscreenKeyboardFromViewport();
+            scheduleTerminalLayoutStabilize(`${reason}:phase-${index}`, { focus: false });
+        }, delay);
+    });
 }
 
 function ensureFullscreenLoader() {
@@ -1849,9 +1879,12 @@ async function fullscreenTerminalTab(tabId) {
         if (compact) {
             workspace.classList.toggle('custom-fullscreen');
             document.body.classList.toggle('terminal-custom-fullscreen-open', workspace.classList.contains('custom-fullscreen'));
+            appKeyboardLastSignature = '';
+            scheduleTerminalKeyboardReflow(workspace.classList.contains('custom-fullscreen') ? 'mobile-fullscreen-enter' : 'mobile-fullscreen-exit');
             renderTerminalTabs();
             hideFullscreenLoading({ delay: 360 });
             window.setTimeout(() => {
+                scheduleTerminalKeyboardReflow('mobile-fullscreen-after-focus');
                 win.querySelector('.terminal-frame')?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'focus-terminal' }, '*');
             }, 120);
         } else {
@@ -1902,9 +1935,11 @@ function setTerminalSmartbarOpen(open) {
         terminalSmartbarPickerOpen = false;
         terminalSmartbarClosing = true;
         renderTerminalSmartbar();
+        scheduleTerminalKeyboardReflow('smartbar-close');
         setTerminalSmartbarOpen._closeTimer = window.setTimeout(() => {
             terminalSmartbarClosing = false;
             renderTerminalSmartbar();
+            scheduleTerminalKeyboardReflow('smartbar-close-settled');
         }, 760);
         return;
     }
@@ -1912,6 +1947,7 @@ function setTerminalSmartbarOpen(open) {
     terminalSmartbarClosing = false;
     terminalSmartbarOpen = true;
     renderTerminalSmartbar();
+    scheduleTerminalKeyboardReflow('smartbar-open');
     scheduleTerminalSmartbarAutoClose();
 }
 function noteTerminalWorkspaceActivity() {}
@@ -2770,6 +2806,7 @@ function bindEvents() {
         const isTerminalFullscreen = fullscreenElement === workspace || fullscreenElement?.classList?.contains('terminal-window');
         if (isTerminalFullscreen) {
             appKeyboardBaseline = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, window.visualViewport?.height || 0);
+            scheduleTerminalKeyboardReflow('native-fullscreen-change');
             hideFullscreenLoading({ delay: 620 });
         } else {
             resetTerminalWorkspaceKeyboard();
