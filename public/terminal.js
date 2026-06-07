@@ -2447,10 +2447,37 @@ async function sha256HexFromBlob(blob) {
     return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// === 浏览器原生下载：<a> 标签触发，浏览器在底部显示原生进度条 ===
+function canUseVerifiedChunkedDownload(download, totalSize, fileName = '') {
+    if (!(totalSize > 0 && totalSize <= 1024 * 1024 * 1024 && download?.hashUrl)) return false;
+    // HTTP 非安全上下文通常没有 crypto.subtle；媒体文件用 Blob 拼接也容易在移动端占满内存。
+    // 这些场景走浏览器原生流式下载，更稳定，也避免下载触发 iframe 导航导致终端会话被卸载。
+    if (!window.crypto?.subtle) return false;
+    if (isSftpMediaFile(fileName || download?.path || '')) return false;
+    return true;
+}
+
+function triggerNativeDownloadUrl(url) {
+    const absoluteUrl = new URL(url, location.href).href;
+    if (embeddedMode && window.parent && window.parent !== window) {
+        window.parent.postMessage({ source: 'zephyr-terminal', type: 'download-url', url: absoluteUrl }, '*');
+        return;
+    }
+    const frame = document.createElement('iframe');
+    frame.style.position = 'fixed';
+    frame.style.width = '1px';
+    frame.style.height = '1px';
+    frame.style.opacity = '0';
+    frame.style.pointerEvents = 'none';
+    frame.style.inset = 'auto 0 0 auto';
+    frame.src = absoluteUrl;
+    document.body.appendChild(frame);
+    window.setTimeout(() => { try { frame.remove(); } catch {} }, 60000);
+}
+
+// === 浏览器原生下载：通过父页面/隐藏 iframe 触发，避免终端 iframe 被下载响应替换 ===
 // 传输面板通过服务端进度轮询反映真实进度
 // 暂停：终止服务端流（浏览器会看到下载失败）
-// 继续：重新 <a> 标签下载（从零开始，服务端内部 Range 可断点，但浏览器侧不保存偏移）
+// 继续：重新发起下载（从零开始，服务端支持 Range）
 async function startChunkedDownload(download) {
     if (!download || !download.url) return;
     const id = download.downloadId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2481,8 +2508,8 @@ async function startChunkedDownload(download) {
         });
     }
 
-    // <=1GB 使用 fetch 分片下载并在浏览器端做 SHA-256 校验；更大的文件走浏览器原生下载，避免网页内存压力。
-    if (totalSize > 0 && totalSize <= 1024 * 1024 * 1024 && download.hashUrl) {
+    // 小文件可选浏览器端 SHA-256 校验；HTTP 非安全上下文/媒体文件优先走原生流式下载，避免内存和会话问题。
+    if (canUseVerifiedChunkedDownload(download, totalSize, fileName)) {
         verifiedChunkedDownload(id, fileName, download.url, totalSize, download.hashUrl).catch((err) => {
             markDownloadProgress(id, { status: 'error' });
             showToast('下载校验失败: ' + (err.message || '未知错误'), 'error');
@@ -2529,17 +2556,10 @@ async function verifiedChunkedDownload(id, fileName, url, totalSize, hashUrl) {
 function nativeDownload(id, fileName, url, totalSize) {
     const entry = activeSftpDownloads.get(id);
     if (!entry) return;
-    
-    // 触发浏览器原生下载（底部显示下载进度条）
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    window.setTimeout(() => {
-        try { document.body.removeChild(a); } catch {} 
-    }, 1000);
+
+    // 触发浏览器原生下载。嵌入在主页 iframe 时必须交给父页面创建隐藏 iframe，
+    // 否则部分浏览器会把 terminal iframe 导航到下载响应，表现为文件管理器断开/自动回登录页。
+    triggerNativeDownloadUrl(url);
 
     // 开始轮询服务端进度
     startProgressPoll(id, totalSize, entry.progressUrl || '');

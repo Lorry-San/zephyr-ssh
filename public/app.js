@@ -2839,6 +2839,14 @@ function bindEvents() {
             return;
         }
         if (e.data.type === 'download-url') {
+            let downloadUrl;
+            try {
+                downloadUrl = new URL(e.data.url || '', location.href);
+                if (downloadUrl.origin !== location.origin) throw new Error('cross-origin download blocked');
+            } catch (err) {
+                console.warn('[terminal-download]', 'ignored invalid download url', { message: err.message });
+                return;
+            }
             const frame = document.createElement('iframe');
             frame.style.position = 'fixed';
             frame.style.width = '1px';
@@ -2846,7 +2854,8 @@ function bindEvents() {
             frame.style.opacity = '0';
             frame.style.pointerEvents = 'none';
             frame.style.inset = 'auto 0 0 auto';
-            frame.src = e.data.url;
+            frame.referrerPolicy = 'same-origin';
+            frame.src = downloadUrl.href;
             document.body.appendChild(frame);
             window.setTimeout(() => frame.remove(), 60000);
             return;

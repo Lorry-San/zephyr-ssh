@@ -2390,7 +2390,7 @@ function sftpWriteChunk(sftp, handle, buffer, length, position) {
         sftp.write(handle, buffer, 0, length, position, (err) => err ? reject(err) : resolve());
     });
 }
-async function sftpHashFile(sftp, filePath, { algorithm = 'sha256', chunkSize = 4 * 1024 * 1024, transfer = null } = {}) {
+async function sftpHashFile(sftp, filePath, { algorithm = 'sha256', chunkSize = 256 * 1024, transfer = null } = {}) {
     const hash = crypto.createHash(algorithm);
     let handle = null;
     const handleRef = { sftp, handle: null };
@@ -3412,7 +3412,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
     // === Fix: Explicit chunked SFTP read (分片读取) using sftp.open() + sftp.read() ===
     // Instead of createReadStream which can silently buffer too much, we read in
     // controlled chunks with keepalive between reads to prevent SSH channel timeout.
-    const CHUNK_SIZE = 16 * 1024 * 1024; // 16MB per SFTP read chunk — larger chunks = higher throughput
+    const CHUNK_SIZE = 256 * 1024; // 256KB：兼容 OpenSSH/Dropbear 等 SFTP 服务端的单次 READ 上限，避免大文件/MP4 下载中断
 
     try {
         fileHandle = await new Promise((resolve, reject) => {
