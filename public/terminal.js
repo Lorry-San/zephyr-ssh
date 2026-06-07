@@ -2356,7 +2356,7 @@ function updateProgressDisplay(id) {
         }
     }
     // 每次更新时重新绑 onclick
-    const direction = activeSftpUploads.has(id) ? 'upload' : 'download';
+    const direction = item.direction || (activeSftpUploads.has(id) ? 'upload' : 'download');
     bindCancelBtn(el, id, direction);
 }
 
@@ -2462,6 +2462,7 @@ function bindCancelBtn(containerEl, id, direction) {
         if (direction === 'upload') cancelUploadTransfer(id);
         else if (direction === 'download') cancelDownloadTransfer(id);
         else if (direction === 'copy' || direction === 'move') cancelClipboardTransfer(id);
+        else if (direction === 'archive') cancelArchiveTransfer(id);
     };
     // 在按下阶段立即取消，避免移动端 pointerup/click 丢失导致“点了没反应”。
     btn.onpointerdown = fire;
@@ -2756,6 +2757,21 @@ function cancelClipboardTransfer(id) {
     markDownloadProgress(id, { status: 'cancelling', cancelled: true });
     sendJsonMessage({ type: 'sftp-clipboard-cancel', transferId: id });
     showToast('正在取消复制任务...', 'info');
+    window.setTimeout(() => {
+        const latest = activeSftpDownloads.get(id);
+        if (latest?.status === 'cancelling') markDownloadProgress(id, { status: 'error', cancelled: true });
+    }, 1800);
+    window.setTimeout(() => { activeSftpDownloads.delete(id); scheduleTransferRender(); }, 4200);
+}
+
+function cancelArchiveTransfer(id) {
+    const item = activeSftpDownloads.get(id);
+    if (!item || item.status === 'cancelling' || item.status === 'error' || item.status === 'done') return;
+    item.cancelled = true;
+    item._ignoreRemote = true;
+    markDownloadProgress(id, { status: 'cancelling', cancelled: true, cancellable: true });
+    sendJsonMessage({ type: 'sftp-archive-cancel', transferId: id });
+    showToast('正在取消归档任务...', 'info');
     window.setTimeout(() => {
         const latest = activeSftpDownloads.get(id);
         if (latest?.status === 'cancelling') markDownloadProgress(id, { status: 'error', cancelled: true });
@@ -3688,7 +3704,7 @@ function handleFileMenuAction(action) {
         const targetPath = chooseArchiveTargetPath(defaultName);
         if (!targetPath) return;
         const transferId = `archive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        markDownloadProgress(transferId, { name: `压缩: ${targetPath.split('/').pop() || '压缩包'}`, path: targetPath, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: false });
+        markDownloadProgress(transferId, { name: `压缩: ${targetPath.split('/').pop() || '压缩包'}`, path: targetPath, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: true });
         showTransferPopover({ autoHide: true });
         wsConnection.send(JSON.stringify({ type: 'sftp-compress', items: selected, targetPath, transferId }));
         showToast('正在压缩，进度可在传输面板查看', 'info');
@@ -3698,7 +3714,7 @@ function handleFileMenuAction(action) {
         const targetDir = prompt('解压到:', currentPath);
         if (!targetDir) return;
         const transferId = `archive-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        markDownloadProgress(transferId, { name: `解压: ${single.name || '压缩包'}`, path: single.path, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: false });
+        markDownloadProgress(transferId, { name: `解压: ${single.name || '压缩包'}`, path: single.path, direction: 'archive', phase: 'prepare', size: 0, loaded: 0, status: 'pending', cancellable: true });
         showTransferPopover({ autoHide: true });
         wsConnection.send(JSON.stringify({ type: 'sftp-extract', path: single.path, targetDir, transferId }));
         showToast('正在解压，进度可在传输面板查看', 'info');
@@ -5540,20 +5556,22 @@ function handleSFTPMessage(msg) {
             if (msg.transferId) {
                 const current = activeSftpDownloads.get(msg.transferId) || {};
                 const finalSize = Number(msg.size) || Number(current.size) || 0;
-                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize });
+                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize, cancelled: !!msg.cancelled || !!current.cancelled });
                 window.setTimeout(() => { activeSftpDownloads.delete(msg.transferId); scheduleTransferRender(); }, msg.success ? 5000 : 8000);
             }
             if (msg.success) { showToast('压缩完成', 'success'); refreshAllOpenFileManagers(); }
+            else if (msg.cancelled) showToast('压缩已取消', 'info');
             else alert('压缩失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-extract':
             if (msg.transferId) {
                 const current = activeSftpDownloads.get(msg.transferId) || {};
                 const finalSize = Number(msg.size) || Number(current.size) || 0;
-                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize });
+                markDownloadProgress(msg.transferId, { status: msg.success ? 'done' : 'error', loaded: finalSize || current.loaded || 0, size: finalSize, cancelled: !!msg.cancelled || !!current.cancelled });
                 window.setTimeout(() => { activeSftpDownloads.delete(msg.transferId); scheduleTransferRender(); }, msg.success ? 5000 : 8000);
             }
             if (msg.success) { showToast('解压完成', 'success'); refreshAllOpenFileManagers(); }
+            else if (msg.cancelled) showToast('解压已取消', 'info');
             else alert('解压失败: ' + (msg.error || '未知错误'));
             break;
         case 'sftp-readfile': {
