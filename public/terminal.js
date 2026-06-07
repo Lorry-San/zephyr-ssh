@@ -2393,11 +2393,12 @@ function bindCancelBtn(containerEl, id, direction) {
         else if (direction === 'download') cancelDownloadTransfer(id);
         else if (direction === 'copy' || direction === 'move') cancelClipboardTransfer(id);
     };
-    btn.onpointerdown = consume;
-    btn.onmousedown = consume;
-    btn.ontouchstart = consume;
-    btn.onpointerup = fire;
-    btn.ontouchend = fire;
+    // 在按下阶段立即取消，避免移动端 pointerup/click 丢失导致“点了没反应”。
+    btn.onpointerdown = fire;
+    btn.onmousedown = fire;
+    btn.ontouchstart = fire;
+    btn.onpointerup = consume;
+    btn.ontouchend = consume;
     btn.onclick = fire;
 }
 
@@ -2622,14 +2623,14 @@ function markUploadProgress(id, patch) {
 }
 
 function sendDownloadControl(download, action) {
-    if (!download?.controlUrl) return;
-    fetch(download.controlUrl, {
+    if (!download?.controlUrl) return Promise.resolve(null);
+    return fetch(download.controlUrl, {
         method: 'POST',
         credentials: 'same-origin',
-        keepalive: true,
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
-    }).catch(() => {});
+    }).catch(() => null);
 }
 
 function cancelUploadTransfer(id) {
