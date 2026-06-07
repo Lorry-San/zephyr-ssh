@@ -2368,26 +2368,37 @@ function metaText(item) {
 }
 
 function actionButtons(item) {
-    // 所有非完成/失败的状态都显示取消 ❌
+    if (item.cancellable === false) return '';
     if (item.status === 'done' || item.status === 'error' || item.status === 'cancelling') return '';
     return `<button type="button" class="transfer-cancel-btn" data-transfer-action="cancel" data-transfer-id="${escapeHtml(item.id || '')}" data-transfer-direction="${escapeHtml(item.direction || '')}" title="取消" aria-label="取消"><span aria-hidden="true">×</span></button>`;
 }
 
-// 直接给取消按钮绑 onclick（不依赖任何事件委托/冒泡）
+// 取消按钮必须在 pointer/touch 阶段就吞掉事件；移动端合成 click 若落到下层按钮，可能误触发断开/跳转。
 function bindCancelBtn(containerEl, id, direction) {
     const btn = containerEl.querySelector('.transfer-cancel-btn');
     if (!btn) return;
     btn.dataset.transferAction = 'cancel';
     btn.dataset.transferId = id || '';
     btn.dataset.transferDirection = direction || '';
-    btn.onclick = function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!id) return;
+    const consume = (e) => {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        e?.stopImmediatePropagation?.();
+    };
+    const fire = (e) => {
+        consume(e);
+        if (!id || btn.dataset.cancelFired === '1') return;
+        btn.dataset.cancelFired = '1';
         if (direction === 'upload') cancelUploadTransfer(id);
         else if (direction === 'download') cancelDownloadTransfer(id);
         else if (direction === 'copy' || direction === 'move') cancelClipboardTransfer(id);
     };
+    btn.onpointerdown = consume;
+    btn.onmousedown = consume;
+    btn.ontouchstart = consume;
+    btn.onpointerup = fire;
+    btn.ontouchend = fire;
+    btn.onclick = fire;
 }
 
 // Throttled transfer render: at most once per 300ms to avoid re-rendering on every chunk
@@ -2615,6 +2626,7 @@ function sendDownloadControl(download, action) {
     fetch(download.controlUrl, {
         method: 'POST',
         credentials: 'same-origin',
+        keepalive: true,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
     }).catch(() => {});
@@ -2624,9 +2636,12 @@ function cancelUploadTransfer(id) {
     const upload = activeSftpUploads.get(id);
     if (!upload) return;
     upload.cancelled = true;
+    upload.status = 'error';
     upload.controller?.abort?.();
     markUploadProgress(id, { status: 'error' });
-    sendJsonMessage({ type: 'sftp-upload-cancel', uploadId: id });
+    if (wsConnection?.readyState === WebSocket.OPEN && isConnected) {
+        sendJsonMessage({ type: 'sftp-upload-cancel', uploadId: id });
+    }
     showToast('已取消上传', 'info');
     window.setTimeout(() => { activeSftpUploads.delete(id); scheduleTransferRender(); }, 1200);
 }
