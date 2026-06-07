@@ -83,6 +83,8 @@ RUN echo "BUILD_FREERDP_VERSION=$(apk list --installed 2>/dev/null | grep 'freer
 # ============================================================
 FROM guacamole/guacd:1.5.5
 
+ARG ZEPHYR_VERSION=3.0.0
+
 USER root
 WORKDIR /app
 
@@ -149,6 +151,7 @@ ENV GUACD_EMBEDDED=true
 ENV GUACD_HOST=127.0.0.1
 ENV GUACD_PORT=4822
 ENV GUACD_BIN=guacd
+ENV ZEPHYR_VERSION=${ZEPHYR_VERSION}
 
 EXPOSE 3000
 

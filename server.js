@@ -26,6 +26,7 @@ const {
 const { getRemoteStats } = require('./stats');
 const storage = require('./storage');
 const { handleEditorLspConnection } = require('./editor-lsp-server');
+const { getAppVersion } = require('./version');
 const {
     getImageExt,
     isBrowserImageExt,
@@ -58,6 +59,7 @@ const GUACD_LOG_LEVEL = process.env.GUACD_LOG_LEVEL || 'warning';
 const GUACD_TRAFFIC_LOG_LEVEL = String(process.env.GUACD_TRAFFIC_LOG_LEVEL || 'info').toLowerCase();
 const GUACD_TRAFFIC_HEXDUMP = process.env.GUACD_TRAFFIC_HEXDUMP === 'true';
 const SSH_STATS_ENABLED = process.env.SSH_STATS_ENABLED !== 'false';
+const APP_VERSION = getAppVersion();
 const app = express();
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -221,7 +223,7 @@ function initData() {
         users: [{ username: 'admin', passwordHash: hashPassword('admin'), defaultPassword: true, createdAt: Date.now() }]
     });
     ensureDataFile(CONNECTIONS_FILE, { connections: [], activities: [] });
-    ensureDataFile(SETTINGS_FILE, { version: '1.0.0', icp: '', policeBeian: '' });
+    ensureDataFile(SETTINGS_FILE, { version: APP_VERSION, icp: '', policeBeian: '' });
 }
 
 storage.init({ hashPassword });
@@ -1050,6 +1052,7 @@ function publicOrigin(req) { return req.headers.origin || (process.env.PUBLIC_OR
 function rpIdFromOrigin(origin) { try { return new URL(origin).hostname; } catch { return 'localhost'; } }
 function safeSettings(s = storage.getSettings()) {
     const copy = JSON.parse(JSON.stringify(s || {}));
+    copy.version = APP_VERSION;
     if (copy.mail?.pass) copy.mail.pass = '******';
     if (copy.captcha?.secretKey) copy.captcha.secretKey = '******';
     if (copy.captcha?.tencentAppSecretKey) copy.captcha.tencentAppSecretKey = '******';
@@ -1613,7 +1616,7 @@ app.post('/api/connections/:id/open', requireAuth, (req, res) => {
     }
 });
 
-app.get('/api/settings', requireAuth, (req, res) => res.json(safeSettings(readJSON(SETTINGS_FILE, { version: '3.0.0' }))));
+app.get('/api/settings', requireAuth, (req, res) => res.json(safeSettings(storage.getSettings())));
 
 app.put('/api/settings', requireAuth, (req, res) => {
     const body = normalizeSettingsInput(req.body || {});
@@ -1740,7 +1743,7 @@ app.post('/api/passkeys/login/verify', async (req, res) => {
 
 app.get('/api/data/export', requireAuth, async (req, res) => {
     try { storage.rawDb().pragma('wal_checkpoint(FULL)'); } catch (err) { console.error('[DB] WAL checkpoint failed:', err.message); }
-    const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: '3.0.0', exportedAt: Date.now() }, null, 2) };
+    const files = { 'zephyr.db': fs.readFileSync(path.join(DATA_DIR, 'zephyr.db')), 'manifest.json': JSON.stringify({ app: 'Zephyr', version: APP_VERSION, exportedAt: Date.now() }, null, 2) };
     const encrypted = encryptBuffer(await zipBuffer(files), process.env.ENCRYPTION_KEY);
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('Content-Disposition', `attachment; filename="zephyr-backup-${stamp}.zip.enc"`); res.end(encrypted);

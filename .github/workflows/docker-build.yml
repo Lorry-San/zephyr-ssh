@@ -45,7 +45,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+          docker build --build-arg ZEPHYR_VERSION="${VERSION_TAG}" -t $IMAGE_TAG -t $IMAGE_LATEST .
 
       - name: Push Docker image
         run: |

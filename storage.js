@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { getAppVersion } = require('./version');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'zephyr.db');
@@ -9,6 +10,7 @@ const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 let db;
+const APP_VERSION = getAppVersion();
 
 function now() { return Date.now(); }
 function json(value, fallback) { try { return JSON.parse(value || ''); } catch { return fallback; } }
@@ -46,7 +48,7 @@ function addColumnIfMissing(table, column, definition) {
 
 function defaultSettings(legacySettings = {}) {
     return {
-        version: '3.0.0',
+        version: APP_VERSION,
         security: {
             ipWhitelistEnabled: false,
             ipWhitelist: '',
@@ -209,7 +211,7 @@ function init({ hashPassword }) {
     const legacySettings = readJSONFile(SETTINGS_FILE, {});
     const defaults = defaultSettings(legacySettings);
     Object.entries(defaults).forEach(([key, value]) => setSettingDefault(key, value));
-    if ((getSettings().version || '0') !== '3.0.0') updateSettings({ ...defaults, ...getSettings(), version: '3.0.0' });
+    if ((getSettings().version || '0') !== APP_VERSION) updateSettings({ ...defaults, ...getSettings(), version: APP_VERSION });
 }
 
 function setSettingDefault(key, value) {
