@@ -2429,7 +2429,7 @@ function defaultAiSettings() {
         defaultSystemPrompt: DEFAULT_AI_GUIDANCE_TEXT,
         guidanceVersion: 1,
         codeCompletionEnabled: true,
-        context: { windowTokens: 128000, maxInputChars: 180000, keepMessages: 40, toolResultChars: 60000, memoryItems: 28 },
+        context: { windowTokens: 128000, maxInputChars: 180000, keepMessages: 40, toolResultChars: 60000, memoryItems: 28, maxToolRounds: 0 },
         sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
         permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
         planner: { enabled: true, requirePlanBeforeTools: false },
@@ -2515,6 +2515,7 @@ function renderAiSettingsForm() {
     if ($('#aiContextMaxInputChars')) $('#aiContextMaxInputChars').value = ai.context?.maxInputChars ?? 180000;
     if ($('#aiContextKeepMessages')) $('#aiContextKeepMessages').value = ai.context?.keepMessages ?? 40;
     if ($('#aiContextToolResultChars')) $('#aiContextToolResultChars').value = ai.context?.toolResultChars ?? 60000;
+    if ($('#aiContextMaxToolRounds')) $('#aiContextMaxToolRounds').value = ai.context?.maxToolRounds ?? 0;
     $('#aiRequireConfirmation').checked = ai.sensitive?.requireConfirmation !== false;
     $('#aiAutoConfirm').checked = !!ai.sensitive?.autoConfirm;
     $('#aiAutoConfirmDelayMs').value = ai.sensitive?.autoConfirmDelayMs ?? 2500;
@@ -2556,6 +2557,7 @@ function collectAiSettingsForm() {
             keepMessages: Number($('#aiContextKeepMessages')?.value) || 40,
             toolResultChars: Number($('#aiContextToolResultChars')?.value) || 60000,
             memoryItems: old.context?.memoryItems ?? 28,
+            maxToolRounds: Math.max(0, Number($('#aiContextMaxToolRounds')?.value) || 0),
         },
         sensitive: { requireConfirmation: $('#aiRequireConfirmation').checked, autoConfirm: $('#aiAutoConfirm').checked, autoConfirmDelayMs: Number($('#aiAutoConfirmDelayMs').value) || 0 },
         permissions: {
@@ -3026,15 +3028,94 @@ function mergeAiMemory(memory) {
     if (idx >= 0) ai.memories[idx] = memory; else ai.memories.unshift(memory);
     settings.ai = ai; aiSettingsState = ai; renderAiMemoryList();
 }
-function syncAiToolSideEffects(toolResults = []) {
-    toolResults.forEach((r) => {
+function currentOrRequestedTerminalTab(tabId = '') {
+    const requested = String(tabId || '').trim();
+    if (requested && terminalTabs.some((t) => t.id === requested)) return requested;
+    if (activeTerminalTab && terminalTabs.some((t) => t.id === activeTerminalTab)) return activeTerminalTab;
+    return terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || '';
+}
+function terminalFrameForAi(tabId = '') {
+    const id = currentOrRequestedTerminalTab(tabId);
+    return id ? document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(id)}"]`) : null;
+}
+function clickSettingsSection(section = '') {
+    const key = String(section || '').toLowerCase();
+    if (!key) return;
+    if (['security', 'data'].includes(key)) throw new Error('AI 不允许代操作安全/数据管理设置页');
+    const btn = document.querySelector(`.settings-tab[data-settings="${CSS.escape(key)}"]`);
+    if (btn) btn.click();
+}
+function waitForTerminalFrameReady(frame, timeoutMs = 1800) {
+    if (!frame) return Promise.reject(new Error('当前终端页面还没准备好'));
+    try {
+        const doc = frame.contentDocument;
+        if (doc && doc.readyState !== 'loading') return Promise.resolve(frame);
+    } catch (_) {}
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = () => { if (done) return; done = true; frame.removeEventListener('load', finish); resolve(frame); };
+        frame.addEventListener('load', finish, { once: true });
+        window.setTimeout(finish, timeoutMs);
+    });
+}
+async function performAiUiAction(action = {}) {
+    const a = String(action.action || '');
+    if (!a) return;
+    if (a === 'switch_view') {
+        const view = ['dashboard', 'terminal', 'remote', 'settings'].includes(action.view) ? action.view : 'dashboard';
+        switchView(view);
+        if (view === 'settings') clickSettingsSection(action.settingsSection || 'ai');
+        toast(`AI 已切换到${view}`);
+        return;
+    }
+    if (a === 'open_add_connection') { switchView('dashboard'); openModal(null, $('#addConnectionBtn')); return; }
+    if (a === 'open_edit_connection') {
+        switchView('dashboard');
+        const conn = connections.find((c) => c.id === String(action.connectionId || ''));
+        if (!conn) throw new Error('连接不存在或尚未刷新');
+        openModal(conn, document.querySelector(`[data-edit="${CSS.escape(conn.id)}"]`) || $('#addConnectionBtn'));
+        return;
+    }
+    if (a === 'terminal_fullscreen') { const id = currentOrRequestedTerminalTab(action.tabId); if (!id) throw new Error('暂无终端会话'); fullscreenTerminalTab(id).catch((err) => toast(err.message)); return; }
+    if (a === 'terminal_exit_fullscreen') { exitTerminalFullscreen(); return; }
+    if (a === 'terminal_window_action') { const id = currentOrRequestedTerminalTab(action.tabId); if (!id) throw new Error('暂无终端会话'); applyTerminalWindowPreset(id, action.windowAction || 'fullscreen'); return; }
+    if (a === 'terminal_toolbar') {
+        switchView('terminal');
+        const frame = await waitForTerminalFrameReady(terminalFrameForAi(action.tabId));
+        if (!frame?.contentWindow) throw new Error('当前终端页面还没准备好');
+        frame.contentWindow.postMessage({ source: 'zephyr-app', type: 'ai-terminal-toolbar', control: action.control || '' }, '*');
+        return;
+    }
+    if (a === 'terminal_send_input') {
+        switchView('terminal');
+        const frame = await waitForTerminalFrameReady(terminalFrameForAi(action.tabId));
+        if (!frame?.contentWindow) throw new Error('当前终端页面还没准备好');
+        frame.contentWindow.postMessage({ source: 'zephyr-app', type: 'ai-terminal-send-input', text: action.text || '', run: action.run !== false }, '*');
+        return;
+    }
+    if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
+    throw new Error(`未知 UI 动作：${a}`);
+}
+async function syncAiToolSideEffects(toolResults = []) {
+    for (const r of toolResults) {
         updateAiBrowserPreviewFromToolResult(r);
         if (r.result?.uiAction === 'open_connection' && r.result?.connectionId) {
-            openConnection(r.result.connectionId).catch((err) => toast(err.message || 'AI 打开连接失败'));
+            try { await openConnection(r.result.connectionId); } catch (err) { toast(err.message || 'AI 打开连接失败'); }
+        }
+        if (r.result?.uiAction === 'ui_action' && r.result?.action) {
+            try { await performAiUiAction(r.result.action); } catch (err) { toast(err.message || 'AI UI 操作失败'); }
         }
         if (r.tool === 'plan_task' || r.tool === 'plan_update') mergeAiPlan(r.result?.plan);
         if (r.tool === 'memory_save') mergeAiMemory(r.result?.memory);
-    });
+        if (/^(connection_|proxy_|ssh_key_|jump_host_)/.test(String(r.tool || ''))) {
+            await Promise.all([loadConnections().catch(() => {}), loadNetwork().catch(() => {})]);
+        }
+        if (/^snippet_/.test(String(r.tool || ''))) {
+            const snippets = r.result?.resources?.snippets;
+            if (Array.isArray(snippets)) { settings.snippets = normalizeSnippets(snippets); renderSnippetSettings(); }
+            else await loadSettings().then(() => renderSnippetSettings()).catch(() => {});
+        }
+    }
 }
 function maskAiSensitive(value, tool = '') {
     const sensitiveKeys = /api[_-]?key|password|passwd|private[_-]?key|passphrase|secret|token|authorization|cookie/i;
@@ -3131,7 +3212,7 @@ async function sendAiMessage() {
         const options = aiIntensityOptions();
         const data = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
-            syncAiToolSideEffects(data.toolResults);
+            await syncAiToolSideEffects(data.toolResults);
             appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
         }
         if (data.confirmationRequired) {
@@ -3187,7 +3268,7 @@ async function continueAiAfterConfirmation(id, approve, data) {
     try {
         setAiTyping(true);
         const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
-        if (next.toolResults?.length) { syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
+        if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
         if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
     } catch (err) {
@@ -3221,7 +3302,7 @@ async function resolveAiConfirmation(id, approve) {
     try {
         const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', signal: abortController.signal, body: JSON.stringify({ approve }) });
         if (approve && data.result) {
-            syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
+            await syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
             appendAiMessage(formatAiToolResult({ tool: 'confirmed', result: data.result, args: data.args || {}, durationMs: data.durationMs }), 'trace', { rawHtml: true });
             if (aiActiveAbortController === abortController) aiActiveAbortController = null;
             await continueAiAfterConfirmation(id, true, data);

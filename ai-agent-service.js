@@ -5,7 +5,7 @@ const { URL } = require('url');
 const { browserService, SHOT_DIR } = require('./ai-browser-service');
 const { DEFAULT_ZEPHYR_SYSTEM_PROMPT, DEFAULT_ZEPHYR_SKILLS } = require('./ai-defaults');
 
-const OPENAI_TOOL_LIMIT = 4;
+const DEFAULT_TOOL_CALL_LIMIT = 0;
 const MAX_TOOL_TEXT = 60 * 1024;
 const MAX_REMOTE_READ = 512 * 1024;
 const MAX_REMOTE_WRITE = 1024 * 1024;
@@ -249,6 +249,20 @@ function toolDefinitions(ai = {}) {
     const p = ai.permissions || {};
     const tools = [];
     tools.push({ type: 'function', function: { name: 'list_connections', description: '列出 Zephyr 中可用的 SSH/RDP/VNC 连接（不含密码/私钥）；只有 SSH 支持远程命令和文件工具。', parameters: { type: 'object', properties: {}, additionalProperties: false } } });
+    tools.push({ type: 'function', function: { name: 'list_zephyr_resources', description: '列出 Zephyr 本地资源：连接、代理、SSH 密钥库、跳板机、代码片段。只返回脱敏信息。', parameters: { type: 'object', properties: { resources: { type: 'array', items: { type: 'string', enum: ['connections', 'proxies', 'sshKeys', 'jumpHosts', 'snippets'] } } } } } });
+    tools.push({ type: 'function', function: { name: 'connection_create', description: '新增 SSH/RDP/VNC 连接资产。可填写密码/私钥/标签/代理/跳板链；属于修改本地资源的敏感操作，需要确认。', parameters: { type: 'object', properties: { name: { type: 'string' }, protocol: { type: 'string', enum: ['SSH', 'RDP', 'VNC'] }, host: { type: 'string' }, port: { type: 'number' }, username: { type: 'string' }, password: { type: 'string' }, privateKey: { type: 'string' }, sshKeyId: { type: 'string' }, remark: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, connectionMode: { type: 'string', enum: ['direct', 'proxy', 'jump'] }, proxyId: { type: 'string' }, jumpHostId: { type: 'string' }, jumpHostIds: { type: 'array', items: { type: 'string' } } }, required: ['name', 'protocol', 'host'] } } });
+    tools.push({ type: 'function', function: { name: 'connection_update', description: '修改已有 SSH/RDP/VNC 连接资产。未传字段保持不变；密码/私钥传 ****** 或不传表示不修改。敏感操作，需要确认。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, name: { type: 'string' }, protocol: { type: 'string', enum: ['SSH', 'RDP', 'VNC'] }, host: { type: 'string' }, port: { type: 'number' }, username: { type: 'string' }, password: { type: 'string' }, privateKey: { type: 'string' }, sshKeyId: { type: 'string' }, remark: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, connectionMode: { type: 'string', enum: ['direct', 'proxy', 'jump'] }, proxyId: { type: 'string' }, jumpHostId: { type: 'string' }, jumpHostIds: { type: 'array', items: { type: 'string' } } }, required: ['connectionId'] } } });
+    tools.push({ type: 'function', function: { name: 'connection_delete', description: '删除连接资产。敏感操作，需要确认。', parameters: { type: 'object', properties: { connectionId: { type: 'string' } }, required: ['connectionId'] } } });
+    tools.push({ type: 'function', function: { name: 'connection_test', description: '测试 SSH/RDP/VNC 连接连通性。可用现有 connectionId，也可临时传入连接字段进行测试。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, name: { type: 'string' }, protocol: { type: 'string', enum: ['SSH', 'RDP', 'VNC'] }, host: { type: 'string' }, port: { type: 'number' }, username: { type: 'string' }, password: { type: 'string' }, privateKey: { type: 'string' }, sshKeyId: { type: 'string' }, connectionMode: { type: 'string', enum: ['direct', 'proxy', 'jump'] }, proxyId: { type: 'string' }, jumpHostId: { type: 'string' }, jumpHostIds: { type: 'array', items: { type: 'string' } }, timeoutSeconds: { type: 'number' } } } } });
+    tools.push({ type: 'function', function: { name: 'proxy_save', description: '新增或修改代理池条目。传 proxyId 为修改，不传为新增。敏感操作，需要确认。', parameters: { type: 'object', properties: { proxyId: { type: 'string' }, name: { type: 'string' }, host: { type: 'string' }, port: { type: 'number' }, type: { type: 'string', enum: ['socks5', 'http'] }, username: { type: 'string' }, password: { type: 'string' } }, required: ['name', 'host', 'port'] } } });
+    tools.push({ type: 'function', function: { name: 'proxy_delete', description: '删除代理池条目。敏感操作，需要确认。', parameters: { type: 'object', properties: { proxyId: { type: 'string' } }, required: ['proxyId'] } } });
+    tools.push({ type: 'function', function: { name: 'ssh_key_save', description: '新增或修改 SSH 密钥库条目。传 sshKeyId 为修改，不传为新增。私钥/口令属于敏感信息，需要确认。', parameters: { type: 'object', properties: { sshKeyId: { type: 'string' }, name: { type: 'string' }, privateKey: { type: 'string' }, passphrase: { type: 'string' }, remark: { type: 'string' } }, required: ['name'] } } });
+    tools.push({ type: 'function', function: { name: 'ssh_key_delete', description: '删除 SSH 密钥库条目。敏感操作，需要确认。', parameters: { type: 'object', properties: { sshKeyId: { type: 'string' } }, required: ['sshKeyId'] } } });
+    tools.push({ type: 'function', function: { name: 'jump_host_save', description: '新增或修改跳板机配置。传 jumpHostId 为修改，不传为新增；connectionId 必须指向 SSH 连接。敏感操作，需要确认。', parameters: { type: 'object', properties: { jumpHostId: { type: 'string' }, name: { type: 'string' }, connectionId: { type: 'string' } }, required: ['name', 'connectionId'] } } });
+    tools.push({ type: 'function', function: { name: 'jump_host_delete', description: '删除跳板机配置。敏感操作，需要确认。', parameters: { type: 'object', properties: { jumpHostId: { type: 'string' } }, required: ['jumpHostId'] } } });
+    tools.push({ type: 'function', function: { name: 'snippet_save', description: '新增或修改代码片段。传 snippetId 为修改，不传为新增。', parameters: { type: 'object', properties: { snippetId: { type: 'string' }, name: { type: 'string' }, command: { type: 'string' }, group: { type: 'string' }, autoRun: { type: 'boolean' } }, required: ['name', 'command'] } } });
+    tools.push({ type: 'function', function: { name: 'snippet_delete', description: '删除代码片段。', parameters: { type: 'object', properties: { snippetId: { type: 'string' } }, required: ['snippetId'] } } });
+    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击终端内文件/监控/Docker/片段/快捷键/复制/粘贴/重连/断开等按钮。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect'] }, text: { type: 'string' }, run: { type: 'boolean' } }, required: ['action'] } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
@@ -521,6 +535,74 @@ function connectionSummary(conn) {
 function getAllConnections(deps) {
     return (deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] }).connections || []);
 }
+function saveConnectionsStore(deps, store) {
+    if (typeof deps.writeJSON !== 'function') throw new Error('连接写入接口不可用');
+    deps.writeJSON(deps.CONNECTIONS_FILE, store);
+}
+function publicConnectionForAi(conn = {}) {
+    const clean = connectionSummary(conn);
+    clean.connectionMode = conn.connectionMode || 'direct';
+    clean.proxyId = conn.proxyId || '';
+    clean.jumpHostId = conn.jumpHostId || '';
+    clean.jumpHostIds = stringList(conn.jumpHostIds || conn.jumpHostId);
+    clean.sshKeyId = conn.sshKeyId || '';
+    clean.hasPassword = !!conn.password;
+    clean.hasPrivateKey = !!conn.privateKey;
+    return clean;
+}
+function defaultPortForProtocol(protocol = 'SSH') {
+    const p = String(protocol || 'SSH').toUpperCase();
+    if (p === 'RDP') return 3389;
+    if (p === 'VNC') return 5900;
+    return 22;
+}
+function normalizeConnectionTags(value) {
+    return Array.isArray(value) ? uniqueStrings(value).slice(0, 50) : uniqueStrings(String(value || '').split(/[,，\n]+/)).slice(0, 50);
+}
+function normalizeJumpIds(value, fallback = '') {
+    const ids = Array.isArray(value) ? value : String(value || fallback || '').split(/[,，\n]+/);
+    return uniqueStrings(ids).slice(0, 12);
+}
+function normalizeConnectionForSave(raw = {}, old = null) {
+    const create = !old;
+    const protocol = String(raw.protocol ?? old?.protocol ?? 'SSH').toUpperCase();
+    if (!['SSH', 'RDP', 'VNC'].includes(protocol)) throw new Error('连接协议仅支持 SSH/RDP/VNC');
+    const next = create ? {
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        lastConnectedAt: null,
+    } : { ...old };
+    next.protocol = protocol;
+    next.name = String(raw.name ?? old?.name ?? '').trim().slice(0, 120);
+    next.host = String(raw.host ?? old?.host ?? '').trim().slice(0, 255);
+    next.port = Number(raw.port ?? old?.port) || defaultPortForProtocol(protocol);
+    next.username = String(raw.username ?? old?.username ?? '').trim().slice(0, 120);
+    next.remark = String(raw.remark ?? old?.remark ?? '').slice(0, 20000);
+    next.tags = raw.tags !== undefined ? normalizeConnectionTags(raw.tags) : normalizeConnectionTags(old?.tags || []);
+    next.sshKeyId = String(raw.sshKeyId ?? old?.sshKeyId ?? '').slice(0, 120);
+    next.connectionMode = ['direct', 'proxy', 'jump'].includes(String(raw.connectionMode ?? old?.connectionMode ?? 'direct')) ? String(raw.connectionMode ?? old?.connectionMode ?? 'direct') : 'direct';
+    next.proxyId = raw.proxyId !== undefined ? (raw.proxyId || null) : (old?.proxyId || null);
+    const jumpHostIds = raw.jumpHostIds !== undefined || raw.jumpHostId !== undefined
+        ? normalizeJumpIds(raw.jumpHostIds, raw.jumpHostId)
+        : normalizeJumpIds(old?.jumpHostIds, old?.jumpHostId);
+    next.jumpHostIds = jumpHostIds;
+    next.jumpHostId = jumpHostIds[0] || (raw.jumpHostId ?? old?.jumpHostId ?? null) || null;
+    if (create || (raw.password !== undefined && raw.password !== '******')) next.password = String(raw.password || '');
+    if (create || (raw.privateKey !== undefined && raw.privateKey !== '******')) next.privateKey = String(raw.privateKey || '');
+    if (!next.name || !next.host || (protocol === 'SSH' && !next.username)) throw new Error(protocol === 'SSH' ? '名称、主机、用户名不能为空' : '名称、主机不能为空');
+    next.updatedAt = Date.now();
+    return next;
+}
+function publicResourceList(deps, resources = []) {
+    const wanted = new Set((resources.length ? resources : ['connections', 'proxies', 'sshKeys', 'jumpHosts', 'snippets']).map((x) => String(x || '').toLowerCase()));
+    const out = {};
+    if (wanted.has('connections')) out.connections = getAllConnections(deps).map(publicConnectionForAi);
+    if (wanted.has('proxies')) out.proxies = typeof deps.storage.listProxies === 'function' ? deps.storage.listProxies() : [];
+    if (wanted.has('sshkeys') || wanted.has('ssh_keys')) out.sshKeys = typeof deps.storage.listSshKeys === 'function' ? deps.storage.listSshKeys() : [];
+    if (wanted.has('jumphosts') || wanted.has('jump_hosts')) out.jumpHosts = typeof deps.storage.listJumpHosts === 'function' ? deps.storage.listJumpHosts() : [];
+    if (wanted.has('snippets')) out.snippets = Array.isArray(deps.storage.getSettings()?.snippets) ? deps.storage.getSettings().snippets : [];
+    return out;
+}
 function getSshConnections(deps) {
     return getAllConnections(deps).filter((c) => String(c.protocol || '').toUpperCase() === 'SSH');
 }
@@ -615,6 +697,37 @@ function findConnection(deps, id) {
     if (!conn) throw new Error('SSH 连接不存在或不可用');
     return conn;
 }
+function addStoreActivity(store, message) {
+    store.activities = [{ id: crypto.randomUUID(), time: Date.now(), message }, ...(store.activities || [])].slice(0, 100);
+}
+function normalizeProxyType(type) {
+    const value = String(type || 'socks5').toLowerCase();
+    return ['socks5', 'http'].includes(value) ? value : 'socks5';
+}
+function normalizeSnippet(item = {}, old = null) {
+    const out = {
+        id: String(item.snippetId || item.id || old?.id || crypto.randomUUID()).slice(0, 80),
+        name: String(item.name ?? old?.name ?? '').slice(0, 60),
+        command: String(item.command ?? old?.command ?? '').slice(0, 20000),
+        group: String(item.group ?? old?.group ?? '').slice(0, 40),
+        autoRun: item.autoRun !== undefined ? !!item.autoRun : !!old?.autoRun,
+        updatedAt: Date.now(),
+    };
+    if (!out.name || !out.command.trim()) throw new Error('代码片段名称和命令不能为空');
+    return out;
+}
+function toolRoundLimit(ai = {}, provider = {}) {
+    const raw = provider.options?.context?.maxToolRounds ?? ai.context?.maxToolRounds ?? DEFAULT_TOOL_CALL_LIMIT;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return Infinity;
+    return Math.max(1, Math.min(100000, Math.floor(n)));
+}
+function safeUiActionArgs(args = {}) {
+    const action = String(args.action || '');
+    const forbiddenSettings = ['security', 'data'];
+    if (action === 'switch_view' && String(args.view || '') === 'settings' && forbiddenSettings.includes(String(args.settingsSection || '').toLowerCase())) throw new Error('AI 不允许代操作安全/数据管理设置页');
+    return { ...args, action };
+}
 function sftpOpen(client) { return new Promise((resolve, reject) => client.sftp((err, sftp) => err ? reject(err) : resolve(sftp))); }
 function sftpStat(sftp, targetPath) { return new Promise((resolve, reject) => sftp.stat(targetPath, (err, stat) => err ? reject(err) : resolve(stat))); }
 function sftpReadFile(sftp, targetPath) { return new Promise((resolve, reject) => sftp.readFile(targetPath, (err, data) => err ? reject(err) : resolve(data))); }
@@ -635,14 +748,36 @@ async function withRemoteSftp(deps, conn, fn) {
         (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
     }
 }
-function isSensitiveTool(name) { return ['remote_execute', 'remote_write_file', 'get_env_var'].includes(String(name || '')); }
+function isSensitiveTool(name, args = {}) {
+    const value = String(name || '');
+    if (value === 'ui_action') return String(args.action || '') === 'terminal_send_input' && args.run !== false;
+    return ['remote_execute', 'remote_write_file', 'get_env_var', 'connection_create', 'connection_update', 'connection_delete', 'proxy_save', 'proxy_delete', 'ssh_key_save', 'ssh_key_delete', 'jump_host_save', 'jump_host_delete'].includes(value);
+}
+function maskToolPayload(value, key = '') {
+    const sensitiveKeys = /password|passwd|private[_-]?key|passphrase|secret|token|authorization|cookie|api[_-]?key/i;
+    if (value === null || value === undefined) return value;
+    if (typeof value !== 'object') return sensitiveKeys.test(key) && value ? '******' : value;
+    if (Array.isArray(value)) return value.map((item) => maskToolPayload(item, key));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sensitiveKeys.test(k) && v ? '******' : maskToolPayload(v, k)]));
+}
 function publicToolArgs(toolName, args) {
-    const copy = JSON.parse(JSON.stringify(args || {}));
-    if (copy.content && String(copy.content).length > 1200) copy.content = `${String(copy.content).slice(0, 1200)}\n...[内容已截断]`;
+    const copy = maskToolPayload(JSON.parse(JSON.stringify(args || {})));
+    if (copy.content && String(copy.content).length > 1200) copy.content = `${String(copy.content).slice(0, 1200)}
+...[内容已截断]`;
+    if (copy.privateKey && String(copy.privateKey).length > 80) copy.privateKey = '******';
     if (toolName === 'get_env_var') delete copy.nameValue;
     return copy;
 }
 function confirmationSummary(toolName, args, deps) {
+    if (toolName === 'connection_create') return `新增连接：${args.protocol || 'SSH'} ${args.name || args.host || ''}`;
+    if (toolName === 'connection_update') return `修改连接：${args.connectionId || ''}`;
+    if (toolName === 'connection_delete') return `删除连接：${args.connectionId || ''}`;
+    if (toolName === 'proxy_save') return `${args.proxyId ? '修改' : '新增'}代理：${args.name || args.host || ''}`;
+    if (toolName === 'proxy_delete') return `删除代理：${args.proxyId || ''}`;
+    if (toolName === 'ssh_key_save') return `${args.sshKeyId ? '修改' : '新增'} SSH 密钥：${args.name || args.sshKeyId || ''}`;
+    if (toolName === 'ssh_key_delete') return `删除 SSH 密钥：${args.sshKeyId || ''}`;
+    if (toolName === 'jump_host_save') return `${args.jumpHostId ? '修改' : '新增'}跳板机：${args.name || args.connectionId || ''}`;
+    if (toolName === 'jump_host_delete') return `删除跳板机：${args.jumpHostId || ''}`;
     if (toolName === 'remote_execute') return `在 ${(args.connectionIds || []).length} 台服务器执行：${String(args.command || '').slice(0, 200)}`;
     if (toolName === 'remote_write_file') {
         let connName = args.connectionId;
@@ -697,7 +832,7 @@ function inferPlanStatus(plan = {}) {
 async function maybeRequireConfirmation(toolName, args, ctx, run, deps) {
     const ai = deps.storage.getSettings().ai || {};
     const sensitive = ai.sensitive || {};
-    if (!isSensitiveTool(toolName) || ctx.confirmed || sensitive.requireConfirmation === false) return run();
+    if (!isSensitiveTool(toolName, args) || ctx.confirmed || sensitive.requireConfirmation === false) return run();
     if (sensitive.autoConfirm) {
         await delay(clampNumber(sensitive.autoConfirmDelayMs, 0, 60000, 2500), ctx.signal);
         return run();
@@ -713,6 +848,133 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
     switch (toolName) {
         case 'list_connections':
             return { connections: getAllConnections(deps).map(connectionSummary) };
+        case 'list_zephyr_resources':
+            return publicResourceList(deps, args.resources || []);
+        case 'connection_create':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [], activities: [] });
+                const conn = normalizeConnectionForSave(args, null);
+                store.connections = [conn, ...(store.connections || [])];
+                addStoreActivity(store, `AI 新增连接：${conn.name}`);
+                saveConnectionsStore(deps, store);
+                return { connection: publicConnectionForAi(conn), resources: publicResourceList(deps, ['connections']) };
+            }, deps);
+        case 'connection_update':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const connectionId = String(args.connectionId || '').trim();
+                const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [], activities: [] });
+                const idx = (store.connections || []).findIndex((c) => c.id === connectionId);
+                if (idx < 0) throw new Error('连接不存在');
+                const conn = normalizeConnectionForSave(args, store.connections[idx]);
+                store.connections[idx] = conn;
+                addStoreActivity(store, `AI 修改连接：${conn.name}`);
+                saveConnectionsStore(deps, store);
+                return { connection: publicConnectionForAi(conn), resources: publicResourceList(deps, ['connections']) };
+            }, deps);
+        case 'connection_delete':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const connectionId = String(args.connectionId || '').trim();
+                const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [], activities: [] });
+                const target = (store.connections || []).find((c) => c.id === connectionId);
+                if (!target) throw new Error('连接不存在');
+                store.connections = (store.connections || []).filter((c) => c.id !== connectionId);
+                addStoreActivity(store, `AI 删除连接：${target.name}`);
+                saveConnectionsStore(deps, store);
+                return { deleted: true, connectionId, name: target.name, resources: publicResourceList(deps, ['connections']) };
+            }, deps);
+        case 'connection_test': {
+            if (typeof deps.testConnection !== 'function') throw new Error('连接测试接口不可用');
+            const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] });
+            const old = args.connectionId ? (store.connections || []).find((c) => c.id === String(args.connectionId)) : null;
+            const conn = normalizeConnectionForSave(args, old || null);
+            return deps.testConnection(conn, clampNumber(args.timeoutSeconds, 1, 30, 10));
+        }
+        case 'proxy_save':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const old = args.proxyId && typeof deps.storage.getProxyRaw === 'function' ? deps.storage.getProxyRaw(String(args.proxyId)) : null;
+                const proxy = deps.storage.saveProxy({
+                    ...(old || {}),
+                    id: String(args.proxyId || old?.id || crypto.randomUUID()),
+                    name: String(args.name ?? old?.name ?? '').trim(),
+                    host: String(args.host ?? old?.host ?? '').trim(),
+                    port: Number(args.port ?? old?.port) || 1080,
+                    type: normalizeProxyType(args.type ?? old?.type),
+                    username: String(args.username ?? old?.username ?? ''),
+                    password: args.password === '******' || args.password === undefined ? (old?.password || '') : String(args.password || ''),
+                    createdAt: old?.createdAt || Date.now(),
+                    updatedAt: Date.now(),
+                });
+                if (!proxy.name || !proxy.host || !proxy.port) throw new Error('代理名称、主机、端口不能为空');
+                deps.addActivity?.(`AI ${old ? '修改' : '新增'}代理：${proxy.name}`);
+                return { proxy, resources: publicResourceList(deps, ['proxies']) };
+            }, deps);
+        case 'proxy_delete':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const proxyId = String(args.proxyId || '').trim();
+                deps.storage.deleteProxy(proxyId);
+                deps.addActivity?.(`AI 删除代理：${proxyId}`);
+                return { deleted: true, proxyId, resources: publicResourceList(deps, ['proxies']) };
+            }, deps);
+        case 'ssh_key_save':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const old = args.sshKeyId && typeof deps.storage.getSshKeyRaw === 'function' ? deps.storage.getSshKeyRaw(String(args.sshKeyId)) : null;
+                const privateKey = args.privateKey === '******' || args.privateKey === undefined ? (old?.privateKey || '') : String(args.privateKey || '');
+                if (!privateKey.includes('-----BEGIN')) throw new Error('请填写有效的 SSH 私钥');
+                const sshKey = deps.storage.saveSshKey({
+                    ...(old || {}),
+                    id: String(args.sshKeyId || old?.id || crypto.randomUUID()),
+                    name: String(args.name ?? old?.name ?? '').trim(),
+                    privateKey,
+                    passphrase: args.passphrase === '******' || args.passphrase === undefined ? (old?.passphrase || '') : String(args.passphrase || ''),
+                    remark: String(args.remark ?? old?.remark ?? ''),
+                    createdAt: old?.createdAt || Date.now(),
+                    updatedAt: Date.now(),
+                });
+                deps.addActivity?.(`AI ${old ? '修改' : '新增'} SSH 密钥：${sshKey.name}`);
+                return { sshKey, resources: publicResourceList(deps, ['sshKeys']) };
+            }, deps);
+        case 'ssh_key_delete':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const sshKeyId = String(args.sshKeyId || '').trim();
+                deps.storage.deleteSshKey(sshKeyId);
+                deps.addActivity?.(`AI 删除 SSH 密钥：${sshKeyId}`);
+                return { deleted: true, sshKeyId, resources: publicResourceList(deps, ['sshKeys']) };
+            }, deps);
+        case 'jump_host_save':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const connectionId = String(args.connectionId || '').trim();
+                const conn = getAllConnections(deps).find((c) => c.id === connectionId);
+                if (!conn || String(conn.protocol || 'SSH').toUpperCase() !== 'SSH') throw new Error('跳板机必须选择一个 SSH 连接');
+                const old = args.jumpHostId ? (deps.storage.listJumpHosts() || []).find((j) => j.id === String(args.jumpHostId)) : null;
+                const jumpHost = deps.storage.saveJumpHost({ id: String(args.jumpHostId || old?.id || crypto.randomUUID()), name: String(args.name ?? old?.name ?? '').trim(), connectionId, createdAt: old?.createdAt || Date.now(), updatedAt: Date.now() });
+                deps.addActivity?.(`AI ${old ? '修改' : '新增'}跳板机：${jumpHost.name}`);
+                return { jumpHost, resources: publicResourceList(deps, ['jumpHosts']) };
+            }, deps);
+        case 'jump_host_delete':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const jumpHostId = String(args.jumpHostId || '').trim();
+                deps.storage.deleteJumpHost(jumpHostId);
+                deps.addActivity?.(`AI 删除跳板机：${jumpHostId}`);
+                return { deleted: true, jumpHostId, resources: publicResourceList(deps, ['jumpHosts']) };
+            }, deps);
+        case 'snippet_save': {
+            const settings = deps.storage.getSettings();
+            const snippets = Array.isArray(settings.snippets) ? settings.snippets.slice(0, 500) : [];
+            const idx = snippets.findIndex((x) => x.id === String(args.snippetId || args.id || ''));
+            const item = normalizeSnippet(args, idx >= 0 ? snippets[idx] : null);
+            if (idx >= 0) snippets[idx] = item; else snippets.unshift(item);
+            deps.storage.updateSettings({ snippets: snippets.slice(0, 500) });
+            return { snippet: item, resources: publicResourceList(deps, ['snippets']) };
+        }
+        case 'snippet_delete': {
+            const snippetId = String(args.snippetId || '').trim();
+            const settings = deps.storage.getSettings();
+            const snippets = (Array.isArray(settings.snippets) ? settings.snippets : []).filter((x) => x.id !== snippetId);
+            deps.storage.updateSettings({ snippets });
+            return { deleted: true, snippetId, resources: publicResourceList(deps, ['snippets']) };
+        }
+        case 'ui_action':
+            return maybeRequireConfirmation(toolName, args, ctx, async () => ({ uiAction: 'ui_action', action: safeUiActionArgs(args), message: '已请求前端执行可见 UI 代操作' }), deps);
         case 'web_search':
             if (p.webSearch === false) throw new Error('网页搜索权限未开启');
             return { results: await duckDuckGoSearch(String(args.query || ''), clampNumber(args.maxResults, 1, 10, 6)) };
@@ -935,6 +1197,7 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
         keepMessages: clampNumber(contextIn.keepMessages, 4, 160, 40),
         toolResultChars: clampNumber(contextIn.toolResultChars, 1000, 240000, 60000),
         memoryItems: clampNumber(contextIn.memoryItems, 0, 80, 28),
+        maxToolRounds: clampNumber(contextIn.maxToolRounds, 0, 100000, DEFAULT_TOOL_CALL_LIMIT),
     };
     next.guidanceVersion = Math.max(1, Number(pick('guidanceVersion', currentAi.guidanceVersion) || 1));
     next.codeCompletionEnabled = pick('codeCompletionEnabled', currentAi.codeCompletionEnabled) !== false;
@@ -1115,7 +1378,8 @@ function registerAiRoutes(app, deps) {
             const tools = providerSupportsTools(provider) ? toolDefinitions(ai) : [];
             let messages = baseMessages;
             const toolResults = [];
-            for (let step = 0; step < OPENAI_TOOL_LIMIT; step += 1) {
+            const maxToolRounds = toolRoundLimit(ai, provider);
+            for (let step = 0; step < maxToolRounds; step += 1) {
                 throwIfAborted(abortController.signal);
                 const message = await callProvider(provider, model, messages, req.body?.options || {}, tools, abortController.signal);
                 throwIfAborted(abortController.signal);

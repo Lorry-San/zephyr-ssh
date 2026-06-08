@@ -1960,9 +1960,19 @@ registerAiRoutes(app, {
     requireAuth,
     storage,
     readJSON,
+    writeJSON,
     CONNECTIONS_FILE,
     createRoutedSSHConnection,
     runRemoteCommand,
+    testConnection: async (conn, timeoutSeconds = 10) => {
+        const protocol = String(conn.protocol || 'SSH').toUpperCase();
+        const timeoutMs = Math.max(1000, Math.min(Number(timeoutSeconds || 10) * 1000, 30000));
+        return protocol === 'SSH'
+            ? testSSHConnection(conn, timeoutMs)
+            : protocol === 'VNC'
+                ? testNoVncConnection(conn, timeoutMs)
+                : testGuacamoleConnection(conn, timeoutMs);
+    },
     addActivity,
     verifySensitiveAccess,
 });

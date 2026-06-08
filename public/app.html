@@ -208,6 +208,7 @@
                                 <h3>上下文长度</h3>
                                 <div class="form-row ai-context-row"><div class="form-group"><label>上下文窗口 Tokens</label><input id="aiContextWindowTokens" type="number" min="1024" step="1024" placeholder="128000"></div><div class="form-group"><label>最大输入字符数</label><input id="aiContextMaxInputChars" type="number" min="8000" step="1000" placeholder="180000"></div></div>
                                 <div class="form-row ai-context-row"><div class="form-group"><label>保留最近消息数</label><input id="aiContextKeepMessages" type="number" min="4" max="160" step="1" placeholder="40"></div><div class="form-group"><label>工具结果注入字符数</label><input id="aiContextToolResultChars" type="number" min="1000" step="1000" placeholder="60000"></div></div>
+                                <div class="form-row ai-context-row"><div class="form-group"><label>AI 工具调用轮次上限</label><input id="aiContextMaxToolRounds" type="number" min="0" step="1" placeholder="0 表示无上限"></div><div class="form-group"><label>说明</label><p class="field-hint">默认 0 = 无上限；如果模型循环调用工具，可设置成 20 / 50 等硬上限。</p></div></div>
                                 <label class="check-line"><input type="checkbox" id="aiCodeCompletionEnabled"> 文件编辑器启用 AI 代码补全</label>
                                 <h3>工具权限</h3>
                                 <div class="ai-permission-grid">

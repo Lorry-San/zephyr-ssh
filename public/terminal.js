@@ -875,6 +875,21 @@ window.addEventListener('message', (e) => {
     if (e.data.type === 'reconnect-terminal') {
         reconnectBtn?.click?.();
     }
+    if (e.data.type === 'ai-terminal-toolbar') {
+        const controls = { file: fileBtn, info: infoBtn, docker: dockerBtn, snippet: snippetBtn, shortcut: shortcutBtn, copy: copyBtn, paste: pasteBtn, theme: themeToggle, 'wterm-theme': wtermThemeToggle, reconnect: reconnectBtn, disconnect: disconnectBtn };
+        const btn = controls[String(e.data.control || '')];
+        if (btn) btn.click?.();
+        else showToast(`未知 AI 工具栏动作：${e.data.control || ''}`, 'error');
+        return;
+    }
+    if (e.data.type === 'ai-terminal-send-input') {
+        const text = String(e.data.text || '');
+        cmdInput.value = text;
+        resizeCommandInput();
+        cmdInput.focus?.();
+        if (e.data.run !== false) sendCommand();
+        return;
+    }
     if (e.data.type === 'keyboard-freeze') {
         const settleMs = Math.max(300, Math.min(2500, Number(e.data.settleMs) || 1000));
         parentKeyboardResizeFreezeUntil = e.data.frozen ? Date.now() + settleMs : 0;
