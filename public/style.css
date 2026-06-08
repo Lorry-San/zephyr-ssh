@@ -8329,7 +8329,10 @@ body.app-body:not(.terminal-mode) .app-main {
 .ai-agent-panel .panel-traffic-btn {
     --panel-island-w: 58px;
     --panel-island-h: 22px;
+    cursor: grab;
 }
+.ai-agent-panel.dragging .panel-drag-handle,
+.ai-agent-panel.dragging .panel-traffic-btn { cursor: grabbing; }
 .ai-agent-panel .panel-resize-handle {
     width: 38px !important;
     height: 38px !important;

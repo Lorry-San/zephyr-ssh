@@ -3562,20 +3562,21 @@ function setupAiPanelChrome() {
     const layoutBtn = panel?.querySelector('[data-ai-agent-layout]');
     panel?.addEventListener('pointerdown', bringAiPanelToFront);
     layoutBtn?.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
         e.stopPropagation();
-        bringAiPanelToFront();
         layoutBtn.classList.add('pressing');
+        startAiPanelDrag(e, { allowButtons: true, suppressLayoutClick: true });
         const up = () => { layoutBtn.classList.remove('pressing'); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
         window.addEventListener('pointerup', up, { once: true });
         window.addEventListener('pointercancel', up, { once: true });
     });
-    const startAiPanelDrag = (e, { allowButtons = false } = {}) => {
+    const startAiPanelDrag = (e, { allowButtons = false, suppressLayoutClick = false } = {}) => {
         if (e.button !== undefined && e.button !== 0) return;
         const interactive = e.target.closest('input,select,textarea,label,a');
         if (interactive) return;
         if (!allowButtons && e.target.closest('button')) return;
         bringAiPanelToFront();
+        const startedOnTopGrip = !!e.target.closest('.panel-drag-handle');
+        const dragThreshold = startedOnTopGrip ? 4 : (window.innerWidth <= 760 ? 12 : 6);
         const sx = e.clientX, sy = e.clientY, sl = panel.offsetLeft, st = panel.offsetTop;
         let dragging = false, raf = 0, lastX = sx, lastY = sy;
         const commit = () => {
@@ -3588,14 +3589,21 @@ function setupAiPanelChrome() {
         const move = (ev) => {
             lastX = ev.clientX; lastY = ev.clientY;
             const dist = Math.hypot(lastX - sx, lastY - sy);
-            if (!dragging && dist > (window.innerWidth <= 760 ? 12 : 6)) { dragging = true; panel.classList.add('dragging'); panel._suppressHeaderClick = true; }
+            if (!dragging && dist > dragThreshold) {
+                dragging = true;
+                panel.classList.add('dragging');
+                panel._suppressHeaderClick = true;
+                if (suppressLayoutClick) { aiPanelSuppressLayoutClick = true; closeAiPanelLayoutMenu({ instant: true }); }
+            }
             if (!dragging) return;
             ev.preventDefault();
             if (!raf) raf = requestAnimationFrame(commit);
         };
         const up = () => {
+            const wasDragging = dragging;
             if (raf) cancelAnimationFrame(raf);
             if (dragging) commit();
+            if (suppressLayoutClick && wasDragging) window.setTimeout(() => { aiPanelSuppressLayoutClick = false; }, 700);
             panel.classList.remove('dragging'); updateAiPanelResponsiveState();
             window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
         };
@@ -3603,7 +3611,7 @@ function setupAiPanelChrome() {
         window.addEventListener('pointerup', up, { once: true });
         window.addEventListener('pointercancel', up, { once: true });
     };
-    panel?.querySelector('.panel-drag-handle')?.addEventListener('pointerdown', (e) => startAiPanelDrag(e, { allowButtons: false }));
+    panel?.querySelector('.panel-drag-handle')?.addEventListener('pointerdown', (e) => startAiPanelDrag(e, { allowButtons: true }));
     panel?.querySelector('.panel-titlebar')?.addEventListener('pointerdown', (e) => startAiPanelDrag(e, { allowButtons: true }));
     panel?.querySelector('.panel-titlebar')?.addEventListener('click', (e) => {
         if (!panel._suppressHeaderClick) return;
