@@ -263,6 +263,7 @@ function toolDefinitions(ai = {}) {
     tools.push({ type: 'function', function: { name: 'snippet_save', description: '新增或修改代码片段。传 snippetId 为修改，不传为新增。', parameters: { type: 'object', properties: { snippetId: { type: 'string' }, name: { type: 'string' }, command: { type: 'string' }, group: { type: 'string' }, autoRun: { type: 'boolean' } }, required: ['name', 'command'] } } });
     tools.push({ type: 'function', function: { name: 'snippet_delete', description: '删除代码片段。', parameters: { type: 'object', properties: { snippetId: { type: 'string' } }, required: ['snippetId'] } } });
     tools.push({ type: 'function', function: { name: 'terminal_read_output', description: '读取用户当前 Zephyr SSH 终端输出快照（屏幕/scrollback 文本、当前输入框内容、连接信息）。当用户问“终端里显示什么/刚才命令输出/当前屏幕结果”时优先调用。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxChars: { type: 'number' }, allVisible: { type: 'boolean' } } } } });
+    tools.push({ type: 'function', function: { name: 'remote_desktop_screenshot', description: '读取用户当前 Zephyr RDP/VNC 远程桌面画面快照（JPEG 截图）。RDP/VNC 没有文本终端输出，用本工具查看远程桌面当前画面。返回画面尺寸、状态和截图数据。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxWidth: { type: 'number' } } } } });
     tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击终端内文件/监控/Docker/片段/快捷键/复制/粘贴/重连/断开等按钮。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' } }, required: ['action'] } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
@@ -663,6 +664,15 @@ function formatAiContextForPrompt(context = {}) {
         }).join('\n');
         lines.push(`当前 SSH 终端输出快照（来自用户当前活动/可见终端；需要指定终端或更长文本时调用 terminal_read_output）：\n${rendered}`);
     }
+    const remoteDesktopSnapshots = Array.isArray(c.remoteDesktopSnapshots) ? c.remoteDesktopSnapshots : [];
+    const rdps = remoteDesktopSnapshots.filter((r) => ['RDP', 'VNC'].includes(String(r.protocol || '').toUpperCase()));
+    if (rdps.length) {
+        const summary = rdps.slice(0, 3).map((r) => {
+            const label = (r.name || r.tabId || '远程桌面') + ' ' + (r.protocol || '') + ' ' + (r.host || '') + (r.port ? ':' + r.port : '') + ' ' + (r.connected ? '已连接' : (r.error || r.status || '未连接')) + ' ' + (r.originalWidth || r.width || 0) + 'x' + (r.originalHeight || r.height || 0);
+            return label.trim();
+        }).join('; ');
+        lines.push('当前 RDP/VNC 远程桌面画面可用（无文本输出，需调用 remote_desktop_screenshot 查看画面快照）：' + summary);
+    }
     if (!lines.length) return '';
     return `\n当前 Zephyr 上下文（用于选择连接、项目和 Memory）：\n${lines.map((x) => `- ${x}`).join('\n')}`;
 }
@@ -752,6 +762,28 @@ function publicTerminalOutput(item = {}, maxChars = 30000) {
         rows: item.rows || 0,
         scrollbackCount: item.scrollbackCount || 0,
         at: item.at || Date.now(),
+    };
+}
+
+function publicRemoteDesktopScreenshot(r = {}, maxWidth = 960) {
+    const w = Math.max(1, Number(r.originalWidth || r.width || 0));
+    const h = Math.max(1, Number(r.originalHeight || r.height || 0));
+    return {
+        tabId: String(r.tabId || ''),
+        name: String(r.name || ''),
+        protocol: String(r.protocol || '').toUpperCase(),
+        connectionId: String(r.connectionId || ''),
+        host: String(r.host || ''),
+        port: String(r.port || ''),
+        status: String(r.status || ''),
+        title: String(r.title || r.name || ''),
+        connected: !!r.connected,
+        width: w,
+        height: h,
+        dataUrl: String(r.dataUrl || '').slice(0, 500000),
+        hasScreenshot: !!(r.dataUrl && r.dataUrl.length > 200),
+        error: String(r.error || ''),
+        at: Number(r.at || Date.now()),
     };
 }
 function toolRoundLimit(ai = {}, provider = {}) {
@@ -1199,6 +1231,21 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
                 deps.addActivity?.(`AI 助理写入远程文件：${targetPath}`);
                 return { path: targetPath, bytes: buffer.length, append: !!args.append };
             }), deps);
+        case 'remote_desktop_screenshot': {
+            const raw = Array.isArray(ctx.context?.remoteDesktopSnapshots) ? ctx.context.remoteDesktopSnapshots : [];
+            const tabId = String(args.tabId || '').trim();
+            const maxWidth = clampNumber(args.maxWidth, 320, 1600, 960);
+            const screenshots = (tabId ? raw.filter((r) => String(r.tabId || '') === tabId) : raw)
+                .filter((r) => ['RDP', 'VNC'].includes(String(r.protocol || '').toUpperCase()) && (r.dataUrl || r.error || r.connected))
+                .slice(0, 3)
+                .map((r) => publicRemoteDesktopScreenshot(r, maxWidth));
+            let message = '已读取远程桌面画面快照';
+            if (!screenshots.length) {
+                const rdps = raw.filter((r) => ['RDP', 'VNC'].includes(String(r.protocol || '').toUpperCase()));
+                message = rdps.length ? `当前 ${rdps.length} 个远程桌面画面暂不可用（可能是画面尚未渲染或连接已断开）` : '当前没有可读取的 RDP/VNC 远程桌面画面；请先打开 RDP 或 VNC 连接。';
+            }
+            return { screenshots, message };
+        }
         default:
             throw new Error(`未知工具：${toolName}`);
     }
@@ -1207,8 +1254,24 @@ function parseToolCall(call = {}) {
     const fn = call.function || {};
     return { id: call.id || crypto.randomUUID(), name: fn.name || call.name || '', args: safeJsonParse(fn.arguments || call.arguments || '{}', {}) || {} };
 }
-function toolResultMessage(call, result, mode = 'chat', limits = {}) {
+function toolResultMessage(call, result, mode = 'chat', limits = {}, providerType = '') {
     const max = clampNumber(limits.toolResultChars, 1000, 240000, 60000);
+    const screenshots = call.name === 'remote_desktop_screenshot' ? (result?.screenshots || []).filter((r) => r.hasScreenshot && r.dataUrl) : [];
+    if (screenshots.length && providerType === 'anthropic') {
+        const parts = [{ type: 'text', text: clipText(JSON.stringify(result, null, 2), max) }];
+        for (const shot of screenshots.slice(0, 3)) parts.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: shot.dataUrl.replace(/^data:image\/jpeg;base64,/, '') } });
+        return { role: 'user', content: parts };
+    }
+    if (screenshots.length && providerType === 'gemini') {
+        const parts = [{ text: clipText(JSON.stringify(result, null, 2), max) }];
+        for (const shot of screenshots.slice(0, 3)) parts.push({ inlineData: { mimeType: 'image/jpeg', data: shot.dataUrl.replace(/^data:image\/jpeg;base64,/, '') } });
+        return { role: 'user', parts };
+    }
+    if (screenshots.length && (mode === 'chat' || mode === 'responses')) {
+        const parts = [{ type: 'text', text: clipText(JSON.stringify(result, null, 2), max) }];
+        for (const shot of screenshots.slice(0, 3)) parts.push({ type: 'image_url', image_url: { url: shot.dataUrl, detail: 'auto' } });
+        return { role: 'tool', tool_call_id: call.id, name: call.name, content: parts };
+    }
     if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), max) };
     return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), max) };
 }
@@ -1444,7 +1507,7 @@ function registerAiRoutes(app, deps) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
                     toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
-                    messages.push(toolResultMessage(call, result, openAiApiMode(provider), limits));
+                    messages.push(toolResultMessage(call, result, openAiApiMode(provider), limits, provider.type || ''));
                 }
             }
             res.json({ ok: true, message: { role: 'assistant', content: '已达到工具调用轮次上限，请根据上方工具结果继续。' }, toolResults });

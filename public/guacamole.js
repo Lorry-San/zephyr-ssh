@@ -457,6 +457,45 @@ function setRdpScaleZoom(nextZoom, { preserveViewport = true } = {}) {
     applyDisplayScale();
 }
 
+function captureCanvasSnapshotForAi(source, options = {}) {
+    if (!source || !source.width || !source.height) return { error: '当前远程桌面画面还没有可读取的 canvas' };
+    const maxWidth = Math.max(320, Math.min(1600, Number(options.maxWidth) || 960));
+    const quality = Math.max(0.35, Math.min(0.9, Number(options.quality) || 0.68));
+    const scale = Math.min(1, maxWidth / Math.max(1, source.width));
+    const width = Math.max(1, Math.round(source.width * scale));
+    const height = Math.max(1, Math.round(source.height * scale));
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(source, 0, 0, width, height);
+        return { dataUrl: canvas.toDataURL('image/jpeg', quality), width, height, originalWidth: source.width, originalHeight: source.height };
+    } catch (err) {
+        return { error: err.message || String(err) };
+    }
+}
+function getRemoteDesktopSnapshotForAi(options = {}) {
+    let source = displayRoot?.querySelector?.('#rdp-canvas') || displayRoot?.querySelector?.('canvas');
+    try { if (!source) source = client?.getDisplay?.()?.flatten?.() || null; } catch (_) {}
+    const shot = captureCanvasSnapshotForAi(source, options);
+    return {
+        protocol: protocolLabel(),
+        tabId: params?.tabId || tabId,
+        connectionId: params?.connectionId || '',
+        host: params?.host || '',
+        port: params?.port || protocolDefaultPort(),
+        status: statusText?.textContent || '',
+        title: connInfo?.textContent || '',
+        connected,
+        at: Date.now(),
+        ...shot,
+    };
+}
+window.__zephyrGetRemoteDesktopSnapshot = getRemoteDesktopSnapshotForAi;
+
 function applyDisplayScale() {
     if (!displayShell) return;
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');

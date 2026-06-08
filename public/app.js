@@ -2973,7 +2973,8 @@ function collectAiContext() {
     const tags = uniq(contextConnections.flatMap((c) => c.tags || []));
     const view = document.querySelector('.nav-tab.active')?.dataset.view || '';
     const terminalOutputs = collectAiTerminalOutputs();
-    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs };
+    const remoteDesktopSnapshots = collectAiRemoteDesktopSnapshots();
+    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs, remoteDesktopSnapshots };
 }
 function browserShotFromResult(result = {}) {
     if (!result || typeof result !== 'object') return null;
@@ -3084,6 +3085,40 @@ function collectAiTerminalOutputs() {
         .filter((item) => item.protocol === 'SSH' && (item.available || item.text || item.currentInput))
         .slice(0, 3);
 }
+function readRemoteDesktopSnapshotForAi(tabId = '', maxWidth = 960) {
+    const id = currentOrRequestedTerminalTab(tabId);
+    const tab = terminalTabs.find((t) => t.id === id) || null;
+    const protocol = String(tab?.protocol || '').toUpperCase();
+    if (!['RDP', 'VNC'].includes(protocol)) return null;
+    const conn = tab?.connectionId ? connections.find((c) => String(c.id) === String(tab.connectionId)) : null;
+    const frame = terminalFrameByIdForAi(id);
+    let shot = null;
+    try { shot = frame?.contentWindow?.__zephyrGetRemoteDesktopSnapshot?.({ maxWidth }); } catch (err) { shot = { error: err.message || String(err) }; }
+    return {
+        tabId: id,
+        name: tab?.name || conn?.name || '',
+        protocol,
+        connectionId: tab?.connectionId || conn?.id || '',
+        host: shot?.host || conn?.host || '',
+        port: shot?.port || conn?.port || '',
+        status: shot?.status || tab?.status || '',
+        title: shot?.title || tab?.name || conn?.name || '',
+        connected: !!shot?.connected,
+        dataUrl: shot?.dataUrl || '',
+        width: shot?.width || 0,
+        height: shot?.height || 0,
+        originalWidth: shot?.originalWidth || 0,
+        originalHeight: shot?.originalHeight || 0,
+        error: shot?.error || (!frame ? '远程桌面 iframe 未加载或已被最小化释放' : ''),
+        at: shot?.at || Date.now(),
+    };
+}
+function collectAiRemoteDesktopSnapshots() {
+    const ids = uniq([activeTerminalTab, ...visualLayout, ...terminalTabs.filter((t) => !t.minimized).map((t) => t.id), ...terminalTabs.map((t) => t.id)]).slice(0, 5);
+    return ids.map((id, index) => readRemoteDesktopSnapshotForAi(id, index === 0 ? 960 : 720))
+        .filter((item) => item && ['RDP', 'VNC'].includes(item.protocol) && (item.dataUrl || item.error || item.connected))
+        .slice(0, 2);
+}
 function delayMs(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
 async function readTerminalOutputAfterAiAction(action = {}) {
     const waitMs = action.run === false ? 120 : 1200;
@@ -3188,7 +3223,10 @@ function maskAiSensitive(value, tool = '') {
             return item;
         }
         if (Array.isArray(item)) return item.map((x) => walk(x, key));
-        return Object.fromEntries(Object.entries(item).map(([k, v]) => [k, sensitiveKeys.test(k) || (tool === 'get_env_var' && k === 'value') ? (v ? '******' : v) : walk(v, k)]));
+        return Object.fromEntries(Object.entries(item).map(([k, v]) => {
+            if (/^(dataUrl|imageDataUrl)$/i.test(k) && typeof v === 'string') return [k, v ? `[image data omitted ${v.length} chars]` : ''];
+            return [k, sensitiveKeys.test(k) || (tool === 'get_env_var' && k === 'value') ? (v ? '******' : v) : walk(v, k)];
+        }));
     };
     return walk(value);
 }
@@ -3209,6 +3247,7 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
     if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
+    if (tool === 'remote_desktop_screenshot') return `读取 ${(result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
     if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;
     if (tool === 'browser_inspect') return `发现 ${(result.elements || []).length} 个可操作元素：${(result.elements || []).slice(0, 5).map((e) => e.text || e.selector).filter(Boolean).join('、')}`;
     if (String(tool || '').startsWith('browser_')) return `AI 正在页面代操作：${result.title || result.url || '浏览器操作完成'}`;
@@ -3219,7 +3258,7 @@ function formatAiToolResult(r = {}) {
     const detail = JSON.stringify(maskAiSensitive({ args: r.args || {}, result }, r.tool), null, 2);
     const shot = browserShotFromResult(result);
     const titleMap = {
-        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_inspect: '检查页面元素', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', browser_key: '浏览器按键', browser_wait: '等待页面', open_connection: '打开连接', terminal_read_output: '读取终端输出', ui_action: '页面/终端代操作', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
+        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_inspect: '检查页面元素', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', browser_key: '浏览器按键', browser_wait: '等待页面', open_connection: '打开连接', terminal_read_output: '读取终端输出', remote_desktop_screenshot: '读取远程桌面画面', ui_action: '页面/终端代操作', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
     };
     const title = titleMap[r.tool] || `工具 ${r.tool || 'unknown'}`;
     const duration = Number.isFinite(Number(r.durationMs)) ? `${(Number(r.durationMs) / 1000).toFixed(1)}s` : '';
