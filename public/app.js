@@ -2972,7 +2972,8 @@ function collectAiContext() {
     const contextConnections = activeConnectionIds.map((id) => connections.find((c) => String(c.id) === String(id))).filter(Boolean).map((c) => ({ id: c.id, name: c.name, protocol: c.protocol, host: c.host, port: c.port, username: c.username, tags: Array.isArray(c.tags) ? c.tags : splitCsv(c.tags), remark: c.remark || '' }));
     const tags = uniq(contextConnections.flatMap((c) => c.tags || []));
     const view = document.querySelector('.nav-tab.active')?.dataset.view || '';
-    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags };
+    const terminalOutputs = collectAiTerminalOutputs();
+    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs };
 }
 function browserShotFromResult(result = {}) {
     if (!result || typeof result !== 'object') return null;
@@ -3034,9 +3035,60 @@ function currentOrRequestedTerminalTab(tabId = '') {
     if (activeTerminalTab && terminalTabs.some((t) => t.id === activeTerminalTab)) return activeTerminalTab;
     return terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || '';
 }
+function terminalFrameByIdForAi(tabId = '') {
+    const id = String(tabId || '').trim();
+    return id ? document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(id)}"]`) : null;
+}
 function terminalFrameForAi(tabId = '') {
     const id = currentOrRequestedTerminalTab(tabId);
-    return id ? document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(id)}"]`) : null;
+    return terminalFrameByIdForAi(id);
+}
+function clipAiTerminalText(text = '', maxChars = 24000) {
+    const max = Math.max(1000, Math.min(60000, Number(maxChars) || 24000));
+    const value = String(text || '').replace(/[\s\n]+$/g, '');
+    return value.length > max ? `[前面已截断 ${value.length - max} 字符]\n${value.slice(-max)}` : value;
+}
+function readTerminalOutputForAi(tabId = '', maxChars = 24000) {
+    const id = currentOrRequestedTerminalTab(tabId);
+    const tab = terminalTabs.find((t) => t.id === id) || null;
+    const conn = tab?.connectionId ? connections.find((c) => String(c.id) === String(tab.connectionId)) : null;
+    const frame = terminalFrameByIdForAi(id);
+    let snapshot = null;
+    try { snapshot = frame?.contentWindow?.__zephyrGetTerminalOutput?.({ maxChars }); } catch (err) { snapshot = { error: err.message || String(err) }; }
+    const protocol = String(tab?.protocol || conn?.protocol || '').toUpperCase();
+    return {
+        tabId: id,
+        name: tab?.name || conn?.name || '',
+        protocol,
+        connectionId: tab?.connectionId || conn?.id || '',
+        host: snapshot?.host || conn?.host || '',
+        port: snapshot?.port || conn?.port || '',
+        username: snapshot?.username || conn?.username || '',
+        status: snapshot?.status || tab?.status || '',
+        available: Boolean(snapshot && !snapshot.error && (snapshot.text || snapshot.currentInput || protocol === 'SSH')),
+        error: snapshot?.error || (!frame ? '终端 iframe 未加载或已被最小化释放' : ''),
+        text: clipAiTerminalText(snapshot?.text || '', maxChars),
+        currentInput: snapshot?.currentInput || '',
+        lineCount: snapshot?.lineCount || 0,
+        originalLength: snapshot?.originalLength || 0,
+        truncated: !!snapshot?.truncated,
+        cols: snapshot?.cols || 0,
+        rows: snapshot?.rows || 0,
+        scrollbackCount: snapshot?.scrollbackCount || 0,
+        at: snapshot?.at || Date.now(),
+    };
+}
+function collectAiTerminalOutputs() {
+    const ids = uniq([activeTerminalTab, ...visualLayout, ...terminalTabs.filter((t) => !t.minimized).map((t) => t.id), ...terminalTabs.map((t) => t.id)]).slice(0, 4);
+    return ids.map((id, index) => readTerminalOutputForAi(id, index === 0 ? 60000 : 16000))
+        .filter((item) => item.protocol === 'SSH' && (item.available || item.text || item.currentInput))
+        .slice(0, 3);
+}
+function delayMs(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+async function readTerminalOutputAfterAiAction(action = {}) {
+    const waitMs = action.run === false ? 120 : 1200;
+    await delayMs(waitMs);
+    return readTerminalOutputForAi(action.tabId || '', 30000);
 }
 function clickSettingsSection(section = '') {
     const key = String(section || '').toLowerCase();
@@ -3088,10 +3140,17 @@ async function performAiUiAction(action = {}) {
     }
     if (a === 'terminal_send_input') {
         switchView('terminal');
-        const frame = await waitForTerminalFrameReady(terminalFrameForAi(action.tabId));
+        const id = currentOrRequestedTerminalTab(action.tabId);
+        const frame = await waitForTerminalFrameReady(terminalFrameByIdForAi(id));
         if (!frame?.contentWindow) throw new Error('当前终端页面还没准备好');
         frame.contentWindow.postMessage({ source: 'zephyr-app', type: 'ai-terminal-send-input', text: action.text || '', run: action.run !== false }, '*');
-        return;
+        return { terminalOutput: await readTerminalOutputAfterAiAction({ ...action, tabId: id }) };
+    }
+    if (a === 'terminal_read_output') {
+        switchView('terminal');
+        const id = currentOrRequestedTerminalTab(action.tabId);
+        await waitForTerminalFrameReady(terminalFrameByIdForAi(id));
+        return { terminalOutput: readTerminalOutputForAi(id, action.maxChars || 30000) };
     }
     if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
     throw new Error(`未知 UI 动作：${a}`);
@@ -3103,7 +3162,10 @@ async function syncAiToolSideEffects(toolResults = []) {
             try { await openConnection(r.result.connectionId); } catch (err) { toast(err.message || 'AI 打开连接失败'); }
         }
         if (r.result?.uiAction === 'ui_action' && r.result?.action) {
-            try { await performAiUiAction(r.result.action); } catch (err) { toast(err.message || 'AI UI 操作失败'); }
+            try {
+                const clientResult = await performAiUiAction(r.result.action);
+                if (clientResult && typeof clientResult === 'object') Object.assign(r.result, clientResult);
+            } catch (err) { toast(err.message || 'AI UI 操作失败'); r.result.clientError = err.message || 'AI UI 操作失败'; }
         }
         if (r.tool === 'plan_task' || r.tool === 'plan_update') mergeAiPlan(r.result?.plan);
         if (r.tool === 'memory_save') mergeAiMemory(r.result?.memory);
@@ -3146,6 +3208,8 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'plan_task' || tool === 'plan_update') return `计划 ${result.plan?.title || result.plan?.id || ''}：${result.plan?.status || 'planned'}`;
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
+    if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
+    if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;
     if (tool === 'browser_inspect') return `发现 ${(result.elements || []).length} 个可操作元素：${(result.elements || []).slice(0, 5).map((e) => e.text || e.selector).filter(Boolean).join('、')}`;
     if (String(tool || '').startsWith('browser_')) return `AI 正在页面代操作：${result.title || result.url || '浏览器操作完成'}`;
     return '执行完成';
@@ -3155,7 +3219,7 @@ function formatAiToolResult(r = {}) {
     const detail = JSON.stringify(maskAiSensitive({ args: r.args || {}, result }, r.tool), null, 2);
     const shot = browserShotFromResult(result);
     const titleMap = {
-        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_inspect: '检查页面元素', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', browser_key: '浏览器按键', browser_wait: '等待页面', open_connection: '打开连接', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
+        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_inspect: '检查页面元素', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', browser_key: '浏览器按键', browser_wait: '等待页面', open_connection: '打开连接', terminal_read_output: '读取终端输出', ui_action: '页面/终端代操作', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
     };
     const title = titleMap[r.tool] || `工具 ${r.tool || 'unknown'}`;
     const duration = Number.isFinite(Number(r.durationMs)) ? `${(Number(r.durationMs) / 1000).toFixed(1)}s` : '';
@@ -3267,7 +3331,7 @@ async function continueAiAfterConfirmation(id, approve, data) {
     aiActiveAbortController = abortController;
     try {
         setAiTyping(true);
-        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
+        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext() }) });
         if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
         if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });

@@ -1605,6 +1605,47 @@ function snapshotWTermVisualLines(reason = 'snapshot-visual-lines') {
     return snapshot;
 }
 
+function collectTerminalOutputLinesForAi() {
+    if (!term || !wtermWrapper) return [];
+    const bufferLines = collectWTermBufferLines();
+    const domRows = Array.from(wtermWrapper.querySelectorAll('.term-row, .term-scrollback-row'));
+    const domLines = domRows.map((row) => cleanTerminalRowText(row.textContent || ''));
+    const bufferText = bufferLines.join('\n').replace(/[\s\n]+$/g, '');
+    const domText = domLines.join('\n').replace(/[\s\n]+$/g, '');
+    let lines = bufferText.trim().length >= domText.trim().length ? bufferLines : domLines;
+    if (!lines.some((line) => String(line || '').trim())) {
+        const fallback = String(wtermWrapper.innerText || wtermWrapper.textContent || '').split(/\r?\n/).map(cleanTerminalRowText);
+        if (fallback.some((line) => line.trim())) lines = fallback;
+    }
+    return normalizeTerminalSnapshotLines(lines);
+}
+function getAiTerminalOutputSnapshot(options = {}) {
+    const maxChars = Math.max(1000, Math.min(60000, Number(options.maxChars) || 24000));
+    const lines = collectTerminalOutputLinesForAi();
+    let text = lines.join('\n').replace(/[\s\n]+$/g, '');
+    const originalLength = text.length;
+    const truncated = originalLength > maxChars;
+    if (truncated) text = text.slice(-maxChars);
+    return {
+        tabId: params?.tabId || '',
+        connectionId: params?.connectionId || '',
+        host: params?.host || '',
+        port: params?.port || '',
+        username: params?.username || '',
+        status: statusText?.textContent || '',
+        currentInput: cmdInput?.value || '',
+        text,
+        lineCount: text ? text.split(/\r?\n/).length : 0,
+        originalLength,
+        truncated,
+        cols: Number(term?.bridge?.getCols?.() || term?.cols || 0),
+        rows: Number(term?.bridge?.getRows?.() || term?.rows || 0),
+        scrollbackCount: Number(term?.bridge?.getScrollbackCount?.() || 0),
+        at: Date.now(),
+    };
+}
+window.__zephyrGetTerminalOutput = getAiTerminalOutputSnapshot;
+
 function hasTerminalTextRegression(previous = '', next = '') {
     const prev = String(previous || '').replace(/[\s\n]+$/g, '');
     const cur = String(next || '').replace(/[\s\n]+$/g, '');

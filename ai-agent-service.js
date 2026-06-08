@@ -262,7 +262,8 @@ function toolDefinitions(ai = {}) {
     tools.push({ type: 'function', function: { name: 'jump_host_delete', description: '删除跳板机配置。敏感操作，需要确认。', parameters: { type: 'object', properties: { jumpHostId: { type: 'string' } }, required: ['jumpHostId'] } } });
     tools.push({ type: 'function', function: { name: 'snippet_save', description: '新增或修改代码片段。传 snippetId 为修改，不传为新增。', parameters: { type: 'object', properties: { snippetId: { type: 'string' }, name: { type: 'string' }, command: { type: 'string' }, group: { type: 'string' }, autoRun: { type: 'boolean' } }, required: ['name', 'command'] } } });
     tools.push({ type: 'function', function: { name: 'snippet_delete', description: '删除代码片段。', parameters: { type: 'object', properties: { snippetId: { type: 'string' } }, required: ['snippetId'] } } });
-    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击终端内文件/监控/Docker/片段/快捷键/复制/粘贴/重连/断开等按钮。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect'] }, text: { type: 'string' }, run: { type: 'boolean' } }, required: ['action'] } } });
+    tools.push({ type: 'function', function: { name: 'terminal_read_output', description: '读取用户当前 Zephyr SSH 终端输出快照（屏幕/scrollback 文本、当前输入框内容、连接信息）。当用户问“终端里显示什么/刚才命令输出/当前屏幕结果”时优先调用。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxChars: { type: 'number' }, allVisible: { type: 'boolean' } } } } });
+    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击终端内文件/监控/Docker/片段/快捷键/复制/粘贴/重连/断开等按钮。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' } }, required: ['action'] } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
@@ -652,6 +653,16 @@ function formatAiContextForPrompt(context = {}) {
     if (c.projects.length) lines.push(`关联项目：${c.projects.join(', ')}`);
     if (c.tags.length) lines.push(`关联标签：${c.tags.join(', ')}`);
     if (c.connections.length) lines.push(`当前连接上下文：${c.connections.slice(0, 12).map((x) => `${x.protocol || 'SSH'}:${x.name || x.id}(${x.username || '-'}@${x.host || '-'})${Array.isArray(x.tags) && x.tags.length ? `[${x.tags.join(',')}]` : ''}`).join('; ')}`);
+    const terminalOutputs = Array.isArray(c.terminalOutputs) ? c.terminalOutputs : [];
+    if (terminalOutputs.length) {
+        const rendered = terminalOutputs.slice(0, 3).map((t) => {
+            const label = `${t.name || t.tabId || '终端'} ${t.username || '-'}@${t.host || '-'} ${t.status ? `(${t.status})` : ''}`.trim();
+            const text = tailText(t.text || '', 6000) || '[无可见输出]';
+            const input = t.currentInput ? `\n当前输入框：${String(t.currentInput).slice(0, 1000)}` : '';
+            return `${label}${t.truncated ? '（输出已截断为尾部）' : ''}${input}\n~~~text\n${text}\n~~~`;
+        }).join('\n');
+        lines.push(`当前 SSH 终端输出快照（来自用户当前活动/可见终端；需要指定终端或更长文本时调用 terminal_read_output）：\n${rendered}`);
+    }
     if (!lines.length) return '';
     return `\n当前 Zephyr 上下文（用于选择连接、项目和 Memory）：\n${lines.map((x) => `- ${x}`).join('\n')}`;
 }
@@ -715,6 +726,33 @@ function normalizeSnippet(item = {}, old = null) {
     };
     if (!out.name || !out.command.trim()) throw new Error('代码片段名称和命令不能为空');
     return out;
+}
+function tailText(value = '', max = MAX_TOOL_TEXT) {
+    const text = String(value || '');
+    const limit = Math.max(1000, Math.min(200000, Number(max) || MAX_TOOL_TEXT));
+    return text.length > limit ? `[前面已截断 ${text.length - limit} 字符]
+${text.slice(-limit)}` : text;
+}
+function publicTerminalOutput(item = {}, maxChars = 30000) {
+    return {
+        tabId: item.tabId || '',
+        connectionId: item.connectionId || '',
+        name: item.name || '',
+        protocol: item.protocol || 'SSH',
+        host: item.host || '',
+        port: item.port || '',
+        username: item.username || '',
+        status: item.status || '',
+        currentInput: item.currentInput || '',
+        text: tailText(item.text || '', clampNumber(maxChars, 1000, 60000, 30000)),
+        lineCount: item.lineCount || 0,
+        originalLength: item.originalLength || 0,
+        truncated: !!item.truncated || String(item.text || '').length > clampNumber(maxChars, 1000, 60000, 30000),
+        cols: item.cols || 0,
+        rows: item.rows || 0,
+        scrollbackCount: item.scrollbackCount || 0,
+        at: item.at || Date.now(),
+    };
 }
 function toolRoundLimit(ai = {}, provider = {}) {
     const raw = provider.options?.context?.maxToolRounds ?? ai.context?.maxToolRounds ?? DEFAULT_TOOL_CALL_LIMIT;
@@ -972,6 +1010,13 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             const snippets = (Array.isArray(settings.snippets) ? settings.snippets : []).filter((x) => x.id !== snippetId);
             deps.storage.updateSettings({ snippets });
             return { deleted: true, snippetId, resources: publicResourceList(deps, ['snippets']) };
+        }
+        case 'terminal_read_output': {
+            const maxChars = clampNumber(args.maxChars, 1000, 60000, 30000);
+            const outputs = Array.isArray(ctx.context?.terminalOutputs) ? ctx.context.terminalOutputs : [];
+            const tabId = String(args.tabId || '').trim();
+            const selected = (args.allVisible ? outputs : (tabId ? outputs.filter((t) => String(t.tabId || '') === tabId) : outputs.slice(0, 1))).filter((t) => String(t.protocol || 'SSH').toUpperCase() === 'SSH');
+            return { activeTerminalTab: ctx.context?.activeTerminalTab || '', terminalOutputs: selected.map((t) => publicTerminalOutput(t, maxChars)), message: selected.length ? '已读取终端输出快照' : '当前没有可读取的 SSH 终端输出；请先打开 SSH 连接或切到终端页。' };
         }
         case 'ui_action':
             return maybeRequireConfirmation(toolName, args, ctx, async () => ({ uiAction: 'ui_action', action: safeUiActionArgs(args), message: '已请求前端执行可见 UI 代操作' }), deps);
