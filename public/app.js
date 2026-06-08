@@ -3220,10 +3220,12 @@ function openAiAssistantPanel(trigger = null) {
     $('#aiFloatingBtn')?.classList.add('active');
     if (!panel.dataset.positioned) {
         const compact = window.innerWidth <= 760;
-        const width = compact ? Math.max(320, window.innerWidth - 12) : Math.min(980, window.innerWidth - 40);
-        const height = compact ? Math.max(460, (window.visualViewport?.height || window.innerHeight) - 12) : Math.min(780, window.innerHeight - 80);
-        panel.style.left = compact ? '6px' : `${Math.max(16, (window.innerWidth - width) / 2)}px`;
-        panel.style.top = compact ? '6px' : '52px';
+        const vvWidth = window.visualViewport?.width || window.innerWidth;
+        const vvHeight = window.visualViewport?.height || window.innerHeight;
+        const width = compact ? Math.max(300, Math.min(vvWidth - 40, Math.round(vvWidth * 0.88))) : Math.min(980, window.innerWidth - 40);
+        const height = compact ? Math.max(360, Math.min(vvHeight - 96, Math.round(vvHeight * 0.78))) : Math.min(780, window.innerHeight - 80);
+        panel.style.left = compact ? `${Math.max(16, Math.round((vvWidth - width) / 2))}px` : `${Math.max(16, (window.innerWidth - width) / 2)}px`;
+        panel.style.top = compact ? `${Math.max(18, Math.round((vvHeight - height) * 0.16))}px` : '52px';
         panel.style.width = `${width}px`;
         panel.style.height = `${height}px`;
         panel.dataset.positioned = '1';

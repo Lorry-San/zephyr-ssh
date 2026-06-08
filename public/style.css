@@ -7623,9 +7623,9 @@ body.app-body:not(.terminal-mode) .app-main {
     .ai-agent-panel.file-manager {
         left: 6px;
         top: 6px;
-        width: calc(100vw - 12px) !important;
-        height: calc(100dvh - 12px) !important;
-        max-height: calc(100dvh - 12px) !important;
+        width: calc(100vw - 12px);
+        height: calc(100dvh - 12px);
+        max-height: calc(100dvh - 12px);
         min-width: 0 !important;
         min-height: 0 !important;
         border-radius: 16px;
