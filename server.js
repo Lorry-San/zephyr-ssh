@@ -1054,6 +1054,8 @@ async function testGuacamoleConnection(conn, timeout = 10000) {
     }
 }
 
+function shellSingleQuote(value) { return "'" + String(value || '').replace(/'/g, "'\\''") + "'"; }
+
 function runRemoteCommand(conn, command, timeoutSeconds = 30) {
     return new Promise((resolve) => {
         const started = Date.now();
@@ -1073,7 +1075,7 @@ function runRemoteCommand(conn, command, timeoutSeconds = 30) {
         createRoutedSSHConnection(conn, Math.min(timeoutMs, 15000)).then((result) => {
             routed = result;
             const client = result.client;
-            client.exec(`sh -lc ${JSON.stringify(command)}`, (err, stream) => {
+            client.exec(`/bin/sh -c ${shellSingleQuote(command)}`, (err, stream) => {
                 if (err) return done({ status: 'failed', success: false, error: err.message });
                 stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
                 stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });

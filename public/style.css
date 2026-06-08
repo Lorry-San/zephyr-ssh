@@ -7654,3 +7654,32 @@ body.app-body:not(.terminal-mode) .app-main {
     .ai-tool-trace { border-radius: 14px; padding: 10px; }
     .ai-tool-trace-head strong { white-space: normal; }
 }
+
+
+/* 20260608: AI openclaw-like browser/menu fixes */
+.ai-layout-menu,
+.panel-layout-menu.ai-layout-menu {
+    z-index: 2147483000 !important;
+    pointer-events: auto;
+}
+.ai-browser-preview {
+    border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+    box-shadow: 0 10px 28px rgba(0,0,0,.10);
+}
+.ai-browser-preview-head span::before {
+    content: '●';
+    color: var(--success, #16a34a);
+    margin-right: 6px;
+}
+.ai-browser-preview-body {
+    min-height: 180px;
+    max-height: 46vh;
+    background: #0b0f14;
+}
+.ai-browser-preview-body img {
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 10px 28px rgba(0,0,0,.24);
+}
+@media (max-width: 760px) {
+    .ai-browser-preview-body { min-height: 140px; max-height: 34vh; }
+}

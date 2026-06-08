@@ -176,29 +176,100 @@ class AiBrowserService {
         fs.writeFileSync(file, Buffer.from(shot.data || '', 'base64'));
         return { id, path: file, url: `/api/ai/browser/screenshots/${encodeURIComponent(id)}`, bytes: fs.statSync(file).size };
     }
+    async inspect({ session = 'default', max = 80 } = {}) {
+        const page = await this.getPage(session);
+        const expression = `(() => {
+            const cssEscape = (value) => (window.CSS && CSS.escape) ? CSS.escape(value) : String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+            const selectorFor = (el) => {
+                if (el.id) return '#' + cssEscape(el.id);
+                const name = el.getAttribute('name');
+                if (name) return el.tagName.toLowerCase() + '[name="' + name.replace(/"/g, '\\\"') + '"]';
+                const aria = el.getAttribute('aria-label');
+                if (aria) return el.tagName.toLowerCase() + '[aria-label="' + aria.replace(/"/g, '\\\"') + '"]';
+                const parts = [];
+                let cur = el;
+                while (cur && cur.nodeType === 1 && parts.length < 5) {
+                    const tag = cur.tagName.toLowerCase();
+                    const parent = cur.parentElement;
+                    if (!parent) { parts.unshift(tag); break; }
+                    const same = Array.from(parent.children).filter((x) => x.tagName === cur.tagName);
+                    const idx = same.indexOf(cur) + 1;
+                    parts.unshift(same.length > 1 ? tag + ':nth-of-type(' + idx + ')' : tag);
+                    cur = parent;
+                }
+                return parts.join(' > ');
+            };
+            const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                return r.width > 1 && r.height > 1 && style.visibility !== 'hidden' && style.display !== 'none' && r.bottom >= 0 && r.right >= 0 && r.top <= innerHeight && r.left <= innerWidth;
+            };
+            const nodes = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"],summary,label'));
+            return nodes.filter(visible).slice(0, ${clamp(max, 1, 200, 80)}).map((el, index) => {
+                const r = el.getBoundingClientRect();
+                return {
+                    index,
+                    tag: el.tagName.toLowerCase(),
+                    type: el.getAttribute('type') || '',
+                    role: el.getAttribute('role') || '',
+                    selector: selectorFor(el),
+                    text: String(el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || el.title || '').trim().slice(0, 160),
+                    href: el.href || '',
+                    x: Math.round(r.left + r.width / 2),
+                    y: Math.round(r.top + r.height / 2),
+                };
+            });
+        })()`;
+        const result = await this.client.send('Runtime.evaluate', { expression, returnByValue: true }, page.sessionId);
+        return { session, url: page.url, title: await this.title(session), elements: result?.result?.value || [] };
+    }
     async click({ session = 'default', selector = '', x = null, y = null }) {
         const page = await this.getPage(session);
+        let px = Number(x), py = Number(y), meta = {};
         if (selector) {
-            const expression = `(function(){const el=document.querySelector(${JSON.stringify(selector)}); if(!el) return {ok:false,error:'selector not found'}; el.scrollIntoView({block:'center',inline:'center'}); const r=el.getBoundingClientRect(); el.click(); return {ok:true,x:r.left+r.width/2,y:r.top+r.height/2,text:el.innerText||el.value||el.getAttribute('aria-label')||''};})()`;
+            const expression = `(function(){const el=document.querySelector(${JSON.stringify(selector)}); if(!el) return {ok:false,error:'selector not found'}; el.scrollIntoView({block:'center',inline:'center'}); const r=el.getBoundingClientRect(); return {ok:true,x:r.left+r.width/2,y:r.top+r.height/2,text:el.innerText||el.value||el.getAttribute('aria-label')||'',tag:el.tagName};})()`;
             const result = await this.client.send('Runtime.evaluate', { expression, returnByValue: true }, page.sessionId);
             const value = result?.result?.value || {};
             if (!value.ok) throw new Error(value.error || '点击失败');
-            return value;
+            px = Number(value.x); py = Number(value.y); meta = value;
         }
-        const px = Number(x), py = Number(y);
         if (!Number.isFinite(px) || !Number.isFinite(py)) throw new Error('请提供 selector 或 x/y 坐标');
+        await this.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: px, y: py, button: 'none' }, page.sessionId);
         await this.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: px, y: py, button: 'left', clickCount: 1 }, page.sessionId);
         await this.client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: px, y: py, button: 'left', clickCount: 1 }, page.sessionId);
-        return { ok: true, x: px, y: py };
+        await delay(250);
+        return { ok: true, ...meta, x: px, y: py, title: await this.title(session), url: page.url };
     }
     async type({ session = 'default', selector = '', text = '', clear = false }) {
         const page = await this.getPage(session);
         if (!selector) throw new Error('请输入表单 selector');
-        const expression = `(function(){const el=document.querySelector(${JSON.stringify(selector)}); if(!el) return {ok:false,error:'selector not found'}; el.focus(); if(${clear ? 'true' : 'false'}) el.value=''; const value=${JSON.stringify(String(text || ''))}; if('value' in el){ el.value += value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); } else { el.textContent += value; } return {ok:true,value:el.value||el.textContent||''};})()`;
+        const expression = `(function(){const el=document.querySelector(${JSON.stringify(selector)}); if(!el) return {ok:false,error:'selector not found'}; el.scrollIntoView({block:'center',inline:'center'}); el.focus(); if(${clear ? 'true' : 'false'}){ if('value' in el){ el.value=''; el.dispatchEvent(new Event('input',{bubbles:true})); } else { el.textContent=''; } } const r=el.getBoundingClientRect(); return {ok:true,x:r.left+r.width/2,y:r.top+r.height/2,tag:el.tagName,value:el.value||el.textContent||''};})()`;
         const result = await this.client.send('Runtime.evaluate', { expression, returnByValue: true }, page.sessionId);
-        const value = result?.result?.value || {};
-        if (!value.ok) throw new Error(value.error || '输入失败');
-        return value;
+        const focused = result?.result?.value || {};
+        if (!focused.ok) throw new Error(focused.error || '输入失败');
+        await this.client.send('Input.insertText', { text: String(text || '') }, page.sessionId);
+        await delay(120);
+        const read = await this.client.send('Runtime.evaluate', { expression: `(function(){const el=document.querySelector(${JSON.stringify(selector)}); return el ? {ok:true,value:el.value||el.textContent||''} : {ok:false};})()`, returnByValue: true }, page.sessionId).catch(() => null);
+        return { ...focused, ...(read?.result?.value || {}), title: await this.title(session), url: page.url };
+    }
+    async key({ session = 'default', key = 'Enter' }) {
+        const page = await this.getPage(session);
+        const name = String(key || 'Enter');
+        const map = {
+            Enter: ['Enter', 'Enter', 13], Tab: ['Tab', 'Tab', 9], Escape: ['Escape', 'Escape', 27], Backspace: ['Backspace', 'Backspace', 8], Delete: ['Delete', 'Delete', 46],
+            ArrowUp: ['ArrowUp', 'ArrowUp', 38], ArrowDown: ['ArrowDown', 'ArrowDown', 40], ArrowLeft: ['ArrowLeft', 'ArrowLeft', 37], ArrowRight: ['ArrowRight', 'ArrowRight', 39],
+            Home: ['Home', 'Home', 36], End: ['End', 'End', 35], PageUp: ['PageUp', 'PageUp', 33], PageDown: ['PageDown', 'PageDown', 34], Space: [' ', 'Space', 32],
+        };
+        const [keyName, code, vk] = map[name] || [name, name, name.length === 1 ? name.toUpperCase().charCodeAt(0) : 0];
+        await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, code, windowsVirtualKeyCode: vk }, page.sessionId);
+        await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: vk }, page.sessionId);
+        await delay(180);
+        return { ok: true, key: name, title: await this.title(session), url: page.url };
+    }
+    async wait({ session = 'default', ms = 1000 } = {}) {
+        const page = await this.getPage(session);
+        await delay(clamp(ms, 0, 15000, 1000));
+        return { ok: true, session, url: page.url, title: await this.title(session), text: await this.text(session, 2000) };
     }
     async scroll({ session = 'default', direction = 'down', amount = 800 }) {
         const page = await this.getPage(session);

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260608-ai-agent-mobile-transparency">
+    <link rel="stylesheet" href="style.css?v=20260608-ai-agent-openclaw">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -309,8 +309,8 @@
                 </div>
                 <div class="ai-capability-strip force-hidden" id="aiCapabilityStrip" aria-hidden="true"></div>
                 <div class="ai-browser-preview" id="aiBrowserPreview" aria-live="polite">
-                    <div class="ai-browser-preview-head"><span id="aiBrowserPreviewTitle">Chromium 预览</span><button class="ui-btn" type="button" id="aiBrowserPreviewRefreshBtn">刷新截图</button></div>
-                    <div class="ai-browser-preview-body" id="aiBrowserPreviewBody"><span>AI 调用浏览器后，页面截图会自动嵌入这里。</span></div>
+                    <div class="ai-browser-preview-head"><span id="aiBrowserPreviewTitle">AI 代操作页面</span><button class="ui-btn" type="button" id="aiBrowserPreviewRefreshBtn">刷新截图</button></div>
+                    <div class="ai-browser-preview-body" id="aiBrowserPreviewBody"><span>AI 打开网页后，会在这里持续显示它正在代操作的页面。</span></div>
                 </div>
                 <div class="ai-chat-area" id="aiChatArea"><div class="ai-typing-indicator" id="aiTypingIndicator"><span></span><span></span><span></span></div></div>
                 <div class="ai-input-area">
@@ -385,6 +385,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260608-ai-agent-mobile-transparency" type="module"></script>
+    <script src="app.js?v=20260608-ai-agent-openclaw" type="module"></script>
 </body>
 </html>

@@ -2968,11 +2968,11 @@ function renderAiBrowserPreview() {
     if (toggle) toggle.textContent = aiBrowserPreviewState.visible ? '隐藏预览' : '浏览器预览';
     const shot = aiBrowserPreviewState.preview;
     if (!shot?.url) {
-        title && (title.textContent = 'Chromium 预览');
-        body.innerHTML = '<span>AI 调用浏览器后，页面截图会自动嵌入这里。</span>';
+        title && (title.textContent = 'AI 代操作页面');
+        body.innerHTML = '<span>AI 打开网页后，会在这里持续显示它正在代操作的页面。</span>';
         return;
     }
-    title && (title.textContent = `${shot.tool || 'Chromium'} · ${aiBrowserPreviewState.session || 'default'} · ${new Date(shot.updatedAt || Date.now()).toLocaleTimeString()}`);
+    title && (title.textContent = `AI 代操作页面 · ${shot.tool || 'browser'} · ${aiBrowserPreviewState.session || 'default'} · ${new Date(shot.updatedAt || Date.now()).toLocaleTimeString()}`);
     body.innerHTML = `<a href="${escapeHtml(shot.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(shot.url)}" alt="浏览器截图"></a>${shot.pageUrl ? `<small>${escapeHtml(shot.pageUrl)}</small>` : ''}`;
 }
 async function refreshAiBrowserPreview() {
@@ -3002,6 +3002,9 @@ function mergeAiMemory(memory) {
 function syncAiToolSideEffects(toolResults = []) {
     toolResults.forEach((r) => {
         updateAiBrowserPreviewFromToolResult(r);
+        if (r.result?.uiAction === 'open_connection' && r.result?.connectionId) {
+            openConnection(r.result.connectionId).catch((err) => toast(err.message || 'AI 打开连接失败'));
+        }
         if (r.tool === 'plan_task' || r.tool === 'plan_update') mergeAiPlan(r.result?.plan);
         if (r.tool === 'memory_save') mergeAiMemory(r.result?.memory);
     });
@@ -3034,7 +3037,9 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'memory_save') return `已保存 Memory：${result.memory?.title || ''}`;
     if (tool === 'plan_task' || tool === 'plan_update') return `计划 ${result.plan?.title || result.plan?.id || ''}：${result.plan?.status || 'planned'}`;
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
-    if (String(tool || '').startsWith('browser_')) return result.title || result.url || '浏览器操作完成';
+    if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
+    if (tool === 'browser_inspect') return `发现 ${(result.elements || []).length} 个可操作元素：${(result.elements || []).slice(0, 5).map((e) => e.text || e.selector).filter(Boolean).join('、')}`;
+    if (String(tool || '').startsWith('browser_')) return `AI 正在页面代操作：${result.title || result.url || '浏览器操作完成'}`;
     return '执行完成';
 }
 function formatAiToolResult(r = {}) {
@@ -3042,7 +3047,7 @@ function formatAiToolResult(r = {}) {
     const detail = JSON.stringify(maskAiSensitive({ args: r.args || {}, result }, r.tool), null, 2);
     const shot = browserShotFromResult(result);
     const titleMap = {
-        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
+        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_inspect: '检查页面元素', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', browser_key: '浏览器按键', browser_wait: '等待页面', open_connection: '打开连接', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
     };
     const title = titleMap[r.tool] || `工具 ${r.tool || 'unknown'}`;
     const duration = Number.isFinite(Number(r.durationMs)) ? `${(Number(r.durationMs) / 1000).toFixed(1)}s` : '';
@@ -3357,6 +3362,8 @@ function openAiPanelLayoutMenu(button, panel) {
     `;
     menu.style.transition = 'none';
     document.body.appendChild(menu);
+    const baseZ = Number(panel?.style?.zIndex || getComputedStyle(panel || document.body).zIndex || 10080) || 10080;
+    menu.style.zIndex = String(baseZ + 200);
     aiPanelLayoutMenu = menu;
     positionAiPanelLayoutMenu(menu, button, { collapsed: true });
     button.style.opacity = '0';

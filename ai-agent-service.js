@@ -229,12 +229,15 @@ function toolDefinitions(ai = {}) {
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
-        tools.push({ type: 'function', function: { name: 'browser_navigate', description: '用内置 Chromium 打开 URL，并返回标题和页面文本摘要。', parameters: { type: 'object', properties: { url: { type: 'string' }, session: { type: 'string' }, waitMs: { type: 'number' } }, required: ['url'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_navigate', description: '用内置 Chromium 打开 URL，并在 AI 浮窗里显示页面预览，像用户打开网页一样继续代操作。', parameters: { type: 'object', properties: { url: { type: 'string' }, session: { type: 'string' }, waitMs: { type: 'number' } }, required: ['url'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_inspect', description: '列出当前页面可见的按钮、链接、输入框等可交互元素及 selector/坐标。点击或输入前优先调用它，避免盲点。', parameters: { type: 'object', properties: { session: { type: 'string' }, max: { type: 'number' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_screenshot', description: '截取内置 Chromium 当前页面截图。', parameters: { type: 'object', properties: { session: { type: 'string' }, fullPage: { type: 'boolean' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_click', description: '点击当前页面中的 CSS 选择器或坐标。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_type', description: '向当前页面表单元素输入文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' }, clear: { type: 'boolean' } }, required: ['selector', 'text'] } } });
         tools.push({ type: 'function', function: { name: 'browser_scroll', description: '滚动当前页面。', parameters: { type: 'object', properties: { session: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, amount: { type: 'number' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_text', description: '读取当前浏览器页面可见/正文文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, maxChars: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'browser_key', description: '向当前页面发送键盘按键（Enter/Tab/Escape/方向键等），用于像用户一样操作页面。', parameters: { type: 'object', properties: { session: { type: 'string' }, key: { type: 'string' } }, required: ['key'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_wait', description: '等待页面加载或交互完成，然后返回页面状态和截图预览。', parameters: { type: 'object', properties: { session: { type: 'string' }, ms: { type: 'number' } } } } });
     }
     if (p.memory !== false) {
         tools.push({ type: 'function', function: { name: 'memory_search', description: '搜索长期 Memory / 项目记忆；会结合当前连接、项目、标签进行自动关联排序。', parameters: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, connectionIds: { type: 'array', items: { type: 'string' } }, maxResults: { type: 'number' } } } } });
@@ -244,6 +247,7 @@ function toolDefinitions(ai = {}) {
         tools.push({ type: 'function', function: { name: 'list_env_vars', description: '列出 AI 专用环境变量名称和说明，不返回值。', parameters: { type: 'object', properties: {} } } });
         tools.push({ type: 'function', function: { name: 'get_env_var', description: '读取 AI 专用环境变量的值。敏感操作，需要用户确认。', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } });
     }
+    tools.push({ type: 'function', function: { name: 'open_connection', description: '在用户当前 Zephyr 页面里直接打开一个 SSH/RDP/VNC 连接，相当于用户点击连接卡片。用于需要 AI 代用户打开页面/会话时。', parameters: { type: 'object', properties: { connectionId: { type: 'string' } }, required: ['connectionId'] } } });
     tools.push({ type: 'function', function: { name: 'plan_task', description: '创建执行计划，返回 planId；后续用 plan_update 更新步骤状态。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
     tools.push({ type: 'function', function: { name: 'plan_update', description: '更新任务计划：步骤状态、暂停/继续、失败重试、追加日志。', parameters: { type: 'object', properties: { planId: { type: 'string' }, status: { type: 'string', enum: ['planned', 'running', 'paused', 'completed', 'failed', 'cancelled'] }, pause: { type: 'boolean' }, resume: { type: 'boolean' }, retryFailed: { type: 'boolean' }, note: { type: 'string' }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, index: { type: 'number' }, status: { type: 'string', enum: ['pending', 'running', 'paused', 'completed', 'failed', 'skipped', 'retrying'] }, note: { type: 'string' }, error: { type: 'string' } } } } }, required: ['planId'] } } });
     tools.push({ type: 'function', function: { name: 'plan_delete', description: '删除一个任务计划。', parameters: { type: 'object', properties: { planId: { type: 'string' } }, required: ['planId'] } } });
@@ -699,6 +703,11 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
         case 'browser_screenshot':
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
             return browserService.screenshot({ session: args.session || 'default', fullPage: !!args.fullPage });
+        case 'browser_inspect': {
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            const session = args.session || 'default';
+            return browserResultWithPreview('inspect', await browserService.inspect({ session, max: args.max || 80 }), session);
+        }
         case 'browser_click': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
             const session = args.session || 'default';
@@ -718,6 +727,23 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
             const session = args.session || 'default';
             return browserResultWithPreview('text', { session, text: await browserService.text(session, clampNumber(args.maxChars, 1000, 120000, MAX_TOOL_TEXT)) }, session);
+        }
+        case 'browser_key': {
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            const session = args.session || 'default';
+            return browserResultWithPreview('key', await browserService.key({ session, key: args.key || 'Enter' }), session);
+        }
+        case 'browser_wait': {
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            const session = args.session || 'default';
+            return browserResultWithPreview('wait', await browserService.wait({ session, ms: args.ms || 1000 }), session);
+        }
+        case 'open_connection': {
+            const connectionId = String(args.connectionId || '').trim();
+            const conn = getAllConnections(deps).find((c) => c.id === connectionId);
+            if (!conn) throw new Error('连接不存在');
+            deps.addActivity?.(`AI 请求打开连接：${conn.name || conn.id}`);
+            return { uiAction: 'open_connection', connectionId: conn.id, connection: connectionSummary(conn), message: `准备在页面打开 ${conn.protocol || 'SSH'} 连接：${conn.name || conn.host}` };
         }
         case 'memory_search':
             if (p.memory === false || ai.memory?.enabled === false) throw new Error('长期 Memory 权限未开启');
