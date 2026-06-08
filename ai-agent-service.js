@@ -106,23 +106,28 @@ async function fetchJson(url, options = {}) {
     }
     return data ?? {};
 }
-function buildSystemPrompt(ai = {}) {
+function buildSystemPrompt(ai = {}, context = {}) {
     const enabledSkills = (Array.isArray(ai.skills) ? ai.skills : []).filter((s) => s?.enabled !== false && (s.prompt || s.description || s.name));
     const skillsText = enabledSkills.length
         ? `\n\n已启用 Skills：\n${enabledSkills.map((s, i) => `# Skill ${i + 1}: ${s.name || '未命名'}\n${s.description ? `说明：${s.description}\n` : ''}${s.prompt || ''}`).join('\n\n')}`
         : '';
-    const memoryText = ai.memory?.enabled !== false && Array.isArray(ai.memories) && ai.memories.length
-        ? `\n\n长期 Memory / 项目记忆（按需参考，不要泄露敏感信息）：\n${ai.memories.filter((m) => m?.enabled !== false).slice(0, 80).map((m) => `- [${m.scope || 'global'}] ${m.title || m.key || 'memory'}: ${m.content || ''}`).join('\n')}`
+    const relatedMemories = ai.memory?.enabled !== false ? selectPromptMemories(ai, context, 28) : [];
+    const memoryText = relatedMemories.length
+        ? `\n\n长期 Memory / 项目记忆（已按当前连接、项目、标签自动关联；按需参考，不要泄露敏感信息）：\n${relatedMemories.map((m) => `- ${memoryLabel(m)}: ${m.content || ''}`).join('\n')}`
         : '';
+    const contextText = formatAiContextForPrompt(context);
     const envNames = Array.isArray(ai.envVars) ? ai.envVars.filter((e) => e?.enabled !== false && e.name).map((e) => e.name).join(', ') : '';
     const envText = envNames ? `\n\n可用 AI 环境变量名（值需通过 get_env_var 工具并经敏感确认后读取）：${envNames}` : '';
     return [
         `你是 ${ai.assistantName || 'Zephyr AI 助理'}，运行在 Zephyr SSH 管理平台内。`,
         '你要像真正的运维/开发智能体一样工作：先理解目标，再尽量使用可用工具获取事实、搜索网页、操作浏览器、读取远程文件、执行安全命令或给出可审计补丁。',
-        '复杂任务优先使用任务规划器：先提出计划、分解步骤、标记风险，再逐步执行并更新状态。',
+        '复杂任务优先使用任务规划器：先提出计划、分解步骤、标记风险；执行过程中用 plan_update 持续更新步骤状态，遇到阻塞可暂停，失败后可标记失败并重试。',
         '涉及写文件、远程执行、删除、重启、安装、改权限、改网络/防火墙、读取环境变量/密钥等操作时，必须等待 Zephyr 的敏感操作确认机制。',
+        'Memory 会按当前连接、项目、标签自动关联；保存 Memory 时优先补充 connectionIds、project/projects、tags，便于下次自动召回。',
+        '浏览器自动化工具会返回可视化预览截图；需要观察页面时优先使用 browser_screenshot 或查看工具返回的 preview。',
         '输出要简洁、可执行；命令和补丁必须说明作用与风险。',
         `当前时间：${new Date().toISOString()}`,
+        contextText,
         ai.systemPrompt ? `\n用户自定义系统提示：\n${ai.systemPrompt}` : '',
         skillsText,
         memoryText,
@@ -144,14 +149,15 @@ function toolDefinitions(ai = {}) {
         tools.push({ type: 'function', function: { name: 'browser_text', description: '读取当前浏览器页面可见/正文文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, maxChars: { type: 'number' } } } } });
     }
     if (p.memory !== false) {
-        tools.push({ type: 'function', function: { name: 'memory_search', description: '搜索长期 Memory / 项目记忆。', parameters: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string' }, maxResults: { type: 'number' } } } } });
-        tools.push({ type: 'function', function: { name: 'memory_save', description: '保存长期 Memory 或项目记忆。', parameters: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' } }, required: ['content'] } } });
+        tools.push({ type: 'function', function: { name: 'memory_search', description: '搜索长期 Memory / 项目记忆；会结合当前连接、项目、标签进行自动关联排序。', parameters: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, connectionIds: { type: 'array', items: { type: 'string' } }, maxResults: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'memory_save', description: '保存长期 Memory 或项目记忆；优先填写 connectionIds/project/projects/tags 以便自动关联。', parameters: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' }, projects: { type: 'array', items: { type: 'string' } }, tags: { type: 'array', items: { type: 'string' } }, connectionIds: { type: 'array', items: { type: 'string' } } }, required: ['content'] } } });
     }
     if (p.env !== false) {
         tools.push({ type: 'function', function: { name: 'list_env_vars', description: '列出 AI 专用环境变量名称和说明，不返回值。', parameters: { type: 'object', properties: {} } } });
         tools.push({ type: 'function', function: { name: 'get_env_var', description: '读取 AI 专用环境变量的值。敏感操作，需要用户确认。', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } });
     }
-    tools.push({ type: 'function', function: { name: 'plan_task', description: '为复杂任务创建或更新执行计划。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
+    tools.push({ type: 'function', function: { name: 'plan_task', description: '创建执行计划，返回 planId；后续用 plan_update 更新步骤状态。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
+    tools.push({ type: 'function', function: { name: 'plan_update', description: '更新任务计划：步骤状态、暂停/继续、失败重试、追加日志。', parameters: { type: 'object', properties: { planId: { type: 'string' }, status: { type: 'string', enum: ['planned', 'running', 'paused', 'completed', 'failed', 'cancelled'] }, pause: { type: 'boolean' }, resume: { type: 'boolean' }, retryFailed: { type: 'boolean' }, note: { type: 'string' }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, index: { type: 'number' }, status: { type: 'string', enum: ['pending', 'running', 'paused', 'completed', 'failed', 'skipped', 'retrying'] }, note: { type: 'string' }, error: { type: 'string' } } } } }, required: ['planId'] } } });
     if (p.remoteExecute !== false) tools.push({ type: 'function', function: { name: 'remote_execute', description: '在一个或多个 SSH 连接上执行 shell 命令。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionIds: { type: 'array', items: { type: 'string' } }, command: { type: 'string' }, timeoutSeconds: { type: 'number' } }, required: ['connectionIds', 'command'] } } });
     if (p.fileRead !== false) tools.push({ type: 'function', function: { name: 'remote_read_file', description: '读取远程 SSH 主机上的文本文件。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['connectionId', 'path'] } } });
     if (p.fileWrite !== false) tools.push({ type: 'function', function: { name: 'remote_write_file', description: '写入或追加远程 SSH 主机文件。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' }, encoding: { type: 'string', enum: ['utf8', 'base64'] }, append: { type: 'boolean' } }, required: ['connectionId', 'path', 'content'] } } });
@@ -322,15 +328,85 @@ function aiEnvList(ai = {}) {
 function publicEnvVar(item = {}) {
     return { name: item.name, description: item.description || '', enabled: item.enabled !== false, hasValue: !!item.value, updatedAt: item.updatedAt || null };
 }
-function searchMemories(ai = {}, query = '', scope = '', maxResults = 10) {
+function searchMemories(ai = {}, query = '', scope = '', maxResults = 10, context = {}) {
     const q = String(query || '').toLowerCase();
     const wantedScope = String(scope || '').toLowerCase();
+    const enriched = rankMemories(ai, context)
+        .filter((m) => !wantedScope || [m.scope, m.project, ...(m.projects || []), ...(m.tags || [])].join(' ').toLowerCase().includes(wantedScope))
+        .filter((m) => !q || memorySearchHaystack(m).includes(q));
+    return enriched.slice(0, clampNumber(maxResults, 1, 50, 10));
+}
+function stringList(value) {
+    if (Array.isArray(value)) return value.map((x) => String(x || '').trim()).filter(Boolean);
+    return String(value || '').split(/[\n,，]+/).map((x) => x.trim()).filter(Boolean);
+}
+function uniqueStrings(list = []) {
+    const seen = new Set();
+    const out = [];
+    list.forEach((item) => {
+        const text = String(item || '').trim();
+        const key = text.toLowerCase();
+        if (text && !seen.has(key)) { seen.add(key); out.push(text); }
+    });
+    return out;
+}
+function normalizeAiContext(context = {}) {
+    const connections = Array.isArray(context.connections) ? context.connections : [];
+    const activeConnectionIds = uniqueStrings([
+        ...stringList(context.activeConnectionIds),
+        ...connections.map((c) => c.id),
+    ]);
+    const projects = uniqueStrings([context.project, ...stringList(context.projects)]);
+    const tags = uniqueStrings([...stringList(context.tags), ...connections.flatMap((c) => Array.isArray(c.tags) ? c.tags : stringList(c.tags))]);
+    return { ...context, activeConnectionIds, projects, tags, connections };
+}
+function formatAiContextForPrompt(context = {}) {
+    const c = normalizeAiContext(context);
+    const lines = [];
+    if (c.view) lines.push(`当前视图：${c.view}`);
+    if (c.activeChatTitle) lines.push(`当前 AI 对话：${c.activeChatTitle}`);
+    if (c.projects.length) lines.push(`关联项目：${c.projects.join(', ')}`);
+    if (c.tags.length) lines.push(`关联标签：${c.tags.join(', ')}`);
+    if (c.connections.length) lines.push(`当前连接上下文：${c.connections.slice(0, 12).map((x) => `${x.name || x.id}(${x.username || '-'}@${x.host || '-'})${Array.isArray(x.tags) && x.tags.length ? `[${x.tags.join(',')}]` : ''}`).join('; ')}`);
+    if (!lines.length) return '';
+    return `\n当前 Zephyr 上下文（用于选择连接、项目和 Memory）：\n${lines.map((x) => `- ${x}`).join('\n')}`;
+}
+function memoryLabel(m = {}) {
+    const bits = [];
+    const scopes = uniqueStrings([m.scope, m.project, ...(m.projects || [])]);
+    if (scopes.length) bits.push(scopes.join('/'));
+    if (Array.isArray(m.connectionIds) && m.connectionIds.length) bits.push(`连接:${m.connectionIds.join(',')}`);
+    if (Array.isArray(m.tags) && m.tags.length) bits.push(`标签:${m.tags.join(',')}`);
+    return `[${bits.join(' · ') || 'global'}] ${m.title || m.key || 'memory'}`;
+}
+function memorySearchHaystack(m = {}) {
+    return [m.title, m.key, m.content, m.scope, m.project, ...(m.projects || []), ...(m.tags || []), ...(m.connectionIds || []), ...(m.connectionNames || [])].join(' ').toLowerCase();
+}
+function rankMemories(ai = {}, context = {}) {
+    const c = normalizeAiContext(context);
+    const projectSet = new Set(c.projects.map((x) => x.toLowerCase()));
+    const tagSet = new Set(c.tags.map((x) => x.toLowerCase()));
+    const connSet = new Set(c.activeConnectionIds.map((x) => x.toLowerCase()));
     return (Array.isArray(ai.memories) ? ai.memories : [])
         .filter((m) => m?.enabled !== false)
-        .filter((m) => !wantedScope || String(m.scope || '').toLowerCase().includes(wantedScope) || String(m.project || '').toLowerCase().includes(wantedScope))
-        .filter((m) => !q || [m.title, m.key, m.content, m.scope, m.project].join(' ').toLowerCase().includes(q))
-        .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
-        .slice(0, clampNumber(maxResults, 1, 50, 10));
+        .map((m) => {
+            const connectionIds = stringList(m.connectionIds);
+            const projects = uniqueStrings([m.project, ...stringList(m.projects)]);
+            const tags = stringList(m.tags);
+            let score = 0;
+            if (connectionIds.some((id) => connSet.has(id.toLowerCase()))) score += 120;
+            if (projects.some((p) => projectSet.has(p.toLowerCase()))) score += 70;
+            if (tags.some((t) => tagSet.has(t.toLowerCase()))) score += 45;
+            if (String(m.scope || '').toLowerCase() === 'global') score += 5;
+            return { ...m, connectionIds, projects, tags, _score: score };
+        })
+        .sort((a, b) => (b._score - a._score) || (Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0)));
+}
+function selectPromptMemories(ai = {}, context = {}, max = 28) {
+    const ranked = rankMemories(ai, context);
+    const relevant = ranked.filter((m) => m._score > 0);
+    const globals = ranked.filter((m) => String(m.scope || '').toLowerCase() === 'global' && !relevant.some((x) => x.id === m.id)).slice(0, 6);
+    return [...relevant, ...globals].slice(0, max);
 }
 function findConnection(deps, id) {
     const conn = getSshConnections(deps).find((c) => c.id === String(id || ''));
@@ -361,6 +437,7 @@ function isSensitiveTool(name) { return ['remote_execute', 'remote_write_file', 
 function publicToolArgs(toolName, args) {
     const copy = JSON.parse(JSON.stringify(args || {}));
     if (copy.content && String(copy.content).length > 1200) copy.content = `${String(copy.content).slice(0, 1200)}\n...[内容已截断]`;
+    if (toolName === 'get_env_var') delete copy.nameValue;
     return copy;
 }
 function confirmationSummary(toolName, args, deps) {
@@ -373,6 +450,48 @@ function confirmationSummary(toolName, args, deps) {
     if (toolName === 'get_env_var') return `读取 AI 环境变量：${String(args.name || '').slice(0, 120)}`;
     return `执行工具：${toolName}`;
 }
+async function browserResultWithPreview(action, result, session = 'default', includePreview = true) {
+    if (!includePreview) return result;
+    try {
+        const preview = await browserService.screenshot({ session, fullPage: false });
+        return { ...result, preview };
+    } catch (err) {
+        return { ...result, previewError: err.message || String(err) };
+    }
+}
+function normalizePlanStep(step, index = 0) {
+    const isPlain = typeof step === 'string';
+    const text = isPlain ? step : (step?.text || '');
+    return {
+        id: String(isPlain ? `step-${index + 1}` : (step?.id || `step-${index + 1}`)).slice(0, 80),
+        text: String(text || '').slice(0, 500),
+        status: String(isPlain ? 'pending' : (step?.status || 'pending')).slice(0, 40),
+        note: String(isPlain ? '' : (step?.note || '')).slice(0, 1000),
+        error: String(isPlain ? '' : (step?.error || '')).slice(0, 1000),
+        attempts: Number(isPlain ? 0 : (step?.attempts || 0)),
+        updatedAt: Number(isPlain ? Date.now() : (step?.updatedAt || Date.now())),
+    };
+}
+function updateStoredPlan(ai = {}, planId = '', updater) {
+    const plans = Array.isArray(ai.plans) ? ai.plans.slice(0, 100) : [];
+    const idx = plans.findIndex((p) => p.id === String(planId || ''));
+    if (idx < 0) throw new Error('任务计划不存在');
+    const plan = { ...plans[idx], steps: Array.isArray(plans[idx].steps) ? plans[idx].steps.map(normalizePlanStep) : [] };
+    const next = updater(plan) || plan;
+    next.updatedAt = Date.now();
+    plans[idx] = next;
+    return { plans, plan: next };
+}
+function inferPlanStatus(plan = {}) {
+    const steps = Array.isArray(plan.steps) ? plan.steps : [];
+    if (!steps.length) return plan.status || 'planned';
+    if (steps.some((s) => s.status === 'failed')) return 'failed';
+    if (steps.some((s) => s.status === 'paused')) return 'paused';
+    if (steps.some((s) => s.status === 'running' || s.status === 'retrying')) return 'running';
+    if (steps.every((s) => ['completed', 'skipped'].includes(s.status))) return 'completed';
+    if (steps.some((s) => ['completed', 'skipped'].includes(s.status))) return 'running';
+    return plan.status || 'planned';
+}
 async function maybeRequireConfirmation(toolName, args, ctx, run, deps) {
     const ai = deps.storage.getSettings().ai || {};
     const sensitive = ai.sensitive || {};
@@ -383,7 +502,7 @@ async function maybeRequireConfirmation(toolName, args, ctx, run, deps) {
     }
     const id = crypto.randomUUID();
     const confirmation = { id, toolName, summary: confirmationSummary(toolName, args, deps), args: publicToolArgs(toolName, args), createdAt: Date.now(), expiresAt: Date.now() + 10 * 60 * 1000 };
-    pendingActions.set(id, { ...confirmation, username: ctx.req.session.username, rawArgs: args });
+    pendingActions.set(id, { ...confirmation, username: ctx.req.session.username, rawArgs: args, context: ctx.context || {} });
     return { confirmationRequired: true, confirmation };
 }
 async function executeAiTool(toolName, args = {}, ctx, deps) {
@@ -398,31 +517,57 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
         case 'fetch_url':
             if (p.webFetch === false) throw new Error('网页读取权限未开启');
             return { url: String(args.url || ''), text: await fetchUrlText(args.url, args.maxChars) };
-        case 'browser_navigate':
+        case 'browser_navigate': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return browserService.navigate({ url: args.url, session: args.session || 'default', waitMs: args.waitMs });
+            const session = args.session || 'default';
+            return browserResultWithPreview('navigate', await browserService.navigate({ url: args.url, session, waitMs: args.waitMs }), session);
+        }
         case 'browser_screenshot':
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
             return browserService.screenshot({ session: args.session || 'default', fullPage: !!args.fullPage });
-        case 'browser_click':
+        case 'browser_click': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return browserService.click({ session: args.session || 'default', selector: args.selector || '', x: args.x, y: args.y });
-        case 'browser_type':
+            const session = args.session || 'default';
+            return browserResultWithPreview('click', await browserService.click({ session, selector: args.selector || '', x: args.x, y: args.y }), session);
+        }
+        case 'browser_type': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return browserService.type({ session: args.session || 'default', selector: args.selector || '', text: args.text || '', clear: !!args.clear });
-        case 'browser_scroll':
+            const session = args.session || 'default';
+            return browserResultWithPreview('type', await browserService.type({ session, selector: args.selector || '', text: args.text || '', clear: !!args.clear }), session);
+        }
+        case 'browser_scroll': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return browserService.scroll({ session: args.session || 'default', direction: args.direction || 'down', amount: args.amount });
-        case 'browser_text':
+            const session = args.session || 'default';
+            return browserResultWithPreview('scroll', await browserService.scroll({ session, direction: args.direction || 'down', amount: args.amount }), session);
+        }
+        case 'browser_text': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return { session: args.session || 'default', text: await browserService.text(args.session || 'default', clampNumber(args.maxChars, 1000, 120000, MAX_TOOL_TEXT)) };
+            const session = args.session || 'default';
+            return browserResultWithPreview('text', { session, text: await browserService.text(session, clampNumber(args.maxChars, 1000, 120000, MAX_TOOL_TEXT)) }, session);
+        }
         case 'memory_search':
             if (p.memory === false || ai.memory?.enabled === false) throw new Error('长期 Memory 权限未开启');
-            return { memories: searchMemories(ai, args.query || '', args.scope || args.project || '', args.maxResults || 10) };
+            return { memories: searchMemories(ai, args.query || '', args.scope || args.project || '', args.maxResults || 10, { ...(ctx.context || {}), activeConnectionIds: uniqueStrings([...stringList(ctx.context?.activeConnectionIds), ...stringList(args.connectionIds)]), projects: uniqueStrings([...stringList(ctx.context?.projects), args.project].filter(Boolean)), tags: uniqueStrings([...stringList(ctx.context?.tags), ...stringList(args.tags)]) }) };
         case 'memory_save': {
             if (p.memory === false || ai.memory?.enabled === false) throw new Error('长期 Memory 权限未开启');
             const memories = Array.isArray(ai.memories) ? ai.memories.slice(0, 1000) : [];
-            const item = { id: crypto.randomUUID(), title: String(args.title || args.key || 'AI Memory').slice(0, 120), content: String(args.content || '').slice(0, 20000), scope: String(args.scope || 'global').slice(0, 80), project: String(args.project || '').slice(0, 120), enabled: true, createdAt: Date.now(), updatedAt: Date.now() };
+            const context = normalizeAiContext(ctx.context || {});
+            const connectionIds = uniqueStrings([...context.activeConnectionIds, ...stringList(args.connectionIds)]);
+            const projects = uniqueStrings([...(context.projects || []), args.project, ...stringList(args.projects)]);
+            const tags = uniqueStrings([...(context.tags || []), ...stringList(args.tags)]);
+            const item = {
+                id: crypto.randomUUID(),
+                title: String(args.title || args.key || 'AI Memory').slice(0, 120),
+                content: String(args.content || '').slice(0, 20000),
+                scope: String(args.scope || projects[0] || (connectionIds.length ? 'connection' : 'global')).slice(0, 80),
+                project: String(args.project || projects[0] || '').slice(0, 120),
+                projects: projects.slice(0, 20),
+                tags: tags.slice(0, 30),
+                connectionIds: connectionIds.slice(0, 50),
+                enabled: true,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            };
             if (!item.content.trim()) throw new Error('Memory 内容不能为空');
             memories.unshift(item);
             deps.storage.updateSettings({ ai: { memories: memories.slice(0, clampNumber(ai.memory?.maxItems, 1, 2000, 500)) } });
@@ -444,9 +589,43 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             const steps = Array.isArray(args.steps) ? args.steps.map((s) => String(s).slice(0, 500)).filter(Boolean) : [];
             if (!steps.length) throw new Error('计划至少需要一个步骤');
             const plans = Array.isArray(ai.plans) ? ai.plans.slice(0, 100) : [];
-            const plan = { id: crypto.randomUUID(), title: String(args.title || 'AI 任务计划').slice(0, 160), steps: steps.map((text, index) => ({ id: `step-${index + 1}`, text, status: 'pending' })), risk: String(args.risk || '').slice(0, 2000), status: 'planned', createdAt: Date.now(), updatedAt: Date.now() };
+            const plan = {
+                id: crypto.randomUUID(),
+                title: String(args.title || 'AI 任务计划').slice(0, 160),
+                steps: steps.map((text, index) => normalizePlanStep({ id: `step-${index + 1}`, text, status: 'pending' }, index)),
+                risk: String(args.risk || '').slice(0, 2000),
+                status: 'planned',
+                logs: [],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+            };
             plans.unshift(plan);
             deps.storage.updateSettings({ ai: { plans: plans.slice(0, 100) } });
+            return { plan };
+        }
+        case 'plan_update': {
+            const planId = String(args.planId || '').trim();
+            if (!planId) throw new Error('planId 不能为空');
+            const { plans, plan } = updateStoredPlan(ai, planId, (draft) => {
+                const logs = Array.isArray(draft.logs) ? draft.logs.slice(-80) : [];
+                if (args.note) logs.push({ time: Date.now(), text: String(args.note).slice(0, 2000) });
+                draft.logs = logs;
+                if (args.pause) { draft.status = 'paused'; draft.steps = draft.steps.map((s) => s.status === 'running' || s.status === 'retrying' ? { ...s, status: 'paused', updatedAt: Date.now() } : s); }
+                if (args.resume) { draft.status = 'running'; const first = draft.steps.find((s) => s.status === 'paused') || draft.steps.find((s) => s.status === 'pending'); if (first) { first.status = 'running'; first.updatedAt = Date.now(); } }
+                if (args.retryFailed) { draft.status = 'running'; draft.steps = draft.steps.map((s) => s.status === 'failed' ? { ...s, status: 'retrying', attempts: Number(s.attempts || 0) + 1, error: '', updatedAt: Date.now() } : s); }
+                if (Array.isArray(args.steps)) {
+                    args.steps.forEach((patch) => {
+                        const idx = patch.id ? draft.steps.findIndex((s) => s.id === patch.id) : Number(patch.index) - 1;
+                        if (idx < 0 || idx >= draft.steps.length) return;
+                        const old = draft.steps[idx];
+                        draft.steps[idx] = { ...old, status: patch.status ? String(patch.status).slice(0, 40) : old.status, note: patch.note !== undefined ? String(patch.note).slice(0, 1000) : old.note, error: patch.error !== undefined ? String(patch.error).slice(0, 1000) : old.error, updatedAt: Date.now() };
+                    });
+                }
+                if (args.status) draft.status = String(args.status).slice(0, 40);
+                else draft.status = inferPlanStatus(draft);
+                return draft;
+            });
+            deps.storage.updateSettings({ ai: { plans } });
             return { plan };
         }
         case 'remote_execute':
@@ -506,31 +685,37 @@ async function completeWithProvider(ai, body) {
 }
 function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     const currentProviders = Array.isArray(currentAi.providers) ? currentAi.providers : [];
-    const next = { ...(currentAi || {}), ...(ai || {}) };
-    next.enabled = !!ai.enabled;
-    next.assistantName = String(ai.assistantName || currentAi.assistantName || 'Zephyr AI').slice(0, 40);
-    next.defaultProviderId = String(ai.defaultProviderId || '').slice(0, 120);
-    next.defaultModel = String(ai.defaultModel || '').slice(0, 160);
-    next.systemPrompt = String(ai.systemPrompt || '').slice(0, 20000);
-    next.codeCompletionEnabled = ai.codeCompletionEnabled !== false;
+    const partial = arguments.length >= 2 && ai && typeof ai === 'object' ? ai : {};
+    const pick = (key, fallback) => Object.prototype.hasOwnProperty.call(partial, key) ? partial[key] : fallback;
+    const next = { ...(currentAi || {}), ...(partial || {}) };
+    next.enabled = !!pick('enabled', currentAi.enabled);
+    next.assistantName = String(pick('assistantName', currentAi.assistantName) || 'Zephyr AI').slice(0, 40);
+    next.defaultProviderId = String(pick('defaultProviderId', currentAi.defaultProviderId) || '').slice(0, 120);
+    next.defaultModel = String(pick('defaultModel', currentAi.defaultModel) || '').slice(0, 160);
+    next.systemPrompt = String(pick('systemPrompt', currentAi.systemPrompt) || '').slice(0, 20000);
+    next.codeCompletionEnabled = pick('codeCompletionEnabled', currentAi.codeCompletionEnabled) !== false;
+    const sensitiveIn = { ...(currentAi.sensitive || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'sensitive') ? (partial.sensitive || {}) : {}) };
     next.sensitive = {
-        requireConfirmation: ai.sensitive?.requireConfirmation !== false,
-        autoConfirm: !!ai.sensitive?.autoConfirm,
-        autoConfirmDelayMs: clampNumber(ai.sensitive?.autoConfirmDelayMs, 0, 60000, 2500),
+        requireConfirmation: sensitiveIn.requireConfirmation !== false,
+        autoConfirm: !!sensitiveIn.autoConfirm,
+        autoConfirmDelayMs: clampNumber(sensitiveIn.autoConfirmDelayMs, 0, 60000, 2500),
     };
+    const permissionsIn = { ...(currentAi.permissions || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'permissions') ? (partial.permissions || {}) : {}) };
     next.permissions = {
-        webSearch: ai.permissions?.webSearch !== false,
-        webFetch: ai.permissions?.webFetch !== false,
-        browser: ai.permissions?.browser !== false,
-        remoteExecute: ai.permissions?.remoteExecute !== false,
-        fileRead: ai.permissions?.fileRead !== false,
-        fileWrite: ai.permissions?.fileWrite !== false,
-        codeEdit: ai.permissions?.codeEdit !== false,
-        memory: ai.permissions?.memory !== false,
-        env: ai.permissions?.env !== false,
+        webSearch: permissionsIn.webSearch !== false,
+        webFetch: permissionsIn.webFetch !== false,
+        browser: permissionsIn.browser !== false,
+        remoteExecute: permissionsIn.remoteExecute !== false,
+        fileRead: permissionsIn.fileRead !== false,
+        fileWrite: permissionsIn.fileWrite !== false,
+        codeEdit: permissionsIn.codeEdit !== false,
+        memory: permissionsIn.memory !== false,
+        env: permissionsIn.env !== false,
     };
-    next.planner = { enabled: ai.planner?.enabled !== false, requirePlanBeforeTools: !!ai.planner?.requirePlanBeforeTools };
-    next.memory = { enabled: ai.memory?.enabled !== false, maxItems: clampNumber(ai.memory?.maxItems, 1, 2000, 500) };
+    const plannerIn = { ...(currentAi.planner || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'planner') ? (partial.planner || {}) : {}) };
+    next.planner = { enabled: plannerIn.enabled !== false, requirePlanBeforeTools: !!plannerIn.requirePlanBeforeTools };
+    const memoryIn = { ...(currentAi.memory || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'memory') ? (partial.memory || {}) : {}) };
+    next.memory = { enabled: memoryIn.enabled !== false, maxItems: clampNumber(memoryIn.maxItems, 1, 2000, 500) };
     if (Array.isArray(ai.providers)) {
         next.providers = ai.providers.slice(0, 30).map((p) => {
             const old = currentProviders.find((x) => x.id === p.id) || {};
@@ -575,6 +760,9 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
             content: String(m.content || '').slice(0, 20000),
             scope: String(m.scope || 'global').slice(0, 80),
             project: String(m.project || '').slice(0, 120),
+            projects: uniqueStrings([m.project, ...stringList(m.projects)]).slice(0, 20),
+            tags: stringList(m.tags).slice(0, 30),
+            connectionIds: stringList(m.connectionIds).slice(0, 50),
             enabled: m.enabled !== false,
             createdAt: Number(m.createdAt || Date.now()),
             updatedAt: Number(m.updatedAt || Date.now()),
@@ -600,7 +788,8 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
             title: String(plan.title || 'AI 任务计划').slice(0, 160),
             risk: String(plan.risk || '').slice(0, 2000),
             status: String(plan.status || 'planned').slice(0, 40),
-            steps: Array.isArray(plan.steps) ? plan.steps.slice(0, 100).map((step, index) => ({ id: String(step.id || `step-${index + 1}`), text: String(step.text || step).slice(0, 500), status: String(step.status || 'pending').slice(0, 40) })) : [],
+            steps: Array.isArray(plan.steps) ? plan.steps.slice(0, 100).map(normalizePlanStep) : [],
+            logs: Array.isArray(plan.logs) ? plan.logs.slice(-100).map((log) => ({ time: Number(log.time || Date.now()), text: String(log.text || '').slice(0, 2000) })) : [],
             createdAt: Number(plan.createdAt || Date.now()),
             updatedAt: Number(plan.updatedAt || Date.now()),
         }));
@@ -637,7 +826,8 @@ function registerAiRoutes(app, deps) {
             const ai = deps.storage.getSettings().ai || {};
             if (!ai.enabled) return res.status(403).json({ error: 'AI 助理未启用，请先到设置中开启' });
             const { provider, model } = selectProvider(ai, req.body || {});
-            const baseMessages = convertMessagesForProvider(req.body?.messages || [], buildSystemPrompt(ai));
+            const context = normalizeAiContext(req.body?.context || {});
+            const baseMessages = convertMessagesForProvider(req.body?.messages || [], buildSystemPrompt(ai, context));
             const tools = providerSupportsTools(provider) ? toolDefinitions(ai) : [];
             let messages = baseMessages;
             const toolResults = [];
@@ -650,7 +840,7 @@ function registerAiRoutes(app, deps) {
                 }
                 messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls }];
                 for (const call of calls) {
-                    const result = await executeAiTool(call.name, call.args, { req }, deps);
+                    const result = await executeAiTool(call.name, call.args, { req, context }, deps);
                     if (result?.confirmationRequired) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
@@ -669,7 +859,7 @@ function registerAiRoutes(app, deps) {
         try {
             const ai = deps.storage.getSettings().ai || {};
             if (!ai.enabled) return res.status(403).json({ error: 'AI 助理未启用' });
-            const result = await executeAiTool(String(req.body?.tool || ''), req.body?.args || {}, { req }, deps);
+            const result = await executeAiTool(String(req.body?.tool || ''), req.body?.args || {}, { req, context: req.body?.context || {} }, deps);
             res.json({ ok: true, result });
         } catch (err) { res.status(400).json({ error: publicError(err) }); }
     });
@@ -681,7 +871,7 @@ function registerAiRoutes(app, deps) {
         pendingActions.delete(req.params.id);
         if (req.body?.approve === false) return res.json({ ok: true, cancelled: true });
         try {
-            const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true }, deps);
+            const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true, context: item.context || {} }, deps);
             res.json({ ok: true, result });
         } catch (err) { res.status(400).json({ error: publicError(err) }); }
     });

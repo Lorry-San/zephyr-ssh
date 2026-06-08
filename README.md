@@ -37,7 +37,7 @@
 - 🧭 **代理与跳板路由**：支持 SOCKS5 / HTTP CONNECT 代理、SSH 跳板机和多级 SSH 跳板链路。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
 - 🧰 **远程运维能力**：支持远程状态监控、Docker 容器/镜像查看、日志查看、镜像拉取等 SSH 运维操作。
-- 🤖 **AI 助理智能体**：可在设置中启用独立 AI 助理入口，支持多模型供应商、自定义 API Base URL、模型参数、Skills、内置 Chromium 浏览器自动化、长期 Memory / 项目记忆、任务规划器、AI 专用加密环境变量、远程命令执行、远程文件读写、敏感操作确认和编辑器 AI 代码补全。
+- 🤖 **AI 助理智能体**：可在设置中启用独立 AI 助理入口，支持多模型供应商、自定义 API Base URL、模型参数、Skills、内置 Chromium 浏览器自动化与截图嵌入预览、按连接/项目/标签关联的长期 Memory、可暂停/继续/重试的任务规划器、AI 专用加密环境变量、远程命令执行、远程文件读写、敏感操作确认和编辑器 AI 代码补全。
 - 🖼️ **图片类文件预览**：文件管理器支持图片预览，前端使用 Viewer.js 负责缩放/拖动/全屏，后端 Preview API 对浏览器不支持的 HEIC/TIFF/PSD/RAW/DDS/HDR 等格式通过 Sharp 优先、ImageMagick 兜底转为 WebP。
 
 ### 安全与账号
@@ -189,9 +189,9 @@ Zephyr 内置可选 AI Agent 能力，默认关闭。登录后台后进入 **设
 - **多模型供应商**：支持 OpenAI 兼容接口、Anthropic Claude、Google Gemini；可配置自定义 API Base URL、API Key、模型列表、默认模型、额外请求头和常见模型参数（temperature、top_p、max_tokens、presence/frequency penalty、reasoning_effort、额外 JSON 参数等）。
 - **独立入口与浮窗**：启用后顶部导航会在“远程执行”和“设置”之间显示“AI 助理”，点击后打开类似 SSH 文件/监控面板的可拖拽、可缩放、可布局浮窗。
 - **工具权限**：可单独开关网页搜索、网页正文读取、内置 Chromium 浏览器自动化、远程执行、远程文件读取、远程文件写入、代码编辑/补全、长期 Memory 和 AI 环境变量。
-- **内置 Chromium 浏览器自动化**：Docker 运行镜像内置 `chromium`，AI 可通过 CDP 执行页面导航、截图、点击、输入、滚动和正文读取；截图通过 `/api/ai/browser/screenshots/...` 返回。
-- **长期 Memory / 项目记忆**：可在设置页维护项目约定、服务器规则、用户偏好，也可由 AI 通过 `memory_save` 工具写入、`memory_search` 工具检索。
-- **任务规划器**：AI 可用 `plan_task` 为复杂任务生成步骤、风险和状态，设置页会展示最近计划。
+- **内置 Chromium 浏览器自动化**：Docker 运行镜像内置 `chromium`，AI 可通过 CDP 执行页面导航、截图、点击、输入、滚动和正文读取；每次浏览器工具调用会返回 `/api/ai/browser/screenshots/...` 预览，AI 浮窗会把截图直接嵌入聊天流和顶部浏览器预览区。
+- **长期 Memory / 项目记忆**：可在设置页维护项目约定、服务器规则、用户偏好，也可由 AI 通过 `memory_save` 工具写入、`memory_search` 工具检索；Memory 支持按 SSH 连接 ID、项目/Scope、标签自动关联和排序，而不是只靠全文搜索。
+- **任务规划器**：AI 可用 `plan_task` 为复杂任务生成步骤、风险和状态，设置页会展示最近计划；后续可通过 `plan_update` 更新步骤状态、暂停/继续计划、标记失败并重试失败步骤。
 - **AI 专用环境变量**：可在设置页保存加密变量，AI 默认只看到变量名；读取值必须调用 `get_env_var`，并触发敏感操作确认或自动确认延迟。
 - **敏感操作确认**：远程执行、远程写文件、读取 AI 环境变量默认需要用户在 AI 浮窗内手动确认；也可在设置中开启自动确认并设置延迟。
 - **Skills**：可在设置页添加/启用多个 Skill，把工作流、角色设定、工具使用规则和专用提示词注入 AI 上下文。

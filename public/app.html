@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260608-ai-agent">
+    <link rel="stylesheet" href="style.css?v=20260608-ai-agent-v2">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -250,6 +250,7 @@
                             <form id="aiMemoryForm" class="settings-form ai-memory-form">
                                 <input type="hidden" id="aiMemoryId">
                                 <div class="form-row"><div class="form-group"><label>标题</label><input id="aiMemoryTitle" placeholder="例如：生产服务器约定"></div><div class="form-group"><label>Scope / Project</label><input id="aiMemoryScope" placeholder="global / zephyr-ssh / prod"></div></div>
+                                <div class="form-row"><div class="form-group"><label>关联连接 ID（逗号分隔）</label><input id="aiMemoryConnectionIds" placeholder="自动关联到指定 SSH 连接"></div><div class="form-group"><label>标签（逗号分隔）</label><input id="aiMemoryTags" placeholder="生产, 数据库, zephyr"></div></div>
                                 <textarea id="aiMemoryContent" rows="5" placeholder="需要长期记住的项目规则、服务器约定、用户偏好、排障结论..."></textarea>
                                 <label class="check-line"><input type="checkbox" id="aiMemoryItemEnabled" checked> 启用此 Memory</label>
                                 <div class="form-actions"><button class="btn btn-primary" type="submit">保存 Memory</button><button class="btn" type="button" id="aiMemoryResetBtn">清空</button></div>
@@ -300,12 +301,17 @@
                         <select id="aiProviderSelect" class="ui-select"></select>
                         <select id="aiModelSelect" class="ui-select"></select>
                         <select id="aiThinkIntensity" class="ui-select"><option value="fast">快速响应</option><option value="balanced" selected>标准思考</option><option value="deep">深度推理</option></select>
+                        <button class="ui-btn" type="button" id="aiBrowserPreviewToggleBtn">浏览器预览</button>
                         <button class="ui-btn" type="button" id="aiCompressChatBtn">压缩摘要</button>
                         <button class="ui-btn danger" type="button" id="aiClearChatBtn">清空</button>
                         <button class="ui-btn danger" type="button" id="aiClosePanelBtn">关闭</button>
                     </div>
                 </div>
                 <div class="ai-capability-strip" id="aiCapabilityStrip"></div>
+                <div class="ai-browser-preview" id="aiBrowserPreview" aria-live="polite">
+                    <div class="ai-browser-preview-head"><span id="aiBrowserPreviewTitle">Chromium 预览</span><button class="ui-btn" type="button" id="aiBrowserPreviewRefreshBtn">刷新截图</button></div>
+                    <div class="ai-browser-preview-body" id="aiBrowserPreviewBody"><span>AI 调用浏览器后，页面截图会自动嵌入这里。</span></div>
+                </div>
                 <div class="ai-chat-area" id="aiChatArea"><div class="ai-typing-indicator" id="aiTypingIndicator"><span></span><span></span><span></span></div></div>
                 <div class="ai-input-area">
                     <input type="file" id="aiFileUpload" style="display:none;" multiple>
@@ -380,6 +386,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260608-ai-agent" type="module"></script>
+    <script src="app.js?v=20260608-ai-agent-v2" type="module"></script>
 </body>
 </html>

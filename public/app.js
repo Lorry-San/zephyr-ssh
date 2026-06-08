@@ -9,6 +9,8 @@ let aiSpeechRecognition = null;
 let aiRecording = false;
 let aiPanelLayoutMenu = null;
 let aiPanelSuppressLayoutClick = false;
+let aiBrowserPreviewTimer = 0;
+let aiBrowserPreviewState = { session: 'default', preview: null, visible: true };
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
@@ -221,7 +223,14 @@ async function resetAppearance() {
     console.info('[appearance-client]', 'brand reset to defaults');
     toast('名称和图标已重置');
 }
-function renderMarkdown(md) { let s = escapeHtml(md); s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); return s.replace(/\n/g, '<br>'); }
+function renderMarkdown(md) {
+    let s = escapeHtml(md);
+    s = s.replace(/!\[([^\]]*)\]\((\/api\/ai\/browser\/screenshots\/[A-Za-z0-9_.%\-]+\.png)\)/g, '<img class="ai-inline-shot" src="$2" alt="$1">');
+    s = s.replace(/\[([^\]]+)\]\((\/api\/ai\/browser\/screenshots\/[A-Za-z0-9_.%\-]+\.png)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return s.replace(/\n/g, '<br>');
+}
+function splitCsv(value) { return String(value || '').split(/[\n,，]+/).map((x) => x.trim()).filter(Boolean); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
 function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
     const usingTotp = !!securityStatus.user?.totpEnabled;
@@ -844,7 +853,7 @@ async function openConnection(id) {
     } else {
         const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
-        terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+        terminalTabs.push({ id: tabId, name: c.name, protocol: c.protocol, status: 'connecting', iframe: true, page: 'terminal', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
     }
     openOrderStack.push(tabId);
     activeTerminalTab = tabId;
@@ -2660,6 +2669,8 @@ function resetAiMemoryForm() {
     $('#aiMemoryId').value = '';
     $('#aiMemoryTitle').value = '';
     $('#aiMemoryScope').value = '';
+    $('#aiMemoryConnectionIds').value = '';
+    $('#aiMemoryTags').value = '';
     $('#aiMemoryContent').value = '';
     $('#aiMemoryItemEnabled').checked = true;
 }
@@ -2667,13 +2678,31 @@ function renderAiMemoryList() {
     const list = $('#aiMemoryList');
     if (!list) return;
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    list.innerHTML = ai.memories.length ? ai.memories.slice(0, 80).map((m) => `<div class="ai-memory-item" data-memory-id="${escapeHtml(m.id)}"><div><strong>${escapeHtml(m.title || 'Memory')}</strong><span>${m.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(m.scope || 'global')} ${m.project ? '· ' + escapeHtml(m.project) : ''}</span><code>${escapeHtml((m.content || '').slice(0, 300))}</code></div><button class="tool-btn" data-ai-edit-memory="${escapeHtml(m.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-memory="${escapeHtml(m.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无长期 Memory。AI 也可通过 memory_save 工具主动记录项目记忆。</p>';
+    list.innerHTML = ai.memories.length ? ai.memories.slice(0, 80).map((m) => {
+        const tags = Array.isArray(m.tags) ? m.tags : splitCsv(m.tags);
+        const connIds = Array.isArray(m.connectionIds) ? m.connectionIds : splitCsv(m.connectionIds);
+        const meta = [m.enabled === false ? '已停用' : '已启用', m.scope || 'global', m.project || '', tags.length ? `标签:${tags.join(',')}` : '', connIds.length ? `连接:${connIds.length}` : ''].filter(Boolean).join(' · ');
+        return `<div class="ai-memory-item" data-memory-id="${escapeHtml(m.id)}"><div><strong>${escapeHtml(m.title || 'Memory')}</strong><span>${escapeHtml(meta)}</span><code>${escapeHtml((m.content || '').slice(0, 300))}</code></div><button class="tool-btn" data-ai-edit-memory="${escapeHtml(m.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-memory="${escapeHtml(m.id)}">删除</button></div>`;
+    }).join('') : '<p class="empty-state">暂无长期 Memory。AI 也可通过 memory_save 工具主动记录项目记忆，并按连接、项目、标签自动关联。</p>';
 }
 async function saveAiMemory(e) {
     e.preventDefault();
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
     const id = $('#aiMemoryId').value || `memory-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const item = { id, title: $('#aiMemoryTitle').value.trim() || 'Memory', scope: $('#aiMemoryScope').value.trim() || 'global', project: $('#aiMemoryScope').value.trim(), content: $('#aiMemoryContent').value, enabled: $('#aiMemoryItemEnabled').checked, createdAt: Date.now(), updatedAt: Date.now() };
+    const scope = $('#aiMemoryScope').value.trim() || 'global';
+    const item = {
+        id,
+        title: $('#aiMemoryTitle').value.trim() || 'Memory',
+        scope,
+        project: scope,
+        projects: scope && scope !== 'global' ? [scope] : [],
+        tags: splitCsv($('#aiMemoryTags').value),
+        connectionIds: splitCsv($('#aiMemoryConnectionIds').value),
+        content: $('#aiMemoryContent').value,
+        enabled: $('#aiMemoryItemEnabled').checked,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    };
     if (!item.content.trim()) return toast('请填写 Memory 内容');
     const old = ai.memories.find((x) => x.id === id);
     if (old) item.createdAt = old.createdAt || item.createdAt;
@@ -2693,7 +2722,11 @@ function renderAiPlanList() {
     const list = $('#aiPlanList');
     if (!list) return;
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    list.innerHTML = ai.plans.length ? ai.plans.slice(0, 30).map((plan) => `<div class="ai-plan-item"><div><strong>${escapeHtml(plan.title || '任务计划')}</strong><span>${escapeHtml(plan.status || 'planned')} · ${fmtTime(plan.createdAt)}</span>${plan.risk ? `<p>${escapeHtml(plan.risk)}</p>` : ''}<ol>${(plan.steps || []).map((s) => `<li><em>${escapeHtml(s.status || 'pending')}</em> ${escapeHtml(s.text || '')}</li>`).join('')}</ol></div></div>`).join('') : '<p class="empty-state">暂无任务计划。AI 可通过 plan_task 工具为复杂任务创建计划。</p>';
+    list.innerHTML = ai.plans.length ? ai.plans.slice(0, 30).map((plan) => {
+        const steps = Array.isArray(plan.steps) ? plan.steps : [];
+        const actions = `<div class="ai-plan-actions"><button class="tool-btn" data-ai-plan-pause="${escapeHtml(plan.id)}">暂停</button><button class="tool-btn" data-ai-plan-resume="${escapeHtml(plan.id)}">继续</button><button class="tool-btn" data-ai-plan-retry="${escapeHtml(plan.id)}">重试失败</button></div>`;
+        return `<div class="ai-plan-item" data-plan-id="${escapeHtml(plan.id)}"><div><strong>${escapeHtml(plan.title || '任务计划')}</strong><span><b class="ai-status ai-status-${escapeHtml(plan.status || 'planned')}">${escapeHtml(plan.status || 'planned')}</b> · ${fmtTime(plan.updatedAt || plan.createdAt)}</span>${plan.risk ? `<p>${escapeHtml(plan.risk)}</p>` : ''}<ol>${steps.map((s, index) => `<li><em class="ai-status ai-status-${escapeHtml(s.status || 'pending')}">${escapeHtml(s.status || 'pending')}</em> ${escapeHtml(s.text || '')}${s.note ? `<small>${escapeHtml(s.note)}</small>` : ''}${s.error ? `<small class="error-text">${escapeHtml(s.error)}</small>` : ''}<div class="ai-step-actions"><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="running">执行中</button><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="completed">完成</button><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="failed">失败</button></div></li>`).join('')}</ol>${actions}</div></div>`;
+    }).join('') : '<p class="empty-state">暂无任务计划。AI 可通过 plan_task 工具为复杂任务创建计划，并持续更新步骤状态。</p>';
 }
 
 function resetAiSkillForm() {
@@ -2757,6 +2790,7 @@ function renderAiChat() {
     if (!aiChatSessions.length) createAiChat({ silent: true });
     const session = aiCurrentSession();
     $('#aiCurrentChatTitle').textContent = session.title || 'Zephyr AI';
+    renderAiBrowserPreview();
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     area.querySelectorAll('.ai-message').forEach((el) => el.remove());
@@ -2789,6 +2823,97 @@ function aiIntensityOptions() {
     if (v === 'deep') return { temperature: 0.7, max_tokens: 8192, reasoning_effort: 'high' };
     return { temperature: 0.6, max_tokens: 4096 };
 }
+function uniq(list = []) { return Array.from(new Set(list.map((x) => String(x || '').trim()).filter(Boolean))); }
+function collectAiContext() {
+    const active = terminalTabs.find((t) => t.id === activeTerminalTab);
+    const ordered = [active, ...terminalTabs.filter((t) => t && t.id !== activeTerminalTab)].filter(Boolean);
+    const activeConnectionIds = uniq(ordered.map((t) => t.connectionId));
+    const contextConnections = activeConnectionIds.map((id) => connections.find((c) => String(c.id) === String(id))).filter(Boolean).map((c) => ({ id: c.id, name: c.name, protocol: c.protocol, host: c.host, port: c.port, username: c.username, tags: Array.isArray(c.tags) ? c.tags : splitCsv(c.tags), remark: c.remark || '' }));
+    const tags = uniq(contextConnections.flatMap((c) => c.tags || []));
+    const view = document.querySelector('.nav-tab.active')?.dataset.view || '';
+    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags };
+}
+function browserShotFromResult(result = {}) {
+    if (!result || typeof result !== 'object') return null;
+    if (result.preview?.url) return result.preview;
+    if (result.url && /\/api\/ai\/browser\/screenshots\//.test(result.url)) return result;
+    return null;
+}
+function updateAiBrowserPreviewFromToolResult(item = {}) {
+    if (!String(item.tool || '').startsWith('browser_')) return;
+    const shot = browserShotFromResult(item.result || {});
+    if (shot) {
+        aiBrowserPreviewState.preview = { ...shot, tool: item.tool, updatedAt: Date.now(), pageUrl: item.result?.url || item.result?.pageUrl || '' };
+        aiBrowserPreviewState.session = item.args?.session || item.result?.session || aiBrowserPreviewState.session || 'default';
+        aiBrowserPreviewState.visible = true;
+        renderAiBrowserPreview();
+    }
+}
+function renderAiBrowserPreview() {
+    const box = $('#aiBrowserPreview'), body = $('#aiBrowserPreviewBody'), title = $('#aiBrowserPreviewTitle'), toggle = $('#aiBrowserPreviewToggleBtn');
+    if (!box || !body) return;
+    box.classList.toggle('force-hidden', !aiBrowserPreviewState.visible);
+    if (toggle) toggle.textContent = aiBrowserPreviewState.visible ? '隐藏预览' : '浏览器预览';
+    const shot = aiBrowserPreviewState.preview;
+    if (!shot?.url) {
+        title && (title.textContent = 'Chromium 预览');
+        body.innerHTML = '<span>AI 调用浏览器后，页面截图会自动嵌入这里。</span>';
+        return;
+    }
+    title && (title.textContent = `${shot.tool || 'Chromium'} · ${aiBrowserPreviewState.session || 'default'} · ${new Date(shot.updatedAt || Date.now()).toLocaleTimeString()}`);
+    body.innerHTML = `<a href="${escapeHtml(shot.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(shot.url)}" alt="浏览器截图"></a>${shot.pageUrl ? `<small>${escapeHtml(shot.pageUrl)}</small>` : ''}`;
+}
+async function refreshAiBrowserPreview() {
+    if (aiBrowserPreviewTimer) return;
+    aiBrowserPreviewTimer = window.setTimeout(() => { aiBrowserPreviewTimer = 0; }, 800);
+    try {
+        const data = await api('/api/ai/tools/run', { method: 'POST', body: JSON.stringify({ tool: 'browser_screenshot', args: { session: aiBrowserPreviewState.session || 'default' }, context: collectAiContext() }) });
+        aiBrowserPreviewState.preview = { ...(data.result || {}), tool: 'browser_screenshot', updatedAt: Date.now() };
+        aiBrowserPreviewState.visible = true;
+        renderAiBrowserPreview();
+    } catch (err) { toast(err.message || '刷新浏览器截图失败'); }
+}
+function mergeAiPlan(plan) {
+    if (!plan?.id) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const idx = ai.plans.findIndex((p) => p.id === plan.id);
+    if (idx >= 0) ai.plans[idx] = plan; else ai.plans.unshift(plan);
+    settings.ai = ai; aiSettingsState = ai; renderAiPlanList();
+}
+function mergeAiMemory(memory) {
+    if (!memory?.id) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const idx = ai.memories.findIndex((m) => m.id === memory.id);
+    if (idx >= 0) ai.memories[idx] = memory; else ai.memories.unshift(memory);
+    settings.ai = ai; aiSettingsState = ai; renderAiMemoryList();
+}
+function syncAiToolSideEffects(toolResults = []) {
+    toolResults.forEach((r) => {
+        updateAiBrowserPreviewFromToolResult(r);
+        if (r.tool === 'plan_task' || r.tool === 'plan_update') mergeAiPlan(r.result?.plan);
+        if (r.tool === 'memory_save') mergeAiMemory(r.result?.memory);
+    });
+}
+function formatAiToolResult(r = {}) {
+    const result = r.result || {};
+    const shot = browserShotFromResult(result);
+    if (shot?.url) return `工具 ${r.tool} 已执行。\n![浏览器截图](${shot.url})${result.title ? `\n标题：${result.title}` : ''}${result.url && !/screenshots/.test(result.url) ? `\nURL：${result.url}` : ''}`;
+    if (r.tool === 'plan_task' || r.tool === 'plan_update') {
+        const p = result.plan || {};
+        return `计划 ${p.title || p.id || ''}：${p.status || 'planned'}\n${(p.steps || []).map((s, i) => `${i + 1}. [${s.status || 'pending'}] ${s.text || ''}${s.note ? ` — ${s.note}` : ''}${s.error ? ` — ${s.error}` : ''}`).join('\n')}`;
+    }
+    if (r.tool === 'memory_search') return `Memory 命中 ${(result.memories || []).length} 条：\n${(result.memories || []).slice(0, 6).map((m) => `- ${m.title || 'Memory'} · ${m.scope || 'global'}${m.tags?.length ? ` · #${m.tags.join(' #')}` : ''}`).join('\n')}`;
+    if (r.tool === 'memory_save') return `已保存 Memory：${result.memory?.title || ''}`;
+    if (r.tool === 'confirmed') return JSON.stringify(result, null, 2).slice(0, 1600);
+    return `工具 ${r.tool}: ${JSON.stringify(result).slice(0, 1200)}`;
+}
+async function updateAiPlan(planId, action = {}) {
+    try {
+        const data = await api('/api/ai/tools/run', { method: 'POST', body: JSON.stringify({ tool: 'plan_update', args: { planId, ...action }, context: collectAiContext() }) });
+        mergeAiPlan(data.result?.plan);
+        toast('计划已更新');
+    } catch (err) { toast(err.message || '计划更新失败'); }
+}
 async function sendAiMessage() {
     const input = $('#aiUserInput');
     const text = input.value.trim();
@@ -2799,8 +2924,12 @@ async function sendAiMessage() {
     setAiTyping(true);
     try {
         const session = aiCurrentSession();
-        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId: $('#aiProviderSelect').value, model: $('#aiModelSelect').value, options: aiIntensityOptions() }) });
-        if (data.toolResults?.length) appendAiMessage(data.toolResults.map((r) => `工具 ${r.tool}: ${JSON.stringify(r.result).slice(0, 1200)}`).join('\n'), 'system');
+        const context = collectAiContext();
+        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId: $('#aiProviderSelect').value, model: $('#aiModelSelect').value, options: aiIntensityOptions(), context }) });
+        if (data.toolResults?.length) {
+            syncAiToolSideEffects(data.toolResults);
+            appendAiMessage(data.toolResults.map(formatAiToolResult).join('\n\n'), 'system');
+        }
         if (data.confirmationRequired) {
             appendAiConfirmation(data.confirmation);
         } else {
@@ -2827,7 +2956,12 @@ async function resolveAiConfirmation(id, approve) {
     setAiTyping(true);
     try {
         const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ approve }) });
-        appendAiMessage(approve ? `已确认执行，结果：\n${JSON.stringify(data.result || {}, null, 2)}` : '已拒绝执行敏感操作。', 'system');
+        if (approve && data.result) {
+            syncAiToolSideEffects([{ tool: data.result?.plan ? 'plan_update' : '', result: data.result }]);
+            appendAiMessage(`已确认执行，结果：\n${formatAiToolResult({ tool: 'confirmed', result: data.result })}`, 'system');
+        } else {
+            appendAiMessage('已拒绝执行敏感操作。', 'system');
+        }
     } catch (err) { appendAiMessage(`确认处理失败：${err.message}`, 'system'); }
     finally { setAiTyping(false); }
 }
@@ -2843,7 +2977,7 @@ function openAiAssistantPanel() {
     }
     bringAiPanelToFront();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
-    renderAiHeaderSelectors(); renderAiChat();
+    renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
 }
 function closeAiAssistantPanel() { const p = $('#aiAgentPanel'); p.style.display = 'none'; p.setAttribute('aria-hidden', 'true'); }
 function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(650 + Math.floor(Date.now() % 100)); }
@@ -2909,7 +3043,14 @@ function setupAiAssistant() {
     $('#aiEnvList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditEnv, del = e.target.dataset.aiDeleteEnv; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.envVars.find((x) => x.id === edit); if (!item) return; $('#aiEnvId').value = item.id; $('#aiEnvName').value = item.name || ''; $('#aiEnvDescription').value = item.description || ''; $('#aiEnvValue').value = item.hasValue || item.value ? '******' : ''; $('#aiEnvEnabled').checked = item.enabled !== false; } if (del) deleteAiEnv(del); });
     $('#aiMemoryForm')?.addEventListener('submit', saveAiMemory);
     $('#aiMemoryResetBtn')?.addEventListener('click', resetAiMemoryForm);
-    $('#aiMemoryList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditMemory, del = e.target.dataset.aiDeleteMemory; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.memories.find((x) => x.id === edit); if (!item) return; $('#aiMemoryId').value = item.id; $('#aiMemoryTitle').value = item.title || ''; $('#aiMemoryScope').value = item.scope || item.project || ''; $('#aiMemoryContent').value = item.content || ''; $('#aiMemoryItemEnabled').checked = item.enabled !== false; } if (del) deleteAiMemory(del); });
+    $('#aiMemoryList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditMemory, del = e.target.dataset.aiDeleteMemory; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.memories.find((x) => x.id === edit); if (!item) return; $('#aiMemoryId').value = item.id; $('#aiMemoryTitle').value = item.title || ''; $('#aiMemoryScope').value = item.scope || item.project || ''; $('#aiMemoryConnectionIds').value = (Array.isArray(item.connectionIds) ? item.connectionIds : splitCsv(item.connectionIds)).join(', '); $('#aiMemoryTags').value = (Array.isArray(item.tags) ? item.tags : splitCsv(item.tags)).join(', '); $('#aiMemoryContent').value = item.content || ''; $('#aiMemoryItemEnabled').checked = item.enabled !== false; } if (del) deleteAiMemory(del); });
+    $('#aiPlanList')?.addEventListener('click', (e) => {
+        const pause = e.target.dataset.aiPlanPause, resume = e.target.dataset.aiPlanResume, retry = e.target.dataset.aiPlanRetry, stepPlan = e.target.dataset.aiPlanStep;
+        if (pause) updateAiPlan(pause, { pause: true, note: '用户在设置页暂停计划' });
+        if (resume) updateAiPlan(resume, { resume: true, note: '用户在设置页继续计划' });
+        if (retry) updateAiPlan(retry, { retryFailed: true, note: '用户在设置页重试失败步骤' });
+        if (stepPlan) updateAiPlan(stepPlan, { steps: [{ index: Number(e.target.dataset.stepIndex), status: e.target.dataset.stepStatus }] });
+    });
     $('#aiSkillForm')?.addEventListener('submit', saveAiSkill);
     $('#aiSkillResetBtn')?.addEventListener('click', resetAiSkillForm);
     $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
@@ -2923,6 +3064,8 @@ function setupAiAssistant() {
     $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = [{ role: 'system', content: '当前会话上下文已清理。' }]; renderAiChat(); });
     $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
     $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
+    $('#aiBrowserPreviewToggleBtn')?.addEventListener('click', () => { aiBrowserPreviewState.visible = !aiBrowserPreviewState.visible; renderAiBrowserPreview(); });
+    $('#aiBrowserPreviewRefreshBtn')?.addEventListener('click', refreshAiBrowserPreview);
     $('#aiRefreshStatusBtn')?.addEventListener('click', async () => { const r = await api('/api/ai/status'); settings.ai = normalizeAiSettings(r.ai || {}); renderAiSettingsForm(); toast('AI 配置已刷新'); });
     $('#aiChatArea')?.addEventListener('click', (e) => { const approve = e.target.dataset.aiConfirmApprove, deny = e.target.dataset.aiConfirmDeny; if (approve) resolveAiConfirmation(approve, true); if (deny) resolveAiConfirmation(deny, false); });
     $('#aiUploadBtn')?.addEventListener('click', () => $('#aiFileUpload').click());
