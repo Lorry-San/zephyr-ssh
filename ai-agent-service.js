@@ -42,11 +42,35 @@ function normalizeRole(role) {
     if (['system', 'user', 'assistant', 'tool'].includes(value)) return value;
     return 'user';
 }
-function sanitizeMessages(messages = []) {
-    return (Array.isArray(messages) ? messages : [])
-        .slice(-40)
-        .map((item) => ({ role: normalizeRole(item.role), content: clipText(item.content || '', 60000) }))
+function normalizeContextLimits(ai = {}, provider = {}) {
+    const global = ai.context || {};
+    const providerContext = provider.options?.context || {};
+    const raw = { ...global, ...providerContext };
+    const windowTokens = clampNumber(raw.windowTokens, 1024, 1000000, 128000);
+    return {
+        windowTokens,
+        keepMessages: clampNumber(raw.keepMessages, 4, 160, 40),
+        maxInputChars: clampNumber(raw.maxInputChars || Math.floor(windowTokens * 3.2), 8000, 1200000, 180000),
+        perMessageChars: clampNumber(raw.perMessageChars || Math.floor(windowTokens * 1.2), 1000, 300000, 60000),
+        toolResultChars: clampNumber(raw.toolResultChars, 1000, 240000, 60000),
+        memoryItems: clampNumber(raw.memoryItems, 0, 80, 28),
+    };
+}
+function sanitizeMessages(messages = [], limits = {}) {
+    const keepMessages = clampNumber(limits.keepMessages, 4, 160, 40);
+    const perMessageChars = clampNumber(limits.perMessageChars, 1000, 300000, 60000);
+    const maxInputChars = clampNumber(limits.maxInputChars, 8000, 1200000, 180000);
+    const raw = (Array.isArray(messages) ? messages : [])
+        .filter((item) => !['trace'].includes(String(item?.role || '').toLowerCase()))
+        .slice(-keepMessages)
+        .map((item) => ({ role: normalizeRole(item.role), content: clipText(item.content || '', perMessageChars) }))
         .filter((item) => item.content || item.role === 'assistant');
+    let total = raw.reduce((sum, item) => sum + String(item.content || '').length, 0);
+    while (raw.length > 2 && total > maxInputChars) {
+        const removed = raw.shift();
+        total -= String(removed?.content || '').length;
+    }
+    return raw;
 }
 function parseExtraObject(value) {
     if (!value) return {};
@@ -54,7 +78,7 @@ function parseExtraObject(value) {
     const parsed = safeJsonParse(value, {});
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
 }
-function normalizeOptions(provider = {}, requestOptions = {}) {
+function normalizeOptions(provider = {}, requestOptions = {}, mode = 'chat') {
     const raw = { ...(provider.options || {}), ...(requestOptions || {}) };
     const extra = parseExtraObject(raw.extraJson);
     const out = {};
@@ -63,13 +87,30 @@ function normalizeOptions(provider = {}, requestOptions = {}) {
     if (raw.max_tokens !== '' && raw.max_tokens !== undefined && raw.max_tokens !== null) out.max_tokens = Math.max(1, Number(raw.max_tokens) || 4096);
     if (raw.max_output_tokens !== '' && raw.max_output_tokens !== undefined && raw.max_output_tokens !== null) out.max_output_tokens = Math.max(1, Number(raw.max_output_tokens) || 4096);
     if (raw.reasoning_effort) out.reasoning_effort = String(raw.reasoning_effort);
+    if (raw.use_previous_response_id || raw.usePreviousResponseId) out.use_previous_response_id = true;
     if (raw.reasoning && typeof raw.reasoning === 'object') out.reasoning = raw.reasoning;
     if (raw.text && typeof raw.text === 'object') out.text = raw.text;
     if (raw.response_format) {
         const rf = parseExtraObject(raw.response_format);
         out.response_format = Object.keys(rf).length ? rf : { type: String(raw.response_format) };
     }
-    return { ...out, ...extra };
+    const merged = { ...out, ...extra };
+    const apiMode = String(mode || 'chat').toLowerCase();
+    ['context', 'windowTokens', 'maxInputChars', 'keepMessages', 'toolResultChars', 'memoryItems'].forEach((key) => delete merged[key]);
+    if (apiMode === 'responses') {
+        if (merged.max_tokens && !merged.max_output_tokens) merged.max_output_tokens = merged.max_tokens;
+        delete merged.max_tokens;
+        if (merged.reasoning_effort && !merged.reasoning) merged.reasoning = { effort: merged.reasoning_effort };
+        delete merged.reasoning_effort;
+        delete merged.response_format;
+    } else {
+        if (merged.max_output_tokens && !merged.max_tokens) merged.max_tokens = merged.max_output_tokens;
+        delete merged.max_output_tokens;
+        delete merged.text;
+        delete merged.reasoning;
+        delete merged.use_previous_response_id;
+    }
+    return merged;
 }
 function aiModelNames(provider = {}) {
     return String(provider.models || '').split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
@@ -79,7 +120,6 @@ function openAiApiMode(provider = {}) {
     const base = String(provider.baseUrl || '').toLowerCase();
     if (mode === 'responses' || /\/responses\/?$/.test(base)) return 'responses';
     if (mode === 'chat' || /\/chat\/completions\/?$/.test(base)) return 'chat';
-    if (/api\.openai\.com\/v1\/?$/.test(base) && /^gpt-[45]/i.test(String(provider._selectedModel || provider.defaultModel || provider.models || ''))) return 'responses';
     return 'chat';
 }
 function joinApiUrl(base, suffix) {
@@ -157,12 +197,12 @@ function mergeZephyrDefaultSkills(skills = []) {
     });
     return list;
 }
-function buildSystemPrompt(ai = {}, context = {}) {
+function buildSystemPrompt(ai = {}, context = {}, limits = {}) {
     const enabledSkills = mergeZephyrDefaultSkills(ai.skills).filter((s) => s?.enabled !== false && (s.prompt || s.description || s.name));
     const skillsText = enabledSkills.length
         ? `\n\n已启用 Skills：\n${enabledSkills.map((s, i) => `# Skill ${i + 1}: ${s.name || '未命名'}\n${s.description ? `说明：${s.description}\n` : ''}${s.prompt || ''}`).join('\n\n')}`
         : '';
-    const relatedMemories = ai.memory?.enabled !== false ? selectPromptMemories(ai, context, 28) : [];
+    const relatedMemories = ai.memory?.enabled !== false ? selectPromptMemories(ai, context, clampNumber(limits.memoryItems, 0, 80, 28)) : [];
     const memoryText = relatedMemories.length
         ? `\n\n长期 Memory / 项目记忆（已按当前连接、项目、标签自动关联；按需参考，不要泄露敏感信息）：\n${relatedMemories.map((m) => `- ${memoryLabel(m)}: ${m.content || ''}`).join('\n')}`
         : '';
@@ -185,7 +225,7 @@ function buildSystemPrompt(ai = {}, context = {}) {
 function toolDefinitions(ai = {}) {
     const p = ai.permissions || {};
     const tools = [];
-    tools.push({ type: 'function', function: { name: 'list_connections', description: '列出 Zephyr 中可用的 SSH 连接（不含密码/私钥）。', parameters: { type: 'object', properties: {}, additionalProperties: false } } });
+    tools.push({ type: 'function', function: { name: 'list_connections', description: '列出 Zephyr 中可用的 SSH/RDP/VNC 连接（不含密码/私钥）；只有 SSH 支持远程命令和文件工具。', parameters: { type: 'object', properties: {}, additionalProperties: false } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
@@ -206,13 +246,14 @@ function toolDefinitions(ai = {}) {
     }
     tools.push({ type: 'function', function: { name: 'plan_task', description: '创建执行计划，返回 planId；后续用 plan_update 更新步骤状态。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
     tools.push({ type: 'function', function: { name: 'plan_update', description: '更新任务计划：步骤状态、暂停/继续、失败重试、追加日志。', parameters: { type: 'object', properties: { planId: { type: 'string' }, status: { type: 'string', enum: ['planned', 'running', 'paused', 'completed', 'failed', 'cancelled'] }, pause: { type: 'boolean' }, resume: { type: 'boolean' }, retryFailed: { type: 'boolean' }, note: { type: 'string' }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, index: { type: 'number' }, status: { type: 'string', enum: ['pending', 'running', 'paused', 'completed', 'failed', 'skipped', 'retrying'] }, note: { type: 'string' }, error: { type: 'string' } } } } }, required: ['planId'] } } });
+    tools.push({ type: 'function', function: { name: 'plan_delete', description: '删除一个任务计划。', parameters: { type: 'object', properties: { planId: { type: 'string' } }, required: ['planId'] } } });
     if (p.remoteExecute !== false) tools.push({ type: 'function', function: { name: 'remote_execute', description: '在一个或多个 SSH 连接上执行 shell 命令。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionIds: { type: 'array', items: { type: 'string' } }, command: { type: 'string' }, timeoutSeconds: { type: 'number' } }, required: ['connectionIds', 'command'] } } });
     if (p.fileRead !== false) tools.push({ type: 'function', function: { name: 'remote_read_file', description: '读取远程 SSH 主机上的文本文件。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['connectionId', 'path'] } } });
     if (p.fileWrite !== false) tools.push({ type: 'function', function: { name: 'remote_write_file', description: '写入或追加远程 SSH 主机文件。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' }, encoding: { type: 'string', enum: ['utf8', 'base64'] }, append: { type: 'boolean' } }, required: ['connectionId', 'path', 'content'] } } });
     return tools;
 }
-function convertMessagesForProvider(messages = [], systemPrompt = '') {
-    const sanitized = sanitizeMessages(messages);
+function convertMessagesForProvider(messages = [], systemPrompt = '', limits = {}) {
+    const sanitized = sanitizeMessages(messages, limits);
     return [{ role: 'system', content: systemPrompt }, ...sanitized];
 }
 function normalizeOpenAiMessage(message = {}) {
@@ -309,12 +350,21 @@ function responseToolCalls(data = {}) {
     return out;
 }
 function toResponsesInput(messages = []) {
-    return messages.filter((m) => m.role !== 'system').map((m) => {
-        if (m.role === 'tool') return { type: 'function_call_output', call_id: m.tool_call_id || m.name || 'tool', output: String(m.content || '') };
-        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && !m.content) return null;
+    const out = [];
+    for (const m of messages.filter((item) => item.role !== 'system')) {
+        if (m.role === 'tool') {
+            out.push({ type: 'function_call_output', call_id: m.tool_call_id || m.name || 'tool', output: String(m.content || '') });
+            continue;
+        }
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+            if (m.content) out.push({ role: 'assistant', content: String(m.content || '') });
+            m.tool_calls.map(parseToolCall).filter((call) => call.name).forEach((call) => out.push({ type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify(call.args || {}) }));
+            continue;
+        }
         const role = m.role === 'assistant' ? 'assistant' : 'user';
-        return { role, content: String(m.content || '') };
-    }).filter(Boolean);
+        out.push({ role, content: String(m.content || '') });
+    }
+    return out;
 }
 function toResponsesTools(tools = []) {
     return tools.map((tool) => ({ type: 'function', name: tool.function?.name, description: tool.function?.description || '', parameters: tool.function?.parameters || { type: 'object', properties: {} } })).filter((tool) => tool.name);
@@ -322,7 +372,9 @@ function toResponsesTools(tools = []) {
 async function callOpenAiResponses(provider, model, messages, options = {}, tools = []) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/responses');
-    const opts = normalizeOptions(provider, options);
+    const opts = normalizeOptions(provider, options, 'responses');
+    const usePreviousResponseId = !!opts.use_previous_response_id;
+    delete opts.use_previous_response_id;
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     let previousResponseId = '';
     let startIndex = 0;
@@ -333,23 +385,31 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
             break;
         }
     }
-    const inputMessages = previousResponseId ? messages.slice(startIndex).filter((m) => m.role === 'tool') : messages;
+    const inputMessages = previousResponseId && usePreviousResponseId ? messages.slice(startIndex).filter((m) => m.role === 'tool') : messages;
     const payload = { model, input: toResponsesInput(inputMessages), ...opts };
-    if (previousResponseId) payload.previous_response_id = previousResponseId;
+    if (previousResponseId && usePreviousResponseId) payload.previous_response_id = previousResponseId;
     if (system) payload.instructions = system;
-    if (opts.max_tokens && !opts.max_output_tokens) { payload.max_output_tokens = opts.max_tokens; delete payload.max_tokens; }
-    else delete payload.max_tokens;
-    if (opts.reasoning_effort && !payload.reasoning) { payload.reasoning = { effort: opts.reasoning_effort }; delete payload.reasoning_effort; }
     const responseTools = toResponsesTools(tools);
     if (responseTools.length) { payload.tools = responseTools; payload.tool_choice = 'auto'; }
-    delete payload.response_format;
-    const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
+    const run = async (body) => fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(body) });
+    let data;
+    try {
+        data = await run(payload);
+    } catch (err) {
+        if (payload.previous_response_id && /previous_response_id/i.test(String(err.message || ''))) {
+            const retryPayload = { ...payload, input: toResponsesInput(messages) };
+            delete retryPayload.previous_response_id;
+            data = await run(retryPayload);
+        } else {
+            throw err;
+        }
+    }
     return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
 }
 async function callOpenAiCompatible(provider, model, messages, options = {}, tools = []) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
-    const payload = { model, messages, stream: false, ...normalizeOptions(provider, options) };
+    const payload = { model, messages, stream: false, ...normalizeOptions(provider, options, 'chat') };
     if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
     const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
@@ -361,7 +421,7 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     const base = provider.baseUrl || 'https://api.anthropic.com/v1';
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const normal = anthropicMessages(messages);
-    const opts = normalizeOptions(provider, options);
+    const opts = normalizeOptions(provider, options, 'chat');
     const payload = { model, system, messages: normal.length ? normal : [{ role: 'user', content: '你好' }], max_tokens: opts.max_tokens || 4096, temperature: opts.temperature, top_p: opts.top_p };
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
@@ -376,7 +436,7 @@ async function callGemini(provider, model, messages, options = {}, tools = []) {
     const keyParam = provider.apiKey ? `?key=${encodeURIComponent(provider.apiKey)}` : '';
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const contents = geminiContents(messages);
-    const opts = normalizeOptions(provider, options);
+    const opts = normalizeOptions(provider, options, 'chat');
     const generationConfig = { temperature: opts.temperature, topP: opts.top_p, maxOutputTokens: opts.max_tokens };
     Object.keys(generationConfig).forEach((k) => generationConfig[k] === undefined && delete generationConfig[k]);
     const body = { contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '你好' }] }], generationConfig };
@@ -430,8 +490,11 @@ async function fetchUrlText(url, maxChars = MAX_TOOL_TEXT) {
 function connectionSummary(conn) {
     return { id: conn.id, name: conn.name, protocol: conn.protocol, host: conn.host, port: conn.port, username: conn.username, tags: conn.tags || [], remark: conn.remark || '', lastConnectedAt: conn.lastConnectedAt || null };
 }
+function getAllConnections(deps) {
+    return (deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] }).connections || []);
+}
 function getSshConnections(deps) {
-    return (deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] }).connections || []).filter((c) => String(c.protocol || '').toUpperCase() === 'SSH');
+    return getAllConnections(deps).filter((c) => String(c.protocol || '').toUpperCase() === 'SSH');
 }
 function aiEnvList(ai = {}) {
     return (Array.isArray(ai.envVars) ? ai.envVars : []).filter((item) => item?.enabled !== false && item.name);
@@ -478,7 +541,7 @@ function formatAiContextForPrompt(context = {}) {
     if (c.activeChatTitle) lines.push(`当前 AI 对话：${c.activeChatTitle}`);
     if (c.projects.length) lines.push(`关联项目：${c.projects.join(', ')}`);
     if (c.tags.length) lines.push(`关联标签：${c.tags.join(', ')}`);
-    if (c.connections.length) lines.push(`当前连接上下文：${c.connections.slice(0, 12).map((x) => `${x.name || x.id}(${x.username || '-'}@${x.host || '-'})${Array.isArray(x.tags) && x.tags.length ? `[${x.tags.join(',')}]` : ''}`).join('; ')}`);
+    if (c.connections.length) lines.push(`当前连接上下文：${c.connections.slice(0, 12).map((x) => `${x.protocol || 'SSH'}:${x.name || x.id}(${x.username || '-'}@${x.host || '-'})${Array.isArray(x.tags) && x.tags.length ? `[${x.tags.join(',')}]` : ''}`).join('; ')}`);
     if (!lines.length) return '';
     return `\n当前 Zephyr 上下文（用于选择连接、项目和 Memory）：\n${lines.map((x) => `- ${x}`).join('\n')}`;
 }
@@ -621,7 +684,7 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
     const p = ai.permissions || {};
     switch (toolName) {
         case 'list_connections':
-            return { connections: getSshConnections(deps).map(connectionSummary) };
+            return { connections: getAllConnections(deps).map(connectionSummary) };
         case 'web_search':
             if (p.webSearch === false) throw new Error('网页搜索权限未开启');
             return { results: await duckDuckGoSearch(String(args.query || ''), clampNumber(args.maxResults, 1, 10, 6)) };
@@ -739,6 +802,13 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             deps.storage.updateSettings({ ai: { plans } });
             return { plan };
         }
+        case 'plan_delete': {
+            const planId = String(args.planId || '').trim();
+            if (!planId) throw new Error('planId 不能为空');
+            const plans = (Array.isArray(ai.plans) ? ai.plans : []).filter((plan) => plan.id !== planId);
+            deps.storage.updateSettings({ ai: { plans } });
+            return { deleted: true, planId, plans };
+        }
         case 'remote_execute':
             if (p.remoteExecute === false) throw new Error('远程执行权限未开启');
             return maybeRequireConfirmation(toolName, args, ctx, async () => {
@@ -747,6 +817,7 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
                 const command = String(args.command || '').trim();
                 if (!command) throw new Error('命令不能为空');
                 const targets = getSshConnections(deps).filter((c) => ids.includes(c.id));
+                if (!targets.length) throw new Error('远程执行仅支持 SSH 连接；RDP/VNC 只能作为资产上下文或通过连接入口打开');
                 const results = await Promise.all(targets.map((conn) => deps.runRemoteCommand(conn, command, clampNumber(args.timeoutSeconds, 1, 300, 30))));
                 deps.addActivity?.(`AI 助理远程执行：${targets.length} 台服务器，命令 ${command.slice(0, 40)}`);
                 return { results };
@@ -779,9 +850,10 @@ function parseToolCall(call = {}) {
     const fn = call.function || {};
     return { id: call.id || crypto.randomUUID(), name: fn.name || call.name || '', args: safeJsonParse(fn.arguments || call.arguments || '{}', {}) || {} };
 }
-function toolResultMessage(call, result, mode = 'chat') {
-    if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), 30000) };
-    return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), 30000) };
+function toolResultMessage(call, result, mode = 'chat', limits = {}) {
+    const max = clampNumber(limits.toolResultChars, 1000, 240000, 60000);
+    if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), max) };
+    return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), max) };
 }
 async function completeWithProvider(ai, body) {
     const { provider, model } = selectProvider(ai, body);
@@ -806,6 +878,14 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     next.defaultModel = String(pick('defaultModel', currentAi.defaultModel) || '').slice(0, 160);
     next.systemPrompt = String(pick('systemPrompt', currentAi.systemPrompt) || '').slice(0, 20000);
     next.defaultSystemPrompt = String(pick('defaultSystemPrompt', currentAi.defaultSystemPrompt || DEFAULT_ZEPHYR_SYSTEM_PROMPT) || DEFAULT_ZEPHYR_SYSTEM_PROMPT).slice(0, 40000);
+    const contextIn = { ...(currentAi.context || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'context') ? (partial.context || {}) : {}) };
+    next.context = {
+        windowTokens: clampNumber(contextIn.windowTokens, 1024, 1000000, 128000),
+        maxInputChars: clampNumber(contextIn.maxInputChars, 8000, 1200000, 180000),
+        keepMessages: clampNumber(contextIn.keepMessages, 4, 160, 40),
+        toolResultChars: clampNumber(contextIn.toolResultChars, 1000, 240000, 60000),
+        memoryItems: clampNumber(contextIn.memoryItems, 0, 80, 28),
+    };
     next.guidanceVersion = Math.max(1, Number(pick('guidanceVersion', currentAi.guidanceVersion) || 1));
     next.codeCompletionEnabled = pick('codeCompletionEnabled', currentAi.codeCompletionEnabled) !== false;
     const sensitiveIn = { ...(currentAi.sensitive || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'sensitive') ? (partial.sensitive || {}) : {}) };
@@ -852,10 +932,18 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
                     temperature: p.options?.temperature ?? old.options?.temperature ?? 0.7,
                     top_p: p.options?.top_p ?? old.options?.top_p ?? 1,
                     max_tokens: p.options?.max_tokens ?? old.options?.max_tokens ?? 4096,
+                    max_output_tokens: p.options?.max_output_tokens ?? old.options?.max_output_tokens ?? p.options?.max_tokens ?? old.options?.max_tokens ?? 4096,
                     presence_penalty: p.options?.presence_penalty ?? old.options?.presence_penalty ?? 0,
                     frequency_penalty: p.options?.frequency_penalty ?? old.options?.frequency_penalty ?? 0,
                     reasoning_effort: String(p.options?.reasoning_effort ?? old.options?.reasoning_effort ?? ''),
                     response_format: String(p.options?.response_format ?? old.options?.response_format ?? ''),
+                    use_previous_response_id: !!(p.options?.use_previous_response_id ?? old.options?.use_previous_response_id ?? false),
+                    context: {
+                        windowTokens: clampNumber(p.options?.context?.windowTokens ?? old.options?.context?.windowTokens ?? next.context.windowTokens, 1024, 1000000, next.context.windowTokens),
+                        maxInputChars: clampNumber(p.options?.context?.maxInputChars ?? old.options?.context?.maxInputChars ?? next.context.maxInputChars, 8000, 1200000, next.context.maxInputChars),
+                        keepMessages: clampNumber(p.options?.context?.keepMessages ?? old.options?.context?.keepMessages ?? next.context.keepMessages, 4, 160, next.context.keepMessages),
+                        toolResultChars: clampNumber(p.options?.context?.toolResultChars ?? old.options?.context?.toolResultChars ?? next.context.toolResultChars, 1000, 240000, next.context.toolResultChars),
+                    },
                     extraJson: String(p.options?.extraJson ?? old.options?.extraJson ?? '').slice(0, 12000),
                 },
             };
@@ -965,7 +1053,8 @@ function registerAiRoutes(app, deps) {
             if (!ai.enabled) return res.status(403).json({ error: 'AI 助理未启用，请先到设置中开启' });
             const { provider, model } = selectProvider(ai, req.body || {});
             const context = normalizeAiContext(req.body?.context || {});
-            const baseMessages = convertMessagesForProvider(req.body?.messages || [], buildSystemPrompt(ai, context));
+            const limits = normalizeContextLimits(ai, provider);
+            const baseMessages = convertMessagesForProvider(req.body?.messages || [], buildSystemPrompt(ai, context, limits), limits);
             const tools = providerSupportsTools(provider) ? toolDefinitions(ai) : [];
             let messages = baseMessages;
             const toolResults = [];
@@ -978,12 +1067,14 @@ function registerAiRoutes(app, deps) {
                 }
                 messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '' }];
                 for (const call of calls) {
+                    const startedAt = Date.now();
                     const result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider) }, deps);
+                    const endedAt = Date.now();
                     if (result?.confirmationRequired) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
-                    toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result });
-                    messages.push(toolResultMessage(call, result, openAiApiMode(provider)));
+                    toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
+                    messages.push(toolResultMessage(call, result, openAiApiMode(provider), limits));
                 }
             }
             res.json({ ok: true, message: { role: 'assistant', content: '已达到工具调用轮次上限，请根据上方工具结果继续。' }, toolResults });
@@ -991,6 +1082,19 @@ function registerAiRoutes(app, deps) {
             console.error('[ai-agent] chat failed:', err);
             res.status(400).json({ error: publicError(err) });
         }
+    });
+
+    app.post('/api/ai/providers/:id/open', deps.requireAuth, async (req, res) => {
+        try {
+            if (typeof deps.verifySensitiveAccess !== 'function') return res.status(403).json({ error: '敏感信息验证不可用' });
+            const auth = deps.verifySensitiveAccess(req, req.body?.secret);
+            const ai = deps.storage.getSettings().ai || {};
+            const provider = (Array.isArray(ai.providers) ? ai.providers : []).find((p) => p.id === req.params.id);
+            if (!provider) return res.status(404).json({ error: '模型供应商不存在' });
+            deps.addActivity?.(`查看 AI Provider API Key：${provider.name || provider.id}`);
+            console.info('[ai-secret-open] reveal provider api key', { providerId: provider.id, name: provider.name, hasApiKey: !!provider.apiKey, authMethod: auth.method });
+            res.json({ providerId: provider.id, apiKey: provider.apiKey || '', hasApiKey: !!provider.apiKey });
+        } catch (err) { res.status(403).json({ error: publicError(err) }); }
     });
 
     app.post('/api/ai/tools/run', deps.requireAuth, async (req, res) => {
@@ -1009,8 +1113,10 @@ function registerAiRoutes(app, deps) {
         pendingActions.delete(req.params.id);
         if (req.body?.approve === false) return res.json({ ok: true, cancelled: true });
         try {
+            const startedAt = Date.now();
             const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true, context: item.context || {} }, deps);
-            res.json({ ok: true, toolName: item.toolName, args: publicToolArgs(item.toolName, item.rawArgs || item.args || {}), result });
+            const endedAt = Date.now();
+            res.json({ ok: true, toolName: item.toolName, args: publicToolArgs(item.toolName, item.rawArgs || item.args || {}), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
         } catch (err) { res.status(400).json({ error: publicError(err) }); }
     });
 

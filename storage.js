@@ -200,6 +200,7 @@ function defaultSettings(legacySettings = {}) {
             defaultSystemPrompt: DEFAULT_ZEPHYR_SYSTEM_PROMPT,
             guidanceVersion: DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION,
             codeCompletionEnabled: true,
+            context: { windowTokens: 128000, maxInputChars: 180000, keepMessages: 40, toolResultChars: 60000, memoryItems: 28 },
             sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
             permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
             planner: { enabled: true, requirePlanBeforeTools: false },

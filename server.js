@@ -1732,6 +1732,7 @@ registerAiRoutes(app, {
     createRoutedSSHConnection,
     runRemoteCommand,
     addActivity,
+    verifySensitiveAccess,
 });
 
 app.get('/api/public/settings', (req, res) => {

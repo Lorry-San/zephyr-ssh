@@ -15,6 +15,9 @@ let aiAutoTitleTimer = 0;
 let aiSidebarCollapsedBySize = false;
 let aiPendingConfirmations = new Map();
 let aiBrowserPreviewState = { session: 'default', preview: null, visible: false };
+let aiPanelState = 'closed';
+let aiPanelCloseTimer = 0;
+let aiPanelWatchdogTimer = 0;
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
@@ -233,6 +236,7 @@ async function resetAppearance() {
     console.info('[appearance-client]', 'brand reset to defaults');
     toast('名称和图标已重置');
 }
+function safeJsonParseClient(value, fallback = null) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return fallback; } }
 function renderMarkdown(md) {
     let s = escapeHtml(md);
     s = s.replace(/!\[([^\]]*)\]\((\/api\/ai\/browser\/screenshots\/[A-Za-z0-9_.%\-]+\.png)\)/g, '<img class="ai-inline-shot" src="$2" alt="$1">');
@@ -2421,6 +2425,7 @@ function defaultAiSettings() {
         defaultSystemPrompt: DEFAULT_AI_GUIDANCE_TEXT,
         guidanceVersion: 1,
         codeCompletionEnabled: true,
+        context: { windowTokens: 128000, maxInputChars: 180000, keepMessages: 40, toolResultChars: 60000, memoryItems: 28 },
         sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
         permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
         planner: { enabled: true, requirePlanBeforeTools: false },
@@ -2441,6 +2446,7 @@ function normalizeAiSettings(ai = {}) {
         permissions: { ...base.permissions, ...(ai.permissions || {}) },
         planner: { ...base.planner, ...(ai.planner || {}) },
         memory: { ...base.memory, ...(ai.memory || {}) },
+        context: { ...base.context, ...(ai.context || {}) },
         providers: Array.isArray(ai.providers) ? ai.providers : [],
         skills: Array.isArray(ai.skills) ? ai.skills : [],
         envVars: Array.isArray(ai.envVars) ? ai.envVars : [],
@@ -2490,21 +2496,8 @@ function renderAiHeaderSelectors() {
     renderAiCapabilityStrip();
 }
 function renderAiCapabilityStrip() {
-    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    const caps = [];
-    if (ai.permissions.webSearch) caps.push('网页搜索');
-    if (ai.permissions.webFetch) caps.push('网页读取');
-    if (ai.permissions.browser) caps.push('浏览器');
-    if (ai.permissions.remoteExecute) caps.push('远程执行');
-    if (ai.permissions.fileRead) caps.push('读文件');
-    if (ai.permissions.fileWrite) caps.push('写文件');
-    if (ai.permissions.memory && ai.memory?.enabled !== false) caps.push('记忆');
-    if (ai.permissions.env) caps.push('环境变量');
-    if (ai.planner?.enabled !== false) caps.push('任务规划');
-    if (ai.permissions.codeEdit && ai.codeCompletionEnabled) caps.push('代码补全');
-    const enabledSkills = (ai.skills || []).filter((s) => s.enabled !== false).length;
-    if (enabledSkills) caps.push(`${enabledSkills} 个 Skill`);
-    $('#aiCapabilityStrip') && ($('#aiCapabilityStrip').innerHTML = caps.map((c) => `<span>${escapeHtml(c)}</span>`).join('') || '<span>未启用能力</span>');
+    const strip = $('#aiCapabilityStrip');
+    if (strip) strip.innerHTML = '';
 }
 function renderAiSettingsForm() {
     const ai = normalizeAiSettings(settings.ai || {});
@@ -2514,6 +2507,10 @@ function renderAiSettingsForm() {
     $('#aiDefaultModel').value = ai.defaultModel || '';
     $('#aiSystemPrompt').value = ai.systemPrompt || '';
     $('#aiCodeCompletionEnabled').checked = ai.codeCompletionEnabled !== false;
+    if ($('#aiContextWindowTokens')) $('#aiContextWindowTokens').value = ai.context?.windowTokens ?? 128000;
+    if ($('#aiContextMaxInputChars')) $('#aiContextMaxInputChars').value = ai.context?.maxInputChars ?? 180000;
+    if ($('#aiContextKeepMessages')) $('#aiContextKeepMessages').value = ai.context?.keepMessages ?? 40;
+    if ($('#aiContextToolResultChars')) $('#aiContextToolResultChars').value = ai.context?.toolResultChars ?? 60000;
     $('#aiRequireConfirmation').checked = ai.sensitive?.requireConfirmation !== false;
     $('#aiAutoConfirm').checked = !!ai.sensitive?.autoConfirm;
     $('#aiAutoConfirmDelayMs').value = ai.sensitive?.autoConfirmDelayMs ?? 2500;
@@ -2549,6 +2546,13 @@ function collectAiSettingsForm() {
         defaultModel: $('#aiDefaultModel').value.trim(),
         systemPrompt: $('#aiSystemPrompt').value,
         codeCompletionEnabled: $('#aiCodeCompletionEnabled').checked,
+        context: {
+            windowTokens: Number($('#aiContextWindowTokens')?.value) || 128000,
+            maxInputChars: Number($('#aiContextMaxInputChars')?.value) || 180000,
+            keepMessages: Number($('#aiContextKeepMessages')?.value) || 40,
+            toolResultChars: Number($('#aiContextToolResultChars')?.value) || 60000,
+            memoryItems: old.context?.memoryItems ?? 28,
+        },
         sensitive: { requireConfirmation: $('#aiRequireConfirmation').checked, autoConfirm: $('#aiAutoConfirm').checked, autoConfirmDelayMs: Number($('#aiAutoConfirmDelayMs').value) || 0 },
         permissions: {
             webSearch: $('#aiPermWebSearch').checked,
@@ -2588,7 +2592,9 @@ function openAiProviderModal(provider = null) {
     $('#aiProviderExtraHeaders').value = provider?.extraHeaders || '';
     $('#aiProviderTemperature').value = provider?.options?.temperature ?? 0.7;
     $('#aiProviderTopP').value = provider?.options?.top_p ?? 1;
-    $('#aiProviderMaxTokens').value = provider?.options?.max_tokens ?? 4096;
+    $('#aiProviderMaxTokens').value = provider?.options?.max_tokens ?? provider?.options?.max_output_tokens ?? 4096;
+    if ($('#aiProviderContextWindow')) $('#aiProviderContextWindow').value = provider?.options?.context?.windowTokens ?? '';
+    if ($('#aiProviderUsePreviousResponse')) $('#aiProviderUsePreviousResponse').checked = !!provider?.options?.use_previous_response_id;
     $('#aiProviderReasoningEffort').value = provider?.options?.reasoning_effort || '';
     $('#aiProviderPresencePenalty').value = provider?.options?.presence_penalty ?? 0;
     $('#aiProviderFrequencyPenalty').value = provider?.options?.frequency_penalty ?? 0;
@@ -2623,7 +2629,10 @@ async function saveAiProvider(e) {
             temperature: Number($('#aiProviderTemperature').value),
             top_p: Number($('#aiProviderTopP').value),
             max_tokens: Number($('#aiProviderMaxTokens').value) || 4096,
+            max_output_tokens: Number($('#aiProviderMaxTokens').value) || 4096,
             reasoning_effort: $('#aiProviderReasoningEffort').value,
+            use_previous_response_id: !!$('#aiProviderUsePreviousResponse')?.checked,
+            context: { windowTokens: Number($('#aiProviderContextWindow')?.value) || undefined },
             presence_penalty: Number($('#aiProviderPresencePenalty').value) || 0,
             frequency_penalty: Number($('#aiProviderFrequencyPenalty').value) || 0,
             extraJson: $('#aiProviderExtraJson').value.trim(),
@@ -2655,7 +2664,7 @@ function renderAiProviderList() {
     list.innerHTML = ai.providers.length ? ai.providers.map((p) => {
         const models = aiModelNames(p);
         const modelText = p.defaultModel || models[0] || (p.modelsPending ? '可点击获取模型' : '未获取模型');
-        return `<div class="ai-provider-item" data-provider-id="${escapeHtml(p.id)}"><div><strong>${escapeHtml(p.name || '未命名供应商')}</strong><span>${escapeHtml(p.type || 'openai-compatible')} · ${escapeHtml(p.apiMode || 'auto')} · ${p.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(modelText)}</span><code>${escapeHtml(p.baseUrl || '默认 API 地址')}</code></div><button class="tool-btn" data-ai-fetch-provider-models="${escapeHtml(p.id)}">获取模型</button><button class="tool-btn" data-ai-edit-provider="${escapeHtml(p.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-provider="${escapeHtml(p.id)}">删除</button></div>`;
+        return `<div class="ai-provider-item" data-provider-id="${escapeHtml(p.id)}"><div><strong>${escapeHtml(p.name || '未命名供应商')}</strong><span>${escapeHtml(p.type || 'openai-compatible')} · ${escapeHtml(p.apiMode || 'auto')} · ${p.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(modelText)}</span><code>${escapeHtml(p.baseUrl || '默认 API 地址')}</code></div><button class="tool-btn" data-ai-fetch-provider-models="${escapeHtml(p.id)}">获取模型</button><button class="tool-btn" data-ai-reveal-provider-key="${escapeHtml(p.id)}">查看 Key</button><button class="tool-btn" data-ai-edit-provider="${escapeHtml(p.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-provider="${escapeHtml(p.id)}">删除</button></div>`;
     }).join('') : '<p class="empty-state">暂无模型供应商。支持 OpenAI Chat/Responses API、OpenAI 兼容、Anthropic、Gemini，以及自定义 API 地址。</p>';
 }
 async function fetchAiModelsForProvider(id = '') {
@@ -2797,7 +2806,7 @@ function renderAiPlanList() {
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
     list.innerHTML = ai.plans.length ? ai.plans.slice(0, 30).map((plan) => {
         const steps = Array.isArray(plan.steps) ? plan.steps : [];
-        const actions = `<div class="ai-plan-actions"><button class="tool-btn" data-ai-plan-pause="${escapeHtml(plan.id)}">暂停</button><button class="tool-btn" data-ai-plan-resume="${escapeHtml(plan.id)}">继续</button><button class="tool-btn" data-ai-plan-retry="${escapeHtml(plan.id)}">重试失败</button></div>`;
+        const actions = `<div class="ai-plan-actions"><button class="tool-btn" data-ai-plan-pause="${escapeHtml(plan.id)}">暂停</button><button class="tool-btn" data-ai-plan-resume="${escapeHtml(plan.id)}">继续</button><button class="tool-btn" data-ai-plan-retry="${escapeHtml(plan.id)}">重试失败</button><button class="tool-btn danger" data-ai-plan-delete="${escapeHtml(plan.id)}">删除</button></div>`;
         return `<div class="ai-plan-item" data-plan-id="${escapeHtml(plan.id)}"><div><strong>${escapeHtml(plan.title || '任务计划')}</strong><span><b class="ai-status ai-status-${escapeHtml(plan.status || 'planned')}">${escapeHtml(plan.status || 'planned')}</b> · ${fmtTime(plan.updatedAt || plan.createdAt)}</span>${plan.risk ? `<p>${escapeHtml(plan.risk)}</p>` : ''}<ol>${steps.map((s, index) => `<li><em class="ai-status ai-status-${escapeHtml(s.status || 'pending')}">${escapeHtml(s.status || 'pending')}</em> ${escapeHtml(s.text || '')}${s.note ? `<small>${escapeHtml(s.note)}</small>` : ''}${s.error ? `<small class="error-text">${escapeHtml(s.error)}</small>` : ''}<div class="ai-step-actions"><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="running">执行中</button><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="completed">完成</button><button data-ai-plan-step="${escapeHtml(plan.id)}" data-step-index="${index + 1}" data-step-status="failed">失败</button></div></li>`).join('')}</ol>${actions}</div></div>`;
     }).join('') : '<p class="empty-state">暂无任务计划。AI 可通过 plan_task 工具为复杂任务创建计划，并持续更新步骤状态。</p>';
 }
@@ -2872,27 +2881,25 @@ function renderAiChat() {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     area.querySelectorAll('.ai-message').forEach((el) => el.remove());
-    session.messages.forEach((m) => appendAiMessage(m.content, m.role, { store: false }));
+    session.messages.forEach((m) => appendAiMessage(m.content, m.role, { store: false, rawHtml: m.role === 'trace' }));
     area.appendChild(typing);
     renderAiChatList();
     scrollAiChat();
 }
-function appendAiMessage(text, role = 'assistant', { store = true, meta = '' } = {}) {
+function appendAiMessage(text, role = 'assistant', { store = true, meta = '', rawHtml = false } = {}) {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     if (!area || !typing) return;
     const div = document.createElement('div');
-    div.className = `ai-message ${role === 'user' ? 'user' : role === 'system' ? 'system' : 'ai'}`;
-    div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${renderMarkdown(String(text || ''))}`;
+    div.className = `ai-message ${role === 'user' ? 'user' : (role === 'system' || role === 'trace') ? 'system' : 'ai'}`;
+    div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${rawHtml ? String(text || '') : renderMarkdown(String(text || ''))}`;
     area.insertBefore(div, typing);
-    if (role === 'system' && !div.classList.contains('ai-confirm-card')) {
-        div.classList.add('system-collapsed');
-        div.addEventListener('click', (event) => { if (!event.target.closest('button,a,input,select,textarea')) div.classList.toggle('system-expanded'); });
-        div.title = '点击展开/收起工具详情';
+    if ((role === 'system' || role === 'trace') && div.querySelector('.ai-tool-trace')) {
+        div.classList.add('ai-trace-message');
     }
     if (store) {
         const session = aiCurrentSession();
-        session.messages.push({ role: role === 'ai' ? 'assistant' : role, content: String(text || '') });
+        session.messages.push({ role: rawHtml ? 'trace' : (role === 'ai' ? 'assistant' : role), content: String(text || '') });
         if (role === 'user' && (!session.title || session.title === '新对话' || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
         saveAiChats();
     }
@@ -2912,19 +2919,21 @@ function updateAiPanelResponsiveState() {
     if (!panel) return;
     const rect = panel.getBoundingClientRect?.();
     const width = Math.max(220, rect?.width || panel.offsetWidth || 0);
-    const compact = window.innerWidth <= 760 || width < 680;
-    const narrow = width < 560;
+    const isMobile = window.innerWidth <= 760;
+    const compact = isMobile || width < 680;
+    const narrow = !isMobile && width < 560;
     panel.classList.toggle('ai-compact', compact);
     panel.classList.toggle('ai-narrow', narrow);
+    if (isMobile) { aiSidebarCollapsedBySize = false; panel.classList.remove('sidebar-collapsed'); return; }
     if (narrow && !aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = true; panel.classList.add('sidebar-collapsed'); }
     if (!narrow && aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = false; panel.classList.remove('sidebar-collapsed'); }
 }
 function setAiTyping(show) { $('#aiTypingIndicator')?.classList.toggle('show', !!show); scrollAiChat(); }
 function aiIntensityOptions() {
     const v = $('#aiThinkIntensity')?.value || 'balanced';
-    if (v === 'fast') return { temperature: 0.3, max_tokens: 2048 };
-    if (v === 'deep') return { temperature: 0.7, max_tokens: 8192, reasoning_effort: 'high' };
-    return { temperature: 0.6, max_tokens: 4096 };
+    if (v === 'fast') return { temperature: 0.3 };
+    if (v === 'deep') return { temperature: 0.7, reasoning_effort: 'high' };
+    return { temperature: 0.6 };
 }
 function uniq(list = []) { return Array.from(new Set(list.map((x) => String(x || '').trim()).filter(Boolean))); }
 function collectAiContext() {
@@ -2997,18 +3006,71 @@ function syncAiToolSideEffects(toolResults = []) {
         if (r.tool === 'memory_save') mergeAiMemory(r.result?.memory);
     });
 }
+function maskAiSensitive(value, tool = '') {
+    const sensitiveKeys = /api[_-]?key|password|passwd|private[_-]?key|passphrase|secret|token|authorization|cookie/i;
+    const walk = (item, key = '') => {
+        if (item === null || item === undefined) return item;
+        if (typeof item !== 'object') {
+            if (sensitiveKeys.test(key) || (tool === 'get_env_var' && key === 'value')) return item ? '******' : item;
+            return item;
+        }
+        if (Array.isArray(item)) return item.map((x) => walk(x, key));
+        return Object.fromEntries(Object.entries(item).map(([k, v]) => [k, sensitiveKeys.test(k) || (tool === 'get_env_var' && k === 'value') ? (v ? '******' : v) : walk(v, k)]));
+    };
+    return walk(value);
+}
+function summarizeAiToolResult(tool, result = {}) {
+    if (tool === 'list_connections') {
+        const list = result.connections || [];
+        const byProto = list.reduce((acc, c) => { acc[c.protocol || 'SSH'] = (acc[c.protocol || 'SSH'] || 0) + 1; return acc; }, {});
+        return `发现 ${list.length} 个连接：${Object.entries(byProto).map(([k, v]) => `${k} ${v}`).join('、') || '无'}`;
+    }
+    if (tool === 'remote_execute') return `远程命令完成，目标 ${(result.results || []).length} 台`;
+    if (tool === 'remote_read_file') return `读取 ${result.path || '文件'}，${result.size || 0} bytes`;
+    if (tool === 'remote_write_file') return `写入 ${result.path || '文件'}，${result.bytes || 0} bytes`;
+    if (tool === 'web_search') return `搜索返回 ${(result.results || []).length} 条结果`;
+    if (tool === 'fetch_url') return `读取网页 ${result.url || ''}`;
+    if (tool === 'memory_search') return `Memory 命中 ${(result.memories || []).length} 条`;
+    if (tool === 'memory_save') return `已保存 Memory：${result.memory?.title || ''}`;
+    if (tool === 'plan_task' || tool === 'plan_update') return `计划 ${result.plan?.title || result.plan?.id || ''}：${result.plan?.status || 'planned'}`;
+    if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
+    if (String(tool || '').startsWith('browser_')) return result.title || result.url || '浏览器操作完成';
+    return '执行完成';
+}
 function formatAiToolResult(r = {}) {
     const result = r.result || {};
+    const detail = JSON.stringify(maskAiSensitive({ args: r.args || {}, result }, r.tool), null, 2);
     const shot = browserShotFromResult(result);
-    if (shot?.url) return `工具 ${r.tool} 已执行。\n![浏览器截图](${shot.url})${result.title ? `\n标题：${result.title}` : ''}${result.url && !/screenshots/.test(result.url) ? `\nURL：${result.url}` : ''}`;
-    if (r.tool === 'plan_task' || r.tool === 'plan_update') {
-        const p = result.plan || {};
-        return `计划 ${p.title || p.id || ''}：${p.status || 'planned'}\n${(p.steps || []).map((s, i) => `${i + 1}. [${s.status || 'pending'}] ${s.text || ''}${s.note ? ` — ${s.note}` : ''}${s.error ? ` — ${s.error}` : ''}`).join('\n')}`;
-    }
-    if (r.tool === 'memory_search') return `Memory 命中 ${(result.memories || []).length} 条：\n${(result.memories || []).slice(0, 6).map((m) => `- ${m.title || 'Memory'} · ${m.scope || 'global'}${m.tags?.length ? ` · #${m.tags.join(' #')}` : ''}`).join('\n')}`;
-    if (r.tool === 'memory_save') return `已保存 Memory：${result.memory?.title || ''}`;
-    if (r.tool === 'confirmed') return JSON.stringify(result, null, 2).slice(0, 1600);
-    return `工具 ${r.tool}: ${JSON.stringify(result).slice(0, 1200)}`;
+    const titleMap = {
+        list_connections: '列出连接', web_search: '网页搜索', fetch_url: '网页读取', browser_navigate: '浏览器打开', browser_screenshot: '浏览器截图', browser_click: '浏览器点击', browser_type: '浏览器输入', browser_scroll: '浏览器滚动', browser_text: '读取浏览器文本', memory_search: '搜索 Memory', memory_save: '保存 Memory', plan_task: '创建计划', plan_update: '更新计划', plan_delete: '删除计划', remote_execute: '远程执行', remote_read_file: '读取远程文件', remote_write_file: '写入远程文件', confirmed: '敏感操作结果'
+    };
+    const title = titleMap[r.tool] || `工具 ${r.tool || 'unknown'}`;
+    const duration = Number.isFinite(Number(r.durationMs)) ? `${(Number(r.durationMs) / 1000).toFixed(1)}s` : '';
+    return `<div class="ai-tool-trace" data-tool="${escapeHtml(r.tool || '')}">
+        <div class="ai-tool-trace-head"><span class="ai-tool-icon">${String(r.tool || '').startsWith('remote_') ? '▣' : String(r.tool || '').startsWith('browser_') ? '◉' : '◇'}</span><strong>${escapeHtml(title)}</strong>${duration ? `<em>${escapeHtml(duration)}</em>` : ''}</div>
+        <div class="ai-tool-summary">${escapeHtml(summarizeAiToolResult(r.tool, result))}</div>
+        ${shot?.url ? `<a href="${escapeHtml(shot.url)}" target="_blank" rel="noopener"><img class="ai-inline-shot" src="${escapeHtml(shot.url)}" alt="浏览器截图"></a>` : ''}
+        <details class="ai-tool-details"><summary>查看完整参数和结果</summary><pre><code>${escapeHtml(detail)}</code></pre></details>
+    </div>`;
+}
+async function deleteAiPlan(planId) {
+    if (!planId || !confirm('删除这个任务计划？')) return;
+    try {
+        const data = await api('/api/ai/tools/run', { method: 'POST', body: JSON.stringify({ tool: 'plan_delete', args: { planId }, context: collectAiContext() }) });
+        const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+        ai.plans = (ai.plans || []).filter((p) => p.id !== planId);
+        settings.ai = ai; aiSettingsState = ai; renderAiPlanList();
+        toast(data.result?.deleted ? '计划已删除' : '计划删除完成');
+    } catch (err) { toast(err.message || '计划删除失败'); }
+}
+async function revealAiProviderKey(id) {
+    const secret = requestSensitiveSecret('查看已保存 AI API Key');
+    const data = await api(`/api/ai/providers/${encodeURIComponent(id)}/open`, { method: 'POST', body: JSON.stringify({ secret }) });
+    const provider = normalizeAiSettings(settings.ai || aiSettingsState || {}).providers.find((p) => p.id === id);
+    if (provider) openAiProviderModal(provider);
+    $('#aiProviderApiKey').value = data.apiKey || '';
+    $('#aiProviderApiKey').type = 'text';
+    toast(data.hasApiKey ? '已载入保存的 API Key' : '当前未保存 API Key');
 }
 async function updateAiPlan(planId, action = {}) {
     try {
@@ -3035,7 +3097,7 @@ async function sendAiMessage() {
         const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
             syncAiToolSideEffects(data.toolResults);
-            appendAiMessage(data.toolResults.map(formatAiToolResult).join('\n\n'), 'system');
+            appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
         }
         if (data.confirmationRequired) {
             appendAiConfirmation(data.confirmation, { messages: session.messages.slice(), providerId, model, options, context });
@@ -3082,7 +3144,7 @@ async function continueAiAfterConfirmation(id, approve, data) {
     try {
         setAiTyping(true);
         const next = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
-        if (next.toolResults?.length) { syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join('\n\n'), 'system'); }
+        if (next.toolResults?.length) { syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
         if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
     } catch (err) { appendAiMessage(`继续处理失败：${err.message}`, 'system'); }
@@ -3107,7 +3169,7 @@ async function resolveAiConfirmation(id, approve) {
         const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ approve }) });
         if (approve && data.result) {
             syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
-            appendAiMessage(`已确认执行，结果：\n${formatAiToolResult({ tool: 'confirmed', result: data.result })}`, 'system');
+            appendAiMessage(formatAiToolResult({ tool: 'confirmed', result: data.result, args: data.args || {}, durationMs: data.durationMs }), 'trace', { rawHtml: true });
             await continueAiAfterConfirmation(id, true, data);
         } else {
             aiPendingConfirmations.delete(id);
@@ -3117,19 +3179,44 @@ async function resolveAiConfirmation(id, approve) {
     finally { setAiTyping(false); }
 }
 function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
+function startAiPanelWatchdog() {
+    window.clearInterval(aiPanelWatchdogTimer);
+    aiPanelWatchdogTimer = window.setInterval(() => {
+        const p = $('#aiAgentPanel');
+        if (!p || aiPanelState !== 'open') return;
+        const rect = p.getBoundingClientRect();
+        const bad = p.style.display === 'none' || p.getAttribute('aria-hidden') === 'true' || rect.width < 120 || rect.height < 160 || getComputedStyle(p).opacity === '0';
+        if (bad) {
+            p.style.display = 'flex';
+            p.style.opacity = '1';
+            p.style.transform = 'none';
+            p.style.filter = 'none';
+            p.classList.remove('panel-opening', 'panel-closing');
+            p.setAttribute('aria-hidden', 'false');
+            clampAiPanel(p);
+        }
+    }, 1200);
+}
+function stopAiPanelWatchdog() { window.clearInterval(aiPanelWatchdogTimer); aiPanelWatchdogTimer = 0; }
 function openAiAssistantPanel(trigger = null) {
     const ai = normalizeAiSettings(settings.ai || {});
     if (!ai.enabled) { toast('请先在设置中启用 AI 助理'); return; }
     const panel = $('#aiAgentPanel');
-    const wasHidden = panel.style.display === 'none' || panel.getAttribute('aria-hidden') === 'true';
+    const wasHidden = panel.style.display === 'none' || panel.getAttribute('aria-hidden') === 'true' || aiPanelState === 'closed';
+    window.clearTimeout(aiPanelCloseTimer);
+    aiPanelState = 'opening';
     panel.style.display = 'flex';
+    panel.style.opacity = '1';
+    panel.style.transform = 'none';
+    panel.style.filter = 'none';
+    panel.classList.remove('panel-closing');
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     $('#aiFloatingBtn')?.classList.add('active');
     if (!panel.dataset.positioned) {
         const compact = window.innerWidth <= 760;
         const width = compact ? Math.max(320, window.innerWidth - 12) : Math.min(980, window.innerWidth - 40);
-        const height = compact ? Math.max(520, window.innerHeight - 12) : Math.min(780, window.innerHeight - 80);
+        const height = compact ? Math.max(460, (window.visualViewport?.height || window.innerHeight) - 12) : Math.min(780, window.innerHeight - 80);
         panel.style.left = compact ? '6px' : `${Math.max(16, (window.innerWidth - width) / 2)}px`;
         panel.style.top = compact ? '6px' : '52px';
         panel.style.width = `${width}px`;
@@ -3140,18 +3227,32 @@ function openAiAssistantPanel(trigger = null) {
     updateAiPanelResponsiveState();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
     renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
-    if (wasHidden) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
-    setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
+    if (wasHidden && window.innerWidth > 760) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
+    aiPanelState = 'open';
+    startAiPanelWatchdog();
+    if (window.innerWidth > 760) setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
 }
 function closeAiAssistantPanel() {
     const p = $('#aiAgentPanel');
     if (!p || p.style.display === 'none') return;
     closeAiPanelLayoutMenu({ instant: true });
-    animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
-    p.classList.remove('open');
+    window.clearTimeout(aiPanelCloseTimer);
+    aiPanelState = 'closing';
+    p.classList.remove('open', 'panel-opening');
     p.setAttribute('aria-hidden', 'true');
     $('#aiFloatingBtn')?.classList.remove('active');
-    window.setTimeout(() => { if (p.getAttribute('aria-hidden') === 'true') { p.style.display = 'none'; p.classList.remove('panel-opening', 'panel-closing'); } }, 280);
+    if (window.innerWidth > 760) animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
+    aiPanelCloseTimer = window.setTimeout(() => {
+        if (aiPanelState === 'closing') {
+            p.style.display = 'none';
+            p.style.opacity = '';
+            p.style.transform = '';
+            p.style.filter = '';
+            p.classList.remove('panel-opening', 'panel-closing');
+            aiPanelState = 'closed';
+            stopAiPanelWatchdog();
+        }
+    }, window.innerWidth > 760 ? 280 : 60);
 }
 function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(10080 + Math.floor(Date.now() % 40)); p.style.setProperty('--panel-z', p.style.zIndex); }
 function applyAiPanelLayout(layout) {
@@ -3308,27 +3409,52 @@ function setupAiPanelChrome() {
         e.stopPropagation();
         bringAiPanelToFront();
         layoutBtn.classList.add('pressing');
-        layoutBtn.setPointerCapture?.(e.pointerId);
-        const startX = e.clientX, startY = e.clientY, startLeft = panel.offsetLeft, startTop = panel.offsetTop;
-        let moved = false;
-        const move = (ev) => {
-            ev.preventDefault();
-            const dx = ev.clientX - startX, dy = ev.clientY - startY;
-            if (!moved && Math.hypot(dx, dy) > 7) { moved = true; closeAiPanelLayoutMenu({ instant: true }); panel.classList.add('dragging'); }
-            if (!moved) return;
-            panel.style.left = `${startLeft + dx}px`; panel.style.top = `${startTop + dy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel);
-        };
-        const up = () => { panel.classList.remove('dragging'); layoutBtn.classList.remove('pressing'); aiPanelSuppressLayoutClick = moved; updateAiPanelResponsiveState(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
-        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true }); window.addEventListener('pointercancel', up, { once: true });
+        const up = () => { layoutBtn.classList.remove('pressing'); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+        window.addEventListener('pointerup', up, { once: true });
+        window.addEventListener('pointercancel', up, { once: true });
     });
-    panel?.querySelector('.panel-titlebar')?.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button,input,select,textarea,label')) return;
-        e.preventDefault(); bringAiPanelToFront(); panel.classList.add('dragging');
+    const startAiPanelDrag = (e, { allowButtons = false } = {}) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        const interactive = e.target.closest('input,select,textarea,label,a');
+        if (interactive) return;
+        if (!allowButtons && e.target.closest('button')) return;
+        bringAiPanelToFront();
         const sx = e.clientX, sy = e.clientY, sl = panel.offsetLeft, st = panel.offsetTop;
-        const move = (ev) => { ev.preventDefault(); panel.style.left = `${sl + ev.clientX - sx}px`; panel.style.top = `${st + ev.clientY - sy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel); };
-        const up = () => { panel.classList.remove('dragging'); updateAiPanelResponsiveState(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
-    });
+        let dragging = false, raf = 0, lastX = sx, lastY = sy;
+        const commit = () => {
+            raf = 0;
+            panel.style.left = `${sl + lastX - sx}px`;
+            panel.style.top = `${st + lastY - sy}px`;
+            panel.style.right = 'auto'; panel.style.bottom = 'auto';
+            clampAiPanel(panel);
+        };
+        const move = (ev) => {
+            lastX = ev.clientX; lastY = ev.clientY;
+            const dist = Math.hypot(lastX - sx, lastY - sy);
+            if (!dragging && dist > (window.innerWidth <= 760 ? 12 : 6)) { dragging = true; panel.classList.add('dragging'); panel._suppressHeaderClick = true; }
+            if (!dragging) return;
+            ev.preventDefault();
+            if (!raf) raf = requestAnimationFrame(commit);
+        };
+        const up = () => {
+            if (raf) cancelAnimationFrame(raf);
+            if (dragging) commit();
+            panel.classList.remove('dragging'); updateAiPanelResponsiveState();
+            window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
+        };
+        window.addEventListener('pointermove', move, { passive: false });
+        window.addEventListener('pointerup', up, { once: true });
+        window.addEventListener('pointercancel', up, { once: true });
+    };
+    panel?.querySelector('.panel-drag-handle')?.addEventListener('pointerdown', (e) => startAiPanelDrag(e, { allowButtons: false }));
+    panel?.querySelector('.panel-titlebar')?.addEventListener('pointerdown', (e) => startAiPanelDrag(e, { allowButtons: true }));
+    panel?.querySelector('.panel-titlebar')?.addEventListener('click', (e) => {
+        if (!panel._suppressHeaderClick) return;
+        e.preventDefault();
+        e.stopPropagation();
+        panel._suppressHeaderClick = false;
+        console.debug('[ai-panel]', 'header click suppressed after drag');
+    }, true);
     panel?.querySelectorAll('[data-ai-agent-resize]').forEach((h) => h.addEventListener('pointerdown', (e) => {
         e.preventDefault(); bringAiPanelToFront(); panel.classList.add('resizing'); h.setPointerCapture?.(e.pointerId);
         const sx = e.clientX, sy = e.clientY, sw = panel.offsetWidth, sh = panel.offsetHeight, sl = panel.offsetLeft, edge = h.dataset.aiAgentResize;
@@ -3394,7 +3520,7 @@ function setupAiAssistant() {
     $('#aiProviderApiMode')?.addEventListener('change', updateAiProviderModalHints);
     $('#aiProviderCloseBtn')?.addEventListener('click', closeAiProviderModal);
     $('#aiProviderCancelBtn')?.addEventListener('click', closeAiProviderModal);
-    $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider, fetchModels = e.target.dataset.aiFetchProviderModels; const ai = normalizeAiSettings(settings.ai || {}); if (fetchModels) fetchAiModelsForProvider(fetchModels); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
+    $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider, fetchModels = e.target.dataset.aiFetchProviderModels, reveal = e.target.dataset.aiRevealProviderKey; const ai = normalizeAiSettings(settings.ai || {}); if (fetchModels) fetchAiModelsForProvider(fetchModels); if (reveal) revealAiProviderKey(reveal).catch((err) => toast(err.message || '读取 API Key 失败')); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
     $('#aiEnvForm')?.addEventListener('submit', saveAiEnv);
     $('#aiEnvResetBtn')?.addEventListener('click', resetAiEnvForm);
     $('#toggleAiEnvValue')?.addEventListener('click', () => { const el = $('#aiEnvValue'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleAiEnvValue').textContent = el.type === 'password' ? '👁️' : '🙈'; });
@@ -3403,10 +3529,11 @@ function setupAiAssistant() {
     $('#aiMemoryResetBtn')?.addEventListener('click', resetAiMemoryForm);
     $('#aiMemoryList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditMemory, del = e.target.dataset.aiDeleteMemory; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.memories.find((x) => x.id === edit); if (!item) return; $('#aiMemoryId').value = item.id; $('#aiMemoryTitle').value = item.title || ''; $('#aiMemoryScope').value = item.scope || item.project || ''; $('#aiMemoryConnectionIds').value = (Array.isArray(item.connectionIds) ? item.connectionIds : splitCsv(item.connectionIds)).join(', '); $('#aiMemoryTags').value = (Array.isArray(item.tags) ? item.tags : splitCsv(item.tags)).join(', '); $('#aiMemoryContent').value = item.content || ''; $('#aiMemoryItemEnabled').checked = item.enabled !== false; } if (del) deleteAiMemory(del); });
     $('#aiPlanList')?.addEventListener('click', (e) => {
-        const pause = e.target.dataset.aiPlanPause, resume = e.target.dataset.aiPlanResume, retry = e.target.dataset.aiPlanRetry, stepPlan = e.target.dataset.aiPlanStep;
+        const pause = e.target.dataset.aiPlanPause, resume = e.target.dataset.aiPlanResume, retry = e.target.dataset.aiPlanRetry, delPlan = e.target.dataset.aiPlanDelete, stepPlan = e.target.dataset.aiPlanStep;
         if (pause) updateAiPlan(pause, { pause: true, note: '用户在设置页暂停计划' });
         if (resume) updateAiPlan(resume, { resume: true, note: '用户在设置页继续计划' });
         if (retry) updateAiPlan(retry, { retryFailed: true, note: '用户在设置页重试失败步骤' });
+        if (delPlan) deleteAiPlan(delPlan);
         if (stepPlan) updateAiPlan(stepPlan, { steps: [{ index: Number(e.target.dataset.stepIndex), status: e.target.dataset.stepStatus }] });
     });
     $('#aiSkillForm')?.addEventListener('submit', saveAiSkill);
@@ -3431,7 +3558,9 @@ function setupAiAssistant() {
     $('#aiUploadBtn')?.addEventListener('click', () => $('#aiFileUpload').click());
     $('#aiFileUpload')?.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (!files.length) return; appendAiFiles(files).catch((err) => toast(err.message || '附件读取失败')).finally(() => { e.target.value = ''; }); });
     $('#aiVoiceBtn')?.addEventListener('click', toggleAiVoice);
-    window.addEventListener('resize', updateAiPanelResponsiveState);
+    window.addEventListener('resize', () => { updateAiPanelResponsiveState(); if (aiPanelState === 'open') startAiPanelWatchdog(); });
+    window.visualViewport?.addEventListener('resize', () => { updateAiPanelResponsiveState(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && aiPanelState === 'open') startAiPanelWatchdog(); });
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
