@@ -863,10 +863,10 @@ async function openConnection(id) {
     const data = await api(`/api/connections/${id}/open`, { method: 'POST' }); const c = data.connection;
     const protocol = String(c.protocol || 'SSH').toUpperCase();
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    if (['RDP', 'VNC'].includes(protocol)) {
+    if (protocol === 'RDP' || protocol === 'VNC') {
         sessionStorage.setItem(`zephyr_guac_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
-        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: 'guacamole', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
-        console.debug('[guac-client]', 'open guacamole tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
+        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: protocol === 'VNC' ? 'novnc' : 'guacamole', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+        console.debug(protocol === 'VNC' ? '[novnc-client]' : '[guac-client]', 'open remote desktop tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {
         const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
@@ -1360,7 +1360,9 @@ function createTerminalWindowElement(t) {
         frame.dataset.frame = t.id;
         frame.src = t.page === 'guacamole'
             ? `/guacamole.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
-            : `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
+            : t.page === 'novnc'
+                ? `/novnc.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
+                : `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
         frame.allow = 'fullscreen; virtual-keyboard; clipboard-read; clipboard-write';
         body.appendChild(frame);
     } else {

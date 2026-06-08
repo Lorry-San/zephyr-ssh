@@ -7977,3 +7977,336 @@ body.app-body:not(.terminal-mode) .app-main {
 @media (prefers-reduced-motion: reduce) {
     .ai-send-btn.ai-stop-mode { animation: none !important; }
 }
+
+
+/* ===== noVNC 重绘界面 ===== */
+.novnc-page {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: var(--visual-vh, var(--stable-vh, 100vh));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    color: var(--text);
+    background:
+        radial-gradient(circle at 12% -10%, rgba(88,166,255,.22), transparent 34%),
+        radial-gradient(circle at 92% 0%, rgba(240,136,62,.16), transparent 32%),
+        linear-gradient(135deg, #070b12 0%, #0b111c 46%, #05070b 100%);
+}
+.novnc-page::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+    background-size: 34px 34px;
+    mask-image: radial-gradient(circle at 50% 20%, #000 0%, transparent 72%);
+}
+.novnc-topbar {
+    position: relative;
+    z-index: 8;
+    display: grid;
+    grid-template-columns: minmax(210px, auto) minmax(180px, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    margin: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
+    padding: 10px;
+    border: 1px solid rgba(139,148,158,.28);
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--surface) 72%, rgba(8,12,20,.72));
+    box-shadow: 0 24px 80px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.12);
+    backdrop-filter: blur(28px) saturate(1.55);
+    -webkit-backdrop-filter: blur(28px) saturate(1.55);
+}
+.novnc-identity,
+.novnc-status-card,
+.novnc-toolbar { display: flex; align-items: center; min-width: 0; }
+.novnc-identity { gap: 10px; }
+.novnc-orb {
+    width: 42px;
+    height: 42px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, rgba(88,166,255,.95), rgba(120,86,255,.82));
+    box-shadow: 0 16px 38px rgba(88,166,255,.28), inset 0 1px 0 rgba(255,255,255,.3);
+}
+.novnc-orb span {
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.92);
+    box-shadow: inset 0 0 0 5px rgba(255,255,255,.16);
+}
+.novnc-title-group { display: grid; gap: 2px; min-width: 0; }
+.novnc-title-group strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.novnc-eyebrow { color: var(--text-secondary); font-size: 10px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.novnc-status-card {
+    justify-self: stretch;
+    gap: 8px;
+    padding: 9px 12px;
+    border: 1px solid rgba(139,148,158,.22);
+    border-radius: 17px;
+    background: rgba(255,255,255,.04);
+    min-height: 42px;
+}
+.novnc-status-card em {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-style: normal;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.novnc-status-card.connected { border-color: rgba(63,185,80,.36); background: rgba(63,185,80,.08); }
+.novnc-status-card.error { border-color: rgba(248,81,73,.42); background: rgba(248,81,73,.08); }
+.novnc-toolbar {
+    justify-content: flex-end;
+    gap: 7px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+.novnc-toolbar::-webkit-scrollbar { display: none; }
+.novnc-tool,
+.novnc-icon-btn,
+.novnc-primary,
+.novnc-secondary,
+.novnc-panel-close,
+.novnc-shortcut-grid button {
+    border: 1px solid rgba(139,148,158,.28);
+    color: var(--text);
+    background: rgba(255,255,255,.055);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+    cursor: pointer;
+    transition: transform .2s var(--ios-bounce), border-color .2s ease, background .2s ease, box-shadow .2s ease;
+}
+.novnc-tool:hover,
+.novnc-icon-btn:hover,
+.novnc-secondary:hover,
+.novnc-shortcut-grid button:hover { transform: translateY(-1px); border-color: rgba(88,166,255,.44); background: rgba(88,166,255,.12); }
+.novnc-tool:active,
+.novnc-icon-btn:active,
+.novnc-primary:active,
+.novnc-secondary:active,
+.novnc-shortcut-grid button:active { transform: scale(.94); }
+.novnc-tool {
+    min-width: 66px;
+    height: 42px;
+    padding: 6px 10px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    gap: 1px;
+}
+.novnc-tool span { color: var(--text-secondary); font-size: 10px; font-weight: 800; }
+.novnc-tool strong { font-size: 12px; }
+.novnc-icon-btn {
+    min-width: 42px;
+    height: 42px;
+    padding: 0 10px;
+    border-radius: 15px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+.novnc-icon-btn.active { border-color: rgba(88,166,255,.55); background: rgba(88,166,255,.18); color: var(--accent); }
+.novnc-icon-btn.danger { color: #ffb4ad; }
+.novnc-icon-btn.danger:hover { border-color: rgba(248,81,73,.55); background: rgba(248,81,73,.14); }
+.novnc-stage {
+    position: relative;
+    z-index: 1;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 10px;
+    border: 1px solid rgba(139,148,158,.2);
+    border-radius: 28px;
+    overflow: hidden;
+    outline: none;
+    background:
+        radial-gradient(circle at 50% 50%, rgba(88,166,255,.08), transparent 42%),
+        rgba(0,0,0,.26);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 30px 90px rgba(0,0,0,.32);
+}
+.novnc-screen-shell {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: #04070c;
+}
+.novnc-screen-bg {
+    position: absolute;
+    inset: 0;
+    opacity: .78;
+    background:
+        linear-gradient(45deg, rgba(255,255,255,.035) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255,255,255,.035) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255,255,255,.035) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.035) 75%);
+    background-color: #05070a;
+    background-size: 30px 30px;
+    background-position: 0 0, 0 15px, 15px -15px, -15px 0;
+}
+.novnc-screen {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    min-width: 1px;
+    min-height: 1px;
+    display: block;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 26px 70px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.06);
+}
+.novnc-screen > div {
+    width: 100% !important;
+    height: 100% !important;
+    background: transparent !important;
+}
+.novnc-screen canvas { outline: none; image-rendering: auto; }
+.novnc-screen-shell.fit-mode .novnc-screen { max-width: 100%; max-height: 100%; }
+.novnc-screen-shell.drag-mode { cursor: grab; }
+.novnc-screen-shell.drag-mode:active { cursor: grabbing; }
+.novnc-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+    background: radial-gradient(circle at 50% 40%, rgba(14,18,28,.76), rgba(4,7,12,.92));
+    transition: opacity .26s ease, visibility .26s ease;
+}
+.novnc-overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.novnc-overlay strong { font-size: 18px; }
+.novnc-overlay span { max-width: 440px; color: var(--text-secondary); line-height: 1.55; }
+.novnc-loader { display: flex; gap: 7px; }
+.novnc-loader i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 18px rgba(88,166,255,.8);
+    animation: novncLoader 1s ease-in-out infinite;
+}
+.novnc-loader i:nth-child(2) { animation-delay: .12s; }
+.novnc-loader i:nth-child(3) { animation-delay: .24s; }
+@keyframes novncLoader { 0%, 100% { transform: translateY(0); opacity: .4; } 50% { transform: translateY(-8px); opacity: 1; } }
+.novnc-mobile-input {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    z-index: 3;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: .01;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    resize: none;
+    pointer-events: none;
+}
+.novnc-panel {
+    position: absolute;
+    z-index: 35;
+    right: 18px;
+    top: 18px;
+    width: min(430px, calc(100% - 36px));
+    max-height: calc(100% - 36px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid rgba(139,148,158,.34);
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--surface) 82%, rgba(8,12,20,.78));
+    box-shadow: 0 34px 110px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.12);
+    backdrop-filter: blur(28px) saturate(1.55);
+    -webkit-backdrop-filter: blur(28px) saturate(1.55);
+    overflow: auto;
+    transform: translate3d(0, 10px, 0) scale(.98);
+    opacity: 0;
+    transition: opacity .22s ease, transform .28s var(--ios-open);
+}
+.novnc-panel[hidden] { display: none !important; }
+.novnc-panel.open { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+.novnc-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: grab; }
+.novnc-panel-close {
+    width: 32px;
+    height: 32px;
+    border-radius: 12px;
+    font-size: 20px;
+    line-height: 1;
+}
+.novnc-panel label { color: var(--text-secondary); font-size: 12px; font-weight: 900; }
+.novnc-panel textarea {
+    width: 100%;
+    min-height: 92px;
+    border: 1px solid rgba(139,148,158,.28);
+    border-radius: 16px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,.25);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.45;
+    outline: none;
+    resize: vertical;
+}
+.novnc-panel textarea:focus { border-color: rgba(88,166,255,.62); box-shadow: 0 0 0 3px rgba(88,166,255,.14); }
+.novnc-panel-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.novnc-primary,
+.novnc-secondary {
+    height: 36px;
+    padding: 0 13px;
+    border-radius: 13px;
+    font-weight: 850;
+}
+.novnc-primary { border-color: rgba(88,166,255,.52); background: linear-gradient(135deg, rgba(88,166,255,.96), rgba(120,86,255,.86)); color: #fff; }
+.novnc-panel-actions span,
+.novnc-panel-note { color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+.novnc-shortcut-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+    gap: 8px;
+}
+.novnc-shortcut-grid button {
+    height: 38px;
+    border-radius: 13px;
+    font-weight: 850;
+}
+.novnc-stage.bell { animation: novncBell .28s ease; }
+@keyframes novncBell { 0%, 100% { filter: none; } 50% { filter: brightness(1.26); } }
+@media (max-width: 760px) {
+    .novnc-topbar {
+        grid-template-columns: 1fr;
+        gap: 8px;
+        margin: max(6px, env(safe-area-inset-top)) 6px 0;
+        padding: 8px;
+        border-radius: 20px;
+    }
+    .novnc-orb { width: 36px; height: 36px; border-radius: 14px; }
+    .novnc-status-card { min-height: 36px; padding: 7px 10px; }
+    .novnc-toolbar { justify-content: flex-start; padding-bottom: 1px; }
+    .novnc-tool { min-width: 60px; height: 38px; border-radius: 14px; }
+    .novnc-icon-btn { min-width: 38px; height: 38px; border-radius: 14px; }
+    .novnc-stage { margin: 6px; border-radius: 22px; }
+    .novnc-panel { inset: auto 8px 8px 8px; width: auto; max-height: min(72%, 520px); border-radius: 22px; }
+    .novnc-shortcut-grid { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .novnc-page *, .novnc-page *::before, .novnc-page *::after { animation: none !important; transition-duration: .01ms !important; }
+}

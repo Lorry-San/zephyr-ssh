@@ -700,6 +700,212 @@ async function createRoutedTcpForward(conn, targetPort, timeout = 10000) {
     }
 }
 
+function reverseBits8(value) {
+    let out = 0;
+    for (let i = 0; i < 8; i += 1) out = (out << 1) | ((value >> i) & 1);
+    return out;
+}
+
+function vncAuthResponse(password, challenge) {
+    const key = Buffer.alloc(8);
+    const raw = Buffer.from(String(password || ''), 'latin1');
+    for (let i = 0; i < 8; i += 1) key[i] = reverseBits8(raw[i] || 0);
+    const cipher = crypto.createCipheriv('des-ede', Buffer.concat([key, key]), null);
+    cipher.setAutoPadding(false);
+    return Buffer.concat([cipher.update(Buffer.from(challenge)), cipher.final()]);
+}
+
+class ByteQueue {
+    constructor(label = 'stream') {
+        this.label = label;
+        this.buffers = [];
+        this.length = 0;
+        this.waiters = [];
+        this.closed = false;
+        this.error = null;
+    }
+    push(chunk) {
+        if (this.closed) return;
+        const buf = Buffer.from(chunk || []);
+        if (!buf.length) return;
+        this.buffers.push(buf);
+        this.length += buf.length;
+        this.flush();
+    }
+    shift(size) {
+        const out = Buffer.alloc(size);
+        let offset = 0;
+        while (offset < size && this.buffers.length) {
+            const head = this.buffers[0];
+            const take = Math.min(size - offset, head.length);
+            head.copy(out, offset, 0, take);
+            offset += take;
+            this.length -= take;
+            if (take === head.length) this.buffers.shift();
+            else this.buffers[0] = head.slice(take);
+        }
+        return out;
+    }
+    read(size, timeout = 10000, label = '') {
+        const wanted = Math.max(0, Number(size) || 0);
+        if (this.length >= wanted) return Promise.resolve(this.shift(wanted));
+        if (this.closed) return Promise.reject(this.error || new Error(`${label || this.label}已关闭`));
+        return new Promise((resolve, reject) => {
+            const waiter = { size: wanted, resolve, reject, label: label || this.label, timer: null };
+            waiter.timer = setTimeout(() => {
+                this.waiters = this.waiters.filter((item) => item !== waiter);
+                reject(new Error(`${waiter.label}超时`));
+            }, Math.max(1000, Number(timeout) || 10000));
+            this.waiters.push(waiter);
+            this.flush();
+        });
+    }
+    flush() {
+        while (this.waiters.length && this.length >= this.waiters[0].size) {
+            const waiter = this.waiters.shift();
+            clearTimeout(waiter.timer);
+            waiter.resolve(this.shift(waiter.size));
+        }
+    }
+    takeBuffered() {
+        const out = this.length ? Buffer.concat(this.buffers, this.length) : Buffer.alloc(0);
+        this.buffers = [];
+        this.length = 0;
+        return out;
+    }
+    close(err = null) {
+        if (this.closed) return;
+        this.closed = true;
+        this.error = err || new Error(`${this.label}已关闭`);
+        this.waiters.splice(0).forEach((waiter) => {
+            clearTimeout(waiter.timer);
+            waiter.reject(this.error);
+        });
+    }
+}
+
+function parseRfbVersion(buffer) {
+    const text = Buffer.from(buffer || []).toString('ascii');
+    const match = text.match(/^RFB\s+(\d{3})\.(\d{3})\n$/);
+    if (!match) throw new Error(`VNC 服务端返回了非法协议版本：${JSON.stringify(text)}`);
+    return { text, major: Number(match[1]), minor: Number(match[2]) };
+}
+
+function rfbVersionBytes(minor = 8) {
+    const safeMinor = minor >= 8 ? 8 : minor >= 7 ? 7 : 3;
+    return Buffer.from(`RFB 003.${String(safeMinor).padStart(3, '0')}\n`, 'ascii');
+}
+
+async function readVncFailureReason(reader, timeout) {
+    try {
+        const lenBuf = await reader.read(4, timeout, 'VNC 失败原因长度');
+        const len = Math.min(lenBuf.readUInt32BE(0), 4096);
+        if (!len) return '';
+        return (await reader.read(len, timeout, 'VNC 失败原因')).toString('utf8');
+    } catch {
+        return '';
+    }
+}
+
+async function authenticateVncServer(socket, reader, conn, version, timeout = 10000) {
+    const protocolMinor = Number(version?.minor || 8);
+    let securityType = 0;
+    if (protocolMinor >= 7) {
+        const count = (await reader.read(1, timeout, 'VNC 安全类型数量'))[0];
+        if (!count) {
+            const reason = await readVncFailureReason(reader, timeout);
+            throw new Error(reason || 'VNC 服务端拒绝连接');
+        }
+        const types = Array.from(await reader.read(count, timeout, 'VNC 安全类型列表'));
+        if (types.includes(2) && conn.password) securityType = 2;
+        else if (types.includes(1)) securityType = 1;
+        else if (types.includes(2)) securityType = 2;
+        else throw new Error(`当前 noVNC 代理仅支持 VNC None/VNCAuth，服务端返回安全类型：${types.join(', ')}`);
+        socket.write(Buffer.from([securityType]));
+    } else {
+        const typeBuf = await reader.read(4, timeout, 'VNC 安全类型');
+        securityType = typeBuf.readUInt32BE(0);
+        if (securityType === 0) {
+            const reason = await readVncFailureReason(reader, timeout);
+            throw new Error(reason || 'VNC 服务端拒绝连接');
+        }
+        if (![1, 2].includes(securityType)) throw new Error(`当前 noVNC 代理仅支持 VNC None/VNCAuth，服务端返回安全类型：${securityType}`);
+    }
+
+    if (securityType === 2) {
+        const challenge = await reader.read(16, timeout, 'VNC 认证挑战');
+        socket.write(vncAuthResponse(conn.password || '', challenge));
+        const result = (await reader.read(4, timeout, 'VNC 认证结果')).readUInt32BE(0);
+        if (result !== 0) {
+            const reason = protocolMinor >= 8 ? await readVncFailureReason(reader, timeout) : '';
+            throw new Error(reason || 'VNC 密码认证失败');
+        }
+        return { securityType };
+    }
+
+    if (protocolMinor >= 8) {
+        const result = (await reader.read(4, timeout, 'VNC 安全结果')).readUInt32BE(0);
+        if (result !== 0) {
+            const reason = await readVncFailureReason(reader, timeout);
+            throw new Error(reason || 'VNC 安全协商失败');
+        }
+    }
+    return { securityType };
+}
+
+async function openRoutedTcpConnection(conn, targetPort, timeout = 10000) {
+    const plan = resolveRoutePlan(conn);
+    const targetHost = String(conn.host || '');
+    const port = Number(targetPort) || Number(conn.port) || 0;
+    const clients = [];
+    try {
+        if (!plan.hops.length) {
+            const socket = plan.firstProxy ? await openProxyConnection(plan.firstProxy, targetHost, port, timeout) : net.createConnection(port, targetHost);
+            if (!plan.firstProxy) await waitForSocket(socket, timeout, 'TCP 连接');
+            return { socket, clients, route: plan.firstProxy ? `代理 ${plan.firstProxy.name || plan.firstProxy.host} -> ${conn.name || `${targetHost}:${port}`}` : conn.name || `${targetHost}:${port}` };
+        }
+        const firstSock = plan.firstProxy ? await openProxyConnection(plan.firstProxy, plan.hops[0].host, plan.hops[0].port, timeout) : undefined;
+        let currentClient = await connectSSHClient(plan.hops[0], { timeout, sock: firstSock });
+        clients.push(currentClient);
+        for (const hop of plan.hops.slice(1)) {
+            const tunnel = await forwardOut(currentClient, hop.host, hop.port);
+            currentClient = await connectSSHClient(hop, { timeout, sock: tunnel });
+            clients.push(currentClient);
+        }
+        const socket = await forwardOut(currentClient, targetHost, port);
+        return { socket, clients, route: [...plan.hops.map((h) => h.routeName || h.name || h.host), conn.name || `${targetHost}:${port}`].join(' -> ') };
+    } catch (err) {
+        clients.reverse().forEach((client) => { try { client.end(); } catch {} });
+        throw err;
+    }
+}
+
+async function testNoVncConnection(conn, timeout = 10000) {
+    const started = Date.now();
+    let routed = null;
+    let reader = null;
+    try {
+        routed = await openRoutedTcpConnection(conn, Number(conn.port) || 5900, timeout);
+        reader = new ByteQueue('VNC 服务端');
+        const onData = (chunk) => reader.push(chunk);
+        routed.socket.on('data', onData);
+        routed.socket.once('close', () => reader.close(new Error('VNC 服务端已关闭连接')));
+        const version = parseRfbVersion(await reader.read(12, timeout, 'VNC 协议版本'));
+        routed.socket.write(rfbVersionBytes(Math.min(version.minor || 8, 8)));
+        const auth = await authenticateVncServer(routed.socket, reader, conn, version, timeout);
+        routed.socket.off('data', onData);
+        return { ok: true, code: 'success', message: `VNC 连接成功（noVNC ${routed.route || conn.host}，安全类型 ${auth.securityType === 2 ? 'VNCAuth' : 'None'}）`, durationMs: Date.now() - started };
+    } catch (err) {
+        const msg = String(err?.message || err || '连接失败');
+        const code = /timeout|超时/i.test(msg) ? 'timeout' : /ECONNREFUSED|refused/i.test(msg) ? 'refused' : /auth|认证|password|密码/i.test(msg) ? 'auth_failed' : 'unknown';
+        console.warn('[novnc-test]', 'connection failed', { target: conn.host, code, error: msg });
+        return { ok: false, code, message: msg, durationMs: Date.now() - started };
+    } finally {
+        try { reader?.close?.(); } catch {}
+        try { routed?.socket?.destroy?.(); } catch {}
+        (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
+    }
+}
 function classifySSHError(err) {
     const msg = String(err?.message || err || '连接失败');
     if (/timed out|timeout/i.test(msg)) return { code: 'timeout', message: '连接超时' };
@@ -786,7 +992,7 @@ async function ensureEmbeddedGuacd() {
         await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    console.warn('[guacd-embedded]', 'guacd did not become ready before timeout; VNC connect will report detailed errors');
+    console.warn('[guacd-embedded]', 'guacd did not become ready before timeout; RDP connect will report detailed errors');
     return child;
 }
 
@@ -1885,7 +2091,9 @@ app.post('/api/connections/test', requireAuth, async (req, res) => {
     const timeoutMs = Math.max(1000, Math.min(Number(body.timeoutSeconds || 10) * 1000, 30000));
     const result = protocol === 'SSH'
         ? await testSSHConnection(conn, timeoutMs)
-        : await testGuacamoleConnection(conn, timeoutMs);
+        : protocol === 'VNC'
+            ? await testNoVncConnection(conn, timeoutMs)
+            : await testGuacamoleConnection(conn, timeoutMs);
     addActivity(`测试连接：${conn.name || conn.host} - ${result.message}`);
     res.status(result.ok ? 200 : 400).json(result);
 });
@@ -3720,6 +3928,7 @@ app.get('/api/sftp/download/:token', requireAuth, async (req, res) => {
 
 app.use('/vendor/viewerjs', express.static(path.join(__dirname, 'node_modules', 'viewerjs', 'dist')));
 app.use('/vendor/guacamole-common-js', express.static(path.join(__dirname, 'node_modules', 'guacamole-common-js', 'dist', 'esm')));
+app.use('/vendor/novnc', express.static(path.join(__dirname, 'node_modules', '@novnc', 'novnc')));
 app.get('/vendor/@wterm/dom/terminal.css', (req, res) => {
     res.type('text/css').sendFile(path.join(__dirname, 'node_modules', '@wterm', 'dom', 'src', 'terminal.css'));
 });
@@ -3727,6 +3936,7 @@ app.use('/vendor/@wterm', express.static(path.join(__dirname, 'node_modules', '@
 app.get('/app.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
 app.get('/terminal.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'terminal.html')));
 app.get('/guacamole.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'guacamole.html')));
+app.get('/novnc.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'novnc.html')));
 app.get('/player.html', requirePageAuth, (req, res) => res.sendFile(path.join(__dirname, 'public', 'player.html')));
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
@@ -3749,6 +3959,7 @@ const wsServerOptions = {
 };
 const wss = new WebSocketServer(wsServerOptions);
 const guacWss = new WebSocketServer(wsServerOptions);
+const noVncWss = new WebSocketServer(wsServerOptions);
 const editorLspWss = new WebSocketServer(wsServerOptions);
 const rdpH264Wss = new WebSocketServer(wsServerOptions);
 const rdpAudioWss = new WebSocketServer(wsServerOptions);
@@ -3761,7 +3972,7 @@ server.on('upgrade', (req, socket, head) => {
         pathname = req.url || '';
     }
 
-    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/editor-lsp' ? editorLspWss : pathname === '/rdp-h264' ? rdpH264Wss : pathname === '/rdp-audio' ? rdpAudioWss : null;
+    const targetWss = pathname === '/ssh' ? wss : pathname === '/guacamole' ? guacWss : pathname === '/novnc' ? noVncWss : pathname === '/editor-lsp' ? editorLspWss : pathname === '/rdp-h264' ? rdpH264Wss : pathname === '/rdp-audio' ? rdpAudioWss : null;
     if (!targetWss) {
         console.warn('[WS-DIAG] rejected websocket upgrade for unknown path', { url: req.url || '' });
         rejectSocket(socket, 404, 'Not Found');
@@ -4218,6 +4429,93 @@ function startRdpAudioCapture(pipe) {
     });
     ff.on('exit', (code, signal) => { console.info('[rdp-audio]', 'capture exited', { connId: pipe.connId, code, signal }); if (pipe.audioFfmpeg === ff) pipe.audioFfmpeg = null; });
 }
+
+noVncWss.on('connection', async (ws, req) => {
+    const url = new URL(req.url || '/novnc', `http://${req.headers.host || 'localhost'}`);
+    const connId = url.searchParams.get('connectionId') || '';
+    const started = Date.now();
+    let routed = null;
+    let remoteSocket = null;
+    let proxying = false;
+    let cleaned = false;
+    const serverReader = new ByteQueue('VNC 服务端');
+    const browserReader = new ByteQueue('noVNC 浏览器');
+    const sendBrowser = (chunk) => {
+        if (ws.readyState !== ws.OPEN) return false;
+        try { ws.send(Buffer.from(chunk), { binary: true }); return true; } catch { return false; }
+    };
+    const cleanup = (reason = 'cleanup', closeBrowser = false) => {
+        if (cleaned) return;
+        cleaned = true;
+        console.info('[novnc-ws]', 'closing proxy', { connectionId: connId, reason, durationMs: Date.now() - started });
+        try { serverReader.close(new Error(reason)); } catch {}
+        try { browserReader.close(new Error(reason)); } catch {}
+        try { remoteSocket?.destroy?.(); } catch {}
+        (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
+        if (closeBrowser && ws.readyState === ws.OPEN) {
+            try { ws.close(1011, String(reason).slice(0, 120)); } catch {}
+        }
+    };
+
+    ws.on('message', (raw) => {
+        const chunk = Buffer.from(raw || []);
+        if (!chunk.length) return;
+        if (proxying) {
+            try { remoteSocket?.write?.(chunk); } catch (err) { cleanup(err.message || 'browser-write-failed', true); }
+        } else browserReader.push(chunk);
+    });
+    ws.on('close', () => cleanup('browser-close', false));
+    ws.on('error', (err) => cleanup(err.message || 'browser-error', false));
+
+    try {
+        const sessionUser = currentSession(req);
+        if (!sessionUser) { ws.close(1008, 'unauthorized'); return; }
+        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+        const conn = (store.connections || []).find((c) => c.id === connId);
+        if (!conn) { ws.close(1008, 'connection not found'); return; }
+        if (String(conn.protocol || '').toUpperCase() !== 'VNC') { ws.close(1008, 'not a VNC connection'); return; }
+
+        const timeout = 15000;
+        const targetPort = Number(conn.port) || 5900;
+        routed = await openRoutedTcpConnection(conn, targetPort, timeout);
+        remoteSocket = routed.socket;
+        try { remoteSocket.setNoDelay?.(true); } catch {}
+        remoteSocket.on('data', (chunk) => { if (proxying) sendBrowser(chunk); else serverReader.push(chunk); });
+        remoteSocket.once('close', () => { serverReader.close(new Error('VNC 服务端已关闭连接')); if (!cleaned && ws.readyState === ws.OPEN) ws.close(1011, 'vnc server closed'); cleanup('vnc-server-close', false); });
+        remoteSocket.once('error', (err) => { serverReader.close(err); if (!cleaned && ws.readyState === ws.OPEN) ws.close(1011, 'vnc server error'); cleanup(err.message || 'vnc-server-error', false); });
+
+        const serverVersion = parseRfbVersion(await serverReader.read(12, timeout, 'VNC 协议版本'));
+        const minor = Math.min(serverVersion.minor || 8, 8);
+        remoteSocket.write(rfbVersionBytes(minor));
+        const auth = await authenticateVncServer(remoteSocket, serverReader, conn, serverVersion, timeout);
+
+        sendBrowser(rfbVersionBytes(minor));
+        parseRfbVersion(await browserReader.read(12, timeout, 'noVNC 协议版本'));
+        if (minor >= 7) {
+            sendBrowser(Buffer.from([1, 1]));
+            const selected = (await browserReader.read(1, timeout, 'noVNC 安全类型选择'))[0];
+            if (selected !== 1) throw new Error(`noVNC 未选择代理提供的 None 安全类型：${selected}`);
+        } else {
+            const security = Buffer.alloc(4);
+            security.writeUInt32BE(1, 0);
+            sendBrowser(security);
+        }
+        if (minor >= 8) sendBrowser(Buffer.alloc(4));
+
+        const clientInit = await browserReader.read(1, timeout, 'noVNC ClientInit');
+        proxying = true;
+        remoteSocket.write(clientInit);
+        const pendingBrowser = browserReader.takeBuffered();
+        if (pendingBrowser.length) remoteSocket.write(pendingBrowser);
+        const pendingServer = serverReader.takeBuffered();
+        if (pendingServer.length) sendBrowser(pendingServer);
+        console.info('[novnc-ws]', 'proxy ready', { connectionId: connId, name: conn.name, target: `${conn.host}:${targetPort}`, route: routed.route || 'direct', securityType: auth.securityType === 2 ? 'VNCAuth' : 'None' });
+    } catch (err) {
+        const message = String(err?.message || err || 'noVNC 连接失败');
+        console.warn('[novnc-ws]', 'failed to open proxy', { connectionId: connId, error: message });
+        cleanup(message, true);
+    }
+});
 
 rdpH264Wss.on('connection', async (ws, req) => {
     const url = new URL(req.url || '/rdp-h264', `http://${req.headers.host || 'localhost'}`);
@@ -5719,7 +6017,8 @@ async function startServer() {
         });
         console.log(`🌬️  Zephyr 服务运行在 http://localhost:${PORT}`);
         console.log(`   WebSocket 路径: /ssh`);
-        console.log(`   Guacamole/VNC 路径: /guacamole -> guacd ${GUACD_HOST}:${GUACD_PORT}`);
+        console.log(`   RDP/Guacamole 路径: /guacamole -> guacd ${GUACD_HOST}:${GUACD_PORT}`);
+        console.log(`   VNC/noVNC 路径: /novnc -> VNC Server`);
     });
 }
 
