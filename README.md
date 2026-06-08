@@ -12,6 +12,7 @@
 - [协议与路由能力](#协议与路由能力)
 - [快速开始](#快速开始)
 - [配置说明](#配置说明)
+- [AI 助理智能体](#ai-助理智能体)
 - [RDP / VNC / Guacamole](#rdp--vnc--guacamole)
 - [Docker Compose 部署](#docker-compose-部署)
 - [Docker 自行构建](#docker-自行构建)
@@ -36,6 +37,7 @@
 - 🧭 **代理与跳板路由**：支持 SOCKS5 / HTTP CONNECT 代理、SSH 跳板机和多级 SSH 跳板链路。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
 - 🧰 **远程运维能力**：支持远程状态监控、Docker 容器/镜像查看、日志查看、镜像拉取等 SSH 运维操作。
+- 🤖 **AI 助理智能体**：可在设置中启用独立 AI 助理入口，支持多模型供应商、自定义 API Base URL、模型参数、Skills、网页搜索/读取、远程命令执行、远程文件读写、敏感操作确认和编辑器 AI 代码补全。
 - 🖼️ **图片类文件预览**：文件管理器支持图片预览，前端使用 Viewer.js 负责缩放/拖动/全屏，后端 Preview API 对浏览器不支持的 HEIC/TIFF/PSD/RAW/DDS/HDR 等格式通过 Sharp 优先、ImageMagick 兜底转为 WebP。
 
 ### 安全与账号
@@ -177,6 +179,21 @@ PORT=3000
 - `ENCRYPTION_KEY` 用于加密备份文件。旧备份需要使用导出时的旧密钥才能解密导入。
 - Zephyr 首次启动会生成 ML-KEM-768 数据字段加密密钥对，默认保存在 `data/crypto/ml-kem-768-keypair.json`。数据库内的敏感字段会使用该密钥派生的混合加密方案落盘；迁移、备份或恢复时必须同时保留该密钥文件，或通过 `ZEPHYR_DATA_MLKEM768_PUBLIC_KEY_B64` / `ZEPHYR_DATA_MLKEM768_SECRET_KEY_B64` 外部注入同一密钥对。使用默认文件密钥时，后台导出的 `.zip.enc` 备份会把该密钥文件一起放入 `ENCRYPTION_KEY` 加密包中，便于跨机器恢复。
 - 程序首次启动如果发现 `data/.env` 不存在，会生成默认占位文件；生产环境不要长期使用默认密钥。
+
+---
+
+## AI 助理智能体
+
+Zephyr 内置可选 AI Agent 能力，默认关闭。登录后台后进入 **设置 → AI 助理** 可启用：
+
+- **多模型供应商**：支持 OpenAI 兼容接口、Anthropic Claude、Google Gemini；可配置自定义 API Base URL、API Key、模型列表、默认模型、额外请求头和常见模型参数（temperature、top_p、max_tokens、presence/frequency penalty、reasoning_effort、额外 JSON 参数等）。
+- **独立入口与浮窗**：启用后顶部导航会在“远程执行”和“设置”之间显示“AI 助理”，点击后打开类似 SSH 文件/监控面板的可拖拽、可缩放、可布局浮窗。
+- **工具权限**：可单独开关网页搜索、网页正文读取、远程执行、远程文件读取、远程文件写入、代码编辑/补全。
+- **敏感操作确认**：远程执行和远程写文件默认需要用户在 AI 浮窗内手动确认；也可在设置中开启自动确认并设置延迟。
+- **Skills**：可在设置页添加/启用多个 Skill，把工作流、角色设定、工具使用规则和专用提示词注入 AI 上下文。
+- **编辑器 AI 补全**：SSH 文件管理器的代码编辑器支持 `Ctrl/⌘ + Shift + Space`、命令面板“AI 代码补全”、顶部“AI补全”按钮和移动端工具栏 `AI` 按钮。
+
+API Key 等模型密钥会作为设置敏感字段使用 ML-KEM-768 + AES-256-GCM 混合加密后保存；前端读取设置时只返回 `******` 占位。
 
 ---
 

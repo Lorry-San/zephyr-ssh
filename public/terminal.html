@@ -6,7 +6,7 @@
     <title>Zephyr - 终端</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
     <link rel="stylesheet" href="/vendor/@wterm/dom/terminal.css">
-    <link rel="stylesheet" href="style.css?v=20260608-mobile-terminal-layout-guard">
+    <link rel="stylesheet" href="style.css?v=20260608-ai-agent">
     <link rel="stylesheet" href="/vendor/viewerjs/viewer.min.css">
     <link rel="stylesheet" href="preview/image/image-preview.css">
     <link rel="stylesheet" href="preview/media/media-preview.css?v=20260529-subtitle-path-fix">
@@ -83,6 +83,7 @@
                         <button class="tool-btn fm-editor-compact-btn" id="fmEditorCompactBtn" title="切换紧凑布局">紧凑</button>
                         <button class="tool-btn" id="fmEditorMinimapToggle" title="显示/隐藏代码概览">概览</button>
                         <button class="tool-btn fm-editor-palette-btn" id="fmEditorPaletteBtn" title="打开/关闭命令面板">命令</button>
+                        <button class="tool-btn fm-editor-ai-btn" id="fmEditorAiBtn" title="AI 代码补全（Ctrl/⌘+Shift+Space）">AI补全</button>
                         <button class="tool-btn fm-editor-format-btn" id="fmEditorFormatBtn" title="格式化 YAML/JSON/JS">格式化</button>
                         <button class="tool-btn" id="fmEditorUndoBtn" title="撤回">↶</button>
                         <button class="tool-btn" id="fmEditorRedoBtn" title="前进">↷</button>
@@ -342,7 +343,7 @@
     <script src="/vendor/viewerjs/viewer.min.js"></script>
     <script src="preview/image/image-preview.js"></script>
     <script src="preview/media/media-preview.js?v=20260529-subtitle-path-fix"></script>
-    <script src="editor/zephyr-editor.bundle.js" type="module"></script>
-    <script src="terminal.js?v=20260607-archive-cancel" type="module"></script>
+    <script src="editor/zephyr-editor.bundle.js?v=20260608-ai-completion" type="module"></script>
+    <script src="terminal.js?v=20260608-ai-agent" type="module"></script>
 </body>
 </html>

@@ -369,6 +369,7 @@ function buildExtensions(instance) {
       indentWithTab,
       {key: 'Mod-s', run: () => { instance.requestSave?.(); return true; }},
       {key: 'Mod-Shift-f', run: () => { formatDocument(instance); return true; }},
+      {key: 'Mod-Shift-Space', run: () => { requestAiCompletion(instance); return true; }},
       {key: 'Mod-/', run: toggleComment},
       {key: 'Alt-ArrowUp', run: moveLineUp},
       {key: 'Alt-ArrowDown', run: moveLineDown},
@@ -401,6 +402,34 @@ function scheduleAutoSave(instance) {
   clearTimeout(instance.saveTimer);
   if (!instance.dirty || !instance.autoSave) return;
   instance.saveTimer = setTimeout(() => instance.requestSave?.({silent: true}), SAVE_DEBOUNCE_MS);
+}
+
+async function requestAiCompletion(instance) {
+  if (!instance?.view || instance.largeFile) return false;
+  const view = instance.view;
+  const pos = view.state.selection.main.head;
+  const doc = view.state.doc.toString();
+  const prefix = doc.slice(Math.max(0, pos - 5000), pos);
+  const suffix = doc.slice(pos, Math.min(doc.length, pos + 2000));
+  try {
+    const res = await fetch('/api/ai/complete', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ path: instance.path, language: instance.language, prefix, suffix, maxTokens: 180 })
+    });
+    const data = await res.json().catch(() => ({}));
+    const suggestion = data?.suggestions?.[0]?.apply || '';
+    if (!res.ok) throw new Error(data.error || 'AI 补全失败');
+    if (!suggestion) { instance.notify?.('AI 暂无补全建议', 'info'); return true; }
+    view.dispatch(view.state.replaceSelection(suggestion));
+    view.focus();
+    instance.notify?.('AI 补全已插入', 'success');
+    return true;
+  } catch (error) {
+    instance.notify?.(`AI 补全失败: ${error.message || error}`, 'error');
+    return true;
+  }
 }
 
 async function formatDocument(instance) {
@@ -441,6 +470,7 @@ function commandList(instance) {
     ['格式化文档', () => formatDocument(instance)], ['删除尾随空格', deleteTrailingWhitespace], ['触发补全', startCompletion],
     ['折叠全部', foldAll], ['展开全部', unfoldAll], ['切换注释', toggleComment], ['上移行', moveLineUp], ['下移行', moveLineDown],
     ['向上复制行', copyLineUp], ['向下复制行', copyLineDown], ['删除行', deleteLine], ['选择当前行', selectLine],
+    ['AI 代码补全', () => requestAiCompletion(instance)],
     ['切换概览', () => { toggleMinimap(instance); return true; }], ['切换紧凑模式', () => { toggleCompact(instance); return true; }],
   ];
 }
@@ -505,7 +535,7 @@ function createMobileToolbar(instance, parent) {
   }
   toolbar.innerHTML = '';
   const items = [
-    ['TAB', () => insertSnippet(instance, ' '.repeat(instance.tabSize || 4))], ['{}', () => insertSnippet(instance, '{}')],
+    ['TAB', () => insertSnippet(instance, ' '.repeat(instance.tabSize || 4))], ['AI', () => requestAiCompletion(instance)], ['{}', () => insertSnippet(instance, '{}')],
     ['[]', () => insertSnippet(instance, '[]')], ['()', () => insertSnippet(instance, '()')], ['<>', () => insertSnippet(instance, '<>')],
     [':', () => insertSnippet(instance, ':')], [';', () => insertSnippet(instance, ';')], ['$', () => insertSnippet(instance, '$')],
     ['/', () => insertSnippet(instance, '/')],
@@ -646,6 +676,7 @@ export function destroyZephyrEditor(instance) {
 export function undoZephyrEditor(instance) { undo(instance?.view); updateStatus(instance); }
 export function redoZephyrEditor(instance) { redo(instance?.view); updateStatus(instance); }
 export function formatZephyrEditor(instance) { return formatDocument(instance); }
+export function aiCompleteZephyrEditor(instance) { return requestAiCompletion(instance); }
 export function focusZephyrEditor(instance) { instance?.view?.focus(); }
 export function isZephyrEditorDirty(instance) { return !!instance?.dirty; }
 export function toggleMinimap(instance) { updateZephyrEditorOptions(instance, {minimap: !instance?.minimap}); return true; }
@@ -661,6 +692,7 @@ window.ZephyrCodeEditor = {
   undo: undoZephyrEditor,
   redo: redoZephyrEditor,
   format: formatZephyrEditor,
+  aiComplete: aiCompleteZephyrEditor,
   focus: focusZephyrEditor,
   dirty: isZephyrEditorDirty,
   toggleMinimap,

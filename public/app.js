@@ -2,6 +2,14 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [], settings = {};
+let aiSettingsState = null;
+let aiChatSessions = [];
+let aiCurrentSessionId = null;
+let aiSpeechRecognition = null;
+let aiRecording = false;
+let aiPanelLayoutMenu = null;
+let aiPanelSuppressLayoutClick = false;
+const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
 let editingConnectionSecretState = { hasPassword: false, hasPrivateKey: false, sshKeyId: '' };
@@ -2381,6 +2389,437 @@ function startWorkspaceSplitterDrag(e, axis) {
     window.addEventListener('pointercancel', cleanup, { once: true });
 }
 
+
+function defaultAiSettings() {
+    return {
+        enabled: false,
+        assistantName: 'Zephyr AI',
+        defaultProviderId: '',
+        defaultModel: '',
+        systemPrompt: '',
+        codeCompletionEnabled: true,
+        sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
+        permissions: { webSearch: true, webFetch: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true },
+        providers: [],
+        skills: [],
+    };
+}
+function normalizeAiSettings(ai = {}) {
+    const base = defaultAiSettings();
+    return {
+        ...base,
+        ...ai,
+        sensitive: { ...base.sensitive, ...(ai.sensitive || {}) },
+        permissions: { ...base.permissions, ...(ai.permissions || {}) },
+        providers: Array.isArray(ai.providers) ? ai.providers : [],
+        skills: Array.isArray(ai.skills) ? ai.skills : [],
+    };
+}
+function aiModelNames(provider = {}) {
+    return String(provider.models || '').split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+}
+function aiCurrentSession() {
+    if (!aiChatSessions.length) createAiChat({ silent: true });
+    return aiChatSessions.find((s) => s.id === aiCurrentSessionId) || aiChatSessions[0];
+}
+function applyAiVisibility() {
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    $('#aiNavTab')?.classList.toggle('force-hidden', !ai.enabled);
+    if (!ai.enabled && document.querySelector('#view-ai')?.classList.contains('active')) switchView('remote');
+    renderAiHeaderSelectors();
+}
+function renderAiProviderOptions() {
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const providers = ai.providers || [];
+    const defaultSelect = $('#aiDefaultProvider');
+    if (defaultSelect) defaultSelect.innerHTML = '<option value="">自动选择第一个可用供应商</option>' + providers.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.type || '供应商')}</option>`).join('');
+    if (defaultSelect) defaultSelect.value = ai.defaultProviderId || '';
+}
+function renderAiHeaderSelectors() {
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const providerSelect = $('#aiProviderSelect');
+    const modelSelect = $('#aiModelSelect');
+    if (!providerSelect || !modelSelect) return;
+    const providers = (ai.providers || []).filter((p) => p.enabled !== false);
+    const previousProviderId = providerSelect.value;
+    providerSelect.innerHTML = providers.length ? providers.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.type || '供应商')}</option>`).join('') : '<option value="">未配置模型</option>';
+    providerSelect.value = providers.some((p) => p.id === previousProviderId) ? previousProviderId : (ai.defaultProviderId || providers[0]?.id || '');
+    const p = providers.find((x) => x.id === providerSelect.value) || providers[0];
+    const models = aiModelNames(p);
+    const chosen = ((p?.id === ai.defaultProviderId ? ai.defaultModel : '') || p?.defaultModel || models[0] || ai.defaultModel || '').trim();
+    modelSelect.innerHTML = models.length ? models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('') : `<option value="${escapeHtml(chosen)}">${escapeHtml(chosen || '默认模型')}</option>`;
+    modelSelect.value = chosen;
+    renderAiCapabilityStrip();
+}
+function renderAiCapabilityStrip() {
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const caps = [];
+    if (ai.permissions.webSearch) caps.push('网页搜索');
+    if (ai.permissions.webFetch) caps.push('网页读取');
+    if (ai.permissions.remoteExecute) caps.push('远程执行');
+    if (ai.permissions.fileRead) caps.push('读文件');
+    if (ai.permissions.fileWrite) caps.push('写文件');
+    if (ai.permissions.codeEdit && ai.codeCompletionEnabled) caps.push('代码补全');
+    const enabledSkills = (ai.skills || []).filter((s) => s.enabled !== false).length;
+    if (enabledSkills) caps.push(`${enabledSkills} 个 Skill`);
+    $('#aiCapabilityStrip') && ($('#aiCapabilityStrip').innerHTML = caps.map((c) => `<span>${escapeHtml(c)}</span>`).join('') || '<span>未启用能力</span>');
+}
+function renderAiSettingsForm() {
+    const ai = normalizeAiSettings(settings.ai || {});
+    aiSettingsState = ai;
+    $('#aiEnabled').checked = !!ai.enabled;
+    $('#aiAssistantName').value = ai.assistantName || 'Zephyr AI';
+    $('#aiDefaultModel').value = ai.defaultModel || '';
+    $('#aiSystemPrompt').value = ai.systemPrompt || '';
+    $('#aiCodeCompletionEnabled').checked = ai.codeCompletionEnabled !== false;
+    $('#aiRequireConfirmation').checked = ai.sensitive?.requireConfirmation !== false;
+    $('#aiAutoConfirm').checked = !!ai.sensitive?.autoConfirm;
+    $('#aiAutoConfirmDelayMs').value = ai.sensitive?.autoConfirmDelayMs ?? 2500;
+    const p = ai.permissions || {};
+    $('#aiPermWebSearch').checked = p.webSearch !== false;
+    $('#aiPermWebFetch').checked = p.webFetch !== false;
+    $('#aiPermRemoteExecute').checked = p.remoteExecute !== false;
+    $('#aiPermFileRead').checked = p.fileRead !== false;
+    $('#aiPermFileWrite').checked = p.fileWrite !== false;
+    $('#aiPermCodeEdit').checked = p.codeEdit !== false;
+    renderAiProviderOptions();
+    renderAiProviderList();
+    renderAiSkillList();
+    applyAiVisibility();
+}
+function collectAiSettingsForm() {
+    const old = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    return {
+        ...old,
+        enabled: $('#aiEnabled').checked,
+        assistantName: $('#aiAssistantName').value.trim() || 'Zephyr AI',
+        defaultProviderId: $('#aiDefaultProvider').value,
+        defaultModel: $('#aiDefaultModel').value.trim(),
+        systemPrompt: $('#aiSystemPrompt').value,
+        codeCompletionEnabled: $('#aiCodeCompletionEnabled').checked,
+        sensitive: { requireConfirmation: $('#aiRequireConfirmation').checked, autoConfirm: $('#aiAutoConfirm').checked, autoConfirmDelayMs: Number($('#aiAutoConfirmDelayMs').value) || 0 },
+        permissions: {
+            webSearch: $('#aiPermWebSearch').checked,
+            webFetch: $('#aiPermWebFetch').checked,
+            remoteExecute: $('#aiPermRemoteExecute').checked,
+            fileRead: $('#aiPermFileRead').checked,
+            fileWrite: $('#aiPermFileWrite').checked,
+            codeEdit: $('#aiPermCodeEdit').checked,
+        },
+    };
+}
+async function saveAiSettings(e) {
+    e?.preventDefault?.();
+    const ai = collectAiSettingsForm();
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    settings.ai = normalizeAiSettings(settings.ai || ai);
+    renderAiSettingsForm();
+    toast('AI 助理设置已保存');
+}
+function openAiProviderModal(provider = null) {
+    const modal = $('#aiProviderModal');
+    $('#aiProviderModalTitle').textContent = provider ? '编辑模型供应商' : '添加模型供应商';
+    $('#aiProviderId').value = provider?.id || '';
+    $('#aiProviderName').value = provider?.name || '';
+    $('#aiProviderType').value = provider?.type || 'openai-compatible';
+    $('#aiProviderBaseUrl').value = provider?.baseUrl || '';
+    $('#aiProviderApiKey').value = provider?.apiKey ? '******' : '';
+    $('#aiProviderModels').value = provider?.models || '';
+    $('#aiProviderDefaultModel').value = provider?.defaultModel || '';
+    $('#aiProviderOrganization').value = provider?.organization || '';
+    $('#aiProviderExtraHeaders').value = provider?.extraHeaders || '';
+    $('#aiProviderTemperature').value = provider?.options?.temperature ?? 0.7;
+    $('#aiProviderTopP').value = provider?.options?.top_p ?? 1;
+    $('#aiProviderMaxTokens').value = provider?.options?.max_tokens ?? 4096;
+    $('#aiProviderReasoningEffort').value = provider?.options?.reasoning_effort || '';
+    $('#aiProviderPresencePenalty').value = provider?.options?.presence_penalty ?? 0;
+    $('#aiProviderFrequencyPenalty').value = provider?.options?.frequency_penalty ?? 0;
+    $('#aiProviderExtraJson').value = provider?.options?.extraJson || '';
+    $('#aiProviderEnabled').checked = provider?.enabled !== false;
+    modal.classList.add('show', 'app-visible');
+    modal.setAttribute('aria-hidden', 'false');
+}
+function closeAiProviderModal() {
+    const modal = $('#aiProviderModal');
+    modal.classList.remove('show', 'app-visible');
+    modal.setAttribute('aria-hidden', 'true');
+}
+async function saveAiProvider(e) {
+    e.preventDefault();
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const id = $('#aiProviderId').value || `provider-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const provider = {
+        id,
+        name: $('#aiProviderName').value.trim() || '未命名供应商',
+        type: $('#aiProviderType').value,
+        enabled: $('#aiProviderEnabled').checked,
+        baseUrl: $('#aiProviderBaseUrl').value.trim(),
+        apiKey: $('#aiProviderApiKey').value,
+        organization: $('#aiProviderOrganization').value.trim(),
+        extraHeaders: $('#aiProviderExtraHeaders').value.trim(),
+        models: $('#aiProviderModels').value,
+        defaultModel: $('#aiProviderDefaultModel').value.trim(),
+        options: {
+            temperature: Number($('#aiProviderTemperature').value),
+            top_p: Number($('#aiProviderTopP').value),
+            max_tokens: Number($('#aiProviderMaxTokens').value) || 4096,
+            reasoning_effort: $('#aiProviderReasoningEffort').value,
+            presence_penalty: Number($('#aiProviderPresencePenalty').value) || 0,
+            frequency_penalty: Number($('#aiProviderFrequencyPenalty').value) || 0,
+            extraJson: $('#aiProviderExtraJson').value.trim(),
+        },
+    };
+    const idx = ai.providers.findIndex((p) => p.id === id);
+    if (idx >= 0) ai.providers[idx] = provider; else ai.providers.push(provider);
+    if (!ai.defaultProviderId) ai.defaultProviderId = id;
+    if (!ai.defaultModel) ai.defaultModel = provider.defaultModel || aiModelNames(provider)[0] || '';
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    closeAiProviderModal();
+    renderAiSettingsForm();
+    toast('模型供应商已保存');
+}
+function renderAiProviderList() {
+    const list = $('#aiProviderList');
+    if (!list) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    list.innerHTML = ai.providers.length ? ai.providers.map((p) => `<div class="ai-provider-item" data-provider-id="${escapeHtml(p.id)}"><div><strong>${escapeHtml(p.name || '未命名供应商')}</strong><span>${escapeHtml(p.type || 'openai-compatible')} · ${p.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(p.defaultModel || aiModelNames(p)[0] || '未设模型')}</span><code>${escapeHtml(p.baseUrl || '默认 API 地址')}</code></div><button class="tool-btn" data-ai-edit-provider="${escapeHtml(p.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-provider="${escapeHtml(p.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无模型供应商。支持 OpenAI 兼容、Anthropic、Gemini，以及自定义 API 地址。</p>';
+}
+async function deleteAiProvider(id) {
+    if (!confirm('删除该模型供应商？')) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    ai.providers = ai.providers.filter((p) => p.id !== id);
+    if (ai.defaultProviderId === id) ai.defaultProviderId = ai.providers[0]?.id || '';
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    renderAiSettingsForm();
+    toast('模型供应商已删除');
+}
+function resetAiSkillForm() {
+    $('#aiSkillId').value = '';
+    $('#aiSkillName').value = '';
+    $('#aiSkillDescription').value = '';
+    $('#aiSkillPrompt').value = '';
+    $('#aiSkillEnabled').checked = true;
+}
+function renderAiSkillList() {
+    const list = $('#aiSkillList');
+    if (!list) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    list.innerHTML = ai.skills.length ? ai.skills.map((s) => `<div class="ai-skill-item" data-skill-id="${escapeHtml(s.id)}"><div><strong>${escapeHtml(s.name || '未命名 Skill')}</strong><span>${s.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(s.description || '')}</span><code>${escapeHtml((s.prompt || '').slice(0, 260))}</code></div><button class="tool-btn" data-ai-edit-skill="${escapeHtml(s.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-skill="${escapeHtml(s.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无 Skill。可以把工作流、工具使用规则、专用提示词保存成能力包。</p>';
+}
+async function saveAiSkill(e) {
+    e.preventDefault();
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const id = $('#aiSkillId').value || `skill-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const skill = { id, name: $('#aiSkillName').value.trim(), description: $('#aiSkillDescription').value.trim(), prompt: $('#aiSkillPrompt').value, enabled: $('#aiSkillEnabled').checked, updatedAt: Date.now() };
+    if (!skill.name && !skill.prompt.trim()) return toast('请填写 Skill 名称或指令内容');
+    const idx = ai.skills.findIndex((s) => s.id === id);
+    if (idx >= 0) ai.skills[idx] = skill; else ai.skills.unshift(skill);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    resetAiSkillForm();
+    renderAiSettingsForm();
+    toast('Skill 已保存');
+}
+async function deleteAiSkill(id) {
+    if (!confirm('删除该 Skill？')) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    ai.skills = ai.skills.filter((s) => s.id !== id);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    renderAiSettingsForm();
+    toast('Skill 已删除');
+}
+function saveAiChats() {
+    try { localStorage.setItem(AI_CHAT_STORAGE_KEY, JSON.stringify({ current: aiCurrentSessionId, sessions: aiChatSessions.slice(0, 20) })); } catch (_) {}
+}
+function loadAiChats() {
+    try {
+        const data = JSON.parse(localStorage.getItem(AI_CHAT_STORAGE_KEY) || '{}');
+        aiChatSessions = Array.isArray(data.sessions) ? data.sessions.slice(0, 20).filter((s) => s?.id && Array.isArray(s.messages)) : [];
+        aiCurrentSessionId = aiChatSessions.some((s) => s.id === data.current) ? data.current : aiChatSessions[0]?.id || null;
+    } catch (_) { aiChatSessions = []; aiCurrentSessionId = null; }
+}
+function createAiChat({ silent = false } = {}) {
+    const id = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    aiChatSessions.unshift({ id, title: '新沙箱', messages: [{ role: 'assistant', content: `${ai.assistantName || 'Zephyr AI'} 已就绪。可搜索网页、调用工具、读写远程文件、辅助代码编辑。` }] });
+    aiCurrentSessionId = id;
+    saveAiChats();
+    if (!silent) renderAiChat();
+}
+function renderAiChatList() {
+    const list = $('#aiChatList');
+    if (!list) return;
+    list.innerHTML = aiChatSessions.map((s) => `<button class="ai-chat-item ${s.id === aiCurrentSessionId ? 'active' : ''}" data-ai-chat="${escapeHtml(s.id)}">${escapeHtml(s.title || '新对话')}</button>`).join('');
+}
+function renderAiChat() {
+    if (!aiChatSessions.length) createAiChat({ silent: true });
+    const session = aiCurrentSession();
+    $('#aiCurrentChatTitle').textContent = session.title || 'Zephyr AI';
+    const area = $('#aiChatArea');
+    const typing = $('#aiTypingIndicator');
+    area.querySelectorAll('.ai-message').forEach((el) => el.remove());
+    session.messages.forEach((m) => appendAiMessage(m.content, m.role, { store: false }));
+    area.appendChild(typing);
+    renderAiChatList();
+    scrollAiChat();
+}
+function appendAiMessage(text, role = 'assistant', { store = true, meta = '' } = {}) {
+    const area = $('#aiChatArea');
+    const typing = $('#aiTypingIndicator');
+    if (!area || !typing) return;
+    const div = document.createElement('div');
+    div.className = `ai-message ${role === 'user' ? 'user' : role === 'system' ? 'system' : 'ai'}`;
+    div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${renderMarkdown(String(text || ''))}`;
+    area.insertBefore(div, typing);
+    if (store) {
+        const session = aiCurrentSession();
+        session.messages.push({ role: role === 'ai' ? 'assistant' : role, content: String(text || '') });
+        if (role === 'user' && (!session.title || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
+        saveAiChats();
+    }
+    scrollAiChat();
+}
+function scrollAiChat() { setTimeout(() => { const a = $('#aiChatArea'); if (a) a.scrollTop = a.scrollHeight; }, 20); }
+function setAiTyping(show) { $('#aiTypingIndicator')?.classList.toggle('show', !!show); scrollAiChat(); }
+function aiIntensityOptions() {
+    const v = $('#aiThinkIntensity')?.value || 'balanced';
+    if (v === 'fast') return { temperature: 0.3, max_tokens: 2048 };
+    if (v === 'deep') return { temperature: 0.7, max_tokens: 8192, reasoning_effort: 'high' };
+    return { temperature: 0.6, max_tokens: 4096 };
+}
+async function sendAiMessage() {
+    const input = $('#aiUserInput');
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    autoResizeAiInput(input);
+    appendAiMessage(text, 'user');
+    setAiTyping(true);
+    try {
+        const session = aiCurrentSession();
+        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId: $('#aiProviderSelect').value, model: $('#aiModelSelect').value, options: aiIntensityOptions() }) });
+        if (data.toolResults?.length) appendAiMessage(data.toolResults.map((r) => `工具 ${r.tool}: ${JSON.stringify(r.result).slice(0, 1200)}`).join('\n'), 'system');
+        if (data.confirmationRequired) {
+            appendAiConfirmation(data.confirmation);
+        } else {
+            appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
+        }
+    } catch (err) {
+        appendAiMessage(`请求失败：${err.message}`, 'system');
+    } finally {
+        setAiTyping(false);
+    }
+}
+function appendAiConfirmation(confirmation) {
+    const area = $('#aiChatArea');
+    const typing = $('#aiTypingIndicator');
+    const div = document.createElement('div');
+    div.className = 'ai-message system ai-confirm-card';
+    div.innerHTML = `<strong>需要确认敏感操作</strong><p>${escapeHtml(confirmation.summary || '')}</p><pre>${escapeHtml(JSON.stringify(confirmation.args || {}, null, 2))}</pre><div class="form-actions"><button class="btn btn-primary" data-ai-confirm-approve="${escapeHtml(confirmation.id)}">确认执行</button><button class="btn danger" data-ai-confirm-deny="${escapeHtml(confirmation.id)}">拒绝</button></div>`;
+    area.insertBefore(div, typing);
+    aiCurrentSession().messages.push({ role: 'assistant', content: `需要确认敏感操作：${confirmation.summary}` });
+    saveAiChats();
+    scrollAiChat();
+}
+async function resolveAiConfirmation(id, approve) {
+    setAiTyping(true);
+    try {
+        const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ approve }) });
+        appendAiMessage(approve ? `已确认执行，结果：\n${JSON.stringify(data.result || {}, null, 2)}` : '已拒绝执行敏感操作。', 'system');
+    } catch (err) { appendAiMessage(`确认处理失败：${err.message}`, 'system'); }
+    finally { setAiTyping(false); }
+}
+function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
+function openAiAssistantPanel() {
+    const ai = normalizeAiSettings(settings.ai || {});
+    if (!ai.enabled) { toast('请先在设置中启用 AI 助理'); return; }
+    const panel = $('#aiAgentPanel');
+    panel.style.display = 'block';
+    panel.setAttribute('aria-hidden', 'false');
+    if (!panel.dataset.positioned) {
+        panel.style.left = 'calc(50% - 430px)'; panel.style.top = '88px'; panel.style.width = '860px'; panel.style.height = 'min(760px, calc(100vh - 120px))'; panel.dataset.positioned = '1';
+    }
+    bringAiPanelToFront();
+    if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
+    renderAiHeaderSelectors(); renderAiChat();
+}
+function closeAiAssistantPanel() { const p = $('#aiAgentPanel'); p.style.display = 'none'; p.setAttribute('aria-hidden', 'true'); }
+function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(650 + Math.floor(Date.now() % 100)); }
+function applyAiPanelLayout(layout) {
+    const p = $('#aiAgentPanel');
+    if (!p) return;
+    const vw = window.innerWidth, vh = window.innerHeight, top = 72;
+    if (layout === 'full') Object.assign(p.style, { left: '8px', top: '8px', width: `${vw - 16}px`, height: `${vh - 16}px` });
+    if (layout === 'half') Object.assign(p.style, { left: `${Math.max(8, vw * 0.08)}px`, top: `${top}px`, width: `${Math.min(900, vw * 0.84)}px`, height: `${Math.max(420, vh - top - 20)}px` });
+    if (layout === 'left-quarter') Object.assign(p.style, { left: '8px', top: `${top}px`, width: `${Math.max(320, vw * 0.42)}px`, height: `${Math.max(420, vh - top - 20)}px` });
+    if (layout === 'right-quarter') Object.assign(p.style, { left: `${Math.max(8, vw - Math.max(320, vw * 0.42) - 8)}px`, top: `${top}px`, width: `${Math.max(320, vw * 0.42)}px`, height: `${Math.max(420, vh - top - 20)}px` });
+}
+function setupAiPanelChrome() {
+    const panel = $('#aiAgentPanel');
+    panel?.addEventListener('pointerdown', bringAiPanelToFront);
+    panel?.querySelector('[data-ai-agent-drag]')?.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) return;
+        e.preventDefault(); bringAiPanelToFront();
+        const sx = e.clientX, sy = e.clientY, sl = panel.offsetLeft, st = panel.offsetTop;
+        const move = (ev) => { ev.preventDefault(); panel.style.left = `${sl + ev.clientX - sx}px`; panel.style.top = `${st + ev.clientY - sy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; };
+        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
+    });
+    panel?.querySelectorAll('[data-ai-agent-resize]').forEach((h) => h.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); bringAiPanelToFront();
+        const sx = e.clientX, sy = e.clientY, sw = panel.offsetWidth, sh = panel.offsetHeight, sl = panel.offsetLeft, edge = h.dataset.aiAgentResize;
+        const move = (ev) => { let nw = sw + ev.clientX - sx, nl = sl; if (edge === 'left') { nw = sw - (ev.clientX - sx); nl = sl + (ev.clientX - sx); panel.style.left = `${nl}px`; } panel.style.width = `${Math.max(320, nw)}px`; panel.style.height = `${Math.max(360, sh + ev.clientY - sy)}px`; };
+        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
+    }));
+    panel?.querySelector('[data-ai-agent-layout]')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (aiPanelLayoutMenu) { aiPanelLayoutMenu.remove(); aiPanelLayoutMenu = null; return; }
+        const menu = document.createElement('div');
+        menu.className = 'panel-layout-menu island-open ai-layout-menu';
+        menu.innerHTML = '<button data-layout="full">全</button><button data-layout="half">半</button><button data-layout="left-quarter">左</button><button data-layout="right-quarter">右</button><button data-layout="close">×</button>';
+        const r = e.currentTarget.getBoundingClientRect(); menu.style.left = `${r.left}px`; menu.style.top = `${r.bottom + 6}px`; document.body.appendChild(menu); aiPanelLayoutMenu = menu;
+        menu.addEventListener('click', (ev) => { const b = ev.target.closest('[data-layout]'); if (!b) return; if (b.dataset.layout === 'close') closeAiAssistantPanel(); else applyAiPanelLayout(b.dataset.layout); menu.remove(); aiPanelLayoutMenu = null; });
+    });
+}
+function toggleAiVoice() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return toast('当前浏览器不支持语音识别');
+    if (aiRecording) { aiSpeechRecognition?.stop?.(); return; }
+    aiSpeechRecognition = new SpeechRecognition();
+    aiSpeechRecognition.lang = 'zh-CN'; aiSpeechRecognition.interimResults = true;
+    aiSpeechRecognition.onstart = () => { aiRecording = true; $('#aiVoiceBtn').classList.add('active'); };
+    aiSpeechRecognition.onend = () => { aiRecording = false; $('#aiVoiceBtn').classList.remove('active'); $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, ''); };
+    aiSpeechRecognition.onresult = (event) => { let text = ''; for (let i = event.resultIndex; i < event.results.length; i += 1) text += event.results[i][0].transcript; $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, '') + (event.results[event.results.length - 1].isFinal ? text : '[识别中...]'); autoResizeAiInput($('#aiUserInput')); };
+    aiSpeechRecognition.start();
+}
+function setupAiAssistant() {
+    setupAiPanelChrome();
+    $('#aiSettingsForm')?.addEventListener('submit', saveAiSettings);
+    $('#aiAddProviderBtn')?.addEventListener('click', () => openAiProviderModal());
+    $('#aiProviderForm')?.addEventListener('submit', saveAiProvider);
+    $('#aiProviderCloseBtn')?.addEventListener('click', closeAiProviderModal);
+    $('#aiProviderCancelBtn')?.addEventListener('click', closeAiProviderModal);
+    $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider; const ai = normalizeAiSettings(settings.ai || {}); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
+    $('#aiSkillForm')?.addEventListener('submit', saveAiSkill);
+    $('#aiSkillResetBtn')?.addEventListener('click', resetAiSkillForm);
+    $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
+    $('#openAiAssistantBtn')?.addEventListener('click', openAiAssistantPanel); $('#openAiAssistantBtn2')?.addEventListener('click', openAiAssistantPanel);
+    $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
+    $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
+    $('#aiChatList')?.addEventListener('click', (e) => { const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
+    $('#aiSendBtn')?.addEventListener('click', sendAiMessage);
+    $('#aiUserInput')?.addEventListener('input', (e) => autoResizeAiInput(e.target));
+    $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); } });
+    $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = [{ role: 'system', content: '当前会话上下文已清理。' }]; renderAiChat(); });
+    $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
+    $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
+    $('#aiRefreshStatusBtn')?.addEventListener('click', async () => { const r = await api('/api/ai/status'); settings.ai = normalizeAiSettings(r.ai || {}); renderAiSettingsForm(); toast('AI 配置已刷新'); });
+    $('#aiChatArea')?.addEventListener('click', (e) => { const approve = e.target.dataset.aiConfirmApprove, deny = e.target.dataset.aiConfirmDeny; if (approve) resolveAiConfirmation(approve, true); if (deny) resolveAiConfirmation(deny, false); });
+    $('#aiUploadBtn')?.addEventListener('click', () => $('#aiFileUpload').click());
+    $('#aiFileUpload')?.addEventListener('change', (e) => { const names = Array.from(e.target.files || []).map((f) => `${f.name} (${f.size} bytes)`).join(', '); if (names) appendAiMessage(`[附件已选择] ${names}`, 'user'); e.target.value = ''; });
+    $('#aiVoiceBtn')?.addEventListener('click', toggleAiVoice);
+}
+
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
 async function remoteExecute(e) { e.preventDefault(); const ids = $$('#remoteServerList input:checked').map((i) => i.value); try { $('#remoteResults').innerHTML = '<div class="empty-card">执行中...</div>'; const data = await api('/api/remote-execute', { method: 'POST', body: JSON.stringify({ connectionIds: ids, command: $('#remoteCommand').value, timeoutSeconds: Number($('#remoteTimeout').value) || 30 }) }); $('#remoteResults').innerHTML = data.results.map((r) => `<article class="result-card ${r.success ? 'ok' : 'fail'}"><h3>${escapeHtml(r.name)} <span>${escapeHtml(r.status)} · ${r.durationMs}ms</span></h3>${r.error ? `<p class="error-text">${escapeHtml(r.error)}</p>` : ''}<pre>${escapeHtml(r.stdout || '')}</pre>${r.stderr ? `<pre class="stderr">${escapeHtml(r.stderr)}</pre>` : ''}</article>`).join(''); await loadConnections(); } catch (err) { toast(err.message); } }
 
@@ -2395,8 +2834,10 @@ async function loadSettings() {
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
     $('#terminalShortcutPlatform').value = getTerminalShortcutPlatform();
     settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(settings.appearance || {}) };
+    settings.ai = normalizeAiSettings(settings.ai || {});
     applyAppearance(settings.appearance);
     applyTheme(getPreferredTheme());
+    renderAiSettingsForm();
     await loadSecurityStatus(); await loadSecurityLists();
 }
 async function saveBeian(e) { e.preventDefault(); settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ beian: { icp: $('#icpInput').value, icpUrl: $('#icpUrlInput').value, policeBeian: $('#policeInput').value, policeBeianUrl: $('#policeUrlInput').value, show: $('#showBeianInput').checked } }) }); toast('备案信息已保存'); }
@@ -2881,6 +3322,7 @@ function bindEvents() {
         renderTerminalTabs();
     });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#sshKeyForm').addEventListener('submit', saveSshKey); $('#resetSshKeyForm').addEventListener('click', resetSshKeyForm);
+    setupAiAssistant();
     $('#brandIconFile').addEventListener('change', async (e) => { try { const dataUrl = await readImageAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; pendingBrandIcon = dataUrl; $('#brandIconPreview').innerHTML = iconHtml(dataUrl); console.debug('[appearance-client]', 'brand icon file loaded', { size: e.target.files?.[0]?.size || 0, type: e.target.files?.[0]?.type || '' }); } catch (err) { e.target.value = ''; toast(err.message); } });
     $('#resetAppearanceBtn').addEventListener('click', () => resetAppearance().catch((err) => toast(err.message)));
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.openProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyType').value = p.type || 'socks5'; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (e.target.dataset.openProxy) { await openProxySecret(id); } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });

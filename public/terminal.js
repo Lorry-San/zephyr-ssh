@@ -118,6 +118,7 @@ let fmEditorMinimapCode = $('#fmEditorMinimapCode');
 let fmEditorMinimapToggle = $('#fmEditorMinimapToggle');
 let fmEditorCompactBtn = $('#fmEditorCompactBtn');
 let fmEditorPaletteBtn = $('#fmEditorPaletteBtn');
+let fmEditorAiBtn = $('#fmEditorAiBtn');
 let fmEditorFormatBtn = $('#fmEditorFormatBtn');
 let fmEditorSaveBtn = $('#fmEditorSaveBtn');
 let fmEditorCancelBtn = $('#fmEditorCancelBtn');
@@ -4825,6 +4826,7 @@ function updateActiveEditorRefs(panel = activeEditorPanel || fmEditorModal) {
     fmEditorMinimapToggle = panel.querySelector('[data-editor-action="minimap"], #fmEditorMinimapToggle');
     fmEditorCompactBtn = panel.querySelector('[data-editor-action="compact"], #fmEditorCompactBtn');
     fmEditorPaletteBtn = panel.querySelector('[data-editor-action="palette"], #fmEditorPaletteBtn');
+    fmEditorAiBtn = panel.querySelector('[data-editor-action="ai-complete"], #fmEditorAiBtn');
     fmEditorFormatBtn = panel.querySelector('[data-editor-action="format"], #fmEditorFormatBtn');
     fmEditorSaveBtn = panel.querySelector('[data-editor-action="save"], #fmEditorSaveBtn');
     fmEditorCancelBtn = panel.querySelector('[data-editor-action="cancel"], #fmEditorCancelBtn');
@@ -4851,6 +4853,7 @@ function markEditorRoles(panel) {
         ['#fmEditorCompactBtn', 'data-editor-action', 'compact'],
         ['#fmEditorMinimapToggle', 'data-editor-action', 'minimap'],
         ['#fmEditorPaletteBtn', 'data-editor-action', 'palette'],
+        ['#fmEditorAiBtn', 'data-editor-action', 'ai-complete'],
         ['#fmEditorFormatBtn', 'data-editor-action', 'format'],
         ['#fmEditorUndoBtn', 'data-editor-action', 'undo'],
         ['#fmEditorRedoBtn', 'data-editor-action', 'redo'],
@@ -5369,6 +5372,7 @@ fmEditorRedoBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPr
 fmEditorMinimapToggle?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorMinimapToggle.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); });
 fmEditorCompactBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorCompactBtn.closest('.fm-editor-modal')); window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); });
 fmEditorPaletteBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorPaletteBtn.closest('.fm-editor-modal')); const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); });
+fmEditorAiBtn?.addEventListener('click', async (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorAiBtn.closest('.fm-editor-modal')); const ok = await window.ZephyrCodeEditor?.aiComplete?.(getEditorInstance()); if (ok) showToast('AI 补全已处理', 'success'); });
 fmEditorSaveBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); updateActiveEditorRefs(fmEditorSaveBtn.closest('.fm-editor-modal')); saveActiveEditor({ closeAfterSave: false }); });
 fmEditorEncoding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorEncoding.closest('.fm-editor-modal')); if (editorRawBytes) loadEditorFromBytes(editorRawBytes, fmEditorEncoding.value); });
 fmEditorLineEnding?.addEventListener('change', () => { updateActiveEditorRefs(fmEditorLineEnding.closest('.fm-editor-modal')); updateEditorStatus(); });
@@ -5399,6 +5403,7 @@ function setupClonedEditorEvents(panel) {
         else if (action === 'minimap') { window.ZephyrCodeEditor?.toggleMinimap?.(getEditorInstance()); localStorage.setItem('zephyr-editor-minimap-hidden', getEditorInstance()?.minimap ? '0' : '1'); updateEditorStatus(); }
         else if (action === 'compact') { window.ZephyrCodeEditor?.toggleCompact?.(getEditorInstance()); localStorage.setItem('zephyr-editor-compact', getEditorInstance()?.compact ? '1' : '0'); updateEditorStatus(); }
         else if (action === 'palette') { const instance = getEditorInstance(); window.ZephyrCodeEditor?.openPalette?.(instance); fmEditorPaletteBtn?.classList.toggle('active', !!instance?.panel?.querySelector('[data-editor-role="commandPalette"]')?.classList.contains('open')); }
+        else if (action === 'ai-complete') { const ok = await window.ZephyrCodeEditor?.aiComplete?.(getEditorInstance()); if (ok) showToast('AI 补全已处理', 'success'); }
         else if (action === 'undo') window.ZephyrCodeEditor?.undo?.(getEditorInstance());
         else if (action === 'redo') window.ZephyrCodeEditor?.redo?.(getEditorInstance());
         else if (action === 'save') saveActiveEditor({ closeAfterSave: false });

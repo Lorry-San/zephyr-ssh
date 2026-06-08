@@ -29,6 +29,11 @@ const secretCrypto = require('./secret-crypto');
 const { handleEditorLspConnection } = require('./editor-lsp-server');
 const { getAppVersion } = require('./version');
 const {
+    registerAiRoutes,
+    normalizeAiSettingsInput,
+    safeAiSettings,
+} = require('./ai-agent-service');
+const {
     getImageExt,
     isBrowserImageExt,
     isPreviewImageExt,
@@ -1096,6 +1101,7 @@ function safeSettings(s = storage.getSettings()) {
     if (copy.captcha?.tencentAppSecretKey) copy.captcha.tencentAppSecretKey = '******';
     if (copy.captcha?.tencentSecretKey) copy.captcha.tencentSecretKey = '******';
     if (copy.captcha?.aliyunAccessKeySecret) copy.captcha.aliyunAccessKeySecret = '******';
+    if (copy.ai) copy.ai = safeAiSettings(copy.ai);
     return copy;
 }
 function mergeSecret(oldValue, newValue) { return newValue === '******' ? oldValue : (newValue ?? oldValue ?? ''); }
@@ -1112,6 +1118,9 @@ function normalizeSettingsInput(body) {
         tencentSecretKey: mergeSecret(current.captcha?.tencentSecretKey, body.captcha.tencentSecretKey),
         aliyunAccessKeySecret: mergeSecret(current.captcha?.aliyunAccessKeySecret, body.captcha.aliyunAccessKeySecret)
     };
+    if (body.ai) {
+        next.ai = normalizeAiSettingsInput(current.ai || {}, body.ai || {});
+    }
     if (body.appearance) {
         const currentAppearance = current.appearance || {};
         const brandName = String(body.appearance.brandName ?? currentAppearance.brandName ?? 'Zephyr').trim().slice(0, 40) || 'Zephyr';
@@ -1449,7 +1458,7 @@ async function zipBuffer(files) {
 }
 
 initData();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 app.post('/api/auth/login', async (req, res) => {
     const { username, password, captchaToken, remember } = req.body || {};
@@ -1714,6 +1723,16 @@ app.delete('/api/security/ip-bans/:ip', requireAuth, (req, res) => { storage.cle
 app.get('/api/security/login-events', requireAuth, (req, res) => res.json({ events: storage.listLoginEvents(100) }));
 app.delete('/api/security/login-events', requireAuth, (req, res) => { storage.clearLoginEvents(); addActivity('清理登录事件日志'); res.json({ ok: true }); });
 app.delete('/api/activities', requireAuth, (req, res) => { storage.clearActivities(); res.json({ ok: true }); });
+
+registerAiRoutes(app, {
+    requireAuth,
+    storage,
+    readJSON,
+    CONNECTIONS_FILE,
+    createRoutedSSHConnection,
+    runRemoteCommand,
+    addActivity,
+});
 
 app.get('/api/public/settings', (req, res) => {
     const s = storage.getSettings();

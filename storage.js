@@ -92,6 +92,12 @@ function decryptSettingsValue(key, value) {
             if (copy[field]) copy[field] = decryptSecretField(copy[field], 'settings', 'captcha', field);
         });
     }
+    if (key === 'ai' && Array.isArray(copy.providers)) {
+        copy.providers = copy.providers.map((provider) => ({
+            ...provider,
+            apiKey: provider?.apiKey ? decryptSecretField(provider.apiKey, 'settings', 'ai', `provider:${provider.id || provider.name || 'default'}:apiKey`) : '',
+        }));
+    }
     return copy;
 }
 
@@ -103,6 +109,12 @@ function encryptSettingsValue(key, value) {
         ['secretKey', 'tencentAppSecretKey', 'tencentSecretKey', 'aliyunAccessKeySecret'].forEach((field) => {
             if (copy[field]) copy[field] = encryptSecretField(copy[field], 'settings', 'captcha', field);
         });
+    }
+    if (key === 'ai' && Array.isArray(copy.providers)) {
+        copy.providers = copy.providers.map((provider) => ({
+            ...provider,
+            apiKey: provider?.apiKey ? encryptSecretField(provider.apiKey, 'settings', 'ai', `provider:${provider.id || provider.name || 'default'}:apiKey`) : '',
+        }));
     }
     return copy;
 }
@@ -165,6 +177,18 @@ function defaultSettings(legacySettings = {}) {
             minimizedKeepAlive: 0,
             smartbarOrder: 'old-first',
             shortcutPlatform: 'auto',
+        },
+        ai: {
+            enabled: false,
+            assistantName: 'Zephyr AI',
+            defaultProviderId: '',
+            defaultModel: '',
+            systemPrompt: '',
+            codeCompletionEnabled: true,
+            sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
+            permissions: { webSearch: true, webFetch: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true },
+            providers: [],
+            skills: [],
         },
         icp: legacySettings.icp || '',
         policeBeian: legacySettings.policeBeian || '',
