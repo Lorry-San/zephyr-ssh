@@ -209,6 +209,75 @@ Zephyr 内置可选 AI Agent 能力，默认关闭。登录后台后进入 **设
 
 API Key、AI 环境变量等密钥会作为设置敏感字段使用 ML-KEM-768 + AES-256-GCM 混合加密后保存；前端读取设置时只返回 `******` 占位。需要再次查看 AI Provider API Key 时，可在模型供应商列表点击“查看 Key”，流程复用已保存密码查看逻辑：开启 TOTP 时输入动态验证码，否则输入当前登录密码。
 
+### Skill 怎么写
+
+Skill 不是插件代码，而是一段会被注入 AI 上下文的“操作规程 / 工具说明书”。适合把固定工作流、项目约定、服务器规则、工具调用顺序写清楚，让模型少猜、少摸索。
+
+建议一个 Skill 按下面结构写：
+
+```md
+# Skill 名称
+
+## 适用场景
+- 用户提到哪些关键词/任务时使用这个 Skill。
+- 不适用什么场景，避免模型误用。
+
+## 必须先确认的上下文
+- 当前连接 / 项目 / 标签怎么选。
+- 需要先调用哪些只读工具，例如 list_connections、list_zephyr_resources、memory_search、remote_read_file。
+
+## 工具调用流程
+1. 第一步调用什么工具，拿什么字段。
+2. 第二步如何根据结果分支。
+3. 修改类操作用哪些工具，哪些操作必须等待敏感确认。
+
+## 安全规则
+- 不复述密码、私钥、Token。
+- 删除 / 重启 / 写文件 / 执行命令前说明对象和风险。
+- 远程命令避免 top、vim、less、tail -f、watch 等交互/无界命令。
+
+## 输出格式
+- 已执行：列动作和结果。
+- 需要确认：列目标、命令/文件、风险。
+- 失败：列证据、原因、下一步。
+```
+
+Zephyr 自带的默认 Skill 已经写入了本地运维常用规则，重点包括：
+
+- **连接选择**：先 `list_connections` / `list_zephyr_resources`，按名称、Host、标签、备注匹配，不让用户手动复制 ID。
+- **本地资源管理**：连接用 `connection_create/update/delete/test`，代理用 `proxy_save/delete`，SSH 密钥用 `ssh_key_save/delete`，跳板机用 `jump_host_save/delete`，代码片段用 `snippet_save/delete`。
+- **当前页面 UI 代操作**：Zephyr 自身页面不要再用浏览器 DOM 自动化摸索，优先用 `ui_action`；打开 SSH/RDP/VNC 会话优先用 `open_connection`。
+- **终端操作**：后台批量命令优先 `remote_execute`；如果用户明确要“在当前终端可见输入”，才用 `ui_action({ action:'terminal_send_input', run:false/true })`，其中 `run:true` 会触发敏感确认。
+- **远程运维**：RDP/VNC 只能打开会话或测试连通性，不能当 SSH 执行命令；SSH 修改前尽量备份，修改后验证。
+- **Memory**：长期记忆要带 `connectionIds`、`project/scope`、`tags`，不要只写一段散文。
+
+一个面向具体项目的 Skill 示例：
+
+```md
+# Zephyr 项目部署 Skill
+
+## 适用场景
+用户提到“部署 Zephyr / 更新 Zephyr / 检查 Zephyr 服务”时使用。
+
+## 上下文选择
+- 先 list_connections，优先选择 tags 包含 zephyr、prod、server 的 SSH 连接。
+- 再 memory_search，query 使用 zephyr deploy，connectionIds 使用当前连接。
+
+## 流程
+1. 用 remote_execute 查看当前目录、git 分支、服务管理方式：pwd; git status --short; docker ps; systemctl status zephyr --no-pager。
+2. 如果要改代码，先确认分支和未提交内容；不要直接覆盖用户改动。
+3. 部署前创建计划 plan_task，列出 pull/build/restart/verify。
+4. 重启或写文件属于敏感操作，等待用户确认。
+5. 完成后用 curl / health check / docker logs --tail 80 验证。
+
+## 输出
+- 先说当前版本、目标版本、服务状态。
+- 再列已执行命令和验证结果。
+- 失败时给下一步，不要重复盲跑。
+```
+
+写 Skill 时尽量写“何时用、先查什么、调用哪个工具、失败怎么处理”，少写抽象人格描述。不要把 API Key、密码、私钥直接写进 Skill；密钥应放在 AI 环境变量或连接/密钥库里，由工具按敏感确认流程读取。
+
 ---
 
 ## RDP / VNC / noVNC
