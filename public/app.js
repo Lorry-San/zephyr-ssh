@@ -2400,6 +2400,7 @@ function startWorkspaceSplitterDrag(e, axis) {
 }
 
 
+const DEFAULT_AI_GUIDANCE_TEXT = `Zephyr 默认内置提示词已启用：优先使用当前连接上下文、连接标签/备注、Memory、计划器、浏览器截图预览和远程文件/命令工具；先查事实再操作，危险操作走确认。`;
 function defaultAiSettings() {
     return {
         enabled: false,
@@ -2407,6 +2408,8 @@ function defaultAiSettings() {
         defaultProviderId: '',
         defaultModel: '',
         systemPrompt: '',
+        defaultSystemPrompt: DEFAULT_AI_GUIDANCE_TEXT,
+        guidanceVersion: 1,
         codeCompletionEnabled: true,
         sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
         permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },

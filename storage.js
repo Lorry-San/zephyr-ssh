@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const { getAppVersion } = require('./version');
+const { DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION, DEFAULT_ZEPHYR_SYSTEM_PROMPT, cloneDefaultZephyrSkills } = require('./ai-defaults');
 const secretCrypto = require('./secret-crypto');
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -196,13 +197,15 @@ function defaultSettings(legacySettings = {}) {
             defaultProviderId: '',
             defaultModel: '',
             systemPrompt: '',
+            defaultSystemPrompt: DEFAULT_ZEPHYR_SYSTEM_PROMPT,
+            guidanceVersion: DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION,
             codeCompletionEnabled: true,
             sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
             permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
             planner: { enabled: true, requirePlanBeforeTools: false },
             memory: { enabled: true, maxItems: 500 },
             providers: [],
-            skills: [],
+            skills: cloneDefaultZephyrSkills(),
             envVars: [],
         },
         icp: legacySettings.icp || '',
@@ -349,6 +352,24 @@ function init({ hashPassword }) {
     const migrated = migratePlaintextSecrets();
     if (migrated) { try { db.exec('VACUUM'); db.pragma('wal_checkpoint(TRUNCATE)'); } catch {} }
     if ((getSettings().version || '0') !== APP_VERSION) updateSettings({ ...defaults, ...getSettings(), version: APP_VERSION });
+    ensureAiGuidanceDefaults();
+}
+
+function ensureAiGuidanceDefaults() {
+    const settings = getSettings();
+    const ai = settings.ai || {};
+    let changed = false;
+    const next = { ...ai };
+    if (!String(next.defaultSystemPrompt || '').trim() || Number(next.guidanceVersion || 0) < DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION) {
+        next.defaultSystemPrompt = DEFAULT_ZEPHYR_SYSTEM_PROMPT;
+        next.guidanceVersion = DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION;
+        changed = true;
+    }
+    const skills = Array.isArray(next.skills) ? next.skills.slice() : [];
+    cloneDefaultZephyrSkills().forEach((skill) => {
+        if (!skills.some((item) => item?.id === skill.id || item?.name === skill.name)) { skills.unshift(skill); changed = true; }
+    });
+    if (changed) updateSettings({ ai: { ...next, skills } });
 }
 
 function migratePlaintextSecrets() {

@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { browserService, SHOT_DIR } = require('./ai-browser-service');
+const { DEFAULT_ZEPHYR_SYSTEM_PROMPT, DEFAULT_ZEPHYR_SKILLS } = require('./ai-defaults');
 
 const OPENAI_TOOL_LIMIT = 4;
 const MAX_TOOL_TEXT = 60 * 1024;
@@ -106,8 +107,16 @@ async function fetchJson(url, options = {}) {
     }
     return data ?? {};
 }
+function mergeZephyrDefaultSkills(skills = []) {
+    const list = Array.isArray(skills) ? skills.slice() : [];
+    DEFAULT_ZEPHYR_SKILLS.forEach((skill) => {
+        const exists = list.some((item) => item?.id === skill.id || item?.name === skill.name);
+        if (!exists) list.unshift({ ...skill, updatedAt: Date.now() });
+    });
+    return list;
+}
 function buildSystemPrompt(ai = {}, context = {}) {
-    const enabledSkills = (Array.isArray(ai.skills) ? ai.skills : []).filter((s) => s?.enabled !== false && (s.prompt || s.description || s.name));
+    const enabledSkills = mergeZephyrDefaultSkills(ai.skills).filter((s) => s?.enabled !== false && (s.prompt || s.description || s.name));
     const skillsText = enabledSkills.length
         ? `\n\n已启用 Skills：\n${enabledSkills.map((s, i) => `# Skill ${i + 1}: ${s.name || '未命名'}\n${s.description ? `说明：${s.description}\n` : ''}${s.prompt || ''}`).join('\n\n')}`
         : '';
@@ -118,17 +127,14 @@ function buildSystemPrompt(ai = {}, context = {}) {
     const contextText = formatAiContextForPrompt(context);
     const envNames = Array.isArray(ai.envVars) ? ai.envVars.filter((e) => e?.enabled !== false && e.name).map((e) => e.name).join(', ') : '';
     const envText = envNames ? `\n\n可用 AI 环境变量名（值需通过 get_env_var 工具并经敏感确认后读取）：${envNames}` : '';
+    const defaultPrompt = String(ai.defaultSystemPrompt || DEFAULT_ZEPHYR_SYSTEM_PROMPT || '').trim();
+    const customPrompt = String(ai.systemPrompt || '').trim();
     return [
         `你是 ${ai.assistantName || 'Zephyr AI 助理'}，运行在 Zephyr SSH 管理平台内。`,
-        '你要像真正的运维/开发智能体一样工作：先理解目标，再尽量使用可用工具获取事实、搜索网页、操作浏览器、读取远程文件、执行安全命令或给出可审计补丁。',
-        '复杂任务优先使用任务规划器：先提出计划、分解步骤、标记风险；执行过程中用 plan_update 持续更新步骤状态，遇到阻塞可暂停，失败后可标记失败并重试。',
-        '涉及写文件、远程执行、删除、重启、安装、改权限、改网络/防火墙、读取环境变量/密钥等操作时，必须等待 Zephyr 的敏感操作确认机制。',
-        'Memory 会按当前连接、项目、标签自动关联；保存 Memory 时优先补充 connectionIds、project/projects、tags，便于下次自动召回。',
-        '浏览器自动化工具会返回可视化预览截图；需要观察页面时优先使用 browser_screenshot 或查看工具返回的 preview。',
-        '输出要简洁、可执行；命令和补丁必须说明作用与风险。',
+        defaultPrompt,
         `当前时间：${new Date().toISOString()}`,
         contextText,
-        ai.systemPrompt ? `\n用户自定义系统提示：\n${ai.systemPrompt}` : '',
+        customPrompt ? `\n用户自定义系统提示：\n${customPrompt}` : '',
         skillsText,
         memoryText,
         envText,
@@ -693,6 +699,8 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     next.defaultProviderId = String(pick('defaultProviderId', currentAi.defaultProviderId) || '').slice(0, 120);
     next.defaultModel = String(pick('defaultModel', currentAi.defaultModel) || '').slice(0, 160);
     next.systemPrompt = String(pick('systemPrompt', currentAi.systemPrompt) || '').slice(0, 20000);
+    next.defaultSystemPrompt = String(pick('defaultSystemPrompt', currentAi.defaultSystemPrompt || DEFAULT_ZEPHYR_SYSTEM_PROMPT) || DEFAULT_ZEPHYR_SYSTEM_PROMPT).slice(0, 40000);
+    next.guidanceVersion = Math.max(1, Number(pick('guidanceVersion', currentAi.guidanceVersion) || 1));
     next.codeCompletionEnabled = pick('codeCompletionEnabled', currentAi.codeCompletionEnabled) !== false;
     const sensitiveIn = { ...(currentAi.sensitive || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'sensitive') ? (partial.sensitive || {}) : {}) };
     next.sensitive = {
@@ -744,14 +752,16 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
         });
     }
     if (Array.isArray(ai.skills)) {
-        next.skills = ai.skills.slice(0, 200).map((s) => ({
+        next.skills = mergeZephyrDefaultSkills(ai.skills.slice(0, 200).map((s) => ({
             id: String(s.id || crypto.randomUUID()).slice(0, 120),
             name: String(s.name || '').slice(0, 80),
             description: String(s.description || '').slice(0, 500),
             prompt: String(s.prompt || '').slice(0, 30000),
             enabled: s.enabled !== false,
             updatedAt: Number(s.updatedAt || Date.now()),
-        })).filter((s) => s.name || s.prompt);
+        })).filter((s) => s.name || s.prompt)).slice(0, 200);
+    } else {
+        next.skills = mergeZephyrDefaultSkills(next.skills || []).slice(0, 200);
     }
     if (Array.isArray(ai.memories)) {
         next.memories = ai.memories.slice(0, 2000).map((m) => ({
