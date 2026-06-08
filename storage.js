@@ -361,14 +361,20 @@ function ensureAiGuidanceDefaults() {
     const ai = settings.ai || {};
     let changed = false;
     const next = { ...ai };
-    if (!String(next.defaultSystemPrompt || '').trim() || Number(next.guidanceVersion || 0) < DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION) {
+    const shouldUpgradeGuidance = !String(next.defaultSystemPrompt || '').trim() || Number(next.guidanceVersion || 0) < DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION;
+    if (shouldUpgradeGuidance) {
         next.defaultSystemPrompt = DEFAULT_ZEPHYR_SYSTEM_PROMPT;
         next.guidanceVersion = DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION;
         changed = true;
     }
     const skills = Array.isArray(next.skills) ? next.skills.slice() : [];
     cloneDefaultZephyrSkills().forEach((skill) => {
-        if (!skills.some((item) => item?.id === skill.id || item?.name === skill.name)) { skills.unshift(skill); changed = true; }
+        const idx = skills.findIndex((item) => item?.id === skill.id || item?.name === skill.name);
+        if (idx < 0) { skills.unshift(skill); changed = true; }
+        else if (shouldUpgradeGuidance && skill.id === 'zephyr-local-operator') {
+            skills[idx] = { ...skills[idx], name: skill.name, description: skill.description, prompt: skill.prompt, updatedAt: Date.now() };
+            changed = true;
+        }
     });
     if (changed) updateSettings({ ai: { ...next, skills } });
 }
