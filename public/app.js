@@ -2937,7 +2937,9 @@ function setAiTyping(show) {
     const send = $('#aiSendBtn');
     if (send) {
         send.classList.toggle('ai-stop-mode', !!show);
-        send.textContent = show ? '■' : '➤';
+        send.innerHTML = show
+            ? '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"></rect></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>';
         send.title = show ? '停止 AI 回复' : '发送';
         send.setAttribute('aria-label', show ? '停止 AI 回复' : '发送');
     }

@@ -8374,3 +8374,141 @@ body.app-body:not(.terminal-mode) .app-main {
         opacity: 0.62;
     }
 }
+
+
+/* 20260608: unify top AI button and macOS-style AI input bar */
+.nav-actions .ai-floating-btn,
+.nav-actions .ai-floating-btn.active,
+.nav-actions .ai-floating-btn:not(.active) {
+    background: var(--surface) !important;
+    color: var(--accent-hover) !important;
+    border-color: var(--border) !important;
+    box-shadow: none !important;
+}
+.nav-actions .ai-floating-btn:hover,
+.nav-actions .ai-floating-btn.active:hover {
+    background: var(--bg) !important;
+    border-color: var(--text-secondary) !important;
+}
+
+.ai-agent-panel {
+    --ai-mac-input-bg: rgba(28, 28, 30, 0.85);
+    --ai-mac-input-border: rgba(255, 255, 255, 0.10);
+    --ai-mac-field-bg: rgba(255, 255, 255, 0.10);
+    --ai-mac-focus-bg: rgba(44, 44, 46, 0.94);
+    --ai-mac-primary: #007AFF;
+    --ai-mac-icon-color: #9898ED;
+    --ai-mac-text: #ffffff;
+    --ai-mac-placeholder: #636366;
+}
+:root[data-theme="light"] .ai-agent-panel {
+    --ai-mac-input-bg: rgba(245, 245, 247, 0.85);
+    --ai-mac-input-border: rgba(0, 0, 0, 0.08);
+    --ai-mac-field-bg: rgba(255, 255, 255, 0.65);
+    --ai-mac-focus-bg: rgba(255, 255, 255, 0.95);
+    --ai-mac-icon-color: #8E8E93;
+    --ai-mac-text: #1D1D1F;
+    --ai-mac-placeholder: #AEAEB2;
+}
+.ai-agent-panel .ai-input-area {
+    display: flex !important;
+    grid-template-columns: none !important;
+    align-items: center !important;
+    gap: 0 !important;
+    flex: 0 0 auto;
+    min-height: 46px;
+    margin: 10px 44px 12px;
+    padding: 6px 6px 6px 14px !important;
+    border: 1px solid var(--ai-mac-input-border) !important;
+    border-radius: 24px;
+    background: var(--ai-mac-input-bg) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+}
+.ai-agent-panel .ai-input-area:focus-within {
+    border-color: rgba(0, 122, 255, 0.50) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.05), 0 0 0 3px rgba(0,122,255,0.25);
+    background: var(--ai-mac-focus-bg) !important;
+}
+.ai-agent-panel .ai-tool-btn {
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 0 !important;
+    padding: 8px !important;
+    margin: 0 4px 0 0 !important;
+    border: 0 !important;
+    border-radius: 50% !important;
+    background: transparent !important;
+    color: var(--ai-mac-icon-color) !important;
+    box-shadow: none !important;
+    font-size: 0 !important;
+}
+.ai-agent-panel .ai-tool-btn:hover {
+    background: color-mix(in srgb, var(--ai-mac-text) 7%, transparent) !important;
+    color: var(--ai-mac-text) !important;
+    box-shadow: none !important;
+    transform: none;
+}
+.ai-agent-panel .ai-tool-btn:active { transform: scale(.92); }
+.ai-agent-panel .ai-tool-btn svg { width: 20px; height: 20px; display: block; }
+.ai-agent-panel .ai-input-box {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 32px !important;
+    max-height: 140px;
+    padding: 6px 8px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: var(--ai-mac-text) !important;
+    box-shadow: none !important;
+    font-size: 14px;
+    line-height: 1.5;
+    outline: none;
+    resize: none;
+}
+.ai-agent-panel .ai-input-box:focus {
+    border-color: transparent !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+.ai-agent-panel .ai-input-box::placeholder { color: var(--ai-mac-placeholder); font-size: 14px; }
+.ai-agent-panel .ai-send-btn {
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 0 0 8px !important;
+    border: 0 !important;
+    border-radius: 50% !important;
+    background: var(--ai-mac-primary) !important;
+    color: #fff !important;
+    box-shadow: 0 2px 6px rgba(0,122,255,0.30) !important;
+    font-size: 0 !important;
+}
+.ai-agent-panel .ai-send-btn:hover { filter: brightness(1.05); box-shadow: 0 2px 6px rgba(0,122,255,0.30) !important; }
+.ai-agent-panel .ai-send-btn:active { transform: scale(.92); }
+.ai-agent-panel .ai-send-btn svg { width: 14px; height: 14px; display: block; }
+.ai-agent-panel .ai-send-btn.ai-stop-mode {
+    background: var(--danger) !important;
+    border-color: transparent !important;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--danger) 34%, transparent) !important;
+}
+.ai-agent-panel .ai-send-btn.ai-stop-mode svg { width: 13px; height: 13px; }
+.ai-agent-panel.ai-narrow .ai-input-area { margin: 8px 36px 10px; padding: 5px 5px 5px 10px !important; }
+@media (max-width: 760px) {
+    .ai-agent-panel .ai-input-area { margin: 8px 42px 10px; padding: 6px 6px 6px 12px !important; }
+    .ai-agent-panel .ai-tool-btn { width: 34px !important; height: 34px !important; padding: 7px !important; }
+    .ai-agent-panel .ai-input-box { min-height: 32px !important; font-size: 14px; }
+    .ai-agent-panel .ai-send-btn { width: 32px !important; height: 32px !important; }
+}
