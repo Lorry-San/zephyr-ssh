@@ -8310,3 +8310,67 @@ body.app-body:not(.terminal-mode) .app-main {
 @media (prefers-reduced-motion: reduce) {
     .novnc-page *, .novnc-page *::before, .novnc-page *::after { animation: none !important; transition-duration: .01ms !important; }
 }
+
+
+/* 20260608: align AI floating panel chrome with SSH file-manager */
+.ai-agent-panel.file-manager {
+    border-radius: var(--radius-lg) !important;
+    transform-origin: var(--panel-origin-x, 50%) var(--panel-origin-y, 0%);
+    transition:
+        transform 0.42s cubic-bezier(0.16, 1, 0.3, 1),
+        opacity 0.28s ease,
+        filter 0.32s ease,
+        visibility 0.36s;
+}
+.ai-agent-panel .panel-drag-handle {
+    height: 28px !important;
+    background: color-mix(in srgb, var(--border) 34%, transparent) !important;
+}
+.ai-agent-panel .panel-traffic-btn {
+    --panel-island-w: 58px;
+    --panel-island-h: 22px;
+}
+.ai-agent-panel .panel-resize-handle {
+    width: 38px !important;
+    height: 38px !important;
+    bottom: 8px !important;
+    z-index: 5;
+    opacity: 0.62;
+    border-radius: var(--radius-lg) !important;
+}
+.ai-agent-panel .panel-resize-handle.right { right: 4px !important; }
+.ai-agent-panel .panel-resize-handle.left { left: 4px !important; }
+.ai-agent-panel .panel-resize-handle::before {
+    width: 31px !important;
+    height: 31px !important;
+    border-width: 0 3px 3px 0 !important;
+    border-bottom-right-radius: var(--radius-lg) !important;
+}
+.ai-agent-panel .panel-resize-handle.left::before {
+    border-width: 0 0 3px 3px !important;
+    border-bottom-right-radius: 0 !important;
+    border-bottom-left-radius: var(--radius-lg) !important;
+}
+.ai-agent-panel.resizing .panel-resize-handle,
+.ai-agent-panel .panel-resize-handle:hover { opacity: 0.95; }
+
+@media (max-width: 760px) {
+    .ai-agent-panel.file-manager {
+        border-radius: var(--radius-lg) !important;
+        will-change: transform, opacity, filter;
+    }
+    .ai-agent-panel.panel-opening {
+        animation: floatingPanelOpenFromButton .36s cubic-bezier(.16, 1, .3, 1) both !important;
+    }
+    .ai-agent-panel.panel-closing {
+        animation: floatingPanelCloseToButton .28s cubic-bezier(.4, 0, .2, 1) both !important;
+    }
+    .ai-agent-panel .panel-drag-handle { height: 28px !important; }
+    .ai-agent-panel .panel-resize-handle {
+        display: block !important;
+        width: 38px !important;
+        height: 38px !important;
+        bottom: 8px !important;
+        opacity: 0.62;
+    }
+}

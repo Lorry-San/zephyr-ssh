@@ -3289,7 +3289,7 @@ function openAiAssistantPanel(trigger = null) {
     updateAiPanelResponsiveState();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
     renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
-    if (wasHidden && window.innerWidth > 760) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
+    if (wasHidden) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
     aiPanelState = 'open';
     startAiPanelWatchdog();
     if (window.innerWidth > 760) setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
@@ -3303,7 +3303,7 @@ function closeAiAssistantPanel() {
     p.classList.remove('open', 'panel-opening');
     p.setAttribute('aria-hidden', 'true');
     $('#aiFloatingBtn')?.classList.remove('active');
-    if (window.innerWidth > 760) animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
+    animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
     aiPanelCloseTimer = window.setTimeout(() => {
         if (aiPanelState === 'closing') {
             p.style.display = 'none';
@@ -3314,20 +3314,21 @@ function closeAiAssistantPanel() {
             aiPanelState = 'closed';
             stopAiPanelWatchdog();
         }
-    }, window.innerWidth > 760 ? 280 : 60);
+    }, 300);
 }
 function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(10080 + Math.floor(Date.now() % 40)); p.style.setProperty('--panel-z', p.style.zIndex); }
 function applyAiPanelLayout(layout) {
     const p = $('#aiAgentPanel');
     if (!p) return;
     const parentRect = aiPanelParentRect(p);
-    const margin = window.innerWidth <= 760 ? 6 : 12;
-    const topbar = window.innerWidth <= 760 ? 6 : 52;
+    const compact = window.innerWidth <= 760;
+    const margin = compact ? 6 : 12;
+    const topbar = compact ? 38 : 52;
     let left = margin, top = topbar, width = parentRect.width - margin * 2, height = parentRect.height - topbar - margin;
     if (layout === 'full') { left = margin; top = margin; width = parentRect.width - margin * 2; height = parentRect.height - margin * 2; }
-    else if (layout === 'half') { width = parentRect.width; height = Math.max(window.innerWidth <= 760 ? 420 : 360, parentRect.height / 2); left = 0; top = parentRect.height - height; }
-    else if (layout === 'left-quarter') { width = Math.max(window.innerWidth <= 760 ? parentRect.width - margin * 2 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = window.innerWidth <= 760 ? margin : 0; top = topbar; }
-    else if (layout === 'right-quarter') { width = Math.max(window.innerWidth <= 760 ? parentRect.width - margin * 2 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = window.innerWidth <= 760 ? margin : parentRect.width - width; top = topbar; }
+    else if (layout === 'half') { width = parentRect.width; height = Math.max(compact ? 260 : 360, parentRect.height / 2); left = 0; top = parentRect.height - height; }
+    else if (layout === 'left-quarter') { width = Math.max(compact ? 260 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = 0; top = topbar; }
+    else if (layout === 'right-quarter') { width = Math.max(compact ? 260 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = parentRect.width - width; top = topbar; }
     p.classList.add('layout-animating');
     window.clearTimeout(p._layoutAnimationTimer);
     Object.assign(p.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
@@ -3349,7 +3350,16 @@ function animateAiPanelFromButton(panel, button, opening = true) {
     window.clearTimeout(panel._aiPanelMotionTimer);
     panel._aiPanelMotionTimer = window.setTimeout(() => panel.classList.remove('panel-opening', 'panel-closing'), opening ? 380 : 300);
 }
-function aiPanelParentRect(panel) { return panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight }; }
+function aiPanelParentRect(panel) {
+    const viewport = window.visualViewport;
+    const fallback = panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+    return {
+        left: viewport?.offsetLeft || 0,
+        top: viewport?.offsetTop || 0,
+        width: viewport?.width || window.innerWidth || document.documentElement.clientWidth || fallback.width,
+        height: viewport?.height || window.innerHeight || document.documentElement.clientHeight || fallback.height,
+    };
+}
 function clampAiPanel(panel) {
     if (!panel) return;
     const rect = panel.getBoundingClientRect();
