@@ -98,6 +98,12 @@ function decryptSettingsValue(key, value) {
             apiKey: provider?.apiKey ? decryptSecretField(provider.apiKey, 'settings', 'ai', `provider:${provider.id || provider.name || 'default'}:apiKey`) : '',
         }));
     }
+    if (key === 'ai' && Array.isArray(copy.envVars)) {
+        copy.envVars = copy.envVars.map((envVar) => ({
+            ...envVar,
+            value: envVar?.value ? decryptSecretField(envVar.value, 'settings', 'ai', `env:${envVar.id || envVar.name || 'default'}:value`) : '',
+        }));
+    }
     return copy;
 }
 
@@ -114,6 +120,12 @@ function encryptSettingsValue(key, value) {
         copy.providers = copy.providers.map((provider) => ({
             ...provider,
             apiKey: provider?.apiKey ? encryptSecretField(provider.apiKey, 'settings', 'ai', `provider:${provider.id || provider.name || 'default'}:apiKey`) : '',
+        }));
+    }
+    if (key === 'ai' && Array.isArray(copy.envVars)) {
+        copy.envVars = copy.envVars.map((envVar) => ({
+            ...envVar,
+            value: envVar?.value ? encryptSecretField(envVar.value, 'settings', 'ai', `env:${envVar.id || envVar.name || 'default'}:value`) : '',
         }));
     }
     return copy;
@@ -186,9 +198,12 @@ function defaultSettings(legacySettings = {}) {
             systemPrompt: '',
             codeCompletionEnabled: true,
             sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
-            permissions: { webSearch: true, webFetch: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true },
+            permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
+            planner: { enabled: true, requirePlanBeforeTools: false },
+            memory: { enabled: true, maxItems: 500 },
             providers: [],
             skills: [],
+            envVars: [],
         },
         icp: legacySettings.icp || '',
         policeBeian: legacySettings.policeBeian || '',

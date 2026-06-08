@@ -113,6 +113,10 @@ RUN apk update && \
         p7zip \
         xz \
         bzip2 \
+        chromium \
+        nss \
+        harfbuzz \
+        ttf-freefont \
     && \
     rm -rf /opt/guacamole/* 2>/dev/null; \
     echo "=== runtime deps installed ==="

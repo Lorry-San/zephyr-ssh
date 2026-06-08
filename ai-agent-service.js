@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
+const { browserService, SHOT_DIR } = require('./ai-browser-service');
 
 const OPENAI_TOOL_LIMIT = 4;
 const MAX_TOOL_TEXT = 60 * 1024;
@@ -108,14 +111,22 @@ function buildSystemPrompt(ai = {}) {
     const skillsText = enabledSkills.length
         ? `\n\n已启用 Skills：\n${enabledSkills.map((s, i) => `# Skill ${i + 1}: ${s.name || '未命名'}\n${s.description ? `说明：${s.description}\n` : ''}${s.prompt || ''}`).join('\n\n')}`
         : '';
+    const memoryText = ai.memory?.enabled !== false && Array.isArray(ai.memories) && ai.memories.length
+        ? `\n\n长期 Memory / 项目记忆（按需参考，不要泄露敏感信息）：\n${ai.memories.filter((m) => m?.enabled !== false).slice(0, 80).map((m) => `- [${m.scope || 'global'}] ${m.title || m.key || 'memory'}: ${m.content || ''}`).join('\n')}`
+        : '';
+    const envNames = Array.isArray(ai.envVars) ? ai.envVars.filter((e) => e?.enabled !== false && e.name).map((e) => e.name).join(', ') : '';
+    const envText = envNames ? `\n\n可用 AI 环境变量名（值需通过 get_env_var 工具并经敏感确认后读取）：${envNames}` : '';
     return [
         `你是 ${ai.assistantName || 'Zephyr AI 助理'}，运行在 Zephyr SSH 管理平台内。`,
-        '你要像真正的运维/开发智能体一样工作：先理解目标，再尽量使用可用工具获取事实、搜索网页、读取远程文件、执行安全命令或给出可审计补丁。',
-        '涉及写文件、远程执行、删除、重启、安装、改权限、改网络/防火墙、泄露敏感信息等操作时，必须等待 Zephyr 的敏感操作确认机制。',
+        '你要像真正的运维/开发智能体一样工作：先理解目标，再尽量使用可用工具获取事实、搜索网页、操作浏览器、读取远程文件、执行安全命令或给出可审计补丁。',
+        '复杂任务优先使用任务规划器：先提出计划、分解步骤、标记风险，再逐步执行并更新状态。',
+        '涉及写文件、远程执行、删除、重启、安装、改权限、改网络/防火墙、读取环境变量/密钥等操作时，必须等待 Zephyr 的敏感操作确认机制。',
         '输出要简洁、可执行；命令和补丁必须说明作用与风险。',
         `当前时间：${new Date().toISOString()}`,
         ai.systemPrompt ? `\n用户自定义系统提示：\n${ai.systemPrompt}` : '',
         skillsText,
+        memoryText,
+        envText,
     ].filter(Boolean).join('\n');
 }
 function toolDefinitions(ai = {}) {
@@ -124,6 +135,23 @@ function toolDefinitions(ai = {}) {
     tools.push({ type: 'function', function: { name: 'list_connections', description: '列出 Zephyr 中可用的 SSH 连接（不含密码/私钥）。', parameters: { type: 'object', properties: {}, additionalProperties: false } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
+    if (p.browser !== false) {
+        tools.push({ type: 'function', function: { name: 'browser_navigate', description: '用内置 Chromium 打开 URL，并返回标题和页面文本摘要。', parameters: { type: 'object', properties: { url: { type: 'string' }, session: { type: 'string' }, waitMs: { type: 'number' } }, required: ['url'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_screenshot', description: '截取内置 Chromium 当前页面截图。', parameters: { type: 'object', properties: { session: { type: 'string' }, fullPage: { type: 'boolean' } } } } });
+        tools.push({ type: 'function', function: { name: 'browser_click', description: '点击当前页面中的 CSS 选择器或坐标。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'browser_type', description: '向当前页面表单元素输入文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' }, clear: { type: 'boolean' } }, required: ['selector', 'text'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_scroll', description: '滚动当前页面。', parameters: { type: 'object', properties: { session: { type: 'string' }, direction: { type: 'string', enum: ['up', 'down'] }, amount: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'browser_text', description: '读取当前浏览器页面可见/正文文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, maxChars: { type: 'number' } } } } });
+    }
+    if (p.memory !== false) {
+        tools.push({ type: 'function', function: { name: 'memory_search', description: '搜索长期 Memory / 项目记忆。', parameters: { type: 'object', properties: { query: { type: 'string' }, scope: { type: 'string' }, maxResults: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'memory_save', description: '保存长期 Memory 或项目记忆。', parameters: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' }, scope: { type: 'string' }, project: { type: 'string' } }, required: ['content'] } } });
+    }
+    if (p.env !== false) {
+        tools.push({ type: 'function', function: { name: 'list_env_vars', description: '列出 AI 专用环境变量名称和说明，不返回值。', parameters: { type: 'object', properties: {} } } });
+        tools.push({ type: 'function', function: { name: 'get_env_var', description: '读取 AI 专用环境变量的值。敏感操作，需要用户确认。', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } });
+    }
+    tools.push({ type: 'function', function: { name: 'plan_task', description: '为复杂任务创建或更新执行计划。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
     if (p.remoteExecute !== false) tools.push({ type: 'function', function: { name: 'remote_execute', description: '在一个或多个 SSH 连接上执行 shell 命令。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionIds: { type: 'array', items: { type: 'string' } }, command: { type: 'string' }, timeoutSeconds: { type: 'number' } }, required: ['connectionIds', 'command'] } } });
     if (p.fileRead !== false) tools.push({ type: 'function', function: { name: 'remote_read_file', description: '读取远程 SSH 主机上的文本文件。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, maxBytes: { type: 'number' } }, required: ['connectionId', 'path'] } } });
     if (p.fileWrite !== false) tools.push({ type: 'function', function: { name: 'remote_write_file', description: '写入或追加远程 SSH 主机文件。敏感操作需要用户确认。', parameters: { type: 'object', properties: { connectionId: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' }, encoding: { type: 'string', enum: ['utf8', 'base64'] }, append: { type: 'boolean' } }, required: ['connectionId', 'path', 'content'] } } });
@@ -288,6 +316,22 @@ function connectionSummary(conn) {
 function getSshConnections(deps) {
     return (deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] }).connections || []).filter((c) => String(c.protocol || '').toUpperCase() === 'SSH');
 }
+function aiEnvList(ai = {}) {
+    return (Array.isArray(ai.envVars) ? ai.envVars : []).filter((item) => item?.enabled !== false && item.name);
+}
+function publicEnvVar(item = {}) {
+    return { name: item.name, description: item.description || '', enabled: item.enabled !== false, hasValue: !!item.value, updatedAt: item.updatedAt || null };
+}
+function searchMemories(ai = {}, query = '', scope = '', maxResults = 10) {
+    const q = String(query || '').toLowerCase();
+    const wantedScope = String(scope || '').toLowerCase();
+    return (Array.isArray(ai.memories) ? ai.memories : [])
+        .filter((m) => m?.enabled !== false)
+        .filter((m) => !wantedScope || String(m.scope || '').toLowerCase().includes(wantedScope) || String(m.project || '').toLowerCase().includes(wantedScope))
+        .filter((m) => !q || [m.title, m.key, m.content, m.scope, m.project].join(' ').toLowerCase().includes(q))
+        .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
+        .slice(0, clampNumber(maxResults, 1, 50, 10));
+}
 function findConnection(deps, id) {
     const conn = getSshConnections(deps).find((c) => c.id === String(id || ''));
     if (!conn) throw new Error('SSH 连接不存在或不可用');
@@ -313,7 +357,7 @@ async function withRemoteSftp(deps, conn, fn) {
         (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
     }
 }
-function isSensitiveTool(name) { return ['remote_execute', 'remote_write_file'].includes(String(name || '')); }
+function isSensitiveTool(name) { return ['remote_execute', 'remote_write_file', 'get_env_var'].includes(String(name || '')); }
 function publicToolArgs(toolName, args) {
     const copy = JSON.parse(JSON.stringify(args || {}));
     if (copy.content && String(copy.content).length > 1200) copy.content = `${String(copy.content).slice(0, 1200)}\n...[内容已截断]`;
@@ -326,6 +370,7 @@ function confirmationSummary(toolName, args, deps) {
         try { connName = findConnection(deps, args.connectionId).name || connName; } catch {}
         return `写入远程文件：${connName}:${args.path}${args.append ? '（追加）' : ''}`;
     }
+    if (toolName === 'get_env_var') return `读取 AI 环境变量：${String(args.name || '').slice(0, 120)}`;
     return `执行工具：${toolName}`;
 }
 async function maybeRequireConfirmation(toolName, args, ctx, run, deps) {
@@ -353,6 +398,57 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
         case 'fetch_url':
             if (p.webFetch === false) throw new Error('网页读取权限未开启');
             return { url: String(args.url || ''), text: await fetchUrlText(args.url, args.maxChars) };
+        case 'browser_navigate':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return browserService.navigate({ url: args.url, session: args.session || 'default', waitMs: args.waitMs });
+        case 'browser_screenshot':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return browserService.screenshot({ session: args.session || 'default', fullPage: !!args.fullPage });
+        case 'browser_click':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return browserService.click({ session: args.session || 'default', selector: args.selector || '', x: args.x, y: args.y });
+        case 'browser_type':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return browserService.type({ session: args.session || 'default', selector: args.selector || '', text: args.text || '', clear: !!args.clear });
+        case 'browser_scroll':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return browserService.scroll({ session: args.session || 'default', direction: args.direction || 'down', amount: args.amount });
+        case 'browser_text':
+            if (p.browser === false) throw new Error('浏览器自动化权限未开启');
+            return { session: args.session || 'default', text: await browserService.text(args.session || 'default', clampNumber(args.maxChars, 1000, 120000, MAX_TOOL_TEXT)) };
+        case 'memory_search':
+            if (p.memory === false || ai.memory?.enabled === false) throw new Error('长期 Memory 权限未开启');
+            return { memories: searchMemories(ai, args.query || '', args.scope || args.project || '', args.maxResults || 10) };
+        case 'memory_save': {
+            if (p.memory === false || ai.memory?.enabled === false) throw new Error('长期 Memory 权限未开启');
+            const memories = Array.isArray(ai.memories) ? ai.memories.slice(0, 1000) : [];
+            const item = { id: crypto.randomUUID(), title: String(args.title || args.key || 'AI Memory').slice(0, 120), content: String(args.content || '').slice(0, 20000), scope: String(args.scope || 'global').slice(0, 80), project: String(args.project || '').slice(0, 120), enabled: true, createdAt: Date.now(), updatedAt: Date.now() };
+            if (!item.content.trim()) throw new Error('Memory 内容不能为空');
+            memories.unshift(item);
+            deps.storage.updateSettings({ ai: { memories: memories.slice(0, clampNumber(ai.memory?.maxItems, 1, 2000, 500)) } });
+            deps.addActivity?.(`AI 保存 Memory：${item.title}`);
+            return { memory: item };
+        }
+        case 'list_env_vars':
+            if (p.env === false) throw new Error('AI 环境变量权限未开启');
+            return { envVars: aiEnvList(ai).map(publicEnvVar) };
+        case 'get_env_var':
+            if (p.env === false) throw new Error('AI 环境变量权限未开启');
+            return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                const name = String(args.name || '').trim();
+                const item = aiEnvList(ai).find((envVar) => envVar.name === name);
+                if (!item) throw new Error('环境变量不存在或未启用');
+                return { name: item.name, value: item.value || '', description: item.description || '' };
+            }, deps);
+        case 'plan_task': {
+            const steps = Array.isArray(args.steps) ? args.steps.map((s) => String(s).slice(0, 500)).filter(Boolean) : [];
+            if (!steps.length) throw new Error('计划至少需要一个步骤');
+            const plans = Array.isArray(ai.plans) ? ai.plans.slice(0, 100) : [];
+            const plan = { id: crypto.randomUUID(), title: String(args.title || 'AI 任务计划').slice(0, 160), steps: steps.map((text, index) => ({ id: `step-${index + 1}`, text, status: 'pending' })), risk: String(args.risk || '').slice(0, 2000), status: 'planned', createdAt: Date.now(), updatedAt: Date.now() };
+            plans.unshift(plan);
+            deps.storage.updateSettings({ ai: { plans: plans.slice(0, 100) } });
+            return { plan };
+        }
         case 'remote_execute':
             if (p.remoteExecute === false) throw new Error('远程执行权限未开启');
             return maybeRequireConfirmation(toolName, args, ctx, async () => {
@@ -425,11 +521,16 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     next.permissions = {
         webSearch: ai.permissions?.webSearch !== false,
         webFetch: ai.permissions?.webFetch !== false,
+        browser: ai.permissions?.browser !== false,
         remoteExecute: ai.permissions?.remoteExecute !== false,
         fileRead: ai.permissions?.fileRead !== false,
         fileWrite: ai.permissions?.fileWrite !== false,
         codeEdit: ai.permissions?.codeEdit !== false,
+        memory: ai.permissions?.memory !== false,
+        env: ai.permissions?.env !== false,
     };
+    next.planner = { enabled: ai.planner?.enabled !== false, requirePlanBeforeTools: !!ai.planner?.requirePlanBeforeTools };
+    next.memory = { enabled: ai.memory?.enabled !== false, maxItems: clampNumber(ai.memory?.maxItems, 1, 2000, 500) };
     if (Array.isArray(ai.providers)) {
         next.providers = ai.providers.slice(0, 30).map((p) => {
             const old = currentProviders.find((x) => x.id === p.id) || {};
@@ -467,11 +568,49 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
             updatedAt: Number(s.updatedAt || Date.now()),
         })).filter((s) => s.name || s.prompt);
     }
+    if (Array.isArray(ai.memories)) {
+        next.memories = ai.memories.slice(0, 2000).map((m) => ({
+            id: String(m.id || crypto.randomUUID()).slice(0, 120),
+            title: String(m.title || m.key || 'Memory').slice(0, 120),
+            content: String(m.content || '').slice(0, 20000),
+            scope: String(m.scope || 'global').slice(0, 80),
+            project: String(m.project || '').slice(0, 120),
+            enabled: m.enabled !== false,
+            createdAt: Number(m.createdAt || Date.now()),
+            updatedAt: Number(m.updatedAt || Date.now()),
+        })).filter((m) => m.content.trim()).slice(0, next.memory.maxItems);
+    }
+    const currentEnvVars = Array.isArray(currentAi.envVars) ? currentAi.envVars : [];
+    if (Array.isArray(ai.envVars)) {
+        next.envVars = ai.envVars.slice(0, 200).map((item) => {
+            const old = currentEnvVars.find((x) => x.id === item.id || x.name === item.name) || {};
+            return {
+                id: String(item.id || old.id || crypto.randomUUID()).slice(0, 120),
+                name: String(item.name || '').trim().replace(/[^A-Za-z0-9_]/g, '_').slice(0, 80),
+                description: String(item.description || '').slice(0, 500),
+                value: item.value === '******' ? (old.value || '') : String(item.value || ''),
+                enabled: item.enabled !== false,
+                updatedAt: Number(item.updatedAt || Date.now()),
+            };
+        }).filter((item) => item.name);
+    }
+    if (Array.isArray(ai.plans)) {
+        next.plans = ai.plans.slice(0, 100).map((plan) => ({
+            id: String(plan.id || crypto.randomUUID()).slice(0, 120),
+            title: String(plan.title || 'AI 任务计划').slice(0, 160),
+            risk: String(plan.risk || '').slice(0, 2000),
+            status: String(plan.status || 'planned').slice(0, 40),
+            steps: Array.isArray(plan.steps) ? plan.steps.slice(0, 100).map((step, index) => ({ id: String(step.id || `step-${index + 1}`), text: String(step.text || step).slice(0, 500), status: String(step.status || 'pending').slice(0, 40) })) : [],
+            createdAt: Number(plan.createdAt || Date.now()),
+            updatedAt: Number(plan.updatedAt || Date.now()),
+        }));
+    }
     return next;
 }
 function safeAiSettings(ai = {}) {
     const copy = JSON.parse(JSON.stringify(ai || {}));
     if (Array.isArray(copy.providers)) copy.providers.forEach((p) => { if (p.apiKey) p.apiKey = '******'; });
+    if (Array.isArray(copy.envVars)) copy.envVars.forEach((item) => { item.hasValue = !!item.value; if (item.value) item.value = '******'; });
     return copy;
 }
 function cleanupPendingActions() {
@@ -482,6 +621,15 @@ function registerAiRoutes(app, deps) {
     app.get('/api/ai/status', deps.requireAuth, (req, res) => {
         const ai = safeAiSettings(deps.storage.getSettings().ai || {});
         res.json({ ai, pending: pendingActions.size });
+    });
+
+    app.get('/api/ai/browser/screenshots/:name', deps.requireAuth, (req, res) => {
+        const name = path.basename(String(req.params.name || ''));
+        if (!/^[A-Za-z0-9_.-]+\.png$/.test(name)) return res.status(400).end('bad screenshot name');
+        const file = path.join(SHOT_DIR, name);
+        if (!fs.existsSync(file)) return res.status(404).end('not found');
+        res.setHeader('Content-Type', 'image/png');
+        res.sendFile(file);
     });
 
     app.post('/api/ai/chat', deps.requireAuth, async (req, res) => {

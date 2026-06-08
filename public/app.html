@@ -213,11 +213,19 @@
                                 <div class="ai-permission-grid">
                                     <label class="check-line"><input type="checkbox" id="aiPermWebSearch"> 网页搜索</label>
                                     <label class="check-line"><input type="checkbox" id="aiPermWebFetch"> 网页正文读取</label>
+                                    <label class="check-line"><input type="checkbox" id="aiPermBrowser"> Chromium 浏览器自动化</label>
                                     <label class="check-line"><input type="checkbox" id="aiPermRemoteExecute"> 远程执行命令</label>
                                     <label class="check-line"><input type="checkbox" id="aiPermFileRead"> 远程文件读取</label>
                                     <label class="check-line"><input type="checkbox" id="aiPermFileWrite"> 远程文件写入</label>
                                     <label class="check-line"><input type="checkbox" id="aiPermCodeEdit"> 代码编辑/补全</label>
+                                    <label class="check-line"><input type="checkbox" id="aiPermMemory"> 长期 Memory / 项目记忆</label>
+                                    <label class="check-line"><input type="checkbox" id="aiPermEnv"> AI 环境变量</label>
                                 </div>
+                                <h3>长期 Memory / 任务规划器</h3>
+                                <label class="check-line"><input type="checkbox" id="aiMemoryEnabled"> 启用长期 Memory / 项目记忆</label>
+                                <label>最多保存 Memory 条数</label><input id="aiMemoryMaxItems" type="number" min="1" max="2000" step="1" placeholder="500">
+                                <label class="check-line"><input type="checkbox" id="aiPlannerEnabled"> 启用任务规划器</label>
+                                <label class="check-line"><input type="checkbox" id="aiRequirePlanBeforeTools"> 复杂任务优先要求先规划</label>
                                 <h3>敏感操作确认</h3>
                                 <label class="check-line"><input type="checkbox" id="aiRequireConfirmation"> 敏感操作需要用户确认</label>
                                 <label class="check-line"><input type="checkbox" id="aiAutoConfirm"> 自动确认敏感操作</label>
@@ -227,6 +235,28 @@
                             </form>
                             <h2>模型供应商</h2>
                             <div class="ai-provider-list" id="aiProviderList"></div>
+                            <h2>AI 环境变量</h2>
+                            <form id="aiEnvForm" class="settings-form ai-env-form">
+                                <input type="hidden" id="aiEnvId">
+                                <input id="aiEnvName" placeholder="变量名，例如 OPENAI_ADMIN_TOKEN">
+                                <input id="aiEnvDescription" placeholder="说明，例如：调用内部 API 的 Bearer Token">
+                                <div class="form-group password-field"><input id="aiEnvValue" type="password" placeholder="变量值；留 ****** 表示不修改"><button type="button" id="toggleAiEnvValue" title="显示/隐藏变量值">👁️</button></div>
+                                <label class="check-line"><input type="checkbox" id="aiEnvEnabled" checked> 启用变量</label>
+                                <div class="form-actions"><button class="btn btn-primary" type="submit">保存环境变量</button><button class="btn" type="button" id="aiEnvResetBtn">清空</button></div>
+                                <p class="field-hint">AI 默认只能看到变量名和说明；读取变量值必须调用 get_env_var 工具，并触发敏感操作确认或自动确认延迟。</p>
+                            </form>
+                            <div class="ai-env-list" id="aiEnvList"></div>
+                            <h2>长期 Memory / 项目记忆</h2>
+                            <form id="aiMemoryForm" class="settings-form ai-memory-form">
+                                <input type="hidden" id="aiMemoryId">
+                                <div class="form-row"><div class="form-group"><label>标题</label><input id="aiMemoryTitle" placeholder="例如：生产服务器约定"></div><div class="form-group"><label>Scope / Project</label><input id="aiMemoryScope" placeholder="global / zephyr-ssh / prod"></div></div>
+                                <textarea id="aiMemoryContent" rows="5" placeholder="需要长期记住的项目规则、服务器约定、用户偏好、排障结论..."></textarea>
+                                <label class="check-line"><input type="checkbox" id="aiMemoryItemEnabled" checked> 启用此 Memory</label>
+                                <div class="form-actions"><button class="btn btn-primary" type="submit">保存 Memory</button><button class="btn" type="button" id="aiMemoryResetBtn">清空</button></div>
+                            </form>
+                            <div class="ai-memory-list" id="aiMemoryList"></div>
+                            <h2>任务计划器</h2>
+                            <div class="ai-plan-list" id="aiPlanList"></div>
                             <h2>Skills 能力包</h2>
                             <form id="aiSkillForm" class="settings-form ai-skill-form">
                                 <input type="hidden" id="aiSkillId">

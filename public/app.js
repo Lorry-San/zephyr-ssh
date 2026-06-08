@@ -2399,9 +2399,14 @@ function defaultAiSettings() {
         systemPrompt: '',
         codeCompletionEnabled: true,
         sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
-        permissions: { webSearch: true, webFetch: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true },
+        permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
+        planner: { enabled: true, requirePlanBeforeTools: false },
+        memory: { enabled: true, maxItems: 500 },
         providers: [],
         skills: [],
+        envVars: [],
+        memories: [],
+        plans: [],
     };
 }
 function normalizeAiSettings(ai = {}) {
@@ -2411,8 +2416,13 @@ function normalizeAiSettings(ai = {}) {
         ...ai,
         sensitive: { ...base.sensitive, ...(ai.sensitive || {}) },
         permissions: { ...base.permissions, ...(ai.permissions || {}) },
+        planner: { ...base.planner, ...(ai.planner || {}) },
+        memory: { ...base.memory, ...(ai.memory || {}) },
         providers: Array.isArray(ai.providers) ? ai.providers : [],
         skills: Array.isArray(ai.skills) ? ai.skills : [],
+        envVars: Array.isArray(ai.envVars) ? ai.envVars : [],
+        memories: Array.isArray(ai.memories) ? ai.memories : [],
+        plans: Array.isArray(ai.plans) ? ai.plans : [],
     };
 }
 function aiModelNames(provider = {}) {
@@ -2456,9 +2466,13 @@ function renderAiCapabilityStrip() {
     const caps = [];
     if (ai.permissions.webSearch) caps.push('网页搜索');
     if (ai.permissions.webFetch) caps.push('网页读取');
+    if (ai.permissions.browser) caps.push('Chromium');
     if (ai.permissions.remoteExecute) caps.push('远程执行');
     if (ai.permissions.fileRead) caps.push('读文件');
     if (ai.permissions.fileWrite) caps.push('写文件');
+    if (ai.permissions.memory && ai.memory?.enabled !== false) caps.push('Memory');
+    if (ai.permissions.env) caps.push('环境变量');
+    if (ai.planner?.enabled !== false) caps.push('任务规划');
     if (ai.permissions.codeEdit && ai.codeCompletionEnabled) caps.push('代码补全');
     const enabledSkills = (ai.skills || []).filter((s) => s.enabled !== false).length;
     if (enabledSkills) caps.push(`${enabledSkills} 个 Skill`);
@@ -2478,12 +2492,22 @@ function renderAiSettingsForm() {
     const p = ai.permissions || {};
     $('#aiPermWebSearch').checked = p.webSearch !== false;
     $('#aiPermWebFetch').checked = p.webFetch !== false;
+    $('#aiPermBrowser').checked = p.browser !== false;
     $('#aiPermRemoteExecute').checked = p.remoteExecute !== false;
     $('#aiPermFileRead').checked = p.fileRead !== false;
     $('#aiPermFileWrite').checked = p.fileWrite !== false;
     $('#aiPermCodeEdit').checked = p.codeEdit !== false;
+    $('#aiPermMemory').checked = p.memory !== false;
+    $('#aiPermEnv').checked = p.env !== false;
+    $('#aiMemoryEnabled').checked = ai.memory?.enabled !== false;
+    $('#aiMemoryMaxItems').value = ai.memory?.maxItems ?? 500;
+    $('#aiPlannerEnabled').checked = ai.planner?.enabled !== false;
+    $('#aiRequirePlanBeforeTools').checked = !!ai.planner?.requirePlanBeforeTools;
     renderAiProviderOptions();
     renderAiProviderList();
+    renderAiEnvList();
+    renderAiMemoryList();
+    renderAiPlanList();
     renderAiSkillList();
     applyAiVisibility();
 }
@@ -2501,11 +2525,16 @@ function collectAiSettingsForm() {
         permissions: {
             webSearch: $('#aiPermWebSearch').checked,
             webFetch: $('#aiPermWebFetch').checked,
+            browser: $('#aiPermBrowser').checked,
             remoteExecute: $('#aiPermRemoteExecute').checked,
             fileRead: $('#aiPermFileRead').checked,
             fileWrite: $('#aiPermFileWrite').checked,
             codeEdit: $('#aiPermCodeEdit').checked,
+            memory: $('#aiPermMemory').checked,
+            env: $('#aiPermEnv').checked,
         },
+        planner: { enabled: $('#aiPlannerEnabled').checked, requirePlanBeforeTools: $('#aiRequirePlanBeforeTools').checked },
+        memory: { enabled: $('#aiMemoryEnabled').checked, maxItems: Number($('#aiMemoryMaxItems').value) || 500 },
     };
 }
 async function saveAiSettings(e) {
@@ -2593,6 +2622,80 @@ async function deleteAiProvider(id) {
     renderAiSettingsForm();
     toast('模型供应商已删除');
 }
+
+function resetAiEnvForm() {
+    $('#aiEnvId').value = '';
+    $('#aiEnvName').value = '';
+    $('#aiEnvDescription').value = '';
+    $('#aiEnvValue').value = '';
+    $('#aiEnvValue').type = 'password';
+    $('#toggleAiEnvValue').textContent = '👁️';
+    $('#aiEnvEnabled').checked = true;
+}
+function renderAiEnvList() {
+    const list = $('#aiEnvList');
+    if (!list) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    list.innerHTML = ai.envVars.length ? ai.envVars.map((item) => `<div class="ai-env-item" data-env-id="${escapeHtml(item.id)}"><div><strong>${escapeHtml(item.name || 'UNNAMED')}</strong><span>${item.enabled === false ? '已停用' : '已启用'} · ${item.hasValue || item.value ? '已保存值' : '无值'} · ${escapeHtml(item.description || '')}</span></div><button class="tool-btn" data-ai-edit-env="${escapeHtml(item.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-env="${escapeHtml(item.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无 AI 环境变量。变量值会加密保存，AI 读取时需要敏感确认。</p>';
+}
+async function saveAiEnv(e) {
+    e.preventDefault();
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const id = $('#aiEnvId').value || `env-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const item = { id, name: $('#aiEnvName').value.trim(), description: $('#aiEnvDescription').value.trim(), value: $('#aiEnvValue').value, enabled: $('#aiEnvEnabled').checked, updatedAt: Date.now() };
+    if (!item.name) return toast('请填写变量名');
+    const idx = ai.envVars.findIndex((x) => x.id === id);
+    if (idx >= 0) ai.envVars[idx] = item; else ai.envVars.unshift(item);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    resetAiEnvForm(); renderAiSettingsForm(); toast('AI 环境变量已保存');
+}
+async function deleteAiEnv(id) {
+    if (!confirm('删除该 AI 环境变量？')) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    ai.envVars = ai.envVars.filter((x) => x.id !== id);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    renderAiSettingsForm(); toast('AI 环境变量已删除');
+}
+function resetAiMemoryForm() {
+    $('#aiMemoryId').value = '';
+    $('#aiMemoryTitle').value = '';
+    $('#aiMemoryScope').value = '';
+    $('#aiMemoryContent').value = '';
+    $('#aiMemoryItemEnabled').checked = true;
+}
+function renderAiMemoryList() {
+    const list = $('#aiMemoryList');
+    if (!list) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    list.innerHTML = ai.memories.length ? ai.memories.slice(0, 80).map((m) => `<div class="ai-memory-item" data-memory-id="${escapeHtml(m.id)}"><div><strong>${escapeHtml(m.title || 'Memory')}</strong><span>${m.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(m.scope || 'global')} ${m.project ? '· ' + escapeHtml(m.project) : ''}</span><code>${escapeHtml((m.content || '').slice(0, 300))}</code></div><button class="tool-btn" data-ai-edit-memory="${escapeHtml(m.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-memory="${escapeHtml(m.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无长期 Memory。AI 也可通过 memory_save 工具主动记录项目记忆。</p>';
+}
+async function saveAiMemory(e) {
+    e.preventDefault();
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const id = $('#aiMemoryId').value || `memory-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const item = { id, title: $('#aiMemoryTitle').value.trim() || 'Memory', scope: $('#aiMemoryScope').value.trim() || 'global', project: $('#aiMemoryScope').value.trim(), content: $('#aiMemoryContent').value, enabled: $('#aiMemoryItemEnabled').checked, createdAt: Date.now(), updatedAt: Date.now() };
+    if (!item.content.trim()) return toast('请填写 Memory 内容');
+    const old = ai.memories.find((x) => x.id === id);
+    if (old) item.createdAt = old.createdAt || item.createdAt;
+    const idx = ai.memories.findIndex((x) => x.id === id);
+    if (idx >= 0) ai.memories[idx] = item; else ai.memories.unshift(item);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    resetAiMemoryForm(); renderAiSettingsForm(); toast('Memory 已保存');
+}
+async function deleteAiMemory(id) {
+    if (!confirm('删除该 Memory？')) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    ai.memories = ai.memories.filter((x) => x.id !== id);
+    settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+    renderAiSettingsForm(); toast('Memory 已删除');
+}
+function renderAiPlanList() {
+    const list = $('#aiPlanList');
+    if (!list) return;
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    list.innerHTML = ai.plans.length ? ai.plans.slice(0, 30).map((plan) => `<div class="ai-plan-item"><div><strong>${escapeHtml(plan.title || '任务计划')}</strong><span>${escapeHtml(plan.status || 'planned')} · ${fmtTime(plan.createdAt)}</span>${plan.risk ? `<p>${escapeHtml(plan.risk)}</p>` : ''}<ol>${(plan.steps || []).map((s) => `<li><em>${escapeHtml(s.status || 'pending')}</em> ${escapeHtml(s.text || '')}</li>`).join('')}</ol></div></div>`).join('') : '<p class="empty-state">暂无任务计划。AI 可通过 plan_task 工具为复杂任务创建计划。</p>';
+}
+
 function resetAiSkillForm() {
     $('#aiSkillId').value = '';
     $('#aiSkillName').value = '';
@@ -2800,6 +2903,13 @@ function setupAiAssistant() {
     $('#aiProviderCloseBtn')?.addEventListener('click', closeAiProviderModal);
     $('#aiProviderCancelBtn')?.addEventListener('click', closeAiProviderModal);
     $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider; const ai = normalizeAiSettings(settings.ai || {}); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
+    $('#aiEnvForm')?.addEventListener('submit', saveAiEnv);
+    $('#aiEnvResetBtn')?.addEventListener('click', resetAiEnvForm);
+    $('#toggleAiEnvValue')?.addEventListener('click', () => { const el = $('#aiEnvValue'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleAiEnvValue').textContent = el.type === 'password' ? '👁️' : '🙈'; });
+    $('#aiEnvList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditEnv, del = e.target.dataset.aiDeleteEnv; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.envVars.find((x) => x.id === edit); if (!item) return; $('#aiEnvId').value = item.id; $('#aiEnvName').value = item.name || ''; $('#aiEnvDescription').value = item.description || ''; $('#aiEnvValue').value = item.hasValue || item.value ? '******' : ''; $('#aiEnvEnabled').checked = item.enabled !== false; } if (del) deleteAiEnv(del); });
+    $('#aiMemoryForm')?.addEventListener('submit', saveAiMemory);
+    $('#aiMemoryResetBtn')?.addEventListener('click', resetAiMemoryForm);
+    $('#aiMemoryList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditMemory, del = e.target.dataset.aiDeleteMemory; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.memories.find((x) => x.id === edit); if (!item) return; $('#aiMemoryId').value = item.id; $('#aiMemoryTitle').value = item.title || ''; $('#aiMemoryScope').value = item.scope || item.project || ''; $('#aiMemoryContent').value = item.content || ''; $('#aiMemoryItemEnabled').checked = item.enabled !== false; } if (del) deleteAiMemory(del); });
     $('#aiSkillForm')?.addEventListener('submit', saveAiSkill);
     $('#aiSkillResetBtn')?.addEventListener('click', resetAiSkillForm);
     $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
