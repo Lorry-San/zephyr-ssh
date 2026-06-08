@@ -3748,14 +3748,52 @@ function setupAiPanelChrome() {
 }
 function toggleAiVoice() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return toast('当前浏览器不支持语音识别');
+    if (!SpeechRecognition) return toast('当前浏览器不支持语音识别（需 Chrome 或 Edge）');
+
     if (aiRecording) { aiSpeechRecognition?.stop?.(); return; }
+
+    // Pre-check: secure context required
+    if (!window.isSecureContext && location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        return toast('语音识别需要 HTTPS 或 localhost 安全环境');
+    }
+
+    // Visual feedback immediately
+    const btn = $('#aiVoiceBtn');
+    btn?.classList.add('active');
+
     aiSpeechRecognition = new SpeechRecognition();
-    aiSpeechRecognition.lang = 'zh-CN'; aiSpeechRecognition.interimResults = true;
-    aiSpeechRecognition.onstart = () => { aiRecording = true; $('#aiVoiceBtn').classList.add('active'); };
-    aiSpeechRecognition.onend = () => { aiRecording = false; $('#aiVoiceBtn').classList.remove('active'); $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, ''); };
-    aiSpeechRecognition.onresult = (event) => { let text = ''; for (let i = event.resultIndex; i < event.results.length; i += 1) text += event.results[i][0].transcript; $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, '') + (event.results[event.results.length - 1].isFinal ? text : '[识别中...]'); autoResizeAiInput($('#aiUserInput')); };
-    aiSpeechRecognition.start();
+    aiSpeechRecognition.lang = 'zh-CN';
+    aiSpeechRecognition.interimResults = true;
+    aiSpeechRecognition.maxAlternatives = 1;
+
+    aiSpeechRecognition.onstart = () => { aiRecording = true; };
+    aiSpeechRecognition.onend = () => { aiRecording = false; btn?.classList.remove('active'); $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, ''); };
+    aiSpeechRecognition.onerror = (event) => {
+        aiRecording = false;
+        btn?.classList.remove('active');
+        $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, '');
+        const msg = event.error === 'not-allowed' ? '麦克风权限未授予，请在浏览器设置中允许麦克风访问'
+            : event.error === 'no-speech' ? '未检测到语音，请重试'
+            : event.error === 'audio-capture' ? '未找到麦克风设备'
+            : event.error === 'network' ? '语音识别网络连接失败（需要 HTTPS 或 localhost）'
+            : event.error === 'aborted' ? ''  // user stopped, don't show error
+            : '语音识别失败：' + (event.error || '未知错误');
+        if (msg) toast(msg);
+    };
+    aiSpeechRecognition.onresult = (event) => {
+        let text = '';
+        for (let i = event.resultIndex; i < event.results.length; i += 1) text += event.results[i][0].transcript;
+        $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, '') + (event.results[event.results.length - 1].isFinal ? text : '[识别中...]');
+        autoResizeAiInput($('#aiUserInput'));
+    };
+    try {
+        aiSpeechRecognition.start();
+    } catch (err) {
+        aiRecording = false;
+        btn?.classList.remove('active');
+        console.warn('[ai-voice] recognition start failed:', err);
+        toast('语音识别启动失败：' + (err.message || '请检查麦克风权限和网络'));
+    }
 }
 function updateAiProviderModalHints() {
     const type = $('#aiProviderType')?.value || 'openai-compatible';
