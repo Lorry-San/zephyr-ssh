@@ -45,7 +45,7 @@ function normalizeRole(role) {
 function sanitizeMessages(messages = []) {
     return (Array.isArray(messages) ? messages : [])
         .slice(-40)
-        .map((item) => ({ role: normalizeRole(item.role), content: clipText(item.content || '', 24000) }))
+        .map((item) => ({ role: normalizeRole(item.role), content: clipText(item.content || '', 60000) }))
         .filter((item) => item.content || item.role === 'assistant');
 }
 function parseExtraObject(value) {
@@ -56,21 +56,36 @@ function parseExtraObject(value) {
 }
 function normalizeOptions(provider = {}, requestOptions = {}) {
     const raw = { ...(provider.options || {}), ...(requestOptions || {}) };
+    const extra = parseExtraObject(raw.extraJson);
     const out = {};
     const numberFields = ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty'];
     numberFields.forEach((field) => { if (raw[field] !== '' && raw[field] !== undefined && raw[field] !== null) out[field] = Number(raw[field]); });
     if (raw.max_tokens !== '' && raw.max_tokens !== undefined && raw.max_tokens !== null) out.max_tokens = Math.max(1, Number(raw.max_tokens) || 4096);
+    if (raw.max_output_tokens !== '' && raw.max_output_tokens !== undefined && raw.max_output_tokens !== null) out.max_output_tokens = Math.max(1, Number(raw.max_output_tokens) || 4096);
     if (raw.reasoning_effort) out.reasoning_effort = String(raw.reasoning_effort);
+    if (raw.reasoning && typeof raw.reasoning === 'object') out.reasoning = raw.reasoning;
+    if (raw.text && typeof raw.text === 'object') out.text = raw.text;
     if (raw.response_format) {
         const rf = parseExtraObject(raw.response_format);
         out.response_format = Object.keys(rf).length ? rf : { type: String(raw.response_format) };
     }
-    return { ...out, ...parseExtraObject(raw.extraJson) };
+    return { ...out, ...extra };
+}
+function aiModelNames(provider = {}) {
+    return String(provider.models || '').split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+}
+function openAiApiMode(provider = {}) {
+    const mode = String(provider.apiMode || provider.api || provider.endpointMode || 'auto').toLowerCase();
+    const base = String(provider.baseUrl || '').toLowerCase();
+    if (mode === 'responses' || /\/responses\/?$/.test(base)) return 'responses';
+    if (mode === 'chat' || /\/chat\/completions\/?$/.test(base)) return 'chat';
+    if (/api\.openai\.com\/v1\/?$/.test(base) && /^gpt-[45]/i.test(String(provider._selectedModel || provider.defaultModel || provider.models || ''))) return 'responses';
+    return 'chat';
 }
 function joinApiUrl(base, suffix) {
     const raw = String(base || '').trim().replace(/\/+$/, '');
     if (!raw) return suffix;
-    if (/\/chat\/completions$/i.test(raw) || /\/messages$/i.test(raw) || /:generateContent$/i.test(raw)) return raw;
+    if (/\/chat\/completions$/i.test(raw) || /\/responses$/i.test(raw) || /\/messages$/i.test(raw) || /:generateContent$/i.test(raw)) return raw;
     return `${raw}${suffix}`;
 }
 function providerType(provider = {}) { return String(provider.type || 'openai-compatible').toLowerCase(); }
@@ -80,8 +95,10 @@ function selectProvider(ai = {}, body = {}) {
     if (!providers.length) throw new Error('AI 助理尚未配置可用模型供应商');
     const id = String(body.providerId || ai.defaultProviderId || '').trim();
     const provider = providers.find((p) => p.id === id) || providers[0];
-    const model = String(body.model || provider.defaultModel || ai.defaultModel || '').trim();
-    if (!model) throw new Error('请选择或填写模型名称');
+    const models = aiModelNames(provider);
+    const model = String(body.model || provider.defaultModel || ai.defaultModel || models[0] || '').trim();
+    provider._selectedModel = model;
+    if (!model) throw new Error('请选择模型；可在供应商设置中点击“获取模型”自动填充');
     return { provider, model };
 }
 function providerHeaders(provider = {}, contentType = 'application/json') {
@@ -94,8 +111,33 @@ function providerHeaders(provider = {}, contentType = 'application/json') {
     } else if (provider.apiKey) {
         headers.Authorization = `Bearer ${provider.apiKey}`;
     }
-    if (provider.organization) headers['OpenAI-Organization'] = provider.organization;
+    if (provider.organization) {
+        if (/^proj[_-]/i.test(String(provider.organization))) headers['OpenAI-Project'] = provider.organization;
+        else headers['OpenAI-Organization'] = provider.organization;
+    }
     return headers;
+}
+async function listProviderModels(provider = {}) {
+    const type = providerType(provider);
+    if (type === 'anthropic') {
+        if (!provider.baseUrl && provider.apiKey) {
+            try {
+                const data = await fetchJson('https://api.anthropic.com/v1/models', { method: 'GET', headers: providerHeaders(provider) });
+                return (data.data || []).map((m) => ({ id: m.id, name: m.display_name || m.id })).filter((m) => m.id);
+            } catch (_) {}
+        }
+        return ['claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest'].map((id) => ({ id }));
+    }
+    if (type === 'gemini') {
+        const base = (provider.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+        const keyParam = provider.apiKey ? `?key=${encodeURIComponent(provider.apiKey)}` : '';
+        const data = await fetchJson(`${base}/models${keyParam}`, { method: 'GET', headers: providerHeaders({ ...provider, apiKey: '' }) });
+        return (data.models || []).map((m) => ({ id: String(m.name || '').replace(/^models\//, ''), name: m.displayName || m.name })).filter((m) => m.id && /generateContent/.test((m.supportedGenerationMethods || []).join(' ')));
+    }
+    const base = provider.baseUrl || 'https://api.openai.com/v1';
+    const url = joinApiUrl(base.replace(/\/(chat\/completions|responses)$/i, ''), '/models');
+    const data = await fetchJson(url, { method: 'GET', headers: providerHeaders(provider) });
+    return (data.data || data.models || []).map((m) => ({ id: m.id || m.name, name: m.name || m.id })).filter((m) => m.id);
 }
 async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -245,12 +287,74 @@ function geminiContents(messages = []) {
     }
     return out;
 }
+function responseOutputText(data = {}) {
+    if (typeof data.output_text === 'string') return data.output_text;
+    const chunks = [];
+    (Array.isArray(data.output) ? data.output : []).forEach((item) => {
+        (Array.isArray(item.content) ? item.content : []).forEach((part) => {
+            if (typeof part.text === 'string') chunks.push(part.text);
+            if (typeof part.output_text === 'string') chunks.push(part.output_text);
+        });
+    });
+    return chunks.join('\n');
+}
+function responseToolCalls(data = {}) {
+    const out = [];
+    (Array.isArray(data.output) ? data.output : []).forEach((item) => {
+        const name = item.name || item.function?.name;
+        if (item.type === 'function_call' && name) {
+            out.push({ id: item.call_id || item.id || crypto.randomUUID(), type: 'function', function: { name, arguments: item.arguments || item.function?.arguments || '{}' } });
+        }
+    });
+    return out;
+}
+function toResponsesInput(messages = []) {
+    return messages.filter((m) => m.role !== 'system').map((m) => {
+        if (m.role === 'tool') return { type: 'function_call_output', call_id: m.tool_call_id || m.name || 'tool', output: String(m.content || '') };
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && !m.content) return null;
+        const role = m.role === 'assistant' ? 'assistant' : 'user';
+        return { role, content: String(m.content || '') };
+    }).filter(Boolean);
+}
+function toResponsesTools(tools = []) {
+    return tools.map((tool) => ({ type: 'function', name: tool.function?.name, description: tool.function?.description || '', parameters: tool.function?.parameters || { type: 'object', properties: {} } })).filter((tool) => tool.name);
+}
+async function callOpenAiResponses(provider, model, messages, options = {}, tools = []) {
+    const base = provider.baseUrl || 'https://api.openai.com/v1';
+    const url = joinApiUrl(base, '/responses');
+    const opts = normalizeOptions(provider, options);
+    const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    let previousResponseId = '';
+    let startIndex = 0;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i]?.response_id || messages[i]?._response_id) {
+            previousResponseId = messages[i].response_id || messages[i]._response_id;
+            startIndex = i + 1;
+            break;
+        }
+    }
+    const inputMessages = previousResponseId ? messages.slice(startIndex).filter((m) => m.role === 'tool') : messages;
+    const payload = { model, input: toResponsesInput(inputMessages), ...opts };
+    if (previousResponseId) payload.previous_response_id = previousResponseId;
+    if (system) payload.instructions = system;
+    if (opts.max_tokens && !opts.max_output_tokens) { payload.max_output_tokens = opts.max_tokens; delete payload.max_tokens; }
+    else delete payload.max_tokens;
+    if (opts.reasoning_effort && !payload.reasoning) { payload.reasoning = { effort: opts.reasoning_effort }; delete payload.reasoning_effort; }
+    const responseTools = toResponsesTools(tools);
+    if (responseTools.length) { payload.tools = responseTools; payload.tool_choice = 'auto'; }
+    delete payload.response_format;
+    const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
+    return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
+}
 async function callOpenAiCompatible(provider, model, messages, options = {}, tools = []) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
     const payload = { model, messages, stream: false, ...normalizeOptions(provider, options) };
     if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
     const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
+    if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
+        return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
+    }
     return normalizeOpenAiMessage(data?.choices?.[0]?.message || { content: '' });
 }
 async function callAnthropic(provider, model, messages, options = {}, tools = []) {
@@ -289,6 +393,7 @@ async function callProvider(provider, model, messages, options = {}, tools = [])
     const type = providerType(provider);
     if (type === 'anthropic') return callAnthropic(provider, model, messages, options, tools);
     if (type === 'gemini') return callGemini(provider, model, messages, options, tools);
+    if (openAiApiMode(provider) === 'responses') return callOpenAiResponses(provider, model, messages, options, tools);
     return callOpenAiCompatible(provider, model, messages, options, tools);
 }
 async function duckDuckGoSearch(query, maxResults = 6) {
@@ -674,7 +779,8 @@ function parseToolCall(call = {}) {
     const fn = call.function || {};
     return { id: call.id || crypto.randomUUID(), name: fn.name || call.name || '', args: safeJsonParse(fn.arguments || call.arguments || '{}', {}) || {} };
 }
-function toolResultMessage(call, result) {
+function toolResultMessage(call, result, mode = 'chat') {
+    if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), 30000) };
     return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), 30000) };
 }
 async function completeWithProvider(ai, body) {
@@ -727,29 +833,38 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     if (Array.isArray(ai.providers)) {
         next.providers = ai.providers.slice(0, 30).map((p) => {
             const old = currentProviders.find((x) => x.id === p.id) || {};
+            const rawModels = String(p.models || old.models || '').slice(0, 4000);
+            const modelList = rawModels.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
             return {
                 id: String(p.id || crypto.randomUUID()).slice(0, 120),
                 name: String(p.name || '未命名供应商').slice(0, 80),
                 type: ['openai-compatible', 'anthropic', 'gemini'].includes(providerType(p)) ? providerType(p) : 'openai-compatible',
                 enabled: p.enabled !== false,
                 baseUrl: String(p.baseUrl || '').slice(0, 500),
+                apiMode: ['auto', 'chat', 'responses'].includes(String(p.apiMode || old.apiMode || '').toLowerCase()) ? String(p.apiMode || old.apiMode || 'auto').toLowerCase() : 'auto',
                 apiKey: p.apiKey === '******' ? (old.apiKey || '') : String(p.apiKey || ''),
-                organization: String(p.organization || '').slice(0, 200),
-                extraHeaders: String(p.extraHeaders || '').slice(0, 4000),
-                models: String(p.models || '').slice(0, 4000),
-                defaultModel: String(p.defaultModel || '').slice(0, 160),
+                organization: String(p.organization || old.organization || '').slice(0, 200),
+                extraHeaders: String(p.extraHeaders || old.extraHeaders || '').slice(0, 4000),
+                models: rawModels,
+                modelsPending: !modelList.length,
+                defaultModel: String(p.defaultModel || old.defaultModel || modelList[0] || '').slice(0, 160),
                 options: {
-                    temperature: p.options?.temperature ?? 0.7,
-                    top_p: p.options?.top_p ?? 1,
-                    max_tokens: p.options?.max_tokens ?? 4096,
-                    presence_penalty: p.options?.presence_penalty ?? 0,
-                    frequency_penalty: p.options?.frequency_penalty ?? 0,
-                    reasoning_effort: String(p.options?.reasoning_effort || ''),
-                    response_format: String(p.options?.response_format || ''),
-                    extraJson: String(p.options?.extraJson || '').slice(0, 12000),
+                    temperature: p.options?.temperature ?? old.options?.temperature ?? 0.7,
+                    top_p: p.options?.top_p ?? old.options?.top_p ?? 1,
+                    max_tokens: p.options?.max_tokens ?? old.options?.max_tokens ?? 4096,
+                    presence_penalty: p.options?.presence_penalty ?? old.options?.presence_penalty ?? 0,
+                    frequency_penalty: p.options?.frequency_penalty ?? old.options?.frequency_penalty ?? 0,
+                    reasoning_effort: String(p.options?.reasoning_effort ?? old.options?.reasoning_effort ?? ''),
+                    response_format: String(p.options?.response_format ?? old.options?.response_format ?? ''),
+                    extraJson: String(p.options?.extraJson ?? old.options?.extraJson ?? '').slice(0, 12000),
                 },
             };
         });
+        if (!next.defaultProviderId && next.providers.length) next.defaultProviderId = next.providers[0].id;
+        if (!next.defaultModel) {
+            const defaultProvider = next.providers.find((p) => p.id === next.defaultProviderId) || next.providers[0];
+            next.defaultModel = defaultProvider?.defaultModel || aiModelNames(defaultProvider)[0] || '';
+        }
     }
     if (Array.isArray(ai.skills)) {
         next.skills = mergeZephyrDefaultSkills(ai.skills.slice(0, 200).map((s) => ({
@@ -831,6 +946,19 @@ function registerAiRoutes(app, deps) {
         res.sendFile(file);
     });
 
+    app.post('/api/ai/models', deps.requireAuth, async (req, res) => {
+        try {
+            const ai = deps.storage.getSettings().ai || {};
+            const providerId = String(req.body?.providerId || '').trim();
+            const provider = providerId
+                ? (Array.isArray(ai.providers) ? ai.providers : []).find((p) => p.id === providerId)
+                : req.body?.provider;
+            if (!provider) return res.status(404).json({ error: '模型供应商不存在' });
+            const models = await listProviderModels(provider);
+            res.json({ ok: true, models: models.slice(0, 300) });
+        } catch (err) { res.status(400).json({ error: publicError(err) }); }
+    });
+
     app.post('/api/ai/chat', deps.requireAuth, async (req, res) => {
         try {
             const ai = deps.storage.getSettings().ai || {};
@@ -848,14 +976,14 @@ function registerAiRoutes(app, deps) {
                     deps.addActivity?.(`AI 助理对话：${provider.name || provider.type}/${model}`);
                     return res.json({ ok: true, message: { role: 'assistant', content: message.content || '' }, toolResults, provider: { id: provider.id, name: provider.name, type: provider.type }, model });
                 }
-                messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls }];
+                messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '' }];
                 for (const call of calls) {
-                    const result = await executeAiTool(call.name, call.args, { req, context }, deps);
+                    const result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider) }, deps);
                     if (result?.confirmationRequired) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
                     toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result });
-                    messages.push(toolResultMessage(call, result));
+                    messages.push(toolResultMessage(call, result, openAiApiMode(provider)));
                 }
             }
             res.json({ ok: true, message: { role: 'assistant', content: '已达到工具调用轮次上限，请根据上方工具结果继续。' }, toolResults });
@@ -882,7 +1010,7 @@ function registerAiRoutes(app, deps) {
         if (req.body?.approve === false) return res.json({ ok: true, cancelled: true });
         try {
             const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true, context: item.context || {} }, deps);
-            res.json({ ok: true, result });
+            res.json({ ok: true, toolName: item.toolName, args: publicToolArgs(item.toolName, item.rawArgs || item.args || {}), result });
         } catch (err) { res.status(400).json({ error: publicError(err) }); }
     });
 

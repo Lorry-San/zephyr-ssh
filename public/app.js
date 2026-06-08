@@ -11,6 +11,9 @@ let aiPanelLayoutMenu = null;
 let aiPanelLayoutMenuButton = null;
 let aiPanelSuppressLayoutClick = false;
 let aiBrowserPreviewTimer = 0;
+let aiAutoTitleTimer = 0;
+let aiSidebarCollapsedBySize = false;
+let aiPendingConfirmations = new Map();
 let aiBrowserPreviewState = { session: 'default', preview: null, visible: false };
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
@@ -56,6 +59,12 @@ let pendingBrandIcon = DEFAULT_BRAND_ICON;
 
 function api(path, options = {}) {
     return fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options })
+        .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || data.message || '请求失败'); return data; });
+}
+function apiMaybeForm(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (!(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    return fetch(path, { credentials: 'same-origin', headers, ...options })
         .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || data.message || '请求失败'); return data; });
 }
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
@@ -245,13 +254,14 @@ function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
     return secret;
 }
 function switchView(name) {
-    $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
-    $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+    const target = name === 'ai' ? 'dashboard' : name;
+    $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === target));
+    $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${target}`));
     const wasTerminal = document.body.classList.contains('terminal-mode');
-    document.body.classList.toggle('terminal-mode', name === 'terminal');
-    document.body.classList.toggle('terminal-mode-entering', name === 'terminal' && !wasTerminal);
+    document.body.classList.toggle('terminal-mode', target === 'terminal');
+    document.body.classList.toggle('terminal-mode-entering', target === 'terminal' && !wasTerminal);
     window.clearTimeout(switchView._navTimer);
-    if (name === 'terminal') {
+    if (target === 'terminal') {
         switchView._navTimer = window.setTimeout(() => document.body.classList.remove('terminal-mode-entering'), 680);
         scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
     } else {
@@ -2447,9 +2457,11 @@ function aiCurrentSession() {
 }
 function applyAiVisibility() {
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    $('#aiNavTab')?.classList.toggle('force-hidden', !ai.enabled);
-    $('#aiFloatingBtn')?.classList.toggle('force-hidden', !ai.enabled);
-    if (!ai.enabled && document.querySelector('#view-ai')?.classList.contains('active')) switchView('remote');
+    const enabled = !!ai.enabled;
+    $('#aiNavTab')?.classList.add('force-hidden');
+    $('#aiFloatingBtn')?.classList.toggle('force-hidden', !enabled);
+    if (enabled) $('#aiFloatingBtn')?.classList.toggle('active', $('#aiAgentPanel')?.getAttribute('aria-hidden') === 'false');
+    if (document.querySelector('#view-ai')?.classList.contains('active')) switchView('dashboard');
     renderAiHeaderSelectors();
 }
 function renderAiProviderOptions() {
@@ -2471,7 +2483,9 @@ function renderAiHeaderSelectors() {
     const p = providers.find((x) => x.id === providerSelect.value) || providers[0];
     const models = aiModelNames(p);
     const chosen = ((p?.id === ai.defaultProviderId ? ai.defaultModel : '') || p?.defaultModel || models[0] || ai.defaultModel || '').trim();
-    modelSelect.innerHTML = models.length ? models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('') : `<option value="${escapeHtml(chosen)}">${escapeHtml(chosen || '默认模型')}</option>`;
+    modelSelect.innerHTML = models.length
+        ? models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('')
+        : `<option value="${escapeHtml(chosen)}">${escapeHtml(chosen || '自动选择模型')}</option>`;
     modelSelect.value = chosen;
     renderAiCapabilityStrip();
 }
@@ -2480,11 +2494,11 @@ function renderAiCapabilityStrip() {
     const caps = [];
     if (ai.permissions.webSearch) caps.push('网页搜索');
     if (ai.permissions.webFetch) caps.push('网页读取');
-    if (ai.permissions.browser) caps.push('Chromium');
+    if (ai.permissions.browser) caps.push('浏览器');
     if (ai.permissions.remoteExecute) caps.push('远程执行');
     if (ai.permissions.fileRead) caps.push('读文件');
     if (ai.permissions.fileWrite) caps.push('写文件');
-    if (ai.permissions.memory && ai.memory?.enabled !== false) caps.push('Memory');
+    if (ai.permissions.memory && ai.memory?.enabled !== false) caps.push('记忆');
     if (ai.permissions.env) caps.push('环境变量');
     if (ai.planner?.enabled !== false) caps.push('任务规划');
     if (ai.permissions.codeEdit && ai.codeCompletionEnabled) caps.push('代码补全');
@@ -2567,6 +2581,7 @@ function openAiProviderModal(provider = null) {
     $('#aiProviderType').value = provider?.type || 'openai-compatible';
     $('#aiProviderBaseUrl').value = provider?.baseUrl || '';
     $('#aiProviderApiKey').value = provider?.apiKey ? '******' : '';
+    $('#aiProviderApiMode').value = provider?.apiMode || 'auto';
     $('#aiProviderModels').value = provider?.models || '';
     $('#aiProviderDefaultModel').value = provider?.defaultModel || '';
     $('#aiProviderOrganization').value = provider?.organization || '';
@@ -2578,6 +2593,7 @@ function openAiProviderModal(provider = null) {
     $('#aiProviderPresencePenalty').value = provider?.options?.presence_penalty ?? 0;
     $('#aiProviderFrequencyPenalty').value = provider?.options?.frequency_penalty ?? 0;
     $('#aiProviderExtraJson').value = provider?.options?.extraJson || '';
+    updateAiProviderModalHints();
     $('#aiProviderEnabled').checked = provider?.enabled !== false;
     modal.classList.add('show', 'app-visible');
     modal.setAttribute('aria-hidden', 'false');
@@ -2597,6 +2613,7 @@ async function saveAiProvider(e) {
         type: $('#aiProviderType').value,
         enabled: $('#aiProviderEnabled').checked,
         baseUrl: $('#aiProviderBaseUrl').value.trim(),
+        apiMode: $('#aiProviderApiMode').value || 'auto',
         apiKey: $('#aiProviderApiKey').value,
         organization: $('#aiProviderOrganization').value.trim(),
         extraHeaders: $('#aiProviderExtraHeaders').value.trim(),
@@ -2612,21 +2629,72 @@ async function saveAiProvider(e) {
             extraJson: $('#aiProviderExtraJson').value.trim(),
         },
     };
+    const hadApiKey = !!provider.apiKey && provider.apiKey !== '******';
     const idx = ai.providers.findIndex((p) => p.id === id);
     if (idx >= 0) ai.providers[idx] = provider; else ai.providers.push(provider);
     if (!ai.defaultProviderId) ai.defaultProviderId = id;
-    if (!ai.defaultModel) ai.defaultModel = provider.defaultModel || aiModelNames(provider)[0] || '';
+    const firstProviderModel = provider.defaultModel || aiModelNames(provider)[0] || '';
+    if (!provider.defaultModel && firstProviderModel) provider.defaultModel = firstProviderModel;
+    if (idx >= 0) ai.providers[idx] = provider; else ai.providers[ai.providers.length - 1] = provider;
+    if (!ai.defaultModel && firstProviderModel) ai.defaultModel = firstProviderModel;
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
     closeAiProviderModal();
     renderAiSettingsForm();
-    toast('模型供应商已保存');
+    const shouldAutoFetchModels = !aiModelNames(provider).length && provider.enabled !== false && hadApiKey;
+    if (shouldAutoFetchModels) {
+        toast('模型供应商已保存，正在获取模型...');
+        await fetchAiModelsForProvider(id);
+    } else {
+        toast('模型供应商已保存');
+    }
 }
 function renderAiProviderList() {
     const list = $('#aiProviderList');
     if (!list) return;
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    list.innerHTML = ai.providers.length ? ai.providers.map((p) => `<div class="ai-provider-item" data-provider-id="${escapeHtml(p.id)}"><div><strong>${escapeHtml(p.name || '未命名供应商')}</strong><span>${escapeHtml(p.type || 'openai-compatible')} · ${p.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(p.defaultModel || aiModelNames(p)[0] || '未设模型')}</span><code>${escapeHtml(p.baseUrl || '默认 API 地址')}</code></div><button class="tool-btn" data-ai-edit-provider="${escapeHtml(p.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-provider="${escapeHtml(p.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无模型供应商。支持 OpenAI 兼容、Anthropic、Gemini，以及自定义 API 地址。</p>';
+    list.innerHTML = ai.providers.length ? ai.providers.map((p) => {
+        const models = aiModelNames(p);
+        const modelText = p.defaultModel || models[0] || (p.modelsPending ? '可点击获取模型' : '未获取模型');
+        return `<div class="ai-provider-item" data-provider-id="${escapeHtml(p.id)}"><div><strong>${escapeHtml(p.name || '未命名供应商')}</strong><span>${escapeHtml(p.type || 'openai-compatible')} · ${escapeHtml(p.apiMode || 'auto')} · ${p.enabled === false ? '已停用' : '已启用'} · ${escapeHtml(modelText)}</span><code>${escapeHtml(p.baseUrl || '默认 API 地址')}</code></div><button class="tool-btn" data-ai-fetch-provider-models="${escapeHtml(p.id)}">获取模型</button><button class="tool-btn" data-ai-edit-provider="${escapeHtml(p.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-provider="${escapeHtml(p.id)}">删除</button></div>`;
+    }).join('') : '<p class="empty-state">暂无模型供应商。支持 OpenAI Chat/Responses API、OpenAI 兼容、Anthropic、Gemini，以及自定义 API 地址。</p>';
 }
+async function fetchAiModelsForProvider(id = '') {
+    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
+    const provider = id
+        ? ai.providers.find((p) => p.id === id)
+        : {
+            id: $('#aiProviderId').value || 'modal',
+            name: $('#aiProviderName').value.trim() || '临时供应商',
+            type: $('#aiProviderType').value,
+            baseUrl: $('#aiProviderBaseUrl').value.trim(),
+            apiMode: $('#aiProviderApiMode').value || 'auto',
+            apiKey: $('#aiProviderApiKey').value,
+            organization: $('#aiProviderOrganization').value.trim(),
+            extraHeaders: $('#aiProviderExtraHeaders').value.trim(),
+        };
+    if (!provider) return toast('供应商不存在');
+    if (!id && (!provider.apiKey || provider.apiKey === '******')) return toast('请先填写 API Key，或保存后再获取模型');
+    try {
+        const data = await api('/api/ai/models', { method: 'POST', body: JSON.stringify(id ? { providerId: id } : { provider }) });
+        const names = (data.models || []).map((m) => m.id || m.name).filter(Boolean);
+        const uniqueNames = Array.from(new Set(names));
+        if (!uniqueNames.length) return toast('没有获取到模型');
+        if (id) {
+            const idx = ai.providers.findIndex((p) => p.id === id);
+            if (idx >= 0) {
+                ai.providers[idx] = { ...ai.providers[idx], models: uniqueNames.join('\n'), defaultModel: ai.providers[idx].defaultModel || uniqueNames[0], modelsPending: false };
+                if (ai.defaultProviderId === id && !ai.defaultModel) ai.defaultModel = uniqueNames[0];
+                settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
+                renderAiSettingsForm();
+            }
+        } else {
+            $('#aiProviderModels').value = uniqueNames.join('\n');
+            if (!$('#aiProviderDefaultModel').value) $('#aiProviderDefaultModel').value = uniqueNames[0] || '';
+        }
+        toast(`已获取 ${uniqueNames.length} 个模型`);
+    } catch (err) { toast(err.message || '获取模型失败'); }
+}
+
 async function deleteAiProvider(id) {
     if (!confirm('删除该模型供应商？')) return;
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
@@ -2774,14 +2842,19 @@ function saveAiChats() {
 function loadAiChats() {
     try {
         const data = JSON.parse(localStorage.getItem(AI_CHAT_STORAGE_KEY) || '{}');
-        aiChatSessions = Array.isArray(data.sessions) ? data.sessions.slice(0, 20).filter((s) => s?.id && Array.isArray(s.messages)) : [];
+        aiChatSessions = Array.isArray(data.sessions)
+            ? data.sessions.slice(0, 20).filter((s) => s?.id && Array.isArray(s.messages)).map((s) => ({
+                ...s,
+                title: s.title === '新沙箱' ? '新对话' : s.title,
+                messages: s.messages.filter((m) => !(/^.*已就绪。可搜索网页、调用工具、读写远程文件、辅助代码编辑。$/.test(String(m.content || '')))),
+            }))
+            : [];
         aiCurrentSessionId = aiChatSessions.some((s) => s.id === data.current) ? data.current : aiChatSessions[0]?.id || null;
     } catch (_) { aiChatSessions = []; aiCurrentSessionId = null; }
 }
 function createAiChat({ silent = false } = {}) {
     const id = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    aiChatSessions.unshift({ id, title: '新沙箱', messages: [{ role: 'assistant', content: `${ai.assistantName || 'Zephyr AI'} 已就绪。可搜索网页、调用工具、读写远程文件、辅助代码编辑。` }] });
+    aiChatSessions.unshift({ id, title: '新对话', messages: [] });
     aiCurrentSessionId = id;
     saveAiChats();
     if (!silent) renderAiChat();
@@ -2789,12 +2862,12 @@ function createAiChat({ silent = false } = {}) {
 function renderAiChatList() {
     const list = $('#aiChatList');
     if (!list) return;
-    list.innerHTML = aiChatSessions.map((s) => `<button class="ai-chat-item ${s.id === aiCurrentSessionId ? 'active' : ''}" data-ai-chat="${escapeHtml(s.id)}">${escapeHtml(s.title || '新对话')}</button>`).join('');
+    list.innerHTML = aiChatSessions.map((s) => `<div class="ai-chat-row ${s.id === aiCurrentSessionId ? 'active' : ''}" data-ai-chat-row="${escapeHtml(s.id)}"><button class="ai-chat-item" data-ai-chat="${escapeHtml(s.id)}">${escapeHtml(s.title || '新对话')}</button><button class="ai-chat-delete" type="button" data-ai-delete-chat="${escapeHtml(s.id)}" title="删除对话" aria-label="删除对话">×</button></div>`).join('');
 }
 function renderAiChat() {
     if (!aiChatSessions.length) createAiChat({ silent: true });
     const session = aiCurrentSession();
-    $('#aiCurrentChatTitle').textContent = session.title || 'Zephyr AI';
+    $('#aiCurrentChatTitle').textContent = session.title || '新对话';
     renderAiBrowserPreview();
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
@@ -2812,15 +2885,40 @@ function appendAiMessage(text, role = 'assistant', { store = true, meta = '' } =
     div.className = `ai-message ${role === 'user' ? 'user' : role === 'system' ? 'system' : 'ai'}`;
     div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${renderMarkdown(String(text || ''))}`;
     area.insertBefore(div, typing);
+    if (role === 'system' && !div.classList.contains('ai-confirm-card')) {
+        div.classList.add('system-collapsed');
+        div.addEventListener('click', (event) => { if (!event.target.closest('button,a,input,select,textarea')) div.classList.toggle('system-expanded'); });
+        div.title = '点击展开/收起工具详情';
+    }
     if (store) {
         const session = aiCurrentSession();
         session.messages.push({ role: role === 'ai' ? 'assistant' : role, content: String(text || '') });
-        if (role === 'user' && (!session.title || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
+        if (role === 'user' && (!session.title || session.title === '新对话' || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
         saveAiChats();
     }
     scrollAiChat();
 }
-function scrollAiChat() { setTimeout(() => { const a = $('#aiChatArea'); if (a) a.scrollTop = a.scrollHeight; }, 20); }
+function scrollAiChat() { requestAnimationFrame(() => { const a = $('#aiChatArea'); if (a) a.scrollTo({ top: a.scrollHeight, behavior: 'smooth' }); }); }
+function deleteAiChat(id) {
+    if (!id || !confirm('删除这个对话？')) return;
+    aiChatSessions = aiChatSessions.filter((s) => s.id !== id);
+    aiCurrentSessionId = aiChatSessions[0]?.id || null;
+    if (!aiChatSessions.length) createAiChat({ silent: true });
+    saveAiChats();
+    renderAiChat();
+}
+function updateAiPanelResponsiveState() {
+    const panel = $('#aiAgentPanel');
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect?.();
+    const width = Math.max(220, rect?.width || panel.offsetWidth || 0);
+    const compact = window.innerWidth <= 760 || width < 680;
+    const narrow = width < 560;
+    panel.classList.toggle('ai-compact', compact);
+    panel.classList.toggle('ai-narrow', narrow);
+    if (narrow && !aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = true; panel.classList.add('sidebar-collapsed'); }
+    if (!narrow && aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = false; panel.classList.remove('sidebar-collapsed'); }
+}
 function setAiTyping(show) { $('#aiTypingIndicator')?.classList.toggle('show', !!show); scrollAiChat(); }
 function aiIntensityOptions() {
     const v = $('#aiThinkIntensity')?.value || 'balanced';
@@ -2925,18 +3023,22 @@ async function sendAiMessage() {
     if (!text) return;
     input.value = '';
     autoResizeAiInput(input);
+    input.focus?.();
     appendAiMessage(text, 'user');
     setAiTyping(true);
     try {
         const session = aiCurrentSession();
         const context = collectAiContext();
-        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId: $('#aiProviderSelect').value, model: $('#aiModelSelect').value, options: aiIntensityOptions(), context }) });
+        const providerId = $('#aiProviderSelect').value;
+        const model = $('#aiModelSelect').value;
+        const options = aiIntensityOptions();
+        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
             syncAiToolSideEffects(data.toolResults);
             appendAiMessage(data.toolResults.map(formatAiToolResult).join('\n\n'), 'system');
         }
         if (data.confirmationRequired) {
-            appendAiConfirmation(data.confirmation);
+            appendAiConfirmation(data.confirmation, { messages: session.messages.slice(), providerId, model, options, context });
         } else {
             appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
         }
@@ -2946,14 +3048,56 @@ async function sendAiMessage() {
         setAiTyping(false);
     }
 }
-function appendAiConfirmation(confirmation) {
+function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+        reader.readAsDataURL(file);
+    });
+}
+async function appendAiFiles(files = []) {
+    const parts = [];
+    for (const file of files.slice(0, 6)) {
+        if (file.size > 8 * 1024 * 1024) { parts.push(`[附件过大已跳过] ${file.name} (${file.size} bytes)`); continue; }
+        const isText = /^text\//i.test(file.type) || /\.(txt|md|json|yaml|yml|csv|log|conf|ini|js|ts|jsx|tsx|py|sh|css|html|xml)$/i.test(file.name);
+        if (isText) {
+            const text = await file.text();
+            parts.push(`附件：${file.name}\n\`\`\`\n${text.slice(0, 24000)}${text.length > 24000 ? '\n...[已截断]' : ''}\n\`\`\``);
+        } else if (/^image\//i.test(file.type)) {
+            const dataUrl = await readFileAsDataUrl(file);
+            parts.push(`附件图片：${file.name}\n${dataUrl}`);
+        } else {
+            parts.push(`附件：${file.name} (${file.type || 'unknown'}, ${file.size} bytes)；当前仅文本和图片会发送给 AI。`);
+        }
+    }
+    if (parts.length) appendAiMessage(parts.join('\n\n'), 'user');
+}
+async function continueAiAfterConfirmation(id, approve, data) {
+    const pending = aiPendingConfirmations.get(id);
+    aiPendingConfirmations.delete(id);
+    if (!approve || !pending) return;
+    const original = (pending.messages || []).slice().reverse().find((m) => m.role === 'user')?.content || '';
+    const followup = `原问题：${original}\n\n敏感操作已确认并执行，结果如下：\n${JSON.stringify(data.result || {}, null, 2).slice(0, 30000)}\n请基于这个结果继续回答原问题，直接给出结论，不要只复述 JSON。`;
+    try {
+        setAiTyping(true);
+        const next = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
+        if (next.toolResults?.length) { syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join('\n\n'), 'system'); }
+        if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
+        else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+    } catch (err) { appendAiMessage(`继续处理失败：${err.message}`, 'system'); }
+    finally { setAiTyping(false); }
+}
+function appendAiConfirmation(confirmation, pending = {}) {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     const div = document.createElement('div');
     div.className = 'ai-message system ai-confirm-card';
     div.innerHTML = `<strong>需要确认敏感操作</strong><p>${escapeHtml(confirmation.summary || '')}</p><pre>${escapeHtml(JSON.stringify(confirmation.args || {}, null, 2))}</pre><div class="form-actions"><button class="btn btn-primary" data-ai-confirm-approve="${escapeHtml(confirmation.id)}">确认执行</button><button class="btn danger" data-ai-confirm-deny="${escapeHtml(confirmation.id)}">拒绝</button></div>`;
+    div.title = '';
     area.insertBefore(div, typing);
     aiCurrentSession().messages.push({ role: 'assistant', content: `需要确认敏感操作：${confirmation.summary}` });
+    if (confirmation?.id) aiPendingConfirmations.set(confirmation.id, pending);
     saveAiChats();
     scrollAiChat();
 }
@@ -2962,9 +3106,11 @@ async function resolveAiConfirmation(id, approve) {
     try {
         const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ approve }) });
         if (approve && data.result) {
-            syncAiToolSideEffects([{ tool: data.result?.plan ? 'plan_update' : '', result: data.result }]);
+            syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
             appendAiMessage(`已确认执行，结果：\n${formatAiToolResult({ tool: 'confirmed', result: data.result })}`, 'system');
+            await continueAiAfterConfirmation(id, true, data);
         } else {
+            aiPendingConfirmations.delete(id);
             appendAiMessage('已拒绝执行敏感操作。', 'system');
         }
     } catch (err) { appendAiMessage(`确认处理失败：${err.message}`, 'system'); }
@@ -2979,6 +3125,7 @@ function openAiAssistantPanel(trigger = null) {
     panel.style.display = 'flex';
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
+    $('#aiFloatingBtn')?.classList.add('active');
     if (!panel.dataset.positioned) {
         const compact = window.innerWidth <= 760;
         const width = compact ? Math.max(320, window.innerWidth - 12) : Math.min(980, window.innerWidth - 40);
@@ -2990,9 +3137,11 @@ function openAiAssistantPanel(trigger = null) {
         panel.dataset.positioned = '1';
     }
     bringAiPanelToFront();
+    updateAiPanelResponsiveState();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
     renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
     if (wasHidden) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
+    setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
 }
 function closeAiAssistantPanel() {
     const p = $('#aiAgentPanel');
@@ -3001,6 +3150,7 @@ function closeAiAssistantPanel() {
     animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
     p.classList.remove('open');
     p.setAttribute('aria-hidden', 'true');
+    $('#aiFloatingBtn')?.classList.remove('active');
     window.setTimeout(() => { if (p.getAttribute('aria-hidden') === 'true') { p.style.display = 'none'; p.classList.remove('panel-opening', 'panel-closing'); } }, 280);
 }
 function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(10080 + Math.floor(Date.now() % 40)); p.style.setProperty('--panel-z', p.style.zIndex); }
@@ -3019,7 +3169,7 @@ function applyAiPanelLayout(layout) {
     window.clearTimeout(p._layoutAnimationTimer);
     Object.assign(p.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
     bringAiPanelToFront();
-    p._layoutAnimationTimer = window.setTimeout(() => { p.classList.remove('layout-animating'); clampAiPanel(p); }, 480);
+    p._layoutAnimationTimer = window.setTimeout(() => { p.classList.remove('layout-animating'); clampAiPanel(p); updateAiPanelResponsiveState(); }, 480);
 }
 function animateAiPanelFromButton(panel, button, opening = true) {
     if (!panel || !button) return;
@@ -3092,6 +3242,7 @@ function closeAiPanelLayoutMenu({ instant = false } = {}) {
 function openAiPanelLayoutMenu(button, panel) {
     closeAiPanelLayoutMenu({ instant: true });
     aiPanelLayoutMenuButton = button;
+    button?.classList.remove('active-layout');
     const menu = document.createElement('div');
     menu.className = 'panel-layout-menu ai-layout-menu';
     menu.setAttribute('role', 'menu');
@@ -3115,13 +3266,14 @@ function openAiPanelLayoutMenu(button, panel) {
         menu.style.removeProperty('transition');
         menu.classList.add('island-open');
         positionAiPanelLayoutMenu(menu, button, { collapsed: false });
-        window.setTimeout(() => { menu.classList.remove('island-animating'); menu.style.removeProperty('opacity'); button.classList.add('active-layout'); }, 540);
+        window.setTimeout(() => { menu.classList.remove('island-animating'); menu.style.removeProperty('opacity'); }, 540);
     });
     menu.addEventListener('click', (ev) => {
         const item = ev.target.closest('[data-layout]');
         if (!item) return;
-        if (item.dataset.layout === 'close') closeAiAssistantPanel(); else applyAiPanelLayout(item.dataset.layout);
-        closeAiPanelLayoutMenu(item.dataset.layout === 'close' ? { instant: true } : {});
+        if (item.dataset.layout === 'close') { closeAiAssistantPanel(); closeAiPanelLayoutMenu({ instant: true }); return; }
+        applyAiPanelLayout(item.dataset.layout);
+        closeAiPanelLayoutMenu();
     });
 }
 function aiProviderFieldWrap(id, labelText) {
@@ -3138,6 +3290,7 @@ function normalizeAiProviderModalLayout() {
     const labels = {
         aiProviderBaseUrl: 'API Base URL',
         aiProviderApiKey: 'API Key',
+        aiProviderApiMode: '接口模式',
         aiProviderModels: '模型列表',
         aiProviderDefaultModel: '默认模型',
         aiProviderOrganization: 'Organization / Project（可选）',
@@ -3165,7 +3318,7 @@ function setupAiPanelChrome() {
             if (!moved) return;
             panel.style.left = `${startLeft + dx}px`; panel.style.top = `${startTop + dy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel);
         };
-        const up = () => { panel.classList.remove('dragging'); layoutBtn.classList.remove('pressing'); aiPanelSuppressLayoutClick = moved; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+        const up = () => { panel.classList.remove('dragging'); layoutBtn.classList.remove('pressing'); aiPanelSuppressLayoutClick = moved; updateAiPanelResponsiveState(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
         window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true }); window.addEventListener('pointercancel', up, { once: true });
     });
     panel?.querySelector('.panel-titlebar')?.addEventListener('pointerdown', (e) => {
@@ -3173,7 +3326,7 @@ function setupAiPanelChrome() {
         e.preventDefault(); bringAiPanelToFront(); panel.classList.add('dragging');
         const sx = e.clientX, sy = e.clientY, sl = panel.offsetLeft, st = panel.offsetTop;
         const move = (ev) => { ev.preventDefault(); panel.style.left = `${sl + ev.clientX - sx}px`; panel.style.top = `${st + ev.clientY - sy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel); };
-        const up = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const up = () => { panel.classList.remove('dragging'); updateAiPanelResponsiveState(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
     });
     panel?.querySelectorAll('[data-ai-agent-resize]').forEach((h) => h.addEventListener('pointerdown', (e) => {
@@ -3181,11 +3334,12 @@ function setupAiPanelChrome() {
         const sx = e.clientX, sy = e.clientY, sw = panel.offsetWidth, sh = panel.offsetHeight, sl = panel.offsetLeft, edge = h.dataset.aiAgentResize;
         const parentRect = aiPanelParentRect(panel);
         const compact = window.innerWidth <= 760;
-        const minWidth = compact ? 300 : 420, minHeight = compact ? 360 : 420;
-        const move = (ev) => { ev.preventDefault(); let nw = sw + ev.clientX - sx, nl = sl; if (edge === 'left') { nw = sw - (ev.clientX - sx); nl = sl + (ev.clientX - sx); if (nw < minWidth) { nl -= minWidth - nw; nw = minWidth; } if (nl < 8) { nw += nl - 8; nl = 8; } panel.style.left = `${nl}px`; } const maxWidth = edge === 'left' ? sl + sw - 8 : parentRect.width - panel.offsetLeft - 12; const maxHeight = parentRect.height - panel.offsetTop - 12; panel.style.width = `${Math.min(Math.max(minWidth, nw), maxWidth)}px`; panel.style.height = `${Math.min(Math.max(minHeight, sh + ev.clientY - sy), maxHeight)}px`; };
-        const up = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const minWidth = compact ? 220 : 420, minHeight = compact ? 300 : 420;
+        const move = (ev) => { ev.preventDefault(); let nw = sw + ev.clientX - sx, nl = sl; if (edge === 'left') { nw = sw - (ev.clientX - sx); nl = sl + (ev.clientX - sx); if (nw < minWidth) { nl -= minWidth - nw; nw = minWidth; } if (nl < 8) { nw += nl - 8; nl = 8; } panel.style.left = `${nl}px`; } const maxWidth = edge === 'left' ? sl + sw - 8 : parentRect.width - panel.offsetLeft - 12; const maxHeight = parentRect.height - panel.offsetTop - 12; panel.style.width = `${Math.min(Math.max(minWidth, nw), maxWidth)}px`; panel.style.height = `${Math.min(Math.max(minHeight, sh + ev.clientY - sy), maxHeight)}px`; updateAiPanelResponsiveState(); };
+        const up = () => { panel.classList.remove('resizing'); updateAiPanelResponsiveState(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
     }));
+    if (panel) panel._layoutAnimationTimer = null;
     layoutBtn?.addEventListener('click', (e) => {
         e.preventDefault(); e.stopPropagation();
         if (aiPanelSuppressLayoutClick) { aiPanelSuppressLayoutClick = false; return; }
@@ -3209,15 +3363,38 @@ function toggleAiVoice() {
     aiSpeechRecognition.onresult = (event) => { let text = ''; for (let i = event.resultIndex; i < event.results.length; i += 1) text += event.results[i][0].transcript; $('#aiUserInput').value = $('#aiUserInput').value.replace(/\[识别中...\]$/, '') + (event.results[event.results.length - 1].isFinal ? text : '[识别中...]'); autoResizeAiInput($('#aiUserInput')); };
     aiSpeechRecognition.start();
 }
+function updateAiProviderModalHints() {
+    const type = $('#aiProviderType')?.value || 'openai-compatible';
+    const mode = $('#aiProviderApiMode')?.value || 'auto';
+    const base = $('#aiProviderBaseUrl');
+    const extra = $('#aiProviderExtraJson');
+    if (base) {
+        base.placeholder = mode === 'responses'
+            ? 'https://api.openai.com/v1/responses'
+            : type === 'gemini'
+                ? 'https://generativelanguage.googleapis.com/v1beta'
+                : type === 'anthropic'
+                    ? 'https://api.anthropic.com/v1'
+                    : 'https://api.openai.com/v1 / https://api.deepseek.com/v1';
+    }
+    if (extra) {
+        extra.placeholder = mode === 'responses'
+            ? '{"text":{"format":{"type":"json_object"}},"reasoning":{"effort":"medium"}}'
+            : '{"response_format":{"type":"json_object"}}';
+    }
+}
 function setupAiAssistant() {
     normalizeAiProviderModalLayout();
     setupAiPanelChrome();
     $('#aiSettingsForm')?.addEventListener('submit', saveAiSettings);
     $('#aiAddProviderBtn')?.addEventListener('click', () => openAiProviderModal());
     $('#aiProviderForm')?.addEventListener('submit', saveAiProvider);
+    $('#aiFetchModelsBtn')?.addEventListener('click', () => fetchAiModelsForProvider());
+    $('#aiProviderType')?.addEventListener('change', updateAiProviderModalHints);
+    $('#aiProviderApiMode')?.addEventListener('change', updateAiProviderModalHints);
     $('#aiProviderCloseBtn')?.addEventListener('click', closeAiProviderModal);
     $('#aiProviderCancelBtn')?.addEventListener('click', closeAiProviderModal);
-    $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider; const ai = normalizeAiSettings(settings.ai || {}); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
+    $('#aiProviderList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditProvider, del = e.target.dataset.aiDeleteProvider, fetchModels = e.target.dataset.aiFetchProviderModels; const ai = normalizeAiSettings(settings.ai || {}); if (fetchModels) fetchAiModelsForProvider(fetchModels); if (edit) openAiProviderModal(ai.providers.find((p) => p.id === edit)); if (del) deleteAiProvider(del); });
     $('#aiEnvForm')?.addEventListener('submit', saveAiEnv);
     $('#aiEnvResetBtn')?.addEventListener('click', resetAiEnvForm);
     $('#toggleAiEnvValue')?.addEventListener('click', () => { const el = $('#aiEnvValue'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleAiEnvValue').textContent = el.type === 'password' ? '👁️' : '🙈'; });
@@ -3236,14 +3413,15 @@ function setupAiAssistant() {
     $('#aiSkillResetBtn')?.addEventListener('click', resetAiSkillForm);
     $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
     $('#openAiAssistantBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget)); $('#openAiAssistantBtn2')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
+    $('#aiNavTab')?.addEventListener('click', (e) => { e.preventDefault(); openAiAssistantPanel(e.currentTarget); });
     $('#aiFloatingBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
     $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
-    $('#aiChatList')?.addEventListener('click', (e) => { const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
+    $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
     $('#aiSendBtn')?.addEventListener('click', sendAiMessage);
     $('#aiUserInput')?.addEventListener('input', (e) => autoResizeAiInput(e.target));
-    $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(); } });
-    $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = [{ role: 'system', content: '当前会话上下文已清理。' }]; renderAiChat(); });
+    $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAiMessage(); } });
+    $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = []; renderAiChat(); });
     $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
     $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
     $('#aiBrowserPreviewToggleBtn')?.addEventListener('click', () => { aiBrowserPreviewState.visible = !aiBrowserPreviewState.visible; renderAiBrowserPreview(); });
@@ -3251,8 +3429,9 @@ function setupAiAssistant() {
     $('#aiRefreshStatusBtn')?.addEventListener('click', async () => { const r = await api('/api/ai/status'); settings.ai = normalizeAiSettings(r.ai || {}); renderAiSettingsForm(); toast('AI 配置已刷新'); });
     $('#aiChatArea')?.addEventListener('click', (e) => { const approve = e.target.dataset.aiConfirmApprove, deny = e.target.dataset.aiConfirmDeny; if (approve) resolveAiConfirmation(approve, true); if (deny) resolveAiConfirmation(deny, false); });
     $('#aiUploadBtn')?.addEventListener('click', () => $('#aiFileUpload').click());
-    $('#aiFileUpload')?.addEventListener('change', (e) => { const names = Array.from(e.target.files || []).map((f) => `${f.name} (${f.size} bytes)`).join(', '); if (names) appendAiMessage(`[附件已选择] ${names}`, 'user'); e.target.value = ''; });
+    $('#aiFileUpload')?.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (!files.length) return; appendAiFiles(files).catch((err) => toast(err.message || '附件读取失败')).finally(() => { e.target.value = ''; }); });
     $('#aiVoiceBtn')?.addEventListener('click', toggleAiVoice);
+    window.addEventListener('resize', updateAiPanelResponsiveState);
 }
 
 function renderRemoteServers() { const ssh = connections.filter((c) => c.protocol === 'SSH'); $('#remoteServerList').innerHTML = ssh.length ? ssh.map((c) => `<label class="server-check"><input type="checkbox" value="${c.id}"> <span>${escapeHtml(c.name)}</span><em>${escapeHtml(c.host)}</em></label>`).join('') : '<div class="empty-card">暂无 SSH 连接</div>'; }
