@@ -8,9 +8,10 @@ let aiCurrentSessionId = null;
 let aiSpeechRecognition = null;
 let aiRecording = false;
 let aiPanelLayoutMenu = null;
+let aiPanelLayoutMenuButton = null;
 let aiPanelSuppressLayoutClick = false;
 let aiBrowserPreviewTimer = 0;
-let aiBrowserPreviewState = { session: 'default', preview: null, visible: true };
+let aiBrowserPreviewState = { session: 'default', preview: null, visible: false };
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
@@ -2444,6 +2445,7 @@ function aiCurrentSession() {
 function applyAiVisibility() {
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
     $('#aiNavTab')?.classList.toggle('force-hidden', !ai.enabled);
+    $('#aiFloatingBtn')?.classList.toggle('force-hidden', !ai.enabled);
     if (!ai.enabled && document.querySelector('#view-ai')?.classList.contains('active')) switchView('remote');
     renderAiHeaderSelectors();
 }
@@ -2966,57 +2968,232 @@ async function resolveAiConfirmation(id, approve) {
     finally { setAiTyping(false); }
 }
 function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
-function openAiAssistantPanel() {
+function openAiAssistantPanel(trigger = null) {
     const ai = normalizeAiSettings(settings.ai || {});
     if (!ai.enabled) { toast('请先在设置中启用 AI 助理'); return; }
     const panel = $('#aiAgentPanel');
-    panel.style.display = 'block';
+    const wasHidden = panel.style.display === 'none' || panel.getAttribute('aria-hidden') === 'true';
+    panel.style.display = 'flex';
+    panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     if (!panel.dataset.positioned) {
-        panel.style.left = 'calc(50% - 430px)'; panel.style.top = '88px'; panel.style.width = '860px'; panel.style.height = 'min(760px, calc(100vh - 120px))'; panel.dataset.positioned = '1';
+        const compact = window.innerWidth <= 760;
+        const width = compact ? Math.max(320, window.innerWidth - 12) : Math.min(980, window.innerWidth - 40);
+        const height = compact ? Math.max(520, window.innerHeight - 12) : Math.min(780, window.innerHeight - 80);
+        panel.style.left = compact ? '6px' : `${Math.max(16, (window.innerWidth - width) / 2)}px`;
+        panel.style.top = compact ? '6px' : '52px';
+        panel.style.width = `${width}px`;
+        panel.style.height = `${height}px`;
+        panel.dataset.positioned = '1';
     }
     bringAiPanelToFront();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
     renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
+    if (wasHidden) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
 }
-function closeAiAssistantPanel() { const p = $('#aiAgentPanel'); p.style.display = 'none'; p.setAttribute('aria-hidden', 'true'); }
-function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(650 + Math.floor(Date.now() % 100)); }
+function closeAiAssistantPanel() {
+    const p = $('#aiAgentPanel');
+    if (!p || p.style.display === 'none') return;
+    closeAiPanelLayoutMenu({ instant: true });
+    animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
+    p.classList.remove('open');
+    p.setAttribute('aria-hidden', 'true');
+    window.setTimeout(() => { if (p.getAttribute('aria-hidden') === 'true') { p.style.display = 'none'; p.classList.remove('panel-opening', 'panel-closing'); } }, 280);
+}
+function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(10080 + Math.floor(Date.now() % 40)); p.style.setProperty('--panel-z', p.style.zIndex); }
 function applyAiPanelLayout(layout) {
     const p = $('#aiAgentPanel');
     if (!p) return;
-    const vw = window.innerWidth, vh = window.innerHeight, top = 72;
-    if (layout === 'full') Object.assign(p.style, { left: '8px', top: '8px', width: `${vw - 16}px`, height: `${vh - 16}px` });
-    if (layout === 'half') Object.assign(p.style, { left: `${Math.max(8, vw * 0.08)}px`, top: `${top}px`, width: `${Math.min(900, vw * 0.84)}px`, height: `${Math.max(420, vh - top - 20)}px` });
-    if (layout === 'left-quarter') Object.assign(p.style, { left: '8px', top: `${top}px`, width: `${Math.max(320, vw * 0.42)}px`, height: `${Math.max(420, vh - top - 20)}px` });
-    if (layout === 'right-quarter') Object.assign(p.style, { left: `${Math.max(8, vw - Math.max(320, vw * 0.42) - 8)}px`, top: `${top}px`, width: `${Math.max(320, vw * 0.42)}px`, height: `${Math.max(420, vh - top - 20)}px` });
+    const parentRect = aiPanelParentRect(p);
+    const margin = window.innerWidth <= 760 ? 6 : 12;
+    const topbar = window.innerWidth <= 760 ? 6 : 52;
+    let left = margin, top = topbar, width = parentRect.width - margin * 2, height = parentRect.height - topbar - margin;
+    if (layout === 'full') { left = margin; top = margin; width = parentRect.width - margin * 2; height = parentRect.height - margin * 2; }
+    else if (layout === 'half') { width = parentRect.width; height = Math.max(window.innerWidth <= 760 ? 420 : 360, parentRect.height / 2); left = 0; top = parentRect.height - height; }
+    else if (layout === 'left-quarter') { width = Math.max(window.innerWidth <= 760 ? parentRect.width - margin * 2 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = window.innerWidth <= 760 ? margin : 0; top = topbar; }
+    else if (layout === 'right-quarter') { width = Math.max(window.innerWidth <= 760 ? parentRect.width - margin * 2 : 340, parentRect.width / 4); height = parentRect.height - topbar; left = window.innerWidth <= 760 ? margin : parentRect.width - width; top = topbar; }
+    p.classList.add('layout-animating');
+    window.clearTimeout(p._layoutAnimationTimer);
+    Object.assign(p.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
+    bringAiPanelToFront();
+    p._layoutAnimationTimer = window.setTimeout(() => { p.classList.remove('layout-animating'); clampAiPanel(p); }, 480);
+}
+function animateAiPanelFromButton(panel, button, opening = true) {
+    if (!panel || !button) return;
+    const panelRect = panel.getBoundingClientRect?.();
+    const buttonRect = button.getBoundingClientRect?.();
+    if (!panelRect || !buttonRect || panelRect.width <= 1 || panelRect.height <= 1) return;
+    const originX = ((buttonRect.left + buttonRect.width / 2 - panelRect.left) / panelRect.width) * 100;
+    const originY = ((buttonRect.top + buttonRect.height / 2 - panelRect.top) / panelRect.height) * 100;
+    panel.style.setProperty('--panel-origin-x', `${Math.max(8, Math.min(92, originX))}%`);
+    panel.style.setProperty('--panel-origin-y', `${Math.max(8, Math.min(92, originY))}%`);
+    panel.classList.remove('panel-opening', 'panel-closing');
+    void panel.offsetWidth;
+    panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
+    window.clearTimeout(panel._aiPanelMotionTimer);
+    panel._aiPanelMotionTimer = window.setTimeout(() => panel.classList.remove('panel-opening', 'panel-closing'), opening ? 380 : 300);
+}
+function aiPanelParentRect(panel) { return panel?.parentElement?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight }; }
+function clampAiPanel(panel) {
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const parentRect = aiPanelParentRect(panel);
+    const minVisible = window.innerWidth <= 760 ? 160 : 90;
+    const left = Math.min(Math.max(rect.left - parentRect.left, -rect.width + minVisible), parentRect.width - minVisible);
+    const top = Math.min(Math.max(rect.top - parentRect.top, 8), parentRect.height - minVisible);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
+function positionAiPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
+    if (!menu || !button) return;
+    const rect = button.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const vvWidth = viewport?.width || window.innerWidth;
+    const anchorX = rect.left + rect.width / 2;
+    const finalWidth = Math.min(284, Math.max(160, vvWidth - 16));
+    const finalHeight = 50;
+    const finalLeft = anchorX - finalWidth / 2;
+    menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
+    menu.style.top = `${rect.top}px`;
+    menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
+    menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : finalHeight}px`);
+    menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
+    menu.dataset.placement = 'inline';
+}
+function closeAiPanelLayoutMenu({ instant = false } = {}) {
+    const menu = aiPanelLayoutMenu;
+    const button = aiPanelLayoutMenuButton;
+    if (!menu) { button?.classList.remove('active-layout'); aiPanelLayoutMenuButton = null; return; }
+    window.clearTimeout(menu._closeTimer);
+    if (instant || !button?.isConnected) {
+        button?.classList.remove('active-layout');
+        button?.style.removeProperty('opacity');
+        menu.remove(); aiPanelLayoutMenu = null; aiPanelLayoutMenuButton = null; return;
+    }
+    menu.style.transition = 'none';
+    positionAiPanelLayoutMenu(menu, button, { collapsed: false });
+    menu.style.opacity = '1';
+    void menu.offsetWidth;
+    menu.classList.remove('island-open');
+    menu.classList.add('island-closing', 'island-animating');
+    button.classList.remove('active-layout');
+    button.style.opacity = '0';
+    requestAnimationFrame(() => { menu.style.removeProperty('transition'); positionAiPanelLayoutMenu(menu, button, { collapsed: true }); });
+    menu._closeTimer = window.setTimeout(() => {
+        button.classList.remove('active-layout');
+        button.style.opacity = '1';
+        requestAnimationFrame(() => button.style.removeProperty('opacity'));
+        menu.remove(); if (aiPanelLayoutMenu === menu) aiPanelLayoutMenu = null; if (aiPanelLayoutMenuButton === button) aiPanelLayoutMenuButton = null;
+    }, 460);
+}
+function openAiPanelLayoutMenu(button, panel) {
+    closeAiPanelLayoutMenu({ instant: true });
+    aiPanelLayoutMenuButton = button;
+    const menu = document.createElement('div');
+    menu.className = 'panel-layout-menu ai-layout-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'AI 浮窗布局');
+    menu.innerHTML = `
+        <button data-layout="full" title="全屏" aria-label="全屏"><span class="panel-layout-icon full"></span></button>
+        <button data-layout="half" title="半屏" aria-label="半屏"><span class="panel-layout-icon half"></span></button>
+        <button data-layout="left-quarter" title="左侧四分之一" aria-label="左侧四分之一"><span class="panel-layout-icon left"></span></button>
+        <button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button>
+        <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
+    `;
+    menu.style.transition = 'none';
+    document.body.appendChild(menu);
+    aiPanelLayoutMenu = menu;
+    positionAiPanelLayoutMenu(menu, button, { collapsed: true });
+    button.style.opacity = '0';
+    menu.style.opacity = '1';
+    menu.classList.add('island-animating');
+    void menu.offsetWidth;
+    requestAnimationFrame(() => {
+        menu.style.removeProperty('transition');
+        menu.classList.add('island-open');
+        positionAiPanelLayoutMenu(menu, button, { collapsed: false });
+        window.setTimeout(() => { menu.classList.remove('island-animating'); menu.style.removeProperty('opacity'); button.classList.add('active-layout'); }, 540);
+    });
+    menu.addEventListener('click', (ev) => {
+        const item = ev.target.closest('[data-layout]');
+        if (!item) return;
+        if (item.dataset.layout === 'close') closeAiAssistantPanel(); else applyAiPanelLayout(item.dataset.layout);
+        closeAiPanelLayoutMenu(item.dataset.layout === 'close' ? { instant: true } : {});
+    });
+}
+function aiProviderFieldWrap(id, labelText) {
+    const el = document.getElementById(id);
+    if (!el || el.closest('.form-group')) return;
+    const label = Array.from($('#aiProviderForm')?.querySelectorAll(':scope > label') || []).find((x) => x.getAttribute('for') === id || x.nextElementSibling === el || x.textContent.trim() === labelText);
+    const group = document.createElement('div');
+    group.className = 'form-group';
+    if (label) { label.remove(); group.appendChild(label); } else { const l = document.createElement('label'); l.textContent = labelText; group.appendChild(l); }
+    el.parentNode.insertBefore(group, el);
+    group.appendChild(el);
+}
+function normalizeAiProviderModalLayout() {
+    const labels = {
+        aiProviderBaseUrl: 'API Base URL',
+        aiProviderApiKey: 'API Key',
+        aiProviderModels: '模型列表',
+        aiProviderDefaultModel: '默认模型',
+        aiProviderOrganization: 'Organization / Project（可选）',
+        aiProviderExtraHeaders: '额外请求头 JSON（可选）',
+        aiProviderExtraJson: 'response_format / 其他参数 JSON',
+    };
+    Object.entries(labels).forEach(([id, label]) => aiProviderFieldWrap(id, label));
 }
 function setupAiPanelChrome() {
     const panel = $('#aiAgentPanel');
+    const layoutBtn = panel?.querySelector('[data-ai-agent-layout]');
     panel?.addEventListener('pointerdown', bringAiPanelToFront);
-    panel?.querySelector('[data-ai-agent-drag]')?.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('button')) return;
-        e.preventDefault(); bringAiPanelToFront();
+    layoutBtn?.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        bringAiPanelToFront();
+        layoutBtn.classList.add('pressing');
+        layoutBtn.setPointerCapture?.(e.pointerId);
+        const startX = e.clientX, startY = e.clientY, startLeft = panel.offsetLeft, startTop = panel.offsetTop;
+        let moved = false;
+        const move = (ev) => {
+            ev.preventDefault();
+            const dx = ev.clientX - startX, dy = ev.clientY - startY;
+            if (!moved && Math.hypot(dx, dy) > 7) { moved = true; closeAiPanelLayoutMenu({ instant: true }); panel.classList.add('dragging'); }
+            if (!moved) return;
+            panel.style.left = `${startLeft + dx}px`; panel.style.top = `${startTop + dy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel);
+        };
+        const up = () => { panel.classList.remove('dragging'); layoutBtn.classList.remove('pressing'); aiPanelSuppressLayoutClick = moved; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true }); window.addEventListener('pointercancel', up, { once: true });
+    });
+    panel?.querySelector('.panel-titlebar')?.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button,input,select,textarea,label')) return;
+        e.preventDefault(); bringAiPanelToFront(); panel.classList.add('dragging');
         const sx = e.clientX, sy = e.clientY, sl = panel.offsetLeft, st = panel.offsetTop;
-        const move = (ev) => { ev.preventDefault(); panel.style.left = `${sl + ev.clientX - sx}px`; panel.style.top = `${st + ev.clientY - sy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; };
-        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const move = (ev) => { ev.preventDefault(); panel.style.left = `${sl + ev.clientX - sx}px`; panel.style.top = `${st + ev.clientY - sy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampAiPanel(panel); };
+        const up = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
     });
     panel?.querySelectorAll('[data-ai-agent-resize]').forEach((h) => h.addEventListener('pointerdown', (e) => {
-        e.preventDefault(); bringAiPanelToFront();
+        e.preventDefault(); bringAiPanelToFront(); panel.classList.add('resizing'); h.setPointerCapture?.(e.pointerId);
         const sx = e.clientX, sy = e.clientY, sw = panel.offsetWidth, sh = panel.offsetHeight, sl = panel.offsetLeft, edge = h.dataset.aiAgentResize;
-        const move = (ev) => { let nw = sw + ev.clientX - sx, nl = sl; if (edge === 'left') { nw = sw - (ev.clientX - sx); nl = sl + (ev.clientX - sx); panel.style.left = `${nl}px`; } panel.style.width = `${Math.max(320, nw)}px`; panel.style.height = `${Math.max(360, sh + ev.clientY - sy)}px`; };
-        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const parentRect = aiPanelParentRect(panel);
+        const compact = window.innerWidth <= 760;
+        const minWidth = compact ? 300 : 420, minHeight = compact ? 360 : 420;
+        const move = (ev) => { ev.preventDefault(); let nw = sw + ev.clientX - sx, nl = sl; if (edge === 'left') { nw = sw - (ev.clientX - sx); nl = sl + (ev.clientX - sx); if (nw < minWidth) { nl -= minWidth - nw; nw = minWidth; } if (nl < 8) { nw += nl - 8; nl = 8; } panel.style.left = `${nl}px`; } const maxWidth = edge === 'left' ? sl + sw - 8 : parentRect.width - panel.offsetLeft - 12; const maxHeight = parentRect.height - panel.offsetTop - 12; panel.style.width = `${Math.min(Math.max(minWidth, nw), maxWidth)}px`; panel.style.height = `${Math.min(Math.max(minHeight, sh + ev.clientY - sy), maxHeight)}px`; };
+        const up = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up, { once: true });
     }));
-    panel?.querySelector('[data-ai-agent-layout]')?.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (aiPanelLayoutMenu) { aiPanelLayoutMenu.remove(); aiPanelLayoutMenu = null; return; }
-        const menu = document.createElement('div');
-        menu.className = 'panel-layout-menu island-open ai-layout-menu';
-        menu.innerHTML = '<button data-layout="full">全</button><button data-layout="half">半</button><button data-layout="left-quarter">左</button><button data-layout="right-quarter">右</button><button data-layout="close">×</button>';
-        const r = e.currentTarget.getBoundingClientRect(); menu.style.left = `${r.left}px`; menu.style.top = `${r.bottom + 6}px`; document.body.appendChild(menu); aiPanelLayoutMenu = menu;
-        menu.addEventListener('click', (ev) => { const b = ev.target.closest('[data-layout]'); if (!b) return; if (b.dataset.layout === 'close') closeAiAssistantPanel(); else applyAiPanelLayout(b.dataset.layout); menu.remove(); aiPanelLayoutMenu = null; });
+    layoutBtn?.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (aiPanelSuppressLayoutClick) { aiPanelSuppressLayoutClick = false; return; }
+        bringAiPanelToFront();
+        if (navigator.vibrate) navigator.vibrate(8);
+        if (aiPanelLayoutMenu && aiPanelLayoutMenuButton === layoutBtn) closeAiPanelLayoutMenu(); else openAiPanelLayoutMenu(layoutBtn, panel);
     });
+    document.addEventListener('pointerdown', (e) => {
+        if (aiPanelLayoutMenu && !e.target.closest('.panel-layout-menu') && !e.target.closest('[data-ai-agent-layout]')) closeAiPanelLayoutMenu();
+    });
+    window.addEventListener('resize', () => closeAiPanelLayoutMenu({ instant: true }));
 }
 function toggleAiVoice() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3030,6 +3207,7 @@ function toggleAiVoice() {
     aiSpeechRecognition.start();
 }
 function setupAiAssistant() {
+    normalizeAiProviderModalLayout();
     setupAiPanelChrome();
     $('#aiSettingsForm')?.addEventListener('submit', saveAiSettings);
     $('#aiAddProviderBtn')?.addEventListener('click', () => openAiProviderModal());
@@ -3054,7 +3232,8 @@ function setupAiAssistant() {
     $('#aiSkillForm')?.addEventListener('submit', saveAiSkill);
     $('#aiSkillResetBtn')?.addEventListener('click', resetAiSkillForm);
     $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
-    $('#openAiAssistantBtn')?.addEventListener('click', openAiAssistantPanel); $('#openAiAssistantBtn2')?.addEventListener('click', openAiAssistantPanel);
+    $('#openAiAssistantBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget)); $('#openAiAssistantBtn2')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
+    $('#aiFloatingBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
     $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
     $('#aiChatList')?.addEventListener('click', (e) => { const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
