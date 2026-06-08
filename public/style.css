@@ -7960,3 +7960,20 @@ body.app-body:not(.terminal-mode) .app-main {
         scroll-behavior: auto !important;
     }
 }
+
+
+/* 20260608: AI stop response button */
+.ai-send-btn.ai-stop-mode {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--danger) 28%, transparent);
+    animation: aiStopPulse 1.2s ease-in-out infinite;
+}
+@keyframes aiStopPulse {
+    0%, 100% { transform: scale(1); filter: brightness(1); }
+    50% { transform: scale(1.045); filter: brightness(1.06); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ai-send-btn.ai-stop-mode { animation: none !important; }
+}

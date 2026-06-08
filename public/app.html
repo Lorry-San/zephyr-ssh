@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260608-ai-agent-ios-motion">
+    <link rel="stylesheet" href="style.css?v=20260608-ai-agent-stop">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -318,7 +318,7 @@
                     <button class="ai-tool-btn" type="button" id="aiUploadBtn" title="添加附件">📎</button>
                     <button class="ai-tool-btn" type="button" id="aiVoiceBtn" title="语音输入">🎙️</button>
                     <textarea class="ai-input-box" id="aiUserInput" rows="1" placeholder="输入指令，可让 AI 搜索网页、分析连接、执行远程命令、读写文件..."></textarea>
-                    <button class="ai-send-btn" type="button" id="aiSendBtn">➤</button>
+                    <button class="ai-send-btn" type="button" id="aiSendBtn" title="发送" aria-label="发送">➤</button>
                 </div>
             </section>
         </div>
@@ -385,6 +385,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260608-ai-agent-mobile-default-size" type="module"></script>
+    <script src="app.js?v=20260608-ai-agent-stop" type="module"></script>
 </body>
 </html>

@@ -1056,32 +1056,56 @@ async function testGuacamoleConnection(conn, timeout = 10000) {
 
 function shellSingleQuote(value) { return "'" + String(value || '').replace(/'/g, "'\\''") + "'"; }
 
-function runRemoteCommand(conn, command, timeoutSeconds = 30) {
+function runRemoteCommand(conn, command, timeoutSeconds = 30, options = {}) {
     return new Promise((resolve) => {
+        const signal = options?.signal || null;
         const started = Date.now();
         let settled = false;
         let stdout = '';
         let stderr = '';
         const timeoutMs = Math.max(1, Math.min(Number(timeoutSeconds) || 30, 300)) * 1000;
         let routed = null;
+        let activeStream = null;
+        let timer = null;
+        const cleanup = () => {
+            if (timer) clearTimeout(timer);
+            try { signal?.removeEventListener?.('abort', abort); } catch {}
+            try { activeStream?.destroy?.(); } catch {}
+            (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
+        };
         const done = (result) => {
             if (settled) return;
             settled = true;
-            clearTimeout(timer);
-            (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
+            cleanup();
             resolve({ connectionId: conn.id, name: conn.name, host: conn.host, stdout, stderr, durationMs: Date.now() - started, ...result });
         };
-        const timer = setTimeout(() => done({ status: 'timeout', success: false, error: `执行超时（${timeoutSeconds}s）` }), timeoutMs);
+        const abort = () => done({ status: 'aborted', success: false, error: 'AI 请求已停止' });
+        if (signal?.aborted) return abort();
+        signal?.addEventListener?.('abort', abort, { once: true });
+        timer = setTimeout(() => done({ status: 'timeout', success: false, error: `执行超时（${timeoutSeconds}s）` }), timeoutMs);
         createRoutedSSHConnection(conn, Math.min(timeoutMs, 15000)).then((result) => {
             routed = result;
+            if (settled || signal?.aborted) {
+                (result?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
+                if (!settled) abort();
+                return;
+            }
             const client = result.client;
             client.exec(`/bin/sh -c ${shellSingleQuote(command)}`, (err, stream) => {
+                if (settled || signal?.aborted) {
+                    try { stream?.destroy?.(); } catch {}
+                    return abort();
+                }
                 if (err) return done({ status: 'failed', success: false, error: err.message });
+                activeStream = stream;
                 stream.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
                 stream.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
                 stream.on('close', (code) => done({ status: code === 0 ? 'success' : 'failed', success: code === 0, exitCode: code, error: code === 0 ? '' : (stderr || stdout || `退出码 ${code}`).trim() }));
             });
-        }).catch((err) => done({ status: 'failed', success: false, error: classifySSHError(err).message }));
+        }).catch((err) => {
+            if (settled) return;
+            done({ status: signal?.aborted ? 'aborted' : 'failed', success: false, error: signal?.aborted ? 'AI 请求已停止' : classifySSHError(err).message });
+        });
     });
 }
 

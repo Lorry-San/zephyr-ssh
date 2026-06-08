@@ -11,7 +11,27 @@ const MAX_REMOTE_READ = 512 * 1024;
 const MAX_REMOTE_WRITE = 1024 * 1024;
 const pendingActions = new Map();
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+function aiAbortError() {
+    const err = new Error('AI 请求已停止');
+    err.name = 'AbortError';
+    return err;
+}
+function delay(ms, signal = null) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) return reject(aiAbortError());
+        let timer = null;
+        const done = () => {
+            try { signal?.removeEventListener?.('abort', abort); } catch {}
+            resolve();
+        };
+        const abort = () => {
+            if (timer) clearTimeout(timer);
+            reject(aiAbortError());
+        };
+        signal?.addEventListener?.('abort', abort, { once: true });
+        timer = setTimeout(done, Math.max(0, Number(ms) || 0));
+    });
+}
 function clampNumber(value, min, max, fallback) { const n = Number(value); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; }
 function safeJsonParse(value, fallback = null) { try { return JSON.parse(String(value || '').trim()); } catch { return fallback; } }
 function htmlDecode(value = '') {
@@ -36,6 +56,9 @@ function clipText(value, max = MAX_TOOL_TEXT) {
     return text.length > max ? `${text.slice(0, max)}\n...[已截断 ${text.length - max} 字符]` : text;
 }
 function publicError(err) { return err?.message || String(err || '执行失败'); }
+function throwIfAborted(signal) {
+    if (signal?.aborted) throw aiAbortError();
+}
 function normalizeRole(role) {
     const value = String(role || '').toLowerCase();
     if (value === 'ai') return 'assistant';
@@ -373,7 +396,7 @@ function toResponsesInput(messages = []) {
 function toResponsesTools(tools = []) {
     return tools.map((tool) => ({ type: 'function', name: tool.function?.name, description: tool.function?.description || '', parameters: tool.function?.parameters || { type: 'object', properties: {} } })).filter((tool) => tool.name);
 }
-async function callOpenAiResponses(provider, model, messages, options = {}, tools = []) {
+async function callOpenAiResponses(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/responses');
     const opts = normalizeOptions(provider, options, 'responses');
@@ -395,7 +418,7 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
     if (system) payload.instructions = system;
     const responseTools = toResponsesTools(tools);
     if (responseTools.length) { payload.tools = responseTools; payload.tool_choice = 'auto'; }
-    const run = async (body) => fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(body) });
+    const run = async (body) => fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(body), signal });
     let data;
     try {
         data = await run(payload);
@@ -410,18 +433,18 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
     }
     return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
 }
-async function callOpenAiCompatible(provider, model, messages, options = {}, tools = []) {
+async function callOpenAiCompatible(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
     const payload = { model, messages, stream: false, ...normalizeOptions(provider, options, 'chat') };
     if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
-    const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
+    const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
         return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
     }
     return normalizeOpenAiMessage(data?.choices?.[0]?.message || { content: '' });
 }
-async function callAnthropic(provider, model, messages, options = {}, tools = []) {
+async function callAnthropic(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.anthropic.com/v1';
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const normal = anthropicMessages(messages);
@@ -429,13 +452,13 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     const payload = { model, system, messages: normal.length ? normal : [{ role: 'user', content: '你好' }], max_tokens: opts.max_tokens || 4096, temperature: opts.temperature, top_p: opts.top_p };
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
-    const data = await fetchJson(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload) });
+    const data = await fetchJson(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
     const blocks = Array.isArray(data.content) ? data.content : [];
     const content = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
     const toolCalls = blocks.filter((b) => b.type === 'tool_use' && b.name).map((b) => ({ id: b.id || crypto.randomUUID(), type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } }));
     return { role: 'assistant', content, tool_calls: toolCalls };
 }
-async function callGemini(provider, model, messages, options = {}, tools = []) {
+async function callGemini(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = (provider.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
     const keyParam = provider.apiKey ? `?key=${encodeURIComponent(provider.apiKey)}` : '';
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
@@ -447,18 +470,19 @@ async function callGemini(provider, model, messages, options = {}, tools = []) {
     if (system) body.systemInstruction = { parts: [{ text: system }] };
     const geminiTools = toGeminiTools(tools);
     if (geminiTools.length) body.tools = geminiTools;
-    const data = await fetchJson(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), body: JSON.stringify(body) });
+    const data = await fetchJson(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), body: JSON.stringify(body), signal });
     const parts = (data.candidates || []).flatMap((c) => c.content?.parts || []);
     const content = parts.filter((p) => p.text).map((p) => p.text || '').join('\n');
     const toolCalls = parts.filter((p) => p.functionCall?.name).map((p) => ({ id: crypto.randomUUID(), type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) } }));
     return { role: 'assistant', content, tool_calls: toolCalls };
 }
-async function callProvider(provider, model, messages, options = {}, tools = []) {
+async function callProvider(provider, model, messages, options = {}, tools = [], signal = null) {
+    throwIfAborted(signal);
     const type = providerType(provider);
-    if (type === 'anthropic') return callAnthropic(provider, model, messages, options, tools);
-    if (type === 'gemini') return callGemini(provider, model, messages, options, tools);
-    if (openAiApiMode(provider) === 'responses') return callOpenAiResponses(provider, model, messages, options, tools);
-    return callOpenAiCompatible(provider, model, messages, options, tools);
+    if (type === 'anthropic') return callAnthropic(provider, model, messages, options, tools, signal);
+    if (type === 'gemini') return callGemini(provider, model, messages, options, tools, signal);
+    if (openAiApiMode(provider) === 'responses') return callOpenAiResponses(provider, model, messages, options, tools, signal);
+    return callOpenAiCompatible(provider, model, messages, options, tools, signal);
 }
 async function duckDuckGoSearch(query, maxResults = 6) {
     const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -675,7 +699,7 @@ async function maybeRequireConfirmation(toolName, args, ctx, run, deps) {
     const sensitive = ai.sensitive || {};
     if (!isSensitiveTool(toolName) || ctx.confirmed || sensitive.requireConfirmation === false) return run();
     if (sensitive.autoConfirm) {
-        await delay(clampNumber(sensitive.autoConfirmDelayMs, 0, 60000, 2500));
+        await delay(clampNumber(sensitive.autoConfirmDelayMs, 0, 60000, 2500), ctx.signal);
         return run();
     }
     const id = crypto.randomUUID();
@@ -844,7 +868,7 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
                 if (!command) throw new Error('命令不能为空');
                 const targets = getSshConnections(deps).filter((c) => ids.includes(c.id));
                 if (!targets.length) throw new Error('远程执行仅支持 SSH 连接；RDP/VNC 只能作为资产上下文或通过连接入口打开');
-                const results = await Promise.all(targets.map((conn) => deps.runRemoteCommand(conn, command, clampNumber(args.timeoutSeconds, 1, 300, 30))));
+                const results = await Promise.all(targets.map((conn) => deps.runRemoteCommand(conn, command, clampNumber(args.timeoutSeconds, 1, 300, 30), { signal: ctx.signal })));
                 deps.addActivity?.(`AI 助理远程执行：${targets.length} 台服务器，命令 ${command.slice(0, 40)}`);
                 return { results };
             }, deps);
@@ -1074,6 +1098,13 @@ function registerAiRoutes(app, deps) {
     });
 
     app.post('/api/ai/chat', deps.requireAuth, async (req, res) => {
+        const abortController = new AbortController();
+        const abortRequest = () => {
+            if (res.writableEnded) return;
+            abortController.abort();
+        };
+        req.on('aborted', abortRequest);
+        res.on('close', abortRequest);
         try {
             const ai = deps.storage.getSettings().ai || {};
             if (!ai.enabled) return res.status(403).json({ error: 'AI 助理未启用，请先到设置中开启' });
@@ -1085,7 +1116,9 @@ function registerAiRoutes(app, deps) {
             let messages = baseMessages;
             const toolResults = [];
             for (let step = 0; step < OPENAI_TOOL_LIMIT; step += 1) {
-                const message = await callProvider(provider, model, messages, req.body?.options || {}, tools);
+                throwIfAborted(abortController.signal);
+                const message = await callProvider(provider, model, messages, req.body?.options || {}, tools, abortController.signal);
+                throwIfAborted(abortController.signal);
                 const calls = Array.isArray(message.tool_calls) ? message.tool_calls.map(parseToolCall).filter((c) => c.name) : [];
                 if (!calls.length) {
                     deps.addActivity?.(`AI 助理对话：${provider.name || provider.type}/${model}`);
@@ -1093,8 +1126,10 @@ function registerAiRoutes(app, deps) {
                 }
                 messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '' }];
                 for (const call of calls) {
+                    throwIfAborted(abortController.signal);
                     const startedAt = Date.now();
-                    const result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider) }, deps);
+                    const result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider), signal: abortController.signal }, deps);
+                    throwIfAborted(abortController.signal);
                     const endedAt = Date.now();
                     if (result?.confirmationRequired) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
@@ -1105,8 +1140,16 @@ function registerAiRoutes(app, deps) {
             }
             res.json({ ok: true, message: { role: 'assistant', content: '已达到工具调用轮次上限，请根据上方工具结果继续。' }, toolResults });
         } catch (err) {
+            if (err?.name === 'AbortError' || abortController.signal.aborted) {
+                console.info('[ai-agent] chat aborted by client');
+                if (!res.headersSent && !res.destroyed && !res.writableEnded) return res.status(499).json({ error: 'AI 请求已停止' });
+                return;
+            }
             console.error('[ai-agent] chat failed:', err);
             res.status(400).json({ error: publicError(err) });
+        } finally {
+            req.off?.('aborted', abortRequest);
+            res.off?.('close', abortRequest);
         }
     });
 
@@ -1133,17 +1176,36 @@ function registerAiRoutes(app, deps) {
     });
 
     app.post('/api/ai/confirm/:id', deps.requireAuth, async (req, res) => {
-        cleanupPendingActions();
-        const item = pendingActions.get(req.params.id);
-        if (!item || item.username !== req.session.username) return res.status(404).json({ error: '确认请求不存在或已过期' });
-        pendingActions.delete(req.params.id);
-        if (req.body?.approve === false) return res.json({ ok: true, cancelled: true });
+        const abortController = new AbortController();
+        const abortRequest = () => {
+            if (res.writableEnded) return;
+            abortController.abort();
+        };
+        req.on('aborted', abortRequest);
+        res.on('close', abortRequest);
         try {
+            cleanupPendingActions();
+            const item = pendingActions.get(req.params.id);
+            if (!item || item.username !== req.session.username) return res.status(404).json({ error: '确认请求不存在或已过期' });
+            pendingActions.delete(req.params.id);
+            if (req.body?.approve === false) return res.json({ ok: true, cancelled: true });
             const startedAt = Date.now();
-            const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true, context: item.context || {} }, deps);
+            throwIfAborted(abortController.signal);
+            const result = await executeAiTool(item.toolName, item.rawArgs || item.args || {}, { req, confirmed: true, context: item.context || {}, signal: abortController.signal }, deps);
+            throwIfAborted(abortController.signal);
             const endedAt = Date.now();
             res.json({ ok: true, toolName: item.toolName, args: publicToolArgs(item.toolName, item.rawArgs || item.args || {}), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
-        } catch (err) { res.status(400).json({ error: publicError(err) }); }
+        } catch (err) {
+            if (err?.name === 'AbortError' || abortController.signal.aborted) {
+                console.info('[ai-agent] confirmed action aborted by client');
+                if (!res.headersSent && !res.destroyed && !res.writableEnded) return res.status(499).json({ error: 'AI 请求已停止' });
+                return;
+            }
+            res.status(400).json({ error: publicError(err) });
+        } finally {
+            req.off?.('aborted', abortRequest);
+            res.off?.('close', abortRequest);
+        }
     });
 
     app.post('/api/ai/complete', deps.requireAuth, async (req, res) => {

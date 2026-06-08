@@ -15,6 +15,8 @@ let aiAutoTitleTimer = 0;
 let aiSidebarCollapsedBySize = false;
 let aiPendingConfirmations = new Map();
 let aiBrowserPreviewState = { session: 'default', preview: null, visible: false };
+let aiActiveAbortController = null;
+let aiStoppedControllers = new WeakSet();
 let aiPanelState = 'closed';
 let aiPanelCloseTimer = 0;
 let aiPanelWatchdogTimer = 0;
@@ -2928,7 +2930,28 @@ function updateAiPanelResponsiveState() {
     if (narrow && !aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = true; panel.classList.add('sidebar-collapsed'); }
     if (!narrow && aiSidebarCollapsedBySize) { aiSidebarCollapsedBySize = false; panel.classList.remove('sidebar-collapsed'); }
 }
-function setAiTyping(show) { $('#aiTypingIndicator')?.classList.toggle('show', !!show); scrollAiChat(); }
+function setAiTyping(show) {
+    $('#aiTypingIndicator')?.classList.toggle('show', !!show);
+    const send = $('#aiSendBtn');
+    if (send) {
+        send.classList.toggle('ai-stop-mode', !!show);
+        send.textContent = show ? '■' : '➤';
+        send.title = show ? '停止 AI 回复' : '发送';
+        send.setAttribute('aria-label', show ? '停止 AI 回复' : '发送');
+    }
+    scrollAiChat();
+}
+function stopAiResponse() {
+    const controller = aiActiveAbortController;
+    if (!controller) return false;
+    aiStoppedControllers.add(controller);
+    controller.abort();
+    aiActiveAbortController = null;
+    setAiTyping(false);
+    appendAiMessage('已停止 AI 回复/操作。', 'system');
+    return true;
+}
+
 function aiIntensityOptions() {
     const v = $('#aiThinkIntensity')?.value || 'balanced';
     if (v === 'fast') return { temperature: 0.3 };
@@ -3085,6 +3108,7 @@ async function updateAiPlan(planId, action = {}) {
     } catch (err) { toast(err.message || '计划更新失败'); }
 }
 async function sendAiMessage() {
+    if (aiActiveAbortController) { stopAiResponse(); return; }
     const input = $('#aiUserInput');
     const text = input.value.trim();
     if (!text) return;
@@ -3092,6 +3116,8 @@ async function sendAiMessage() {
     autoResizeAiInput(input);
     input.focus?.();
     appendAiMessage(text, 'user');
+    const abortController = new AbortController();
+    aiActiveAbortController = abortController;
     setAiTyping(true);
     try {
         const session = aiCurrentSession();
@@ -3099,7 +3125,7 @@ async function sendAiMessage() {
         const providerId = $('#aiProviderSelect').value;
         const model = $('#aiModelSelect').value;
         const options = aiIntensityOptions();
-        const data = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
+        const data = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
             syncAiToolSideEffects(data.toolResults);
             appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
@@ -3110,9 +3136,14 @@ async function sendAiMessage() {
             appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
         }
     } catch (err) {
-        appendAiMessage(`请求失败：${err.message}`, 'system');
+        if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 回复已中断。', 'system');
+        } else appendAiMessage(`请求失败：${err.message}`, 'system');
     } finally {
-        setAiTyping(false);
+        const isCurrent = aiActiveAbortController === abortController;
+        if (isCurrent) aiActiveAbortController = null;
+        aiStoppedControllers.delete(abortController);
+        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
     }
 }
 function readFileAsDataUrl(file) {
@@ -3141,19 +3172,30 @@ async function appendAiFiles(files = []) {
     if (parts.length) appendAiMessage(parts.join('\n\n'), 'user');
 }
 async function continueAiAfterConfirmation(id, approve, data) {
+    if (aiActiveAbortController) { stopAiResponse(); return; }
     const pending = aiPendingConfirmations.get(id);
     aiPendingConfirmations.delete(id);
     if (!approve || !pending) return;
     const original = (pending.messages || []).slice().reverse().find((m) => m.role === 'user')?.content || '';
     const followup = `原问题：${original}\n\n敏感操作已确认并执行，结果如下：\n${JSON.stringify(data.result || {}, null, 2).slice(0, 30000)}\n请基于这个结果继续回答原问题，直接给出结论，不要只复述 JSON。`;
+    const abortController = new AbortController();
+    aiActiveAbortController = abortController;
     try {
         setAiTyping(true);
-        const next = await api('/api/ai/chat', { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
+        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: pending.context || collectAiContext() }) });
         if (next.toolResults?.length) { syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
         if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
-    } catch (err) { appendAiMessage(`继续处理失败：${err.message}`, 'system'); }
-    finally { setAiTyping(false); }
+    } catch (err) {
+        if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 后续处理已中断。', 'system');
+        } else appendAiMessage(`继续处理失败：${err.message}`, 'system');
+    } finally {
+        const isCurrent = aiActiveAbortController === abortController;
+        if (isCurrent) aiActiveAbortController = null;
+        aiStoppedControllers.delete(abortController);
+        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
+    }
 }
 function appendAiConfirmation(confirmation, pending = {}) {
     const area = $('#aiChatArea');
@@ -3169,19 +3211,30 @@ function appendAiConfirmation(confirmation, pending = {}) {
     scrollAiChat();
 }
 async function resolveAiConfirmation(id, approve) {
+    const abortController = new AbortController();
+    aiActiveAbortController = abortController;
     setAiTyping(true);
     try {
-        const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ approve }) });
+        const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', signal: abortController.signal, body: JSON.stringify({ approve }) });
         if (approve && data.result) {
             syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
             appendAiMessage(formatAiToolResult({ tool: 'confirmed', result: data.result, args: data.args || {}, durationMs: data.durationMs }), 'trace', { rawHtml: true });
+            if (aiActiveAbortController === abortController) aiActiveAbortController = null;
             await continueAiAfterConfirmation(id, true, data);
         } else {
             aiPendingConfirmations.delete(id);
             appendAiMessage('已拒绝执行敏感操作。', 'system');
         }
-    } catch (err) { appendAiMessage(`确认处理失败：${err.message}`, 'system'); }
-    finally { setAiTyping(false); }
+    } catch (err) {
+        if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 确认操作已中断。', 'system');
+        } else appendAiMessage(`确认处理失败：${err.message}`, 'system');
+    } finally {
+        const isCurrent = aiActiveAbortController === abortController;
+        if (isCurrent) aiActiveAbortController = null;
+        aiStoppedControllers.delete(abortController);
+        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
+    }
 }
 function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
 function startAiPanelWatchdog() {
@@ -3554,7 +3607,7 @@ function setupAiAssistant() {
     $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
     $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
-    $('#aiSendBtn')?.addEventListener('click', sendAiMessage);
+    $('#aiSendBtn')?.addEventListener('click', () => { if (aiActiveAbortController) stopAiResponse(); else sendAiMessage(); });
     $('#aiUserInput')?.addEventListener('input', (e) => autoResizeAiInput(e.target));
     $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAiMessage(); } });
     $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = []; renderAiChat(); });
