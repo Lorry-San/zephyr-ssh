@@ -3817,6 +3817,16 @@ function openAiAssistantPanel(trigger = null) {
     startAiPanelWatchdog();
     if (window.innerWidth > 760) setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
 }
+function toggleAiAssistantPanel(trigger = null) {
+    const panel = $('#aiAgentPanel');
+    const visible = panel && panel.style.display !== 'none' && aiPanelState !== 'closed';
+    if (visible) {
+        aiPanelMorphOriginButton = trigger || aiPanelMorphOriginButton || $('#aiFloatingBtn');
+        closeAiAssistantPanel();
+        return;
+    }
+    openAiAssistantPanel(trigger);
+}
 function closeAiAssistantPanel() {
     const p = $('#aiAgentPanel');
     if (!p || p.style.display === 'none') return;
@@ -3943,7 +3953,6 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
         panel._aiMorphSourceRect = source;
         panel._aiMorphFinalRect = { left: finalRect.left, top: finalRect.top, width: finalRect.width, height: finalRect.height };
         panel._aiMorphFinalStyle = { ...finalStyle };
-        if (button && button.dataset.aiMorphOpacity == null) button.dataset.aiMorphOpacity = button.style.opacity || '';
     }
     const originX = ((source.left + source.width / 2 - (opening ? finalRect.left : currentRect.left)) / (opening ? finalRect.width : currentRect.width)) * 100;
     const originY = ((source.top + source.height / 2 - (opening ? finalRect.top : currentRect.top)) / (opening ? finalRect.height : currentRect.height)) * 100;
@@ -3974,7 +3983,7 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
         transform: 'translateZ(0)',
         filter: 'none',
     });
-    if (opening && button) button.style.opacity = '0';
+    // Keep the top AI button visible; clicking it again toggles the floating panel closed.
     void panel.offsetHeight;
     const finish = () => {
         if (panel._aiMorphMotionId !== motionId) return;
@@ -4332,7 +4341,7 @@ function setupAiAssistant() {
     $('#aiSkillList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditSkill, del = e.target.dataset.aiDeleteSkill; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const s = ai.skills.find((x) => x.id === edit); if (!s) return; $('#aiSkillId').value = s.id; $('#aiSkillName').value = s.name || ''; $('#aiSkillDescription').value = s.description || ''; $('#aiSkillPrompt').value = s.prompt || ''; $('#aiSkillEnabled').checked = s.enabled !== false; } if (del) deleteAiSkill(del); });
     $('#openAiAssistantBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget)); $('#openAiAssistantBtn2')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
     $('#aiNavTab')?.addEventListener('click', (e) => { e.preventDefault(); openAiAssistantPanel(e.currentTarget); });
-    $('#aiFloatingBtn')?.addEventListener('click', (e) => openAiAssistantPanel(e.currentTarget));
+    $('#aiFloatingBtn')?.addEventListener('click', (e) => toggleAiAssistantPanel(e.currentTarget));
     $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
     $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
