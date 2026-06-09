@@ -21,6 +21,8 @@ let aiPanelState = 'closed';
 let aiPanelCloseTimer = 0;
 let aiPanelWatchdogTimer = 0;
 let aiPanelMorphOriginButton = null;
+let aiRemoteDesktopActionSeq = 0;
+const aiRemoteDesktopActionWaiters = new Map();
 let aiCodeBlockSeq = 0;
 const aiCodeBlockStore = new Map();
 let aiCodePreviewObjectUrl = '';
@@ -3374,6 +3376,7 @@ function publicAiRemoteDesktopAction(action = {}) {
     return {
         source: 'zephyr-app',
         type: 'ai-remote-desktop-action',
+        actionId: action.actionId || '',
         control: action.desktopControl || action.control || '',
         qualityMode: action.qualityMode || '',
         fitMode: action.fitMode || '',
@@ -3384,9 +3387,55 @@ function publicAiRemoteDesktopAction(action = {}) {
         x: action.x,
         y: action.y,
         button: action.button || 1,
+        coordinateSpace: action.coordinateSpace || '',
+        screenshotX: action.screenshotX,
+        screenshotY: action.screenshotY,
+        screenshotWidth: action.screenshotWidth,
+        screenshotHeight: action.screenshotHeight,
+    };
+}
+function normalizeAiRemoteDesktopMouseAction(action = {}, tabId = '') {
+    if (String(action.action || '') !== 'remote_desktop_mouse') return action;
+    const x = Number(action.x);
+    const y = Number(action.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return action;
+    const shot = readRemoteDesktopSnapshotForAi(tabId, action.maxWidth || 960);
+    const screenshotWidth = Number(shot?.width || 0);
+    const screenshotHeight = Number(shot?.height || 0);
+    const remoteWidth = Number(shot?.originalWidth || screenshotWidth || 0);
+    const remoteHeight = Number(shot?.originalHeight || screenshotHeight || 0);
+    const coordinateSpace = String(action.coordinateSpace || action.coords || 'screenshot').toLowerCase();
+    const shouldScale = coordinateSpace !== 'remote'
+        && screenshotWidth > 0 && screenshotHeight > 0 && remoteWidth > 0 && remoteHeight > 0
+        && (Math.abs(remoteWidth - screenshotWidth) > 1 || Math.abs(remoteHeight - screenshotHeight) > 1)
+        && x >= 0 && y >= 0 && x <= screenshotWidth + 2 && y <= screenshotHeight + 2;
+    if (!shouldScale) return { ...action, coordinateSpace: coordinateSpace || 'remote' };
+    return {
+        ...action,
+        x: Math.round(x * remoteWidth / screenshotWidth),
+        y: Math.round(y * remoteHeight / screenshotHeight),
+        screenshotX: x,
+        screenshotY: y,
+        screenshotWidth,
+        screenshotHeight,
+        coordinateSpace: 'screenshot_scaled_to_remote',
     };
 }
 function delayMs(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+function waitForAiRemoteDesktopActionAck(actionId, timeoutMs = 3200) {
+    if (!actionId) return Promise.resolve(null);
+    return new Promise((resolve) => {
+        const timer = window.setTimeout(() => {
+            aiRemoteDesktopActionWaiters.delete(actionId);
+            resolve({ ok: false, timeout: true, error: '远程桌面没有返回操作结果，可能 iframe 未收到操作或脚本未更新' });
+        }, Math.max(800, Number(timeoutMs) || 3200));
+        aiRemoteDesktopActionWaiters.set(actionId, (payload = {}) => {
+            window.clearTimeout(timer);
+            aiRemoteDesktopActionWaiters.delete(actionId);
+            resolve(payload);
+        });
+    });
+}
 async function readTerminalOutputAfterAiAction(action = {}) {
     const waitMs = action.run === false ? 120 : 1200;
     await delayMs(waitMs);
@@ -3460,13 +3509,20 @@ async function performAiUiAction(action = {}) {
         if (!id) throw new Error('暂无 RDP/VNC 远程桌面会话');
         const frame = await waitForTerminalFrameReady(terminalFrameByIdForAi(id));
         if (!frame?.contentWindow) throw new Error('当前远程桌面页面还没准备好');
+        const actionId = `rdp-${Date.now().toString(36)}-${++aiRemoteDesktopActionSeq}`;
+        const actionForMessage = normalizeAiRemoteDesktopMouseAction(action, id);
         const msg = publicAiRemoteDesktopAction({
-            ...action,
-            desktopControl: action.desktopControl || action.control || (a === 'remote_desktop_send_text' ? 'text' : a === 'remote_desktop_mouse' ? 'mouse_click' : ''),
+            ...actionForMessage,
+            actionId,
+            desktopControl: actionForMessage.desktopControl || actionForMessage.control || (a === 'remote_desktop_send_text' ? 'text' : a === 'remote_desktop_mouse' ? 'mouse_click' : ''),
         });
+        const ackPromise = waitForAiRemoteDesktopActionAck(actionId, action.ackTimeoutMs || 3600);
         frame.contentWindow.postMessage(msg, '*');
+        const ack = await ackPromise;
         await delayMs(action.waitMs || 650);
-        return { remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 960) };
+        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 960) };
+        if (ack && ack.ok === false) result.clientError = ack.error || 'AI 远程桌面操作失败';
+        return result;
     }
     if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
     throw new Error(`未知 UI 动作：${a}`);
@@ -3517,8 +3573,9 @@ function needsRemoteDesktopClientFollowup(toolResults = []) {
         return ['RDP', 'VNC'].includes(protocol) || action.startsWith('remote_desktop');
     });
 }
-async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null } = {}) {
-    const followup = `原问题：${original}\n\n前端已经执行了 RDP/VNC 打开或远程桌面工具栏操作。现在请基于最新 Zephyr 上下文继续回答；如果原问题涉及远程桌面当前画面，必须先调用 remote_desktop_screenshot 读取画面再描述，不要重复打开同一连接或重复点击刚才的按钮。`;
+async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null, toolResults = [] } = {}) {
+    const sideEffectSummary = JSON.stringify(maskAiSensitive((Array.isArray(toolResults) ? toolResults : []).map((r) => ({ tool: r.tool, args: r.args, result: r.result }))), null, 2).slice(0, 12000);
+    const followup = `原问题：${original}\n\n前端已经尝试执行 RDP/VNC 打开或远程桌面操作。工具/前端执行结果摘要如下：\n${sideEffectSummary || '（无工具结果）'}\n\n现在请基于最新 Zephyr 上下文继续回答；如果结果里有 clientError 或 remoteDesktopAction.ok=false，必须直接告诉用户该操作失败和失败原因，不要声称已经完成；如果原问题涉及远程桌面当前画面，必须先调用 remote_desktop_screenshot 读取画面再描述，不要重复打开同一连接或重复点击刚才的按钮。`;
     const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() }) });
     if (next.toolResults?.length) {
         await syncAiToolSideEffects(next.toolResults);
@@ -3562,6 +3619,7 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
     if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
     if (tool === 'remote_desktop_screenshot') return `读取 ${(result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
+    if (tool === 'ui_action' && result.clientError) return `操作失败：${result.clientError}`;
     if (tool === 'ui_action' && result.remoteDesktopScreenshot) return `远程桌面操作完成：${result.remoteDesktopScreenshot.protocol || ''} ${result.remoteDesktopScreenshot.status || ''}`;
     if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;
     if (tool === 'browser_inspect') return `发现 ${(result.elements || []).length} 个可操作元素：${(result.elements || []).slice(0, 5).map((e) => e.text || e.selector).filter(Boolean).join('、')}`;
@@ -3643,7 +3701,7 @@ async function sendAiMessage() {
         if (data.confirmationRequired) {
             appendAiConfirmation(data.confirmation, { messages: session.messages.slice(), providerId, model, options, context });
         } else if (needsRemoteDesktopClientFollowup(data.toolResults || [])) {
-            await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal });
+            await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal, toolResults: data.toolResults || [] });
         } else {
             appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
         }
@@ -4817,6 +4875,12 @@ function bindEvents() {
     });
     window.addEventListener('message', (e) => {
         if (e.data?.source !== 'zephyr-terminal') return;
+        if (e.data.type === 'ai-remote-desktop-action-result') {
+            const actionId = String(e.data.actionId || '');
+            const resolve = aiRemoteDesktopActionWaiters.get(actionId);
+            if (resolve) resolve(e.data);
+            return;
+        }
         if (e.data.type === 'keyboard-metrics') {
             applyTerminalWorkspaceKeyboard(e.data);
             return;

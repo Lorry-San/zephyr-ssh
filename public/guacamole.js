@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-06-05.1-rdp-h264-quality-modes';
+const GUAC_CLIENT_VERSION = '2026-06-09.1-rdp-ai-action-ack';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -150,6 +150,17 @@ function notifyParentActivity() {
     if (embeddedMode && window.parent && window.parent !== window) {
         window.parent.postMessage({ source: 'zephyr-terminal', type: 'activity', tabId: params?.tabId || tabId }, '*');
     }
+}
+
+function notifyParentAiActionResult(actionId, payload = {}) {
+    if (!embeddedMode || !window.parent || window.parent === window || !actionId) return;
+    window.parent.postMessage({
+        source: 'zephyr-terminal',
+        type: 'ai-remote-desktop-action-result',
+        tabId: params?.tabId || tabId,
+        actionId,
+        ...payload,
+    }, '*');
 }
 
 function notifyParentCloseRequest(reason = 'remote-desktop-closed') {
@@ -635,17 +646,49 @@ function sendRdpPointer(message) {
     return true;
 }
 
+function remotePointerMetrics() {
+    const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
+    const displayEl = (rdpInputSender && !client && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot);
+    const rect = displayEl?.getBoundingClientRect?.();
+    const remoteWidth = displayWidth || client?.getDisplay?.()?.getWidth?.() || rdpCanvas?.width || rect?.width || 0;
+    const remoteHeight = displayHeight || client?.getDisplay?.()?.getHeight?.() || rdpCanvas?.height || rect?.height || 0;
+    return { rect, remoteWidth, remoteHeight };
+}
+
+function enrichRemotePosition(position = {}) {
+    const x = Math.round(Number(position.x));
+    const y = Math.round(Number(position.y));
+    const { rect, remoteWidth, remoteHeight } = remotePointerMetrics();
+    const safeRemoteWidth = Number(position.remoteWidth || remoteWidth || 0);
+    const safeRemoteHeight = Number(position.remoteHeight || remoteHeight || 0);
+    const rectWidth = Number(position.rectWidth || rect?.width || 0);
+    const rectHeight = Number(position.rectHeight || rect?.height || 0);
+    return {
+        ...position,
+        x,
+        y,
+        rawX: Number.isFinite(Number(position.rawX)) ? Number(position.rawX) : (rectWidth && safeRemoteWidth ? x * rectWidth / safeRemoteWidth : undefined),
+        rawY: Number.isFinite(Number(position.rawY)) ? Number(position.rawY) : (rectHeight && safeRemoteHeight ? y * rectHeight / safeRemoteHeight : undefined),
+        rectWidth: rectWidth || undefined,
+        rectHeight: rectHeight || undefined,
+        remoteWidth: safeRemoteWidth || undefined,
+        remoteHeight: safeRemoteHeight || undefined,
+    };
+}
+
 function sendRemoteMouseClick(position, source = 'touch', button = 1) {
     if (!connected || !position) return false;
+    position = enrichRemotePosition(position);
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return false;
     console.info('[guac-client]', 'remote mouse click mapped', {
         source,
         button,
         x: position.x,
         y: position.y,
-        rawX: Number(position.rawX.toFixed(1)),
-        rawY: Number(position.rawY.toFixed(1)),
-        rectWidth: Number(position.rectWidth.toFixed(1)),
-        rectHeight: Number(position.rectHeight.toFixed(1)),
+        rawX: fixedOrNull(position.rawX),
+        rawY: fixedOrNull(position.rawY),
+        rectWidth: fixedOrNull(position.rectWidth),
+        rectHeight: fixedOrNull(position.rectHeight),
         remoteWidth: position.remoteWidth,
         remoteHeight: position.remoteHeight,
     });
@@ -2426,6 +2469,35 @@ function sendRemoteClipboardText(text) {
     return true;
 }
 
+async function sendTextByClipboardForAi(text, { paste = true, label = 'AI 文本' } = {}) {
+    const value = String(text || '');
+    if (!value) {
+        setTransientStatus(`${label} 为空，未发送`);
+        return false;
+    }
+    if (paste === false) {
+        if (!ensureRemoteReady(`发送${label}`)) return false;
+        sendTextToRemote(value);
+        setTransientStatus(`已发送 ${label} ${value.length} 字符`);
+        return true;
+    }
+    if (!sendRemoteClipboardText(value)) return false;
+    await sleep(90);
+    if (rdpInputSender && !client) {
+        rdpInputSender({ type: 'paste', text: value });
+    } else if (client) {
+        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+    }
+    notifyParentActivity();
+    setTransientStatus(`已粘贴 ${label} ${value.length} 字符`);
+    return true;
+}
+
+function fixedOrNull(value, digits = 1) {
+    const n = Number(value);
+    return Number.isFinite(n) ? Number(n.toFixed(digits)) : null;
+}
+
 async function readLocalClipboardIntoPanel() {
     try {
         const text = await navigator.clipboard.readText();
@@ -2865,43 +2937,50 @@ function activateRdpQualityMode(mode = '') {
 async function performAiRemoteDesktopAction(data = {}) {
     const control = String(data.control || '').toLowerCase().replace(/-/g, '_');
     const text = String(data.text || '');
-    if (control === 'quality') { activateRdpQualityMode(data.qualityMode || ''); return; }
-    if (control === 'fit') { activateRdpFitMode(data.fitMode || ''); return; }
-    if (control === 'zoom') { setRdpScaleZoom((Number(data.zoomPercent) || 100) / 100); setTransientStatus(`缩放 ${Math.round(rdpScaleZoom * 100)}%`); return; }
-    if (control === 'clipboard') { togglePanel(clipboardPanel, true); clipboardText?.focus?.(); return; }
-    if (control === 'keyboard') { toggleMobileKeyboard(); return; }
-    if (control === 'shortcuts') { togglePanel(shortcutsPanel, true); return; }
-    if (control === 'joystick' || control === 'drag') { togglePanel(joystickPanel, true); updateJoystickHint(); return; }
-    if (control === 'ctrl_alt_del' || control === 'cad') { sendCtrlAltDel(); return; }
-    if (control === 'reconnect') { connect(); return; }
-    if (control === 'disconnect') { disconnect(true); notifyParentCloseRequest('ai-disconnect'); return; }
-    if (control === 'clipboard_read_local') { await readLocalClipboardIntoPanel(); return; }
-    if (control === 'clipboard_copy_remote') { await copyRemoteClipboardToLocal(); return; }
+    if (control === 'quality') return { ok: true, control, mode: activateRdpQualityMode(data.qualityMode || '') };
+    if (control === 'fit') return { ok: true, control, mode: activateRdpFitMode(data.fitMode || '') };
+    if (control === 'zoom') { setRdpScaleZoom((Number(data.zoomPercent) || 100) / 100); setTransientStatus(`缩放 ${Math.round(rdpScaleZoom * 100)}%`); return { ok: true, control, zoomPercent: Math.round(rdpScaleZoom * 100) }; }
+    if (control === 'clipboard') { togglePanel(clipboardPanel, true); clipboardText?.focus?.(); return { ok: true, control, panel: 'clipboard' }; }
+    if (control === 'keyboard') { toggleMobileKeyboard(); return { ok: true, control, keyboardOpen: document.activeElement === mobileKeyboardInput || keyboardBtn?.classList.contains('active') }; }
+    if (control === 'shortcuts') { togglePanel(shortcutsPanel, true); return { ok: true, control, panel: 'shortcuts' }; }
+    if (control === 'joystick' || control === 'drag') { togglePanel(joystickPanel, true); updateJoystickHint(); return { ok: true, control, panel: 'joystick' }; }
+    if (control === 'ctrl_alt_del' || control === 'cad') { sendCtrlAltDel(); return { ok: true, control: 'ctrl_alt_del' }; }
+    if (control === 'reconnect') { connect(); return { ok: true, control }; }
+    if (control === 'disconnect') { disconnect(true); notifyParentCloseRequest('ai-disconnect'); return { ok: true, control }; }
+    if (control === 'clipboard_read_local') { await readLocalClipboardIntoPanel(); return { ok: true, control }; }
+    if (control === 'clipboard_copy_remote') { await copyRemoteClipboardToLocal(); return { ok: true, control }; }
     if (control === 'clipboard_send') {
         if (clipboardText && text) clipboardText.value = text;
         const value = text || clipboardText?.value || '';
-        if (sendRemoteClipboardText(value) && data.paste !== false && rdpInputSender && !client) {
-            await sleep(80);
-            rdpInputSender({ type: 'paste', text: value });
-        }
-        return;
-    }
-    if (control === 'shortcut') { await runShortcut(data.sequence || text); return; }
-    if (control === 'text') {
+        if (!sendRemoteClipboardText(value)) throw new Error('RDP 剪贴板发送失败：远程未连接或文本为空');
         if (data.paste !== false) {
-            if (sendRemoteClipboardText(text) && rdpInputSender && !client) {
-                await sleep(80);
-                rdpInputSender({ type: 'paste', text });
-            }
-        } else sendTextToRemote(text);
-        return;
+            await sleep(90);
+            if (rdpInputSender && !client) rdpInputSender({ type: 'paste', text: value });
+            else if (client) await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+            notifyParentActivity();
+            setTransientStatus(`已粘贴剪贴板文本 ${value.length} 字符`);
+        }
+        return { ok: true, control, length: value.length, paste: data.paste !== false };
+    }
+    if (control === 'shortcut') {
+        const ok = await runShortcut(data.sequence || text);
+        if (!ok) throw new Error(`RDP 快捷键发送失败：${data.sequence || text || ''}`);
+        return { ok: true, control, sequence: data.sequence || text || '' };
+    }
+    if (control === 'text') {
+        const ok = await sendTextByClipboardForAi(text, { paste: data.paste !== false, label: 'AI 文本' });
+        if (!ok) throw new Error('RDP 文本输入失败：远程未连接或文本为空');
+        return { ok: true, control, length: text.length, paste: data.paste !== false };
     }
     if (control === 'mouse_click') {
         const x = Math.round(Number(data.x));
         const y = Math.round(Number(data.y));
+        const button = Number(data.button) || 1;
         if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('AI 远程桌面点击缺少 x/y');
-        sendRemoteMouseClick({ x, y }, 'ai', Number(data.button) || 1);
-        return;
+        const ok = sendRemoteMouseClick({ x, y }, 'ai', button);
+        if (!ok) throw new Error('RDP 点击未发送：远程未连接或坐标无效');
+        setTransientStatus(`AI 已点击 ${x}, ${y}`);
+        return { ok: true, control, x, y, button };
     }
     throw new Error(`未知远程桌面 UI 动作：${control}`);
 }
@@ -3016,9 +3095,13 @@ window.addEventListener('message', (event) => {
         focusMobileKeyboard();
     }
     if (event.data.type === 'ai-remote-desktop-action') {
-        performAiRemoteDesktopAction(event.data).catch((err) => {
+        const actionId = String(event.data.actionId || '');
+        performAiRemoteDesktopAction(event.data).then((result = {}) => {
+            notifyParentAiActionResult(actionId, { ok: true, control: event.data?.control || '', result });
+        }).catch((err) => {
             console.warn('[guac-client]', 'AI remote desktop action failed', { error: err.message, control: event.data?.control });
             setTransientStatus(err.message || 'AI 远程桌面操作失败');
+            notifyParentAiActionResult(actionId, { ok: false, control: event.data?.control || '', error: err.message || 'AI 远程桌面操作失败' });
         });
     }
 });

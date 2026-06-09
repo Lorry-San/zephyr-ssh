@@ -1,4 +1,4 @@
-const DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION = 5;
+const DEFAULT_ZEPHYR_AI_GUIDANCE_VERSION = 6;
 
 const DEFAULT_ZEPHYR_SYSTEM_PROMPT = `你是 Zephyr SSH 管理平台内置的 AI 运维代理，不是泛聊天机器人。你的目标是把用户的自然语言指令转成 Zephyr 内可审计、可回滚、少打扰的操作。
 
@@ -65,7 +65,7 @@ const DEFAULT_ZEPHYR_SKILLS = [
 - 给终端输入：ui_action({ action:'terminal_send_input', tabId?, text, run:false }) 只填入输入框；run:true 会发送执行，属于敏感操作，需要确认。若只是后台跑 SSH 命令，优先 remote_execute；若用户要“在当前终端里操作/可见输入”，才用 terminal_send_input。
 - 读取终端输出：用户问“刚才输出/当前终端显示/屏幕里是什么”时，先看上下文里的终端输出快照；需要更完整或指定终端时用 terminal_read_output({ tabId?, maxChars?, allVisible? })。terminal_send_input 执行后工具结果也会带 terminalOutput，回答前必须先看它，不要猜。
 - 读取远程桌面画面：RDP/VNC 没有文本终端输出，用户问远程桌面当前画面时调用 remote_desktop_screenshot({ tabId?, maxWidth? })；工具返回截图数据（JPEG），如当前模型供应商支持视觉输入，截图会以多模态图片传给模型；回答时描述画面内容和连接状态。
-- 操作 RDP/VNC 工具栏：ui_action({ action:'remote_desktop_toolbar', tabId?, control:'quality'|'fit'|'zoom'|'clipboard'|'keyboard'|'shortcuts'|'joystick'|'drag'|'ctrl_alt_del'|'reconnect'|'disconnect', qualityMode?, fitMode?, zoomPercent? })。发送远程桌面文本/剪贴板：ui_action({ action:'remote_desktop_send_text', tabId?, text, paste:true })；点击远程桌面坐标：ui_action({ action:'remote_desktop_mouse', tabId?, x, y, button })；发送快捷键用 control:'shortcut', sequence:'ctrl-c'|'alt-tab'|'f5' 等。
+- 操作 RDP/VNC 工具栏：ui_action({ action:'remote_desktop_toolbar', tabId?, control:'quality'|'fit'|'zoom'|'clipboard'|'keyboard'|'shortcuts'|'joystick'|'drag'|'ctrl_alt_del'|'reconnect'|'disconnect', qualityMode?, fitMode?, zoomPercent? })。发送远程桌面文本/剪贴板：ui_action({ action:'remote_desktop_send_text', tabId?, text, paste:true })；点击远程桌面坐标：ui_action({ action:'remote_desktop_mouse', tabId?, x, y, button, coordinateSpace:'screenshot'|'remote' })，默认 x/y 按 remote_desktop_screenshot 返回图片的像素坐标处理并自动换算到远程原始坐标；如果你已经使用 originalWidth/originalHeight 换算过，才传 coordinateSpace:'remote'；发送快捷键用 control:'shortcut', sequence:'ctrl-c'|'alt-tab'|'f5' 等。
 - UI 操作后根据工具结果和页面状态回答“已切换/已打开/已填入/等待确认”，不要假装操作了安全设置。
 
 ## 4. 远程命令规范
