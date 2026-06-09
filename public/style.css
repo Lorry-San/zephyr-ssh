@@ -35,6 +35,12 @@
     --connection-app-duration: 0.5s;
     --connection-shadow-idle: 0 4px 12px rgba(0,0,0,0.2);
     --connection-shadow-active: 0 40px 100px rgba(0,0,0,0.5);
+    --ai-morph-spring-open: cubic-bezier(0.32, 0.72, 0, 1);
+    --ai-morph-spring-close: cubic-bezier(0.4, 0, 0.6, 1);
+    --ai-morph-dur-open: 0.52s;
+    --ai-morph-dur-close: 0.42s;
+    --ai-morph-shadow-idle: 0 4px 12px rgba(0,0,0,0.22);
+    --ai-morph-shadow-active: 0 24px 80px rgba(0,0,0,0.45);
 }
 
 /* 浅色主题 */
@@ -8514,6 +8520,88 @@ body.app-body:not(.terminal-mode) .app-main {
     .ai-agent-panel .ai-tool-btn { width: 34px !important; height: 34px !important; padding: 7px !important; }
     .ai-agent-panel .ai-input-box { min-height: 32px !important; font-size: 14px; }
     .ai-agent-panel .ai-send-btn { width: 32px !important; height: 32px !important; }
+}
+
+/* 20260609: AI true morph open/close, matched to reference HTML */
+body.ai-panel-opening .app-shell,
+body.ai-panel-closing .app-shell {
+    transition:
+        transform var(--ai-morph-dur-open) var(--ai-morph-spring-open),
+        filter var(--ai-morph-dur-open) ease-out;
+    will-change: transform, filter;
+}
+body.ai-panel-opening .app-shell {
+    transform: scale(.92) translateZ(0);
+    filter: blur(10px) brightness(.48);
+}
+body.ai-panel-closing .app-shell {
+    transform: scale(1) translateZ(0);
+    filter: blur(0) brightness(1);
+    transition:
+        transform var(--ai-morph-dur-close) var(--ai-morph-spring-close),
+        filter var(--ai-morph-dur-close) ease-out;
+}
+/* Keep page hit-testing controlled by panel visibility; the morph only changes visuals. */
+.nav-actions .ai-floating-btn {
+    will-change: transform, opacity, box-shadow;
+    transition:
+        transform .10s ease,
+        opacity .15s ease,
+        background .18s ease,
+        border-color .18s ease,
+        box-shadow .18s ease !important;
+}
+.nav-actions .ai-floating-btn:active {
+    transform: scale(.92);
+    box-shadow: 0 2px 6px rgba(0,0,0,.18) !important;
+}
+.ai-agent-panel.ai-morphing {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: hidden !important;
+    transform-origin: center center;
+    will-change: top, left, width, height, border-radius, box-shadow;
+    contain: layout paint style;
+}
+.ai-agent-panel.ai-morphing .panel-drag-handle,
+.ai-agent-panel.ai-morphing .ai-agent-window,
+.ai-agent-panel.ai-morphing .panel-resize-handle {
+    transition: opacity .12s cubic-bezier(.4, 0, 1, 1), transform .12s ease !important;
+}
+.ai-agent-panel.ai-morphing .panel-drag-handle,
+.ai-agent-panel.ai-morphing .ai-agent-window,
+.ai-agent-panel.ai-morphing .panel-resize-handle {
+    opacity: 0;
+    transform: scale(.985);
+    pointer-events: none;
+}
+.ai-agent-panel.ai-morphing.ai-morph-open .panel-drag-handle,
+.ai-agent-panel.ai-morphing.ai-morph-open .ai-agent-window,
+.ai-agent-panel.ai-morphing.ai-morph-open .panel-resize-handle {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+    transition: opacity .28s ease-out .14s, transform .45s var(--ai-morph-spring-open) .14s !important;
+}
+.ai-agent-panel.ai-morphing.ai-morph-closing .panel-drag-handle,
+.ai-agent-panel.ai-morphing.ai-morph-closing .ai-agent-window,
+.ai-agent-panel.ai-morphing.ai-morph-closing .panel-resize-handle {
+    opacity: 0;
+    transform: scale(.985);
+    transition: opacity .12s ease, transform .12s ease !important;
+}
+.ai-agent-panel.ai-morphing .ai-agent-window,
+.ai-agent-panel.ai-morphing.open .ai-agent-window,
+.ai-agent-panel.ai-morphing.open .ai-title-bar,
+.ai-agent-panel.ai-morphing.open .ai-browser-preview,
+.ai-agent-panel.ai-morphing.open .ai-input-area {
+    animation: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+    body.ai-panel-opening .app-shell,
+    body.ai-panel-closing .app-shell { transform: none !important; filter: none !important; }
 }
 
 /* ===== AI Markdown / code blocks / message context menu ===== */

@@ -20,6 +20,7 @@ let aiStoppedControllers = new WeakSet();
 let aiPanelState = 'closed';
 let aiPanelCloseTimer = 0;
 let aiPanelWatchdogTimer = 0;
+let aiPanelMorphOriginButton = null;
 let aiCodeBlockSeq = 0;
 const aiCodeBlockStore = new Map();
 let aiCodePreviewObjectUrl = '';
@@ -3771,17 +3772,25 @@ function openAiAssistantPanel(trigger = null) {
     const ai = normalizeAiSettings(settings.ai || {});
     if (!ai.enabled) { toast('请先在设置中启用 AI 助理'); return; }
     const panel = $('#aiAgentPanel');
-    const wasHidden = panel.style.display === 'none' || panel.getAttribute('aria-hidden') === 'true' || aiPanelState === 'closed';
+    if (!panel) return;
+    const wasClosing = aiPanelState === 'closing';
+    const wasHidden = panel.style.display === 'none' || panel.getAttribute('aria-hidden') === 'true' || aiPanelState === 'closed' || wasClosing;
+    const sourceButton = trigger || aiPanelMorphOriginButton || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#openAiAssistantBtn2') || $('#aiNavTab');
+    aiPanelMorphOriginButton = sourceButton || aiPanelMorphOriginButton;
     window.clearTimeout(aiPanelCloseTimer);
+    window.clearTimeout(panel._aiPanelMotionTimer);
     aiPanelState = 'opening';
     panel.style.display = 'flex';
+    panel.style.visibility = 'visible';
+    panel.style.pointerEvents = 'auto';
     panel.style.opacity = '1';
     panel.style.transform = 'none';
     panel.style.filter = 'none';
-    panel.classList.remove('panel-closing');
+    panel.classList.remove('panel-closing', 'ai-morph-closing', 'ai-morph-settled');
     panel.classList.add('open');
     panel.setAttribute('aria-hidden', 'false');
     $('#aiFloatingBtn')?.classList.add('active');
+    if (wasHidden && panel._aiMorphFinalStyle) Object.assign(panel.style, panel._aiMorphFinalStyle);
     if (!panel.dataset.positioned) {
         const compact = window.innerWidth <= 760;
         const vvWidth = window.visualViewport?.width || window.innerWidth;
@@ -3798,8 +3807,15 @@ function openAiAssistantPanel(trigger = null) {
     updateAiPanelResponsiveState();
     if (!aiChatSessions.length) { loadAiChats(); if (!aiChatSessions.length) createAiChat({ silent: true }); }
     renderAiHeaderSelectors(); renderAiBrowserPreview(); renderAiChat();
-    if (wasHidden) requestAnimationFrame(() => animateAiPanelFromButton(panel, trigger || $('#aiFloatingBtn') || $('#openAiAssistantBtn') || $('#aiNavTab'), true));
-    aiPanelState = 'open';
+    if (wasHidden) {
+        requestAnimationFrame(() => animateAiPanelFromButton(panel, sourceButton, true, () => {
+            if (aiPanelState === 'opening') aiPanelState = 'open';
+        }));
+    } else {
+        document.body.classList.add('ai-panel-opening');
+        document.body.classList.remove('ai-panel-closing');
+        aiPanelState = 'open';
+    }
     startAiPanelWatchdog();
     if (window.innerWidth > 760) setTimeout(() => $('#aiUserInput')?.focus?.(), 80);
 }
@@ -3808,22 +3824,30 @@ function closeAiAssistantPanel() {
     if (!p || p.style.display === 'none') return;
     closeAiPanelLayoutMenu({ instant: true });
     window.clearTimeout(aiPanelCloseTimer);
+    window.clearTimeout(p._aiPanelMotionTimer);
     aiPanelState = 'closing';
-    p.classList.remove('open', 'panel-opening');
+    p.classList.remove('open', 'panel-opening', 'ai-morph-open', 'ai-morph-settled');
     p.setAttribute('aria-hidden', 'true');
     $('#aiFloatingBtn')?.classList.remove('active');
-    animateAiPanelFromButton(p, $('#aiFloatingBtn') || $('#aiNavTab'), false);
-    aiPanelCloseTimer = window.setTimeout(() => {
-        if (aiPanelState === 'closing') {
-            p.style.display = 'none';
-            p.style.opacity = '';
-            p.style.transform = '';
-            p.style.filter = '';
-            p.classList.remove('panel-opening', 'panel-closing');
-            aiPanelState = 'closed';
-            stopAiPanelWatchdog();
-        }
-    }, 300);
+    const finishClose = () => {
+        if (aiPanelState !== 'closing') return;
+        p.style.display = 'none';
+        p.style.visibility = '';
+        p.style.pointerEvents = '';
+        p.style.opacity = '';
+        p.style.transform = '';
+        p.style.filter = '';
+        p.style.transition = '';
+        p.style.boxShadow = '';
+        p.style.borderRadius = '';
+        p.classList.remove('panel-opening', 'panel-closing', 'ai-morphing', 'ai-morph-open', 'ai-morph-closing');
+        restoreAiMorphButton();
+        document.body.classList.remove('ai-panel-opening', 'ai-panel-closing');
+        aiPanelState = 'closed';
+        stopAiPanelWatchdog();
+    };
+    const didAnimate = animateAiPanelFromButton(p, aiPanelMorphOriginButton || $('#aiFloatingBtn') || $('#aiNavTab'), false, finishClose);
+    if (!didAnimate) aiPanelCloseTimer = window.setTimeout(finishClose, 20);
 }
 function bringAiPanelToFront() { const p = $('#aiAgentPanel'); if (!p) return; p.style.zIndex = String(10080 + Math.floor(Date.now() % 40)); p.style.setProperty('--panel-z', p.style.zIndex); }
 function applyAiPanelLayout(layout) {
@@ -3844,20 +3868,168 @@ function applyAiPanelLayout(layout) {
     bringAiPanelToFront();
     p._layoutAnimationTimer = window.setTimeout(() => { p.classList.remove('layout-animating'); clampAiPanel(p); updateAiPanelResponsiveState(); }, 480);
 }
-function animateAiPanelFromButton(panel, button, opening = true) {
-    if (!panel || !button) return;
-    const panelRect = panel.getBoundingClientRect?.();
-    const buttonRect = button.getBoundingClientRect?.();
-    if (!panelRect || !buttonRect || panelRect.width <= 1 || panelRect.height <= 1) return;
-    const originX = ((buttonRect.left + buttonRect.width / 2 - panelRect.left) / panelRect.width) * 100;
-    const originY = ((buttonRect.top + buttonRect.height / 2 - panelRect.top) / panelRect.height) * 100;
-    panel.style.setProperty('--panel-origin-x', `${Math.max(8, Math.min(92, originX))}%`);
-    panel.style.setProperty('--panel-origin-y', `${Math.max(8, Math.min(92, originY))}%`);
-    panel.classList.remove('panel-opening', 'panel-closing');
-    void panel.offsetWidth;
-    panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
-    window.clearTimeout(panel._aiPanelMotionTimer);
-    panel._aiPanelMotionTimer = window.setTimeout(() => panel.classList.remove('panel-opening', 'panel-closing'), opening ? 380 : 300);
+function aiMorphCssTimeToMs(value, fallback = 0) {
+    const text = String(value || '').trim();
+    if (!text) return fallback;
+    const first = text.split(',')[0].trim();
+    const n = parseFloat(first);
+    if (!Number.isFinite(n)) return fallback;
+    return first.endsWith('ms') ? n : n * 1000;
+}
+function captureAiMorphButton(button) {
+    if (!button?.getBoundingClientRect) return null;
+    const rect = button.getBoundingClientRect();
+    if (rect.width <= 1 || rect.height <= 1) return null;
+    const style = getComputedStyle(button);
+    return {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        radius: style.borderRadius || `${Math.round(rect.height / 2)}px`,
+    };
+}
+function restoreAiMorphButton() {
+    const button = aiPanelMorphOriginButton || $('#aiFloatingBtn');
+    if (!button) return;
+    if (button.dataset.aiMorphOpacity != null) {
+        button.style.opacity = button.dataset.aiMorphOpacity;
+        delete button.dataset.aiMorphOpacity;
+    } else {
+        button.style.removeProperty('opacity');
+    }
+}
+function animateAiPanelFromButton(panel, button, opening = true, onDone = null) {
+    if (!panel) return false;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const openDur = rootStyle.getPropertyValue('--ai-morph-dur-open') || '0.52s';
+    const closeDur = rootStyle.getPropertyValue('--ai-morph-dur-close') || '0.42s';
+    const openSpring = rootStyle.getPropertyValue('--ai-morph-spring-open') || 'cubic-bezier(0.32, 0.72, 0, 1)';
+    const closeSpring = rootStyle.getPropertyValue('--ai-morph-spring-close') || 'cubic-bezier(0.4, 0, 0.6, 1)';
+    const source = opening ? captureAiMorphButton(button) : (panel._aiMorphSourceRect || captureAiMorphButton(button));
+    const currentRect = panel.getBoundingClientRect?.();
+    if (!source || !currentRect || currentRect.width <= 1 || currentRect.height <= 1) {
+        if (opening) document.body.classList.add('ai-panel-opening');
+        if (onDone) onDone();
+        return false;
+    }
+    const sourceRadius = source.radius || `${Math.round(source.height / 2)}px`;
+    const measuredStyle = {
+        left: panel.style.left || `${currentRect.left}px`,
+        top: panel.style.top || `${currentRect.top}px`,
+        width: panel.style.width || `${currentRect.width}px`,
+        height: panel.style.height || `${currentRect.height}px`,
+        right: panel.style.right || 'auto',
+        bottom: panel.style.bottom || 'auto',
+    };
+    if (!opening) {
+        panel._aiMorphFinalStyle = { ...measuredStyle };
+        panel._aiMorphFinalRect = { left: currentRect.left, top: currentRect.top, width: currentRect.width, height: currentRect.height };
+    }
+    const finalStyle = opening ? (panel._aiMorphFinalStyle || measuredStyle) : measuredStyle;
+    const finalRect = opening ? currentRect : (panel._aiMorphFinalRect || currentRect);
+    const finalRadius = getComputedStyle(panel).borderRadius || '18px';
+    const finalLeft = opening ? (finalStyle.left || `${finalRect.left}px`) : `${source.left}px`;
+    const finalTop = opening ? (finalStyle.top || `${finalRect.top}px`) : `${source.top}px`;
+    const finalWidth = opening ? (finalStyle.width || `${finalRect.width}px`) : `${source.width}px`;
+    const finalHeight = opening ? (finalStyle.height || `${finalRect.height}px`) : `${source.height}px`;
+    const startLeft = opening ? `${source.left}px` : `${currentRect.left}px`;
+    const startTop = opening ? `${source.top}px` : `${currentRect.top}px`;
+    const startWidth = opening ? `${source.width}px` : `${currentRect.width}px`;
+    const startHeight = opening ? `${source.height}px` : `${currentRect.height}px`;
+    const startRadius = opening ? sourceRadius : finalRadius;
+    const endRadius = opening ? finalRadius : sourceRadius;
+    const dur = opening ? openDur.trim() : closeDur.trim();
+    const spring = opening ? openSpring.trim() : closeSpring.trim();
+    const fallbackMs = aiMorphCssTimeToMs(dur, opening ? 520 : 420) + 90;
+    if (opening) {
+        panel._aiMorphSourceRect = source;
+        panel._aiMorphFinalRect = { left: finalRect.left, top: finalRect.top, width: finalRect.width, height: finalRect.height };
+        panel._aiMorphFinalStyle = { ...finalStyle };
+        if (button && button.dataset.aiMorphOpacity == null) button.dataset.aiMorphOpacity = button.style.opacity || '';
+    }
+    const originX = ((source.left + source.width / 2 - (opening ? finalRect.left : currentRect.left)) / (opening ? finalRect.width : currentRect.width)) * 100;
+    const originY = ((source.top + source.height / 2 - (opening ? finalRect.top : currentRect.top)) / (opening ? finalRect.height : currentRect.height)) * 100;
+    panel.style.setProperty('--panel-origin-x', `${Math.max(4, Math.min(96, originX))}%`);
+    panel.style.setProperty('--panel-origin-y', `${Math.max(4, Math.min(96, originY))}%`);
+    panel.classList.remove('panel-opening', 'panel-closing', 'ai-morph-open', 'ai-morph-closing');
+    if (panel._aiMorphTransitionEnd) {
+        panel.removeEventListener('transitionend', panel._aiMorphTransitionEnd);
+        panel._aiMorphTransitionEnd = null;
+    }
+    const motionId = (panel._aiMorphMotionId || 0) + 1;
+    panel._aiMorphMotionId = motionId;
+    panel.classList.add('ai-morphing');
+    if (opening) panel.classList.remove('ai-morph-open'); else panel.classList.add('ai-morph-open');
+    panel.style.transition = 'none';
+    Object.assign(panel.style, {
+        left: startLeft,
+        top: startTop,
+        right: 'auto',
+        bottom: 'auto',
+        width: startWidth,
+        height: startHeight,
+        borderRadius: startRadius,
+        boxShadow: opening ? 'var(--ai-morph-shadow-idle)' : 'var(--ai-morph-shadow-active)',
+        visibility: 'visible',
+        pointerEvents: 'auto',
+        opacity: '1',
+        transform: 'translateZ(0)',
+        filter: 'none',
+    });
+    if (opening) {
+        document.body.classList.remove('ai-panel-closing');
+        document.body.classList.add('ai-panel-opening');
+        if (button) button.style.opacity = '0';
+    } else {
+        document.body.classList.remove('ai-panel-opening');
+        document.body.classList.add('ai-panel-closing');
+    }
+    void panel.offsetHeight;
+    const finish = () => {
+        if (panel._aiMorphMotionId !== motionId) return;
+        window.clearTimeout(panel._aiPanelMotionTimer);
+        panel.removeEventListener('transitionend', onEnd);
+        panel._aiMorphTransitionEnd = null;
+        if (opening) {
+            Object.assign(panel.style, finalStyle);
+            panel.style.transition = '';
+            panel.style.boxShadow = '';
+            panel.style.borderRadius = '';
+            panel.style.transform = '';
+            panel.style.filter = '';
+            panel.classList.remove('ai-morphing', 'ai-morph-open', 'ai-morph-closing');
+        }
+        if (onDone) onDone();
+    };
+    const onEnd = (ev) => {
+        if (ev.target !== panel || ev.propertyName !== 'width') return;
+        finish();
+    };
+    panel._aiMorphTransitionEnd = onEnd;
+    panel.addEventListener('transitionend', onEnd);
+    requestAnimationFrame(() => {
+        panel.classList.toggle('ai-morph-open', opening);
+        panel.classList.toggle('ai-morph-closing', !opening);
+        panel.style.transition = `
+            top ${dur} ${spring},
+            left ${dur} ${spring},
+            width ${dur} ${spring},
+            height ${dur} ${spring},
+            border-radius ${dur} ${spring},
+            box-shadow ${opening ? '0.35s ease-out' : '0.18s ease-in'}
+        `;
+        Object.assign(panel.style, {
+            left: finalLeft,
+            top: finalTop,
+            width: finalWidth,
+            height: finalHeight,
+            borderRadius: endRadius,
+            boxShadow: opening ? 'var(--ai-morph-shadow-active)' : 'var(--ai-morph-shadow-idle)',
+        });
+    });
+    panel._aiPanelMotionTimer = window.setTimeout(finish, fallbackMs);
+    return true;
 }
 function aiPanelParentRect(panel) {
     const viewport = window.visualViewport;
