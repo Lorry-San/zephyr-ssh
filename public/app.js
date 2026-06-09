@@ -20,6 +20,11 @@ let aiStoppedControllers = new WeakSet();
 let aiPanelState = 'closed';
 let aiPanelCloseTimer = 0;
 let aiPanelWatchdogTimer = 0;
+let aiCodeBlockSeq = 0;
+const aiCodeBlockStore = new Map();
+let aiCodePreviewObjectUrl = '';
+let aiMessageMenuState = { index: -1, text: '', element: null, touchTimer: 0 };
+let aiEditingMessageIndex = -1;
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
@@ -239,12 +244,90 @@ async function resetAppearance() {
     toast('名称和图标已重置');
 }
 function safeJsonParseClient(value, fallback = null) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return fallback; } }
-function renderMarkdown(md) {
-    let s = escapeHtml(md);
-    s = s.replace(/!\[([^\]]*)\]\((\/api\/ai\/browser\/screenshots\/[A-Za-z0-9_.%\-]+\.png)\)/g, '<img class="ai-inline-shot" src="$2" alt="$1">');
-    s = s.replace(/\[([^\]]+)\]\((\/api\/ai\/browser\/screenshots\/[A-Za-z0-9_.%\-]+\.png)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    s = s.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    return s.replace(/\n/g, '<br>');
+function escapeAttr(str) { return escapeHtml(str).replace(/'/g, '&#39;'); }
+function safeHref(url = '') {
+    const value = String(url || '').trim();
+    if (/^(https?:|\/|#|blob:)/i.test(value) || /^data:image\//i.test(value)) return value;
+    return '#';
+}
+function codeLangExt(lang = '') {
+    const key = String(lang || '').toLowerCase().replace(/^language-/, '');
+    const map = { js:'js', javascript:'js', ts:'ts', typescript:'ts', json:'json', yaml:'yaml', yml:'yaml', html:'html', htm:'html', xml:'xml', css:'css', sh:'sh', shell:'sh', bash:'sh', python:'py', py:'py', markdown:'md', md:'md', sql:'sql', text:'txt', plaintext:'txt' };
+    return map[key] || (key ? key.replace(/[^a-z0-9_.-]/g, '').slice(0, 16) : 'txt');
+}
+function parseCodeFenceInfo(info = '') {
+    const raw = String(info || '').trim();
+    const parts = raw.split(/\s+/).filter(Boolean);
+    let lang = '', filename = '';
+    for (const part of parts) {
+        const fm = /^(?:file(?:name)?|path)=['"]?(.+?)['"]?$/i.exec(part);
+        if (fm) { filename = fm[1].split(/[\\/]/).pop(); continue; }
+        if (!lang && /^[A-Za-z0-9_+.#-]+$/.test(part) && !part.includes('.')) { lang = part; continue; }
+        if (!filename && /\.[A-Za-z0-9]{1,8}$/.test(part)) filename = part.split(/[\\/]/).pop();
+    }
+    if (!lang && filename && filename.includes('.')) lang = filename.split('.').pop();
+    lang = String(lang || 'text').toLowerCase().replace(/^language-/, '');
+    if (!filename) filename = `snippet.${codeLangExt(lang) || 'txt'}`;
+    return { lang, filename };
+}
+function codeMimeType(filename = '', lang = '') {
+    const ext = String(filename || '').split('.').pop().toLowerCase() || codeLangExt(lang);
+    if (ext === 'html' || ext === 'htm') return 'text/html;charset=utf-8';
+    if (ext === 'json') return 'application/json;charset=utf-8';
+    if (ext === 'yaml' || ext === 'yml') return 'application/yaml;charset=utf-8';
+    if (ext === 'css') return 'text/css;charset=utf-8';
+    if (ext === 'js' || ext === 'mjs') return 'text/javascript;charset=utf-8';
+    if (ext === 'md') return 'text/markdown;charset=utf-8';
+    return 'text/plain;charset=utf-8';
+}
+function renderInlineMarkdown(text = '') {
+    let s = String(text || '');
+    s = s.replace(/!\[([^\]]*)\]\(([^\s)]+)(?:\s+&quot;[^&]*&quot;)?\)/g, (_, alt, url) => `<img class="ai-md-image" src="${escapeAttr(safeHref(url))}" alt="${escapeAttr(alt)}">`);
+    s = s.replace(/\[([^\]]+)\]\(([^\s)]+)(?:\s+&quot;[^&]*&quot;)?\)/g, (_, label, url) => `<a href="${escapeAttr(safeHref(url))}" target="_blank" rel="noopener">${label}</a>`);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    return s;
+}
+function renderCodeBlockHtml(code = '', info = '', enhanced = false) {
+    const meta = parseCodeFenceInfo(info);
+    const cleanCode = String(code || '').replace(/\n$/, '');
+    const escapedCode = escapeHtml(cleanCode);
+    if (!enhanced) return `<pre><code class="language-${escapeAttr(meta.lang)}">${escapedCode}</code></pre>`;
+    const id = `ai-code-${++aiCodeBlockSeq}`;
+    aiCodeBlockStore.set(id, { code: cleanCode, lang: meta.lang, filename: meta.filename });
+    const isHtml = meta.lang === 'html' || /\.html?$/i.test(meta.filename);
+    return `<div class="ai-code-block" data-ai-code-id="${escapeAttr(id)}"><div class="ai-code-toolbar"><span class="ai-code-name"><i>⌘</i>${escapeHtml(meta.filename || meta.lang || 'code')}</span><div class="ai-code-actions">${isHtml ? `<button type="button" data-ai-code-preview="${escapeAttr(id)}">▶ 预览</button>` : ''}<button type="button" data-ai-code-copy="${escapeAttr(id)}">⧉ 复制</button><button type="button" data-ai-code-download="${escapeAttr(id)}">⇩ 下载</button></div></div><pre><code class="language-${escapeAttr(meta.lang)}">${escapedCode}</code></pre></div>`;
+}
+function renderMarkdownBlocks(text = '', codeBlocks = []) {
+    const lines = String(text || '').split('\n'), out = [];
+    const token = (line) => /^§§CODE(\d+)§§$/.exec(String(line || '').trim());
+    const tableSep = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || '');
+    const splitTable = (line) => String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((x) => x.trim());
+    const special = (i) => { const line = lines[i] || ''; return !line.trim() || token(line) || /^#{1,6}\s+/.test(line) || /^\s*>\s?/.test(line) || /^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line) || /^\s*---+\s*$/.test(line) || (line.includes('|') && tableSep(lines[i + 1] || '')); };
+    for (let i = 0; i < lines.length;) {
+        const line = lines[i] || '', tk = token(line);
+        if (tk) { out.push(codeBlocks[Number(tk[1])] || ''); i++; continue; }
+        if (!line.trim()) { i++; continue; }
+        const h = /^(#{1,6})\s+(.+)$/.exec(line);
+        if (h) { const n = Math.min(6, h[1].length); out.push(`<h${n}>${renderInlineMarkdown(h[2].trim())}</h${n}>`); i++; continue; }
+        if (/^\s*---+\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+        if (line.includes('|') && tableSep(lines[i + 1] || '')) {
+            const heads = splitTable(line); i += 2; const rows = [];
+            while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { rows.push(splitTable(lines[i])); i++; }
+            out.push(`<div class="ai-md-table-wrap"><table><thead><tr>${heads.map((x) => `<th>${renderInlineMarkdown(x)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${heads.map((_, idx) => `<td>${renderInlineMarkdown(r[idx] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`); continue;
+        }
+        if (/^\s*>\s?/.test(line)) { const q=[]; while (i < lines.length && /^\s*>\s?/.test(lines[i] || '')) q.push((lines[i++] || '').replace(/^\s*>\s?/, '')); out.push(`<blockquote>${q.map(renderInlineMarkdown).join('<br>')}</blockquote>`); continue; }
+        if (/^\s*[-*+]\s+/.test(line)) { const a=[]; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i] || '')) a.push((lines[i++] || '').replace(/^\s*[-*+]\s+/, '')); out.push(`<ul>${a.map((x)=>`<li>${renderInlineMarkdown(x)}</li>`).join('')}</ul>`); continue; }
+        if (/^\s*\d+[.)]\s+/.test(line)) { const a=[]; while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i] || '')) a.push((lines[i++] || '').replace(/^\s*\d+[.)]\s+/, '')); out.push(`<ol>${a.map((x)=>`<li>${renderInlineMarkdown(x)}</li>`).join('')}</ol>`); continue; }
+        const para=[]; while (i < lines.length && !special(i)) para.push(lines[i++]); if (para.length) out.push(`<p>${para.map(renderInlineMarkdown).join('<br>')}</p>`);
+    }
+    return out.join('\n');
+}
+function renderMarkdown(md, options = {}) {
+    const enhanced = !!options.enhancedCode;
+    const codeBlocks = [];
+    let source = String(md || '').replace(/\r\n?/g, '\n');
+    source = source.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, info, code) => { const idx = codeBlocks.length; codeBlocks.push(renderCodeBlockHtml(code, info, enhanced)); return `\n§§CODE${idx}§§\n`; });
+    return renderMarkdownBlocks(escapeHtml(source), codeBlocks);
 }
 function splitCsv(value) { return String(value || '').split(/[\n,，]+/).map((x) => x.trim()).filter(Boolean); }
 function fmtTime(ts) { return ts ? new Date(ts).toLocaleString() : '从未连接'; }
@@ -2888,31 +2971,182 @@ function renderAiChat() {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     area.querySelectorAll('.ai-message').forEach((el) => el.remove());
-    session.messages.forEach((m) => appendAiMessage(m.content, m.role, { store: false, rawHtml: m.role === 'trace' }));
+    session.messages.forEach((m, index) => appendAiMessage(m.content, m.role, { store: false, rawHtml: m.role === 'trace', messageIndex: index }));
     area.appendChild(typing);
     renderAiChatList();
     scrollAiChat();
 }
-function appendAiMessage(text, role = 'assistant', { store = true, meta = '', rawHtml = false } = {}) {
+function appendAiMessage(text, role = 'assistant', { store = true, meta = '', rawHtml = false, messageIndex = -1 } = {}) {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     if (!area || !typing) return;
     const div = document.createElement('div');
+    const normalizedRole = rawHtml ? 'trace' : (role === 'ai' ? 'assistant' : role);
     div.className = `ai-message ${role === 'user' ? 'user' : (role === 'system' || role === 'trace') ? 'system' : 'ai'}`;
-    div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${rawHtml ? String(text || '') : renderMarkdown(String(text || ''))}`;
+    div.dataset.aiMessageRole = normalizedRole;
+    if (messageIndex >= 0) div.dataset.aiMessageIndex = String(messageIndex);
+    div.dataset.aiMessageText = String(text || '');
+    div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${rawHtml ? String(text || '') : renderMarkdown(String(text || ''), { enhancedCode: role !== 'trace' })}`;
     area.insertBefore(div, typing);
     if ((role === 'system' || role === 'trace') && div.querySelector('.ai-tool-trace')) {
         div.classList.add('ai-trace-message');
     }
     if (store) {
         const session = aiCurrentSession();
-        session.messages.push({ role: rawHtml ? 'trace' : (role === 'ai' ? 'assistant' : role), content: String(text || '') });
+        session.messages.push({ role: normalizedRole, content: String(text || '') });
+        div.dataset.aiMessageIndex = String(session.messages.length - 1);
         if (role === 'user' && (!session.title || session.title === '新对话' || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
         saveAiChats();
     }
     scrollAiChat();
 }
 function scrollAiChat() { requestAnimationFrame(() => { const a = $('#aiChatArea'); if (a) a.scrollTo({ top: a.scrollHeight, behavior: 'smooth' }); }); }
+function aiCodeItem(id = '') { return aiCodeBlockStore.get(String(id || '')) || null; }
+async function aiCopyText(text = '') {
+    try { await navigator.clipboard.writeText(String(text || '')); toast('已复制'); }
+    catch (_) { const ta = document.createElement('textarea'); ta.value = String(text || ''); document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('已复制'); }
+}
+function aiDownloadTextFile(item) {
+    if (!item) return;
+    const blob = new Blob([item.code || ''], { type: codeMimeType(item.filename, item.lang) });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = item.filename || `snippet.${codeLangExt(item.lang)}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+    toast(`已下载 ${a.download}`);
+}
+function aiPreviewCode(item) {
+    if (!item) return;
+    if (aiCodePreviewObjectUrl) URL.revokeObjectURL(aiCodePreviewObjectUrl);
+    aiCodePreviewObjectUrl = URL.createObjectURL(new Blob([item.code || ''], { type: codeMimeType(item.filename, item.lang) }));
+    aiBrowserPreviewState.visible = true;
+    $('#aiBrowserPreview')?.classList.remove('force-hidden');
+    const title = $('#aiBrowserPreviewTitle'), body = $('#aiBrowserPreviewBody'), toggle = $('#aiBrowserPreviewToggleBtn');
+    if (toggle) toggle.textContent = '隐藏预览';
+    if (title) title.textContent = `代码调试沙箱 · ${item.filename || 'snippet'}`;
+    if (body) body.innerHTML = `<iframe class="ai-code-preview-frame" sandbox="allow-scripts allow-forms allow-modals allow-pointer-lock" src="${escapeAttr(aiCodePreviewObjectUrl)}"></iframe><small>${escapeHtml(item.filename || '')} · 本地 Blob 沙箱预览</small>`;
+    toast('已打开代码预览');
+}
+function updateAiInputPreview() {
+    const preview = $('#aiInputPreview');
+    if (!preview || preview.hidden) return;
+    const value = $('#aiUserInput')?.value || '';
+    preview.innerHTML = renderMarkdown(value || '（空）', { enhancedCode: true });
+}
+function toggleAiMarkdownPreview() {
+    const preview = $('#aiInputPreview'), btn = $('#aiMarkdownPreviewBtn');
+    if (!preview) return;
+    preview.hidden = !preview.hidden;
+    btn?.classList.toggle('active', !preview.hidden);
+    if (!preview.hidden) updateAiInputPreview();
+}
+function ensureAiMessageMenu() {
+    let menu = $('#aiMessageContextMenu');
+    if (menu) return menu;
+    menu = document.createElement('div');
+    menu.id = 'aiMessageContextMenu';
+    menu.className = 'ai-message-menu hidden';
+    menu.innerHTML = `<button type="button" data-ai-msg-action="copy"><span>⧉</span>复制文本</button><button type="button" data-ai-msg-action="edit"><span>✎</span>编辑消息</button><button type="button" data-ai-msg-action="regen"><span>↻</span>重新回答</button><button type="button" data-ai-msg-action="select"><span>T</span>选择文本</button>`;
+    document.body.appendChild(menu);
+    return menu;
+}
+function hideAiMessageMenu() {
+    const menu = $('#aiMessageContextMenu');
+    if (!menu) return;
+    menu.classList.add('closing');
+    window.setTimeout(() => { menu.classList.add('hidden'); menu.classList.remove('open', 'closing'); }, 120);
+}
+function showAiMessageMenu(messageEl, x, y) {
+    if (!messageEl) return;
+    const menu = ensureAiMessageMenu();
+    const role = messageEl.dataset.aiMessageRole || '';
+    aiMessageMenuState.index = Number(messageEl.dataset.aiMessageIndex || -1);
+    aiMessageMenuState.text = messageEl.dataset.aiMessageText || '';
+    aiMessageMenuState.element = messageEl;
+    menu.querySelectorAll('[data-ai-msg-action="edit"],[data-ai-msg-action="regen"]').forEach((btn) => { btn.hidden = role !== 'user'; });
+    menu.classList.remove('hidden', 'closing');
+    const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(vw - (rect.width || 180) - 8, x))}px`;
+    menu.style.top = `${Math.max(8, Math.min(vh - (rect.height || 180) - 8, y))}px`;
+    requestAnimationFrame(() => menu.classList.add('open'));
+}
+function selectAiMessageText(el) {
+    if (!el) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+function editAiMessageFromMenu() {
+    const input = $('#aiUserInput');
+    if (!input) return;
+    aiEditingMessageIndex = aiMessageMenuState.index;
+    input.value = aiMessageMenuState.text || '';
+    autoResizeAiInput(input);
+    updateAiInputPreview();
+    input.focus?.();
+    toast('已载入原消息，修改后发送会从此处重新回答');
+}
+function regenerateAiMessageFromMenu() {
+    if (aiActiveAbortController) return toast('请先停止当前 AI 回复');
+    const input = $('#aiUserInput');
+    if (!input) return;
+    aiEditingMessageIndex = aiMessageMenuState.index;
+    input.value = aiMessageMenuState.text || '';
+    autoResizeAiInput(input);
+    sendAiMessage();
+}
+function handleAiMessageMenuAction(action = '') {
+    const a = String(action || '');
+    if (a === 'copy') aiCopyText(aiMessageMenuState.text || '');
+    if (a === 'edit') editAiMessageFromMenu();
+    if (a === 'regen') regenerateAiMessageFromMenu();
+    if (a === 'select') selectAiMessageText(aiMessageMenuState.element);
+    hideAiMessageMenu();
+}
+function aiMessageFromEvent(event) { return event.target?.closest?.('.ai-message'); }
+function handleAiMessageContextMenu(event) {
+    const msg = aiMessageFromEvent(event);
+    if (!msg || msg.classList.contains('ai-trace-message')) return;
+    event.preventDefault();
+    showAiMessageMenu(msg, event.clientX || 24, event.clientY || 24);
+}
+function handleAiMessageTouchStart(event) {
+    const msg = aiMessageFromEvent(event);
+    if (!msg || msg.classList.contains('ai-trace-message')) return;
+    window.clearTimeout(aiMessageMenuState.touchTimer);
+    aiMessageMenuState.touchTimer = window.setTimeout(() => {
+        const t = event.touches?.[0];
+        showAiMessageMenu(msg, t?.clientX || 24, t?.clientY || 24);
+    }, 560);
+}
+function clearAiMessageTouchTimer() { window.clearTimeout(aiMessageMenuState.touchTimer); aiMessageMenuState.touchTimer = 0; }
+function handleAiCodeActionClick(event) {
+    const copy = event.target.closest?.('[data-ai-code-copy]');
+    const download = event.target.closest?.('[data-ai-code-download]');
+    const preview = event.target.closest?.('[data-ai-code-preview]');
+    const id = copy?.dataset.aiCodeCopy || download?.dataset.aiCodeDownload || preview?.dataset.aiCodePreview || '';
+    if (!id) return false;
+    event.preventDefault(); event.stopPropagation();
+    const item = aiCodeItem(id);
+    if (copy) aiCopyText(item?.code || '');
+    if (download) aiDownloadTextFile(item);
+    if (preview) aiPreviewCode(item);
+    return true;
+}
+function handleAiChatAreaClick(event) {
+    if (handleAiCodeActionClick(event)) return;
+    const approve = event.target.dataset.aiConfirmApprove, deny = event.target.dataset.aiConfirmDeny;
+    if (approve) resolveAiConfirmation(approve, true);
+    if (deny) resolveAiConfirmation(deny, false);
+}
 function deleteAiChat(id) {
     if (!id || !confirm('删除这个对话？')) return;
     aiChatSessions = aiChatSessions.filter((s) => s.id !== id);
@@ -3380,15 +3614,22 @@ async function sendAiMessage() {
     const input = $('#aiUserInput');
     const text = input.value.trim();
     if (!text) return;
+    const session = aiCurrentSession();
+    const editingIndex = aiEditingMessageIndex;
+    aiEditingMessageIndex = -1;
+    if (editingIndex >= 0) {
+        session.messages = session.messages.slice(0, Math.max(0, editingIndex));
+        renderAiChat();
+    }
     input.value = '';
     autoResizeAiInput(input);
+    updateAiInputPreview();
     input.focus?.();
     appendAiMessage(text, 'user');
     const abortController = new AbortController();
     aiActiveAbortController = abortController;
     setAiTyping(true);
     try {
-        const session = aiCurrentSession();
         const context = collectAiContext();
         const providerId = $('#aiProviderSelect').value;
         const model = $('#aiModelSelect').value;
@@ -3934,15 +4175,28 @@ function setupAiAssistant() {
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
     $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
     $('#aiSendBtn')?.addEventListener('click', () => { if (aiActiveAbortController) stopAiResponse(); else sendAiMessage(); });
-    $('#aiUserInput')?.addEventListener('input', (e) => autoResizeAiInput(e.target));
+    $('#aiUserInput')?.addEventListener('input', (e) => { autoResizeAiInput(e.target); updateAiInputPreview(); });
     $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAiMessage(); } });
+    $('#aiMarkdownPreviewBtn')?.addEventListener('click', toggleAiMarkdownPreview);
     $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = []; renderAiChat(); });
     $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
     $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
     $('#aiBrowserPreviewToggleBtn')?.addEventListener('click', () => { aiBrowserPreviewState.visible = !aiBrowserPreviewState.visible; renderAiBrowserPreview(); });
     $('#aiBrowserPreviewRefreshBtn')?.addEventListener('click', refreshAiBrowserPreview);
     $('#aiRefreshStatusBtn')?.addEventListener('click', async () => { const r = await api('/api/ai/status'); settings.ai = normalizeAiSettings(r.ai || {}); renderAiSettingsForm(); toast('AI 配置已刷新'); });
-    $('#aiChatArea')?.addEventListener('click', (e) => { const approve = e.target.dataset.aiConfirmApprove, deny = e.target.dataset.aiConfirmDeny; if (approve) resolveAiConfirmation(approve, true); if (deny) resolveAiConfirmation(deny, false); });
+    $('#aiChatArea')?.addEventListener('click', handleAiChatAreaClick);
+    $('#aiChatArea')?.addEventListener('contextmenu', handleAiMessageContextMenu);
+    $('#aiChatArea')?.addEventListener('touchstart', handleAiMessageTouchStart, { passive: true });
+    $('#aiChatArea')?.addEventListener('touchend', clearAiMessageTouchTimer);
+    $('#aiChatArea')?.addEventListener('touchcancel', clearAiMessageTouchTimer);
+    document.addEventListener('click', (e) => {
+        const menu = $('#aiMessageContextMenu');
+        if (menu && !menu.classList.contains('hidden')) {
+            const action = e.target.closest?.('[data-ai-msg-action]')?.dataset.aiMsgAction;
+            if (action) handleAiMessageMenuAction(action);
+            else if (!menu.contains(e.target) && !e.target.closest?.('.ai-message')) hideAiMessageMenu();
+        }
+    });
     $('#aiUploadBtn')?.addEventListener('click', () => $('#aiFileUpload').click());
     $('#aiFileUpload')?.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (!files.length) return; appendAiFiles(files).catch((err) => toast(err.message || '附件读取失败')).finally(() => { e.target.value = ''; }); });
     $('#aiVoiceBtn')?.addEventListener('click', toggleAiVoice);
