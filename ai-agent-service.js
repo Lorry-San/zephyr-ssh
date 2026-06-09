@@ -95,6 +95,72 @@ function sanitizeMessages(messages = [], limits = {}) {
     }
     return raw;
 }
+function dataUrlPayload(dataUrl = '') {
+    const match = /^data:([^;,]+);base64,(.*)$/i.exec(String(dataUrl || ''));
+    return match ? { mimeType: match[1] || 'image/jpeg', data: match[2] || '' } : { mimeType: 'image/jpeg', data: String(dataUrl || '').replace(/^data:image\/\w+;base64,/, '') };
+}
+function normalizeAnthropicUserContent(content) {
+    if (!Array.isArray(content)) return String(content || '');
+    const parts = content.map((part) => {
+        if (!part || typeof part !== 'object') return { type: 'text', text: String(part || '') };
+        if (part.type === 'text') return { type: 'text', text: String(part.text || '') };
+        if (part.type === 'tool_result') return { type: 'tool_result', tool_use_id: part.tool_use_id || part.toolUseId || 'tool', content: Array.isArray(part.content) ? part.content : (typeof part.content === 'string' ? part.content : JSON.stringify(part.content || '')) };
+        if (part.type === 'image' && part.source) return part;
+        if (part.type === 'image_url' && part.image_url?.url) {
+            const payload = dataUrlPayload(part.image_url.url);
+            return { type: 'image', source: { type: 'base64', media_type: payload.mimeType || 'image/jpeg', data: payload.data } };
+        }
+        return { type: 'text', text: String(part.text || part.content || '') };
+    }).filter((part) => part.type === 'image' || part.type === 'tool_result' || part.text);
+    return parts.length ? parts : '';
+}
+function normalizeGeminiUserParts(message = {}) {
+    if (Array.isArray(message.parts)) return message.parts;
+    const content = message.content;
+    if (!Array.isArray(content)) return [{ text: String(content || '') }];
+    const parts = content.map((part) => {
+        if (!part || typeof part !== 'object') return { text: String(part || '') };
+        if (part.text !== undefined) return { text: String(part.text || '') };
+        if (part.inlineData) return part;
+        if (part.type === 'image_url' && part.image_url?.url) {
+            const payload = dataUrlPayload(part.image_url.url);
+            return { inlineData: { mimeType: payload.mimeType || 'image/jpeg', data: payload.data } };
+        }
+        return { text: String(part.content || '') };
+    }).filter((part) => part.inlineData || part.text);
+    return parts.length ? parts : [{ text: '' }];
+}
+function normalizeResponsesContent(content) {
+    if (!Array.isArray(content)) return String(content || '');
+    return content.map((part) => {
+        if (!part || typeof part !== 'object') return { type: 'input_text', text: String(part || '') };
+        if (part.type === 'text') return { type: 'input_text', text: String(part.text || '') };
+        if (part.type === 'input_text' || part.type === 'input_image') return part;
+        if (part.type === 'image_url' && part.image_url?.url) return { type: 'input_image', image_url: part.image_url.url, detail: part.image_url.detail || 'auto' };
+        return { type: 'input_text', text: String(part.text || part.content || '') };
+    }).filter((part) => part.image_url || part.text);
+}
+function openAiScreenshotParts(screenshots = []) {
+    const parts = [{ type: 'text', text: '下面是 remote_desktop_screenshot 工具返回的远程桌面截图。请直接观察图片内容，不要只根据 JSON 元数据回答。' }];
+    for (const shot of screenshots.slice(0, 3)) parts.push({ type: 'image_url', image_url: { url: shot.dataUrl, detail: 'auto' } });
+    return parts;
+}
+function anthropicScreenshotParts(screenshots = []) {
+    const parts = [{ type: 'text', text: '下面是 remote_desktop_screenshot 工具返回的远程桌面截图。请直接观察图片内容，不要只根据 JSON 元数据回答。' }];
+    for (const shot of screenshots.slice(0, 3)) {
+        const payload = dataUrlPayload(shot.dataUrl);
+        if (payload.data) parts.push({ type: 'image', source: { type: 'base64', media_type: payload.mimeType || 'image/jpeg', data: payload.data } });
+    }
+    return parts;
+}
+function geminiScreenshotParts(screenshots = []) {
+    const parts = [{ text: '下面是 remote_desktop_screenshot 工具返回的远程桌面截图。请直接观察图片内容，不要只根据 JSON 元数据回答。' }];
+    for (const shot of screenshots.slice(0, 3)) {
+        const payload = dataUrlPayload(shot.dataUrl);
+        if (payload.data) parts.push({ inlineData: { mimeType: payload.mimeType || 'image/jpeg', data: payload.data } });
+    }
+    return parts;
+}
 function parseExtraObject(value) {
     if (!value) return {};
     if (typeof value === 'object') return value;
@@ -264,7 +330,7 @@ function toolDefinitions(ai = {}) {
     tools.push({ type: 'function', function: { name: 'snippet_delete', description: '删除代码片段。', parameters: { type: 'object', properties: { snippetId: { type: 'string' } }, required: ['snippetId'] } } });
     tools.push({ type: 'function', function: { name: 'terminal_read_output', description: '读取用户当前 Zephyr SSH 终端输出快照（屏幕/scrollback 文本、当前输入框内容、连接信息）。当用户问“终端里显示什么/刚才命令输出/当前屏幕结果”时优先调用。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxChars: { type: 'number' }, allVisible: { type: 'boolean' } } } } });
     tools.push({ type: 'function', function: { name: 'remote_desktop_screenshot', description: '读取用户当前 Zephyr RDP/VNC 远程桌面画面快照（JPEG 截图）。RDP/VNC 没有文本终端输出，用本工具查看远程桌面当前画面。返回画面尺寸、状态和截图数据。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxWidth: { type: 'number' } } } } });
-    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击终端内文件/监控/Docker/片段/快捷键/复制/粘贴/重连/断开等按钮。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' } }, required: ['action'] } } });
+    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击 SSH 终端工具栏、以及点击/调整 RDP/VNC 远程桌面工具栏（画质、视图/适应、缩放、剪贴板、键盘、快捷键、视区/拖拽、Ctrl+Alt+Del、重连、断开、发送快捷键/文本）。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'remote_desktop_toolbar', 'remote_desktop_send_text', 'remote_desktop_mouse', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect', 'quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote'] }, desktopControl: { type: 'string', enum: ['quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'reconnect', 'disconnect', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote', 'shortcut', 'text', 'mouse_click'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' }, maxWidth: { type: 'number' }, qualityMode: { type: 'string', enum: ['balanced', 'performance', 'quality'] }, fitMode: { type: 'string', enum: ['fit', '1:1', '16:9', '4:3', 'original', 'drag'] }, zoomPercent: { type: 'number' }, sequence: { type: 'string' }, paste: { type: 'boolean' }, x: { type: 'number' }, y: { type: 'number' }, button: { type: 'number' } }, required: ['action'] } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
@@ -318,7 +384,8 @@ function anthropicMessages(messages = []) {
     for (const m of messages) {
         if (m.role === 'system') continue;
         if (m.role === 'tool') {
-            out.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id || m.name || 'tool', content: String(m.content || '') }] });
+            if (Array.isArray(m.content)) out.push({ role: 'user', content: normalizeAnthropicUserContent(m.content) });
+            else out.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id || m.name || 'tool', content: String(m.content || '') }] });
         } else if (m.role === 'assistant') {
             const content = [];
             if (m.content) content.push({ type: 'text', text: String(m.content) });
@@ -328,7 +395,7 @@ function anthropicMessages(messages = []) {
             });
             out.push({ role: 'assistant', content: content.length ? content : [{ type: 'text', text: '' }] });
         } else {
-            out.push({ role: 'user', content: String(m.content || '') });
+            out.push({ role: 'user', content: normalizeAnthropicUserContent(m.content) });
         }
     }
     return out;
@@ -355,8 +422,9 @@ function geminiContents(messages = []) {
     for (const m of messages) {
         if (m.role === 'system') continue;
         if (m.role === 'tool') {
-            const response = safeJsonParse(m.content, { result: String(m.content || '') });
+            const response = safeJsonParse(m.content, { result: typeof m.content === 'string' ? String(m.content || '') : m.content });
             out.push({ role: 'function', parts: [{ functionResponse: { name: m.name || m.tool_call_id || 'tool', response } }] });
+            if (Array.isArray(m.parts) || Array.isArray(m.content)) out.push({ role: 'user', parts: normalizeGeminiUserParts(m) });
         } else if (m.role === 'assistant') {
             const parts = [];
             if (m.content) parts.push({ text: String(m.content) });
@@ -366,7 +434,7 @@ function geminiContents(messages = []) {
             });
             out.push({ role: 'model', parts: parts.length ? parts : [{ text: '' }] });
         } else {
-            out.push({ role: 'user', parts: [{ text: String(m.content || '') }] });
+            out.push({ role: 'user', parts: normalizeGeminiUserParts(m) });
         }
     }
     return out;
@@ -396,7 +464,8 @@ function toResponsesInput(messages = []) {
     const out = [];
     for (const m of messages.filter((item) => item.role !== 'system')) {
         if (m.role === 'tool') {
-            out.push({ type: 'function_call_output', call_id: m.tool_call_id || m.name || 'tool', output: String(m.content || '') });
+            const output = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+            out.push({ type: 'function_call_output', call_id: m.tool_call_id || m.name || 'tool', output });
             continue;
         }
         if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
@@ -405,7 +474,7 @@ function toResponsesInput(messages = []) {
             continue;
         }
         const role = m.role === 'assistant' ? 'assistant' : 'user';
-        out.push({ role, content: String(m.content || '') });
+        out.push({ role, content: role === 'user' ? normalizeResponsesContent(m.content) : String(m.content || '') });
     }
     return out;
 }
@@ -768,6 +837,9 @@ function publicTerminalOutput(item = {}, maxChars = 30000) {
 function publicRemoteDesktopScreenshot(r = {}, maxWidth = 960) {
     const w = Math.max(1, Number(r.originalWidth || r.width || 0));
     const h = Math.max(1, Number(r.originalHeight || r.height || 0));
+    const dataUrl = String(r.dataUrl || '');
+    const maxDataUrlChars = clampNumber(r.maxDataUrlChars || 2500000, 300000, 2500000, 2500000);
+    const dataUrlOk = !!dataUrl && dataUrl.length > 200 && dataUrl.length <= maxDataUrlChars && /^data:image\//i.test(dataUrl);
     return {
         tabId: String(r.tabId || ''),
         name: String(r.name || ''),
@@ -780,9 +852,13 @@ function publicRemoteDesktopScreenshot(r = {}, maxWidth = 960) {
         connected: !!r.connected,
         width: w,
         height: h,
-        dataUrl: String(r.dataUrl || '').slice(0, 500000),
-        hasScreenshot: !!(r.dataUrl && r.dataUrl.length > 200),
-        error: String(r.error || ''),
+        renderedWidth: Number(r.width || 0),
+        renderedHeight: Number(r.height || 0),
+        dataUrl: dataUrlOk ? dataUrl : '',
+        dataUrlLength: dataUrl.length,
+        dataUrlTruncated: false,
+        hasScreenshot: dataUrlOk,
+        error: String(r.error || (dataUrl && !dataUrlOk ? `截图数据过大（${dataUrl.length} chars），前端需降低 maxWidth 后重试` : '')),
         at: Number(r.at || Date.now()),
     };
 }
@@ -1257,20 +1333,24 @@ function parseToolCall(call = {}) {
 function toolResultMessage(call, result, mode = 'chat', limits = {}, providerType = '') {
     const max = clampNumber(limits.toolResultChars, 1000, 240000, 60000);
     const screenshots = call.name === 'remote_desktop_screenshot' ? (result?.screenshots || []).filter((r) => r.hasScreenshot && r.dataUrl) : [];
+    const safeJson = () => clipText(JSON.stringify(result, (key, value) => {
+        if (key === 'dataUrl' && typeof value === 'string') return value ? `[image data omitted ${value.length} chars]` : '';
+        return value;
+    }, 2), max);
     if (screenshots.length && providerType === 'anthropic') {
-        const parts = [{ type: 'text', text: clipText(JSON.stringify(result, null, 2), max) }];
-        for (const shot of screenshots.slice(0, 3)) parts.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: shot.dataUrl.replace(/^data:image\/jpeg;base64,/, '') } });
-        return { role: 'user', content: parts };
+        return { role: 'tool', tool_call_id: call.id, name: call.name, content: [{ type: 'tool_result', tool_use_id: call.id, content: safeJson() }, ...anthropicScreenshotParts(screenshots)] };
     }
     if (screenshots.length && providerType === 'gemini') {
-        const parts = [{ text: clipText(JSON.stringify(result, null, 2), max) }];
-        for (const shot of screenshots.slice(0, 3)) parts.push({ inlineData: { mimeType: 'image/jpeg', data: shot.dataUrl.replace(/^data:image\/jpeg;base64,/, '') } });
-        return { role: 'user', parts };
+        return [
+            { role: 'tool', tool_call_id: call.id, name: call.name, content: safeJson() },
+            { role: 'user', parts: geminiScreenshotParts(screenshots) },
+        ];
     }
     if (screenshots.length && (mode === 'chat' || mode === 'responses')) {
-        const parts = [{ type: 'text', text: clipText(JSON.stringify(result, null, 2), max) }];
-        for (const shot of screenshots.slice(0, 3)) parts.push({ type: 'image_url', image_url: { url: shot.dataUrl, detail: 'auto' } });
-        return { role: 'tool', tool_call_id: call.id, name: call.name, content: parts };
+        return [
+            { role: 'tool', tool_call_id: call.id, name: call.name, content: safeJson() },
+            { role: 'user', content: openAiScreenshotParts(screenshots) },
+        ];
     }
     if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), max) };
     return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), max) };
@@ -1497,6 +1577,7 @@ function registerAiRoutes(app, deps) {
                     return res.json({ ok: true, message: { role: 'assistant', content: message.content || '' }, toolResults, provider: { id: provider.id, name: provider.name, type: provider.type }, model });
                 }
                 messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '' }];
+                const followupToolMessages = [];
                 for (const call of calls) {
                     throwIfAborted(abortController.signal);
                     const startedAt = Date.now();
@@ -1507,8 +1588,14 @@ function registerAiRoutes(app, deps) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
                     toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
-                    messages.push(toolResultMessage(call, result, openAiApiMode(provider), limits, provider.type || ''));
+                    const toolMessage = toolResultMessage(call, result, openAiApiMode(provider), limits, provider.type || '');
+                    const toolMessages = Array.isArray(toolMessage) ? toolMessage : [toolMessage];
+                    for (const item of toolMessages) {
+                        if (item?.role === 'user') followupToolMessages.push(item);
+                        else messages.push(item);
+                    }
                 }
+                if (followupToolMessages.length) messages.push(...followupToolMessages);
             }
             res.json({ ok: true, message: { role: 'assistant', content: '已达到工具调用轮次上限，请根据上方工具结果继续。' }, toolResults });
         } catch (err) {

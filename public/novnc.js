@@ -266,16 +266,17 @@ function reconnect() {
     window.setTimeout(connect, 260);
 }
 
-function cycleQuality() {
-    const idx = qualityModes.indexOf(qualityMode);
-    qualityMode = qualityModes[(idx + 1) % qualityModes.length];
+function cycleQuality(mode = '') {
+    const next = qualityModes.includes(String(mode || '')) ? String(mode) : qualityModes[(qualityModes.indexOf(qualityMode) + 1) % qualityModes.length];
+    qualityMode = next;
     localStorage.setItem('zephyr-novnc-quality', qualityMode);
     applyDisplayOptions();
 }
 
-function cycleFit() {
-    const idx = fitModes.indexOf(fitMode);
-    fitMode = fitModes[(idx + 1) % fitModes.length];
+function cycleFit(mode = '') {
+    let next = String(mode || '').toLowerCase();
+    if (next === '1:1') next = 'original';
+    fitMode = fitModes.includes(next) ? next : fitModes[(fitModes.indexOf(fitMode) + 1) % fitModes.length];
     localStorage.setItem('zephyr-novnc-fit', fitMode);
     applyDisplayOptions();
 }
@@ -439,6 +440,74 @@ function makeDraggable(panel) {
     });
 }
 
+function sleep(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+
+async function clickRemotePoint(x, y, button = 1) {
+    const canvas = screen?.querySelector?.('canvas');
+    const target = canvas || screen;
+    const rect = target?.getBoundingClientRect?.();
+    if (!target || !rect || rect.width <= 0 || rect.height <= 0) return false;
+    const remoteWidth = canvas?.width || rect.width;
+    const remoteHeight = canvas?.height || rect.height;
+    const clientX = rect.left + Math.max(0, Math.min(remoteWidth - 1, Number(x) || 0)) * rect.width / Math.max(1, remoteWidth);
+    const clientY = rect.top + Math.max(0, Math.min(remoteHeight - 1, Number(y) || 0)) * rect.height / Math.max(1, remoteHeight);
+    const btn = Math.max(0, Math.min(2, Number(button || 1) - 1));
+    ['mousemove', 'mousedown', 'mouseup', 'click'].forEach((type) => {
+        target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX, clientY, button: btn, buttons: type === 'mousedown' ? (1 << btn) : 0 }));
+    });
+    notifyParentActivity();
+    return true;
+}
+
+async function performAiRemoteDesktopAction(data = {}) {
+    const control = String(data.control || '').toLowerCase().replace(/-/g, '_');
+    const text = String(data.text || '');
+    if (control === 'quality') { cycleQuality(data.qualityMode || ''); return; }
+    if (control === 'fit') { cycleFit(data.fitMode || ''); return; }
+    if (control === 'joystick' || control === 'drag') { toggleDragMode(); return; }
+    if (control === 'clipboard') { openPanel(clipboardPanel); clipboardText?.focus?.(); return; }
+    if (control === 'keyboard') { focusMobileKeyboard(); return; }
+    if (control === 'shortcuts') { openPanel(shortcutsPanel); return; }
+    if (control === 'ctrl_alt_del' || control === 'cad') { rfb?.sendCtrlAltDel?.(); notifyParentActivity(); return; }
+    if (control === 'reconnect') { reconnect(); return; }
+    if (control === 'disconnect') { disconnect({ closeTab: true }); return; }
+    if (control === 'clipboard_read_local') {
+        try { clipboardText.value = await navigator.clipboard.readText(); clipboardHint.textContent = '已读取本机剪贴板'; }
+        catch (err) { clipboardHint.textContent = err.message || '读取本机剪贴板失败'; }
+        return;
+    }
+    if (control === 'clipboard_copy_remote') {
+        try { await navigator.clipboard.writeText(remoteClipboardText.value || lastRemoteClipboard || ''); clipboardHint.textContent = '已复制到本机剪贴板'; }
+        catch (err) { clipboardHint.textContent = err.message || '复制失败'; }
+        return;
+    }
+    if (control === 'clipboard_send') {
+        if (!rfb || !connected) return;
+        if (clipboardText && text) clipboardText.value = text;
+        const value = text || clipboardText?.value || '';
+        rfb.clipboardPasteFrom(value);
+        clipboardHint.textContent = `已发送 ${value.length} 字符到远程剪贴板`;
+        if (data.paste !== false) { await sleep(80); sendSequence('ctrl-v'); }
+        return;
+    }
+    if (control === 'shortcut') { sendSequence(data.sequence || text); return; }
+    if (control === 'text') {
+        if (data.paste !== false) {
+            rfb?.clipboardPasteFrom?.(text);
+            clipboardHint.textContent = `已发送 ${text.length} 字符到远程剪贴板`;
+            await sleep(80);
+            sendSequence('ctrl-v');
+        } else sendText(text);
+        return;
+    }
+    if (control === 'mouse_click') {
+        const ok = await clickRemotePoint(data.x, data.y, data.button || 1);
+        if (!ok) clipboardHint.textContent = '远程画面尚未准备好，无法点击坐标';
+        return;
+    }
+    throw new Error(`未知远程桌面 UI 动作：${control}`);
+}
+
 function bindEvents() {
     qualityBtn.addEventListener('click', cycleQuality);
     fitBtn.addEventListener('click', cycleFit);
@@ -465,6 +534,12 @@ function bindEvents() {
         if (event.data?.source !== 'zephyr-app') return;
         if (event.data.type === 'reconnect-terminal') reconnect();
         if (event.data.type === 'focus-terminal') rfb?.focus?.();
+        if (event.data.type === 'ai-remote-desktop-action') {
+            performAiRemoteDesktopAction(event.data).catch((err) => {
+                console.warn('[novnc-client]', 'AI remote desktop action failed', { error: err.message, control: event.data?.control });
+                clipboardHint.textContent = err.message || 'AI 远程桌面操作失败';
+            });
+        }
     });
     window.addEventListener('beforeunload', () => { try { rfb?.disconnect?.(); } catch {} });
     setupMobileInput();

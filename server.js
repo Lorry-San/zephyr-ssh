@@ -1690,7 +1690,7 @@ async function zipBuffer(files) {
 }
 
 initData();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '8mb' }));
 
 app.post('/api/auth/login', async (req, res) => {
     const { username, password, captchaToken, remember } = req.body || {};

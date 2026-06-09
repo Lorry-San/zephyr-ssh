@@ -883,6 +883,7 @@ async function openConnection(id) {
         window.setTimeout(() => renderTerminalTabs({ rebuildWorkspace: true }), 80);
     }
     await loadConnections();
+    return tabId;
 }
 function openPlaceholderTab(c) {
     const tabId = `tab_${Date.now()}`;
@@ -3094,6 +3095,13 @@ function readRemoteDesktopSnapshotForAi(tabId = '', maxWidth = 960) {
     const frame = terminalFrameByIdForAi(id);
     let shot = null;
     try { shot = frame?.contentWindow?.__zephyrGetRemoteDesktopSnapshot?.({ maxWidth }); } catch (err) { shot = { error: err.message || String(err) }; }
+    if (shot?.dataUrl && shot.dataUrl.length > 1800000 && Number(maxWidth) > 520) {
+        try {
+            const smallerWidth = Math.max(420, Math.round(Number(maxWidth) * 0.62));
+            const smaller = frame?.contentWindow?.__zephyrGetRemoteDesktopSnapshot?.({ maxWidth: smallerWidth, quality: 0.58 });
+            if (smaller?.dataUrl && smaller.dataUrl.length < shot.dataUrl.length) shot = smaller;
+        } catch (_) {}
+    }
     return {
         tabId: id,
         name: tab?.name || conn?.name || '',
@@ -3118,6 +3126,30 @@ function collectAiRemoteDesktopSnapshots() {
     return ids.map((id, index) => readRemoteDesktopSnapshotForAi(id, index === 0 ? 960 : 720))
         .filter((item) => item && ['RDP', 'VNC'].includes(item.protocol) && (item.dataUrl || item.error || item.connected))
         .slice(0, 2);
+}
+function currentOrRequestedRemoteDesktopTab(tabId = '') {
+    const requested = String(tabId || '').trim();
+    const isRemote = (t) => ['RDP', 'VNC'].includes(String(t?.protocol || '').toUpperCase());
+    if (requested && terminalTabs.some((t) => t.id === requested && isRemote(t))) return requested;
+    const active = terminalTabs.find((t) => t.id === activeTerminalTab && isRemote(t));
+    if (active) return active.id;
+    return terminalTabs.find((t) => !t.minimized && isRemote(t))?.id || terminalTabs.find(isRemote)?.id || '';
+}
+function publicAiRemoteDesktopAction(action = {}) {
+    return {
+        source: 'zephyr-app',
+        type: 'ai-remote-desktop-action',
+        control: action.desktopControl || action.control || '',
+        qualityMode: action.qualityMode || '',
+        fitMode: action.fitMode || '',
+        zoomPercent: action.zoomPercent,
+        sequence: action.sequence || '',
+        text: action.text || '',
+        paste: action.paste !== false,
+        x: action.x,
+        y: action.y,
+        button: action.button || 1,
+    };
 }
 function delayMs(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
 async function readTerminalOutputAfterAiAction(action = {}) {
@@ -3187,6 +3219,20 @@ async function performAiUiAction(action = {}) {
         await waitForTerminalFrameReady(terminalFrameByIdForAi(id));
         return { terminalOutput: readTerminalOutputForAi(id, action.maxChars || 30000) };
     }
+    if (a === 'remote_desktop_toolbar' || a === 'remote_desktop_send_text' || a === 'remote_desktop_mouse') {
+        switchView('terminal');
+        const id = currentOrRequestedRemoteDesktopTab(action.tabId);
+        if (!id) throw new Error('暂无 RDP/VNC 远程桌面会话');
+        const frame = await waitForTerminalFrameReady(terminalFrameByIdForAi(id));
+        if (!frame?.contentWindow) throw new Error('当前远程桌面页面还没准备好');
+        const msg = publicAiRemoteDesktopAction({
+            ...action,
+            desktopControl: action.desktopControl || action.control || (a === 'remote_desktop_send_text' ? 'text' : a === 'remote_desktop_mouse' ? 'mouse_click' : ''),
+        });
+        frame.contentWindow.postMessage(msg, '*');
+        await delayMs(action.waitMs || 650);
+        return { remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 960) };
+    }
     if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
     throw new Error(`未知 UI 动作：${a}`);
 }
@@ -3194,7 +3240,12 @@ async function syncAiToolSideEffects(toolResults = []) {
     for (const r of toolResults) {
         updateAiBrowserPreviewFromToolResult(r);
         if (r.result?.uiAction === 'open_connection' && r.result?.connectionId) {
-            try { await openConnection(r.result.connectionId); } catch (err) { toast(err.message || 'AI 打开连接失败'); }
+            try {
+                const openedTabId = await openConnection(r.result.connectionId);
+                if (openedTabId) r.result.openedTabId = openedTabId;
+                const protocol = String(r.result?.connection?.protocol || '').toUpperCase();
+                if (['RDP', 'VNC'].includes(protocol)) r.result.remoteDesktopScreenshot = await waitForRemoteDesktopSnapshotForAi(openedTabId, 960, 5200);
+            } catch (err) { toast(err.message || 'AI 打开连接失败'); }
         }
         if (r.result?.uiAction === 'ui_action' && r.result?.action) {
             try {
@@ -3213,6 +3264,34 @@ async function syncAiToolSideEffects(toolResults = []) {
             else await loadSettings().then(() => renderSnippetSettings()).catch(() => {});
         }
     }
+}
+async function waitForRemoteDesktopSnapshotForAi(tabId = '', maxWidth = 960, timeoutMs = 3600) {
+    const deadline = Date.now() + Math.max(800, Number(timeoutMs) || 3600);
+    let last = null;
+    while (Date.now() < deadline) {
+        last = readRemoteDesktopSnapshotForAi(tabId, maxWidth);
+        if (last?.dataUrl || (last?.connected && (last.width || last.originalWidth))) return last;
+        await delayMs(650);
+    }
+    return last || readRemoteDesktopSnapshotForAi(tabId, maxWidth);
+}
+function needsRemoteDesktopClientFollowup(toolResults = []) {
+    return (Array.isArray(toolResults) ? toolResults : []).some((r) => {
+        const protocol = String(r.result?.connection?.protocol || r.result?.remoteDesktopScreenshot?.protocol || '').toUpperCase();
+        const action = String(r.result?.action?.action || '');
+        return ['RDP', 'VNC'].includes(protocol) || action.startsWith('remote_desktop');
+    });
+}
+async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null } = {}) {
+    const followup = `原问题：${original}\n\n前端已经执行了 RDP/VNC 打开或远程桌面工具栏操作。现在请基于最新 Zephyr 上下文继续回答；如果原问题涉及远程桌面当前画面，必须先调用 remote_desktop_screenshot 读取画面再描述，不要重复打开同一连接或重复点击刚才的按钮。`;
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() }) });
+    if (next.toolResults?.length) {
+        await syncAiToolSideEffects(next.toolResults);
+        appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
+    }
+    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() });
+    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+    return true;
 }
 function maskAiSensitive(value, tool = '') {
     const sensitiveKeys = /api[_-]?key|password|passwd|private[_-]?key|passphrase|secret|token|authorization|cookie/i;
@@ -3247,7 +3326,8 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
     if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
-    if (tool === 'remote_desktop_screenshot') return `读取 ${(result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
+    if (tool === 'remote_desktop_screenshot') return `读取 ${(result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
+    if (tool === 'ui_action' && result.remoteDesktopScreenshot) return `远程桌面操作完成：${result.remoteDesktopScreenshot.protocol || ''} ${result.remoteDesktopScreenshot.status || ''}`;
     if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;
     if (tool === 'browser_inspect') return `发现 ${(result.elements || []).length} 个可操作元素：${(result.elements || []).slice(0, 5).map((e) => e.text || e.selector).filter(Boolean).join('、')}`;
     if (String(tool || '').startsWith('browser_')) return `AI 正在页面代操作：${result.title || result.url || '浏览器操作完成'}`;
@@ -3320,6 +3400,8 @@ async function sendAiMessage() {
         }
         if (data.confirmationRequired) {
             appendAiConfirmation(data.confirmation, { messages: session.messages.slice(), providerId, model, options, context });
+        } else if (needsRemoteDesktopClientFollowup(data.toolResults || [])) {
+            await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal });
         } else {
             appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
         }

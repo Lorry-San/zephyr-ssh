@@ -478,8 +478,12 @@ function captureCanvasSnapshotForAi(source, options = {}) {
     }
 }
 function getRemoteDesktopSnapshotForAi(options = {}) {
-    let source = displayRoot?.querySelector?.('#rdp-canvas') || displayRoot?.querySelector?.('canvas');
-    try { if (!source) source = client?.getDisplay?.()?.flatten?.() || null; } catch (_) {}
+    let source = null;
+    try {
+        if (rdpInputSender && !client) source = displayRoot?.querySelector?.('#rdp-canvas') || null;
+        else if (client) source = client?.getDisplay?.()?.flatten?.() || null;
+    } catch (_) {}
+    if (!source) source = displayRoot?.querySelector?.('#rdp-canvas') || displayRoot?.querySelector?.('canvas');
     const shot = captureCanvasSnapshotForAi(source, options);
     return {
         protocol: protocolLabel(),
@@ -2800,8 +2804,20 @@ function sendCtrlAltDel() {
     notifyParentActivity();
 }
 
-fitBtn.addEventListener('click', () => {
-    fitModeIdx = (fitModeIdx + 1) % fitModes.length;
+function rdpQualityText(mode = qualityModes[qualityIdx]) {
+    return mode === 'balanced' ? '平衡' : mode === 'performance' ? '性能' : '画质';
+}
+
+function rememberRdpQuality(mode) {
+    params.quality = mode;
+    const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
+    try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
+}
+
+function activateRdpFitMode(mode = '') {
+    const normalized = String(mode || '').toLowerCase() === 'original' ? '1:1' : String(mode || '');
+    const nextMode = fitModes.includes(normalized) ? normalized : fitModes[(fitModeIdx + 1) % fitModes.length];
+    fitModeIdx = fitModes.indexOf(nextMode);
     const m = fitModes[fitModeIdx];
     fitBtn.classList.toggle('active', m !== '1:1');
     fitBtn.textContent = m === 'fit' ? '适应' : m === '1:1' ? '1:1 原始' : m;
@@ -2825,7 +2841,72 @@ fitBtn.addEventListener('click', () => {
         switchFitMode(m);
         applyDisplayScale();
     }
-});
+    return m;
+}
+
+function activateRdpQualityMode(mode = '') {
+    const nextMode = qualityModes.includes(String(mode || '')) ? String(mode) : qualityModes[(qualityIdx + 1) % qualityModes.length];
+    qualityIdx = qualityModes.indexOf(nextMode);
+    qualityBtn && (qualityBtn.textContent = rdpQualityText(nextMode));
+    rememberRdpQuality(nextMode);
+    if (rdpInputSender && !client && connected) {
+        const target = computeRdpTargetSize(fitModes[fitModeIdx]);
+        rdpReconnectPending = true;
+        rdpLastReconnectAt = Date.now();
+        rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode, quality: nextMode });
+        setTransientStatus(`正在切换到${rdpQualityText(nextMode)}模式`);
+        return nextMode;
+    }
+    disconnect(false);
+    setTimeout(() => connect(), 300);
+    return nextMode;
+}
+
+async function performAiRemoteDesktopAction(data = {}) {
+    const control = String(data.control || '').toLowerCase().replace(/-/g, '_');
+    const text = String(data.text || '');
+    if (control === 'quality') { activateRdpQualityMode(data.qualityMode || ''); return; }
+    if (control === 'fit') { activateRdpFitMode(data.fitMode || ''); return; }
+    if (control === 'zoom') { setRdpScaleZoom((Number(data.zoomPercent) || 100) / 100); setTransientStatus(`缩放 ${Math.round(rdpScaleZoom * 100)}%`); return; }
+    if (control === 'clipboard') { togglePanel(clipboardPanel, true); clipboardText?.focus?.(); return; }
+    if (control === 'keyboard') { toggleMobileKeyboard(); return; }
+    if (control === 'shortcuts') { togglePanel(shortcutsPanel, true); return; }
+    if (control === 'joystick' || control === 'drag') { togglePanel(joystickPanel, true); updateJoystickHint(); return; }
+    if (control === 'ctrl_alt_del' || control === 'cad') { sendCtrlAltDel(); return; }
+    if (control === 'reconnect') { connect(); return; }
+    if (control === 'disconnect') { disconnect(true); notifyParentCloseRequest('ai-disconnect'); return; }
+    if (control === 'clipboard_read_local') { await readLocalClipboardIntoPanel(); return; }
+    if (control === 'clipboard_copy_remote') { await copyRemoteClipboardToLocal(); return; }
+    if (control === 'clipboard_send') {
+        if (clipboardText && text) clipboardText.value = text;
+        const value = text || clipboardText?.value || '';
+        if (sendRemoteClipboardText(value) && data.paste !== false && rdpInputSender && !client) {
+            await sleep(80);
+            rdpInputSender({ type: 'paste', text: value });
+        }
+        return;
+    }
+    if (control === 'shortcut') { await runShortcut(data.sequence || text); return; }
+    if (control === 'text') {
+        if (data.paste !== false) {
+            if (sendRemoteClipboardText(text) && rdpInputSender && !client) {
+                await sleep(80);
+                rdpInputSender({ type: 'paste', text });
+            }
+        } else sendTextToRemote(text);
+        return;
+    }
+    if (control === 'mouse_click') {
+        const x = Math.round(Number(data.x));
+        const y = Math.round(Number(data.y));
+        if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('AI 远程桌面点击缺少 x/y');
+        sendRemoteMouseClick({ x, y }, 'ai', Number(data.button) || 1);
+        return;
+    }
+    throw new Error(`未知远程桌面 UI 动作：${control}`);
+}
+
+fitBtn.addEventListener('click', () => activateRdpFitMode());
 
 zoomSlider?.addEventListener('pointerdown', (event) => event.stopPropagation());
 zoomSlider?.addEventListener('click', (event) => event.stopPropagation());
@@ -2912,27 +2993,8 @@ stage?.addEventListener('pointerdown', (event) => {
 ctrlAltDelBtn.addEventListener('click', sendCtrlAltDel);
 const qualityBtn = document.getElementById('qualityBtn');
 if (qualityBtn) {
-    qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质';
-    qualityBtn.addEventListener('click', () => {
-        qualityIdx = (qualityIdx + 1) % qualityModes.length;
-        qualityBtn.textContent = qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质';
-        // 保存 quality 到 params 和 sessionStorage
-        params.quality = qualityModes[qualityIdx];
-        const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
-        try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
-        // H.264/Canvas 模式必须让服务端重建编码管线，否则 5 秒内重连会复用旧管线，清晰度看起来不会变。
-        if (rdpInputSender && !client && connected) {
-            const target = computeRdpTargetSize(fitModes[fitModeIdx]);
-            rdpReconnectPending = true;
-            rdpLastReconnectAt = Date.now();
-            rdpInputSender({ type: 'reconnect', width: target.width, height: target.height, mode: target.mode, quality: qualityModes[qualityIdx] });
-            setTransientStatus(`正在切换到${qualityModes[qualityIdx] === 'balanced' ? '平衡' : qualityModes[qualityIdx] === 'performance' ? '性能' : '画质'}模式`);
-            return;
-        }
-        // Guacamole fallback 模式用 false 避免清除 sessionStorage
-        disconnect(false);
-        setTimeout(() => connect(), 300);
-    });
+    qualityBtn.textContent = rdpQualityText();
+    qualityBtn.addEventListener('click', () => activateRdpQualityMode());
 }
 reconnectBtn.addEventListener('click', () => connect());
 disconnectBtn.addEventListener('click', () => {
@@ -2952,6 +3014,12 @@ window.addEventListener('message', (event) => {
     if (event.data.type === 'focus-terminal') {
         stage?.focus?.({ preventScroll: true });
         focusMobileKeyboard();
+    }
+    if (event.data.type === 'ai-remote-desktop-action') {
+        performAiRemoteDesktopAction(event.data).catch((err) => {
+            console.warn('[guac-client]', 'AI remote desktop action failed', { error: err.message, control: event.data?.control });
+            setTransientStatus(err.message || 'AI 远程桌面操作失败');
+        });
     }
 });
 
