@@ -3812,8 +3812,6 @@ function openAiAssistantPanel(trigger = null) {
             if (aiPanelState === 'opening') aiPanelState = 'open';
         }));
     } else {
-        document.body.classList.add('ai-panel-opening');
-        document.body.classList.remove('ai-panel-closing');
         aiPanelState = 'open';
     }
     startAiPanelWatchdog();
@@ -3842,7 +3840,6 @@ function closeAiAssistantPanel() {
         p.style.borderRadius = '';
         p.classList.remove('panel-opening', 'panel-closing', 'ai-morphing', 'ai-morph-open', 'ai-morph-closing');
         restoreAiMorphButton();
-        document.body.classList.remove('ai-panel-opening', 'ai-panel-closing');
         aiPanelState = 'closed';
         stopAiPanelWatchdog();
     };
@@ -3909,7 +3906,7 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
     const source = opening ? captureAiMorphButton(button) : (panel._aiMorphSourceRect || captureAiMorphButton(button));
     const currentRect = panel.getBoundingClientRect?.();
     if (!source || !currentRect || currentRect.width <= 1 || currentRect.height <= 1) {
-        if (opening) document.body.classList.add('ai-panel-opening');
+        // Floating AI panel must not transform or blur the background.
         if (onDone) onDone();
         return false;
     }
@@ -3977,14 +3974,7 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
         transform: 'translateZ(0)',
         filter: 'none',
     });
-    if (opening) {
-        document.body.classList.remove('ai-panel-closing');
-        document.body.classList.add('ai-panel-opening');
-        if (button) button.style.opacity = '0';
-    } else {
-        document.body.classList.remove('ai-panel-opening');
-        document.body.classList.add('ai-panel-closing');
-    }
+    if (opening && button) button.style.opacity = '0';
     void panel.offsetHeight;
     const finish = () => {
         if (panel._aiMorphMotionId !== motionId) return;

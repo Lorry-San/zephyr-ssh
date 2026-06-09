@@ -8522,26 +8522,7 @@ body.app-body:not(.terminal-mode) .app-main {
     .ai-agent-panel .ai-send-btn { width: 32px !important; height: 32px !important; }
 }
 
-/* 20260609: AI true morph open/close, matched to reference HTML */
-body.ai-panel-opening .app-shell,
-body.ai-panel-closing .app-shell {
-    transition:
-        transform var(--ai-morph-dur-open) var(--ai-morph-spring-open),
-        filter var(--ai-morph-dur-open) ease-out;
-    will-change: transform, filter;
-}
-body.ai-panel-opening .app-shell {
-    transform: scale(.92) translateZ(0);
-    filter: blur(10px) brightness(.48);
-}
-body.ai-panel-closing .app-shell {
-    transform: scale(1) translateZ(0);
-    filter: blur(0) brightness(1);
-    transition:
-        transform var(--ai-morph-dur-close) var(--ai-morph-spring-close),
-        filter var(--ai-morph-dur-close) ease-out;
-}
-/* Keep page hit-testing controlled by panel visibility; the morph only changes visuals. */
+/* 20260609: AI true morph open/close. Floating window only; background stays interactive and unfiltered. */
 .nav-actions .ai-floating-btn {
     will-change: transform, opacity, box-shadow;
     transition:
@@ -8599,10 +8580,7 @@ body.ai-panel-closing .app-shell {
 .ai-agent-panel.ai-morphing.open .ai-input-area {
     animation: none !important;
 }
-@media (prefers-reduced-motion: reduce) {
-    body.ai-panel-opening .app-shell,
-    body.ai-panel-closing .app-shell { transform: none !important; filter: none !important; }
-}
+/* AI floating morph has no backdrop transform, even in reduced-motion mode. */
 
 /* ===== AI Markdown / code blocks / message context menu ===== */
 .ai-message { user-select: text; -webkit-user-select: text; }
