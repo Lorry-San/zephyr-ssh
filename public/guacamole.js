@@ -838,7 +838,8 @@ function setupMobilePointerMouse() {
         else if (!t.moved) {
             const now = Date.now();
             const isDouble = lastTapPos && now - lastTapAt < 360 && Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < 36;
-            sendRemoteMouseClick(pos, isDouble ? 'double-tap' : 'tap', 1);
+            sendRemoteMouseClick(pos, isDouble ? 'double-tap-1' : 'tap', 1);
+            if (isDouble) window.setTimeout(() => sendRemoteMouseClick(pos, 'double-tap-2', 1), 70);
             lastTapAt = now; lastTapPos = pos;
         }
         updateRdpPointer(event.clientX, event.clientY, false);
@@ -928,7 +929,8 @@ function setupMobilePointerMouse() {
             else if (!t.moved) {
                 const now = Date.now();
                 const isDouble = lastTapPos && now - lastTapAt < 360 && Math.hypot(pos.x - lastTapPos.x, pos.y - lastTapPos.y) < 36;
-                sendRemoteMouseClick(pos, isDouble ? 'double-tap' : 'tap', 1);
+                sendRemoteMouseClick(pos, isDouble ? 'double-tap-1' : 'tap', 1);
+                if (isDouble) window.setTimeout(() => sendRemoteMouseClick(pos, 'double-tap-2', 1), 70);
                 lastTapAt = now; lastTapPos = pos;
             }
             updateRdpPointer(touch.clientX, touch.clientY, false);
@@ -965,7 +967,7 @@ function bindCanvasTouch(canvas) {
     canvasTouchAbort = new AbortController();
     const sig = canvasTouchAbort.signal;
     const map = new Map();
-    let longT = 0, tf = null;
+    let lastTap = null, lastTapAt = 0, longT = 0, tf = null;
     const cr = () => canvas.getBoundingClientRect();
     const p = (x, y) => {
         const r = cr(); if (!r.width||!r.height) { console.warn('[rdp-touch] zero canvas rect r',r); return null; }
@@ -1013,7 +1015,6 @@ function bindCanvasTouch(canvas) {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault(), { passive: false, signal: sig });
     setTransientStatus('\u89e6\u63a7\u76d1\u542c\u5df2\u5c31\u4f4d');
     canvas.addEventListener('pointerdown', (e) => {
-        if (isDesktopMousePointer(e)) return;
         console.info('[rdp-touch] pointerdown', {x:e.clientX,y:e.clientY,pt:e.pointerType,conn:connected,mapSz:map.size});
         pointerTouchTs = Date.now();
         const pt = p(e.clientX, e.clientY); if (!pt) { setTransientStatus('\u5750\u6807\u89e3\u6790\u5931\u8d25'); return; }
@@ -1027,7 +1028,6 @@ function bindCanvasTouch(canvas) {
         else if (map.size===2){clearTimeout(longT);const a=Array.from(map.values());tf={x:(a[0].cx+a[1].cx)/2,y:(a[0].cy+a[1].cy)/2};}
     },{passive:false,signal:sig});
     canvas.addEventListener('pointermove', (e) => {
-        if (isDesktopMousePointer(e)) return;
         const t=map.get(e.pointerId||'p0'); if(!t)return; e.preventDefault();
         const pt=p(e.clientX, e.clientY); t.cx=e.clientX; t.cy=e.clientY; if(pt) t.last=pt;
         if(!t.moved&&Math.hypot(e.clientX-t.sx,e.clientY-t.sy)>10){t.moved=true;clearTimeout(longT);}
@@ -1037,18 +1037,17 @@ function bindCanvasTouch(canvas) {
         else if(t.down) snd({type:'mouse',x:pt.x,y:pt.y});
     },{passive:false,signal:sig});
     canvas.addEventListener('pointerup', (e) => {
-        if (isDesktopMousePointer(e)) return;
         const t=map.get(e.pointerId||'p0'); if(!t)return; e.preventDefault();
         const pt=p(e.clientX,e.clientY)||t.last||t.pos;
         map.delete(e.pointerId||'p0');
         if(t.down) up(1);
         else if(!t.moved&&!t.right&&pt){
-            click(pt,1);
+            const now=Date.now(); const dbl=lastTap&&now-lastTapAt<360&&Math.hypot(pt.x-lastTap.x,pt.y-lastTap.y)<36;
+            click(pt,1); if(dbl) setTimeout(()=>click(pt,1),70); lastTapAt=now; lastTap=pt;
         }
         if(map.size<2)tf=null; if(!map.size)clearTimeout(longT);
     },{passive:false,signal:sig});
     canvas.addEventListener('pointercancel', (e) => {
-        if (isDesktopMousePointer(e)) return;
         const t=map.get(e.pointerId||'p0'); if(t?.down)up(1); map.delete(e.pointerId||'p0');
         if(!map.size)clearTimeout(longT);
     },{passive:true,signal:sig});
@@ -1082,7 +1081,8 @@ function bindCanvasTouch(canvas) {
         for(const t of Array.from(e.changedTouches)){const id=tId(t),st=map.get(id); if(!st)continue;
             const pt=p(t.clientX,t.clientY)||st.last||st.pos; map.delete(id);
             if(st.down) up(1);
-            else if(!st.moved&&!st.right&&pt){click(pt,1);}}
+            else if(!st.moved&&!st.right&&pt){const now=Date.now();const dbl=lastTap&&now-lastTapAt<360&&Math.hypot(pt.x-lastTap.x,pt.y-lastTap.y)<36;
+                click(pt,1); if(dbl)setTimeout(()=>click(pt,1),70); lastTapAt=now; lastTap=pt;}}
         if(map.size<2)tf=null; if(!map.size)clearTimeout(longT);
         e.preventDefault();
     },{passive:false,signal:sig});
