@@ -7075,11 +7075,11 @@ body.smartbar-trash-hover .smartbar-trash-target {
             "mobile-terminal"
             "mobile-actions"
             "mobile-aux" !important;
-        height: 100dvh !important;
-        max-height: 100dvh !important;
+        height: 100% !important;
+        max-height: 100% !important;
         min-height: 0 !important;
         overflow: hidden !important;
-        position: fixed !important;
+        position: absolute !important;
         inset: 0 !important;
     }
 
@@ -7117,6 +7117,30 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
+
+/* Mobile app-hosted SSH: clamp the compact workspace to the visible terminal view.
+   This keeps the iframe from overflowing below the phone viewport, so the in-frame
+   bottom toolbars stay visible instead of being clipped off-screen. */
+@media (max-width: 760px) and (hover: none) and (pointer: coarse) {
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-view.active {
+        height: calc(100dvh - var(--smartbar-top, 61px) - 4px) !important;
+        max-height: calc(100dvh - var(--smartbar-top, 61px) - 4px) !important;
+        min-height: 0 !important;
+    }
+
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-workspace.compact {
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 0 !important;
+    }
+
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-window,
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-window-body,
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-frame {
+        min-height: 0 !important;
+        max-height: 100% !important;
+    }
+}
 
 /* Colored SVG glyphs converted from the supplied macOS-style icon set. */
 .zephyr-glyph-defs { position: absolute; width: 0; height: 0; overflow: hidden; }

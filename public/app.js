@@ -1827,54 +1827,31 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
         : (parentKeyboardTop || metricsKeyboardTop || layoutHeight);
     const keyboardOpen = (!!metrics.keyboardOpen || parentInset >= 100 || inset >= 100) && effectiveInset >= 80;
 
-    // 移动端非全屏模式（compact + stable input）：父页面收缩 workspace
-    // 高度到 visible 区域底部，iframe 内部拿到正确容器后再做光标可见。
-    // 用 getBoundingClientRect 精确计算可用高度，避免 flex:1 撑满父容器。
-    // 不发送 freeze 消息——wterm 需要响应 layout-stabilize 正常 resize。
-    if (isStableInput && isCompact) {
-        if (keyboardOpen) {
-            const wsRect = workspace.getBoundingClientRect();
-            const currentHeight = Math.round(workspace.getBoundingClientRect?.().height || workspace.offsetHeight || 0);
-            const rawUsableHeight = Math.round(keyboardTop - wsRect.top - 2);
-            const fallbackUsableHeight = Math.round(Math.max(180, (metricsViewportHeight || parentVvHeight || layoutHeight) - wsRect.top - 2));
-            const maxHeightSource = Math.max(220, layoutHeight, wsRect.bottom, currentHeight + wsRect.top);
-            const usableHeight = Math.max(180, Math.min(Math.round(maxHeightSource - wsRect.top), rawUsableHeight > 0 ? rawUsableHeight : fallbackUsableHeight));
-            workspace.style.flex = '0 0 auto';
-            workspace.style.height = `${usableHeight}px`;
-            workspace.style.maxHeight = `${usableHeight}px`;
-            workspace.style.minHeight = '0px';
-            workspace.style.marginBottom = '0px';
-            const frame = workspace.querySelector(`.terminal-frame[data-frame="${CSS.escape(activeTerminalTab || '')}"]`) || workspace.querySelector('.terminal-frame.active');
-            if (frame) {
-                frame.style.height = '100%';
-                frame.style.maxHeight = '100%';
-                frame.style.minHeight = '0px';
-            }
-            document.documentElement.style.setProperty('--app-keyboard-inset', `${effectiveInset}px`);
-            document.documentElement.style.setProperty('--app-visual-vh', `${usableHeight}px`);
-            document.documentElement.style.setProperty('--app-visual-offset-top', `${parentOffsetTop}px`);
-            document.documentElement.style.setProperty('--app-keyboard-top', `${Math.round(keyboardTop)}px`);
-            appKeyboardPendingMetrics = { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop };
-        } else {
-            appKeyboardPendingMetrics = null;
-            workspace.style.flex = '';
-            workspace.style.height = '';
-            workspace.style.maxHeight = '';
-            workspace.style.minHeight = '';
-            workspace.style.marginBottom = '';
-            workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
-                frame.style.height = '';
-                frame.style.maxHeight = '';
-                frame.style.minHeight = '';
-            });
-            document.documentElement.style.setProperty('--app-keyboard-inset', '0px');
-            document.documentElement.style.setProperty('--app-visual-vh', '100vh');
-            document.documentElement.style.setProperty('--app-visual-offset-top', '0px');
-            document.documentElement.style.setProperty('--app-keyboard-top', '100vh');
-        }
+    // 移动端非全屏（compact + stable input）不再让父页面按键盘高度裁剪 workspace。
+    // Android WebView/Chrome 在嵌套 iframe + virtualKeyboard overlays-content 下会把
+    // virtualKeyboard.boundingRect 当成整页坐标回传，旧逻辑会把 workspace 压到 180px，
+    // 终端画布只剩一条黑线，底部工具栏也会被挤乱。稳定输入模式应保持父容器高度，
+    // 仅把键盘指标传给 iframe；iframe 内部负责光标可见和滚动条更新。
+    if (isStableInput && isCompact && !isFullscreenTerminalSurface) {
+        appKeyboardPendingMetrics = keyboardOpen
+            ? { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop }
+            : null;
         workspace.classList.toggle('keyboard-open', keyboardOpen);
         appKeyboardOpen = keyboardOpen;
-        // 通知 iframe 重新 fit，确保 wterm 按新容器尺寸计算 cols/rows
+        workspace.style.flex = '';
+        workspace.style.height = '';
+        workspace.style.maxHeight = '';
+        workspace.style.minHeight = '';
+        workspace.style.marginBottom = '';
+        workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
+            frame.style.height = '';
+            frame.style.maxHeight = '';
+            frame.style.minHeight = '';
+        });
+        document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardOpen ? effectiveInset : 0}px`);
+        document.documentElement.style.setProperty('--app-visual-vh', '100vh');
+        document.documentElement.style.setProperty('--app-visual-offset-top', `${parentOffsetTop}px`);
+        document.documentElement.style.setProperty('--app-keyboard-top', keyboardOpen ? `${Math.round(keyboardTop)}px` : '100vh');
         scheduleTerminalLayoutStabilize(keyboardOpen ? 'parent-keyboard-compact-open' : 'parent-keyboard-compact-close', { focus: false });
         return;
     }
