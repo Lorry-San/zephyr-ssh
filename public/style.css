@@ -7128,7 +7128,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
         min-height: 0 !important;
     }
 
-    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-workspace.compact {
+    body.app-body.terminal-mode:not(.terminal-custom-fullscreen-open) .terminal-workspace.compact:not(.keyboard-open) {
         height: 100% !important;
         max-height: 100% !important;
         min-height: 0 !important;

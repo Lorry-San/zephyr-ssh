@@ -1823,35 +1823,51 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     if (effectiveInset >= 80 && insetKeyboardTop > 0) keyboardTopCandidates.push(insetKeyboardTop);
     const validKeyboardTopCandidates = keyboardTopCandidates.filter((value) => Number.isFinite(value) && value > 0 && value <= layoutHeight + 2);
     const keyboardTop = validKeyboardTopCandidates.length
-        ? Math.max(...validKeyboardTopCandidates)
+        ? Math.min(...validKeyboardTopCandidates)
         : (parentKeyboardTop || metricsKeyboardTop || layoutHeight);
     const keyboardOpen = (!!metrics.keyboardOpen || parentInset >= 100 || inset >= 100) && effectiveInset >= 80;
 
-    // 移动端非全屏（compact + stable input）不再让父页面按键盘高度裁剪 workspace。
-    // Android WebView/Chrome 在嵌套 iframe + virtualKeyboard overlays-content 下会把
-    // virtualKeyboard.boundingRect 当成整页坐标回传，旧逻辑会把 workspace 压到 180px，
-    // 终端画布只剩一条黑线，底部工具栏也会被挤乱。稳定输入模式应保持父容器高度，
-    // 仅把键盘指标传给 iframe；iframe 内部负责光标可见和滚动条更新。
-    if (isStableInput && isCompact && !isFullscreenTerminalSurface) {
+    // 移动端 stable input（全屏/非全屏）使用同一套“父页裁剪 iframe，iframe 内正常排版”的逻辑：
+    // 底部工具栏应始终在键盘上方，而不是被系统键盘覆盖；同时不能裁到 180px。
+    // 旧实现混用 parent visualViewport 与 iframe virtualKeyboard 坐标，某些 Android WebView 会把
+    // keyboardTop 算到 workspace 顶部附近，导致全屏底部栏“起飞”、非全屏下方内容被盖住。
+    if (isStableInput && isCompact) {
+        const wsRect = workspace.getBoundingClientRect();
+        const viewportBottom = Math.max(0, parentOffsetTop + parentVvHeight);
+        const viewRect = document.querySelector('.terminal-view.active')?.getBoundingClientRect?.();
+        const normalBottom = isFullscreenTerminalSurface
+            ? Math.max(viewportBottom, window.innerHeight || 0, document.documentElement.clientHeight || 0)
+            : Math.min(
+                viewRect?.bottom || viewportBottom || window.innerHeight || 0,
+                window.innerHeight || viewportBottom || viewRect?.bottom || 0
+            );
+        const visibleBottomCandidates = [normalBottom];
+        if (parentInset >= 80 && parentKeyboardTop > wsRect.top + 120) visibleBottomCandidates.push(parentKeyboardTop);
+        if (metricsKeyboardTop > wsRect.top + 120 && metricsKeyboardTop <= normalBottom + 2) visibleBottomCandidates.push(metricsKeyboardTop);
+        if (insetKeyboardTop > wsRect.top + 120 && insetKeyboardTop <= normalBottom + 2) visibleBottomCandidates.push(insetKeyboardTop);
+        const visibleBottom = keyboardOpen ? Math.min(...visibleBottomCandidates) : normalBottom;
+        const normalHeight = Math.max(0, Math.round(normalBottom - wsRect.top));
+        const keyboardTargetHeight = Math.min(normalHeight, Math.max(0, Math.round(visibleBottom - wsRect.top)));
+        const usableHeight = keyboardOpen ? keyboardTargetHeight : normalHeight;
         appKeyboardPendingMetrics = keyboardOpen
             ? { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop }
             : null;
         workspace.classList.toggle('keyboard-open', keyboardOpen);
         appKeyboardOpen = keyboardOpen;
-        workspace.style.flex = '';
-        workspace.style.height = '';
-        workspace.style.maxHeight = '';
-        workspace.style.minHeight = '';
-        workspace.style.marginBottom = '';
+        workspace.style.flex = '0 0 auto';
+        workspace.style.height = `${usableHeight}px`;
+        workspace.style.maxHeight = `${usableHeight}px`;
+        workspace.style.minHeight = '0px';
+        workspace.style.marginBottom = '0px';
         workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
-            frame.style.height = '';
-            frame.style.maxHeight = '';
-            frame.style.minHeight = '';
+            frame.style.height = '100%';
+            frame.style.maxHeight = '100%';
+            frame.style.minHeight = '0px';
         });
         document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardOpen ? effectiveInset : 0}px`);
-        document.documentElement.style.setProperty('--app-visual-vh', '100vh');
+        document.documentElement.style.setProperty('--app-visual-vh', `${usableHeight}px`);
         document.documentElement.style.setProperty('--app-visual-offset-top', `${parentOffsetTop}px`);
-        document.documentElement.style.setProperty('--app-keyboard-top', keyboardOpen ? `${Math.round(keyboardTop)}px` : '100vh');
+        document.documentElement.style.setProperty('--app-keyboard-top', keyboardOpen ? `${Math.round(visibleBottom)}px` : '100vh');
         scheduleTerminalLayoutStabilize(keyboardOpen ? 'parent-keyboard-compact-open' : 'parent-keyboard-compact-close', { focus: false });
         return;
     }

@@ -8712,6 +8712,9 @@ function updateTerminalWebLinks() {
 wtermWrapper.addEventListener('contextmenu', async (e) => {
     const selection = window.getSelection();
     if (selection?.toString?.().length > 0) return;
+    // 移动端长按需要留给系统文本选择/复制；自动读剪贴板粘贴会和选区手势冲突。
+    // 桌面端仍保留右键粘贴。
+    if (isTouchKeyboardDevice()) return;
     if (terminalMouseTrackingEnabled()) {
         sendTerminalMouseEvent(e, 'press');
         return;
