@@ -1823,7 +1823,7 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     if (effectiveInset >= 80 && insetKeyboardTop > 0) keyboardTopCandidates.push(insetKeyboardTop);
     const validKeyboardTopCandidates = keyboardTopCandidates.filter((value) => Number.isFinite(value) && value > 0 && value <= layoutHeight + 2);
     const keyboardTop = validKeyboardTopCandidates.length
-        ? Math.min(...validKeyboardTopCandidates)
+        ? Math.max(...validKeyboardTopCandidates)
         : (parentKeyboardTop || metricsKeyboardTop || layoutHeight);
     const keyboardOpen = (!!metrics.keyboardOpen || parentInset >= 100 || inset >= 100) && effectiveInset >= 80;
 
@@ -1833,22 +1833,27 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
     // keyboardTop 算到 workspace 顶部附近，导致全屏底部栏“起飞”、非全屏下方内容被盖住。
     if (isStableInput && isCompact) {
         const wsRect = workspace.getBoundingClientRect();
-        const viewportBottom = Math.max(0, parentOffsetTop + parentVvHeight);
         const viewRect = document.querySelector('.terminal-view.active')?.getBoundingClientRect?.();
+
+        // Normal bottom: workspace bottom when no keyboard
         const normalBottom = isFullscreenTerminalSurface
-            ? Math.max(viewportBottom, window.innerHeight || 0, document.documentElement.clientHeight || 0)
-            : Math.min(
-                viewRect?.bottom || viewportBottom || window.innerHeight || 0,
-                window.innerHeight || viewportBottom || viewRect?.bottom || 0
-            );
-        const visibleBottomCandidates = [normalBottom];
-        if (parentInset >= 80 && parentKeyboardTop > wsRect.top + 120) visibleBottomCandidates.push(parentKeyboardTop);
-        if (metricsKeyboardTop > wsRect.top + 120 && metricsKeyboardTop <= normalBottom + 2) visibleBottomCandidates.push(metricsKeyboardTop);
-        if (insetKeyboardTop > wsRect.top + 120 && insetKeyboardTop <= normalBottom + 2) visibleBottomCandidates.push(insetKeyboardTop);
-        const visibleBottom = keyboardOpen ? Math.min(...visibleBottomCandidates) : normalBottom;
-        const normalHeight = Math.max(0, Math.round(normalBottom - wsRect.top));
-        const keyboardTargetHeight = Math.min(normalHeight, Math.max(0, Math.round(visibleBottom - wsRect.top)));
-        const usableHeight = keyboardOpen ? keyboardTargetHeight : normalHeight;
+            ? Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0)
+            : Math.min(viewRect?.bottom || window.innerHeight || 0, window.innerHeight || 0);
+
+        // Keyboard top: prefer parent visualViewport (resizes-content truth),
+        // fall back to iframe metrics (overlays-content).
+        let kbTop;
+        if (parentInset >= 80) {
+            kbTop = parentKeyboardTop;
+        } else if (inset >= 80 && metricsKeyboardTop > 0) {
+            kbTop = metricsKeyboardTop;
+        } else {
+            kbTop = normalBottom;
+        }
+        kbTop = Math.min(kbTop, normalBottom);
+
+        const usableHeight = Math.max(0, Math.round(kbTop - wsRect.top));
+
         appKeyboardPendingMetrics = keyboardOpen
             ? { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop }
             : null;
@@ -1867,11 +1872,10 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
         document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardOpen ? effectiveInset : 0}px`);
         document.documentElement.style.setProperty('--app-visual-vh', `${usableHeight}px`);
         document.documentElement.style.setProperty('--app-visual-offset-top', `${parentOffsetTop}px`);
-        document.documentElement.style.setProperty('--app-keyboard-top', keyboardOpen ? `${Math.round(visibleBottom)}px` : '100vh');
+        document.documentElement.style.setProperty('--app-keyboard-top', keyboardOpen ? `${Math.round(kbTop)}px` : '100vh');
         scheduleTerminalLayoutStabilize(keyboardOpen ? 'parent-keyboard-compact-open' : 'parent-keyboard-compact-close', { focus: false });
         return;
     }
-
     if (!keyboardOpen || !isFullscreenTerminalSurface) {
         if (!keyboardOpen) resetTerminalWorkspaceKeyboard();
         return;
