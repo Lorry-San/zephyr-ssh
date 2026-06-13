@@ -14,8 +14,8 @@ let aiBrowserPreviewTimer = 0;
 let aiAutoTitleTimer = 0;
 let aiSidebarCollapsedBySize = false;
 let aiPendingConfirmations = new Map();
-let aiBrowserPreviewState = { session: 'default', preview: null, visible: false };
-let aiActiveAbortController = null;
+const aiBrowserPreviewStates = new Map();
+const aiSessionRuns = new Map();
 let aiStoppedControllers = new WeakSet();
 let aiPanelState = 'closed';
 let aiPanelCloseTimer = 0;
@@ -28,6 +28,7 @@ const aiCodeBlockStore = new Map();
 let aiCodePreviewObjectUrl = '';
 let aiMessageMenuState = { index: -1, text: '', element: null, touchTimer: 0 };
 let aiEditingMessageIndex = -1;
+let aiEditingSessionId = '';
 const AI_CHAT_STORAGE_KEY = 'zephyr-ai-chat-sessions';
 let editingId = null;
 let editingSecretLoaded = false;
@@ -3018,13 +3019,18 @@ function createAiChat({ silent = false } = {}) {
     const id = `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     aiChatSessions.unshift({ id, title: '新对话', messages: [] });
     aiCurrentSessionId = id;
+    aiEditingMessageIndex = -1;
+    aiEditingSessionId = '';
     saveAiChats();
     if (!silent) renderAiChat();
 }
 function renderAiChatList() {
     const list = $('#aiChatList');
     if (!list) return;
-    list.innerHTML = aiChatSessions.map((s) => `<div class="ai-chat-row ${s.id === aiCurrentSessionId ? 'active' : ''}" data-ai-chat-row="${escapeHtml(s.id)}"><button class="ai-chat-item" data-ai-chat="${escapeHtml(s.id)}">${escapeHtml(s.title || '新对话')}</button><button class="ai-chat-delete" type="button" data-ai-delete-chat="${escapeHtml(s.id)}" title="删除对话" aria-label="删除对话">×</button></div>`).join('');
+    list.innerHTML = aiChatSessions.map((s) => {
+        const running = aiIsSessionRunning(s.id);
+        return `<div class="ai-chat-row ${s.id === aiCurrentSessionId ? 'active' : ''} ${running ? 'running' : ''}" data-ai-chat-row="${escapeHtml(s.id)}"><button class="ai-chat-item" data-ai-chat="${escapeHtml(s.id)}"><span class="ai-chat-title-text">${escapeHtml(s.title || '新对话')}</span>${running ? '<span class="ai-chat-running-dot" title="AI 正在回复"></span>' : ''}</button><button class="ai-chat-delete" type="button" data-ai-delete-chat="${escapeHtml(s.id)}" title="删除对话" aria-label="删除对话">×</button></div>`;
+    }).join('');
 }
 function renderAiChat() {
     if (!aiChatSessions.length) createAiChat({ silent: true });
@@ -3034,36 +3040,72 @@ function renderAiChat() {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     area.querySelectorAll('.ai-message').forEach((el) => el.remove());
-    session.messages.forEach((m, index) => appendAiMessage(m.content, m.role, { store: false, rawHtml: m.role === 'trace', messageIndex: index }));
+    session.messages.forEach((m, index) => {
+        if (m.role === 'confirmation') {
+            const pending = aiPendingConfirmations.get(m.confirmationId);
+            if (pending?.confirmation) insertAiConfirmationCard(pending.confirmation, index);
+            else appendAiMessage(m.content, 'assistant', { store: false, messageIndex: index, sessionId: session.id });
+            return;
+        }
+        appendAiMessage(m.content, m.role, { store: false, rawHtml: m.role === 'trace', messageIndex: index, sessionId: session.id });
+    });
     area.appendChild(typing);
+    updateAiRunUiForCurrentSession();
     renderAiChatList();
     scrollAiChat();
 }
-function appendAiMessage(text, role = 'assistant', { store = true, meta = '', rawHtml = false, messageIndex = -1 } = {}) {
+function appendAiMessage(text, role = 'assistant', { store = true, meta = '', rawHtml = false, messageIndex = -1, sessionId = '' } = {}) {
+    const targetSessionId = String(sessionId || aiCurrentSessionId || '');
+    const session = targetSessionId
+        ? aiChatSessions.find((s) => s.id === targetSessionId)
+        : aiCurrentSession();
+    if (!session) return;
+    const normalizedRole = rawHtml ? 'trace' : (role === 'ai' ? 'assistant' : role);
+    let storedIndex = messageIndex;
+    if (store) {
+        session.messages.push({ role: normalizedRole, content: String(text || '') });
+        storedIndex = session.messages.length - 1;
+        if (role === 'user' && (!session.title || session.title === '新对话' || session.title === '新沙箱')) {
+            session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : '');
+            if (session.id === aiCurrentSessionId) $('#aiCurrentChatTitle').textContent = session.title;
+        }
+        saveAiChats();
+        renderAiChatList();
+    }
+    if (session.id !== aiCurrentSessionId) return;
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
     if (!area || !typing) return;
     const div = document.createElement('div');
-    const normalizedRole = rawHtml ? 'trace' : (role === 'ai' ? 'assistant' : role);
     div.className = `ai-message ${role === 'user' ? 'user' : (role === 'system' || role === 'trace') ? 'system' : 'ai'}`;
     div.dataset.aiMessageRole = normalizedRole;
-    if (messageIndex >= 0) div.dataset.aiMessageIndex = String(messageIndex);
+    if (storedIndex >= 0) div.dataset.aiMessageIndex = String(storedIndex);
     div.dataset.aiMessageText = String(text || '');
     div.innerHTML = `${meta ? `<small>${escapeHtml(meta)}</small>` : ''}${rawHtml ? String(text || '') : renderMarkdown(String(text || ''), { enhancedCode: role !== 'trace' })}`;
     area.insertBefore(div, typing);
     if ((role === 'system' || role === 'trace') && div.querySelector('.ai-tool-trace')) {
         div.classList.add('ai-trace-message');
     }
-    if (store) {
-        const session = aiCurrentSession();
-        session.messages.push({ role: normalizedRole, content: String(text || '') });
-        div.dataset.aiMessageIndex = String(session.messages.length - 1);
-        if (role === 'user' && (!session.title || session.title === '新对话' || session.title === '新沙箱')) { session.title = String(text || '').slice(0, 14) + (String(text || '').length > 14 ? '...' : ''); renderAiChatList(); $('#aiCurrentChatTitle').textContent = session.title; }
-        saveAiChats();
-    }
     scrollAiChat();
 }
 function scrollAiChat() { requestAnimationFrame(() => { const a = $('#aiChatArea'); if (a) a.scrollTo({ top: a.scrollHeight, behavior: 'smooth' }); }); }
+function aiIsSessionRunning(sessionId = '') { return aiSessionRuns.has(String(sessionId || '')); }
+function aiRunForSession(sessionId = '') { return aiSessionRuns.get(String(sessionId || '')) || null; }
+function registerAiSessionRun(sessionId, controller) {
+    const id = String(sessionId || '');
+    if (!id || !controller) return;
+    aiSessionRuns.set(id, controller);
+    updateAiRunUiForCurrentSession();
+    renderAiChatList();
+}
+function clearAiSessionRun(sessionId, controller = null) {
+    const id = String(sessionId || '');
+    if (!id) return;
+    if (!controller || aiSessionRuns.get(id) === controller) aiSessionRuns.delete(id);
+    updateAiRunUiForCurrentSession();
+    renderAiChatList();
+}
+function updateAiRunUiForCurrentSession() { setAiTyping(aiIsSessionRunning(aiCurrentSessionId)); }
 function aiCodeItem(id = '') { return aiCodeBlockStore.get(String(id || '')) || null; }
 async function aiCopyText(text = '') {
     try { await navigator.clipboard.writeText(String(text || '')); toast('已复制'); }
@@ -3086,7 +3128,8 @@ function aiPreviewCode(item) {
     if (!item) return;
     if (aiCodePreviewObjectUrl) URL.revokeObjectURL(aiCodePreviewObjectUrl);
     aiCodePreviewObjectUrl = URL.createObjectURL(new Blob([item.code || ''], { type: codeMimeType(item.filename, item.lang) }));
-    aiBrowserPreviewState.visible = true;
+    const state = aiBrowserPreviewStateForSession(aiCurrentSessionId);
+    state.visible = true;
     $('#aiBrowserPreview')?.classList.remove('force-hidden');
     const title = $('#aiBrowserPreviewTitle'), body = $('#aiBrowserPreviewBody'), toggle = $('#aiBrowserPreviewToggleBtn');
     if (toggle) toggle.textContent = '隐藏预览';
@@ -3132,6 +3175,7 @@ function showAiMessageMenu(messageEl, x, y) {
         ? selection.toString()
         : '';
     aiMessageMenuState.index = Number(messageEl.dataset.aiMessageIndex || -1);
+    aiMessageMenuState.sessionId = aiCurrentSessionId;
     aiMessageMenuState.text = messageEl.dataset.aiMessageText || '';
     aiMessageMenuState.selectedText = selectedText;
     aiMessageMenuState.element = messageEl;
@@ -3156,6 +3200,7 @@ function editAiMessageFromMenu() {
     const input = $('#aiUserInput');
     if (!input) return;
     aiEditingMessageIndex = aiMessageMenuState.index;
+    aiEditingSessionId = aiMessageMenuState.sessionId || aiCurrentSessionId;
     input.value = aiMessageMenuState.text || '';
     autoResizeAiInput(input);
     updateAiInputPreview();
@@ -3163,10 +3208,11 @@ function editAiMessageFromMenu() {
     toast('已载入原消息，修改后发送会从此处重新回答');
 }
 function regenerateAiMessageFromMenu() {
-    if (aiActiveAbortController) return toast('请先停止当前 AI 回复');
+    if (aiIsSessionRunning(aiCurrentSessionId)) return toast('请先停止当前对话的 AI 回复');
     const input = $('#aiUserInput');
     if (!input) return;
     aiEditingMessageIndex = aiMessageMenuState.index;
+    aiEditingSessionId = aiMessageMenuState.sessionId || aiCurrentSessionId;
     input.value = aiMessageMenuState.text || '';
     autoResizeAiInput(input);
     sendAiMessage();
@@ -3223,6 +3269,13 @@ function handleAiChatAreaClick(event) {
 }
 function deleteAiChat(id) {
     if (!id || !confirm('删除这个对话？')) return;
+    const controller = aiRunForSession(id);
+    if (controller) {
+        aiStoppedControllers.add(controller);
+        controller.abort();
+        clearAiSessionRun(id, controller);
+    }
+    aiPendingConfirmations.forEach((pending, confirmationId) => { if (pending?.sessionId === id) aiPendingConfirmations.delete(confirmationId); });
     aiChatSessions = aiChatSessions.filter((s) => s.id !== id);
     aiCurrentSessionId = aiChatSessions[0]?.id || null;
     if (!aiChatSessions.length) createAiChat({ silent: true });
@@ -3256,14 +3309,14 @@ function setAiTyping(show) {
     }
     scrollAiChat();
 }
-function stopAiResponse() {
-    const controller = aiActiveAbortController;
+function stopAiResponse(sessionId = aiCurrentSessionId) {
+    const id = String(sessionId || aiCurrentSessionId || '');
+    const controller = aiRunForSession(id);
     if (!controller) return false;
     aiStoppedControllers.add(controller);
     controller.abort();
-    aiActiveAbortController = null;
-    setAiTyping(false);
-    appendAiMessage('已停止 AI 回复/操作。', 'system');
+    clearAiSessionRun(id, controller);
+    appendAiMessage('已停止 AI 回复/操作。', 'system', { sessionId: id });
     return true;
 }
 
@@ -3277,6 +3330,7 @@ function aiIntensityOptions() {
 }
 function uniq(list = []) { return Array.from(new Set(list.map((x) => String(x || '').trim()).filter(Boolean))); }
 function collectAiContext(options = {}) {
+    const contextSession = options.sessionId ? aiChatSessions.find((s) => s.id === options.sessionId) : aiCurrentSession();
     const active = terminalTabs.find((t) => t.id === activeTerminalTab);
     const ordered = [active, ...terminalTabs.filter((t) => t && t.id !== activeTerminalTab)].filter(Boolean);
     const activeConnectionIds = uniq(ordered.map((t) => t.connectionId));
@@ -3285,7 +3339,13 @@ function collectAiContext(options = {}) {
     const view = document.querySelector('.nav-tab.active')?.dataset.view || '';
     const terminalOutputs = collectAiTerminalOutputs();
     const remoteDesktopSnapshots = collectAiRemoteDesktopSnapshots({ includeImage: !!options.includeRemoteDesktopImages });
-    return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs, remoteDesktopSnapshots };
+    return { view, aiChatSessionId: contextSession?.id || '', activeChatTitle: contextSession?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs, remoteDesktopSnapshots };
+}
+function aiBrowserPreviewStateForSession(sessionId = aiCurrentSessionId) {
+    const key = String(sessionId || 'default');
+    const safe = key.replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
+    if (!aiBrowserPreviewStates.has(key)) aiBrowserPreviewStates.set(key, { session: safe && safe !== 'default' ? `chat-${safe}` : 'default', preview: null, visible: false });
+    return aiBrowserPreviewStates.get(key);
 }
 function browserShotFromResult(result = {}) {
     if (!result || typeof result !== 'object') return null;
@@ -3293,37 +3353,40 @@ function browserShotFromResult(result = {}) {
     if (result.url && /\/api\/ai\/browser\/screenshots\//.test(result.url)) return result;
     return null;
 }
-function updateAiBrowserPreviewFromToolResult(item = {}) {
+function updateAiBrowserPreviewFromToolResult(item = {}, { sessionId = aiCurrentSessionId } = {}) {
     if (!String(item.tool || '').startsWith('browser_')) return;
     const shot = browserShotFromResult(item.result || {});
     if (shot) {
-        aiBrowserPreviewState.preview = { ...shot, tool: item.tool, updatedAt: Date.now(), pageUrl: item.result?.url || item.result?.pageUrl || '' };
-        aiBrowserPreviewState.session = item.args?.session || item.result?.session || aiBrowserPreviewState.session || 'default';
-        aiBrowserPreviewState.visible = true;
-        renderAiBrowserPreview();
+        const state = aiBrowserPreviewStateForSession(sessionId);
+        state.preview = { ...shot, tool: item.tool, updatedAt: Date.now(), pageUrl: item.result?.url || item.result?.pageUrl || '' };
+        state.session = item.result?.session || item.args?.session || state.session || (sessionId ? `chat-${sessionId}` : 'default');
+        state.visible = true;
+        if (sessionId === aiCurrentSessionId) renderAiBrowserPreview();
     }
 }
 function renderAiBrowserPreview() {
     const box = $('#aiBrowserPreview'), body = $('#aiBrowserPreviewBody'), title = $('#aiBrowserPreviewTitle'), toggle = $('#aiBrowserPreviewToggleBtn');
     if (!box || !body) return;
-    box.classList.toggle('force-hidden', !aiBrowserPreviewState.visible);
-    if (toggle) toggle.textContent = aiBrowserPreviewState.visible ? '隐藏预览' : '浏览器预览';
-    const shot = aiBrowserPreviewState.preview;
+    const state = aiBrowserPreviewStateForSession(aiCurrentSessionId);
+    box.classList.toggle('force-hidden', !state.visible);
+    if (toggle) toggle.textContent = state.visible ? '隐藏预览' : '浏览器预览';
+    const shot = state.preview;
     if (!shot?.url) {
         title && (title.textContent = 'AI 代操作页面');
         body.innerHTML = '<span>AI 打开网页后，会在这里持续显示它正在代操作的页面。</span>';
         return;
     }
-    title && (title.textContent = `AI 代操作页面 · ${shot.tool || 'browser'} · ${aiBrowserPreviewState.session || 'default'} · ${new Date(shot.updatedAt || Date.now()).toLocaleTimeString()}`);
+    title && (title.textContent = `AI 代操作页面 · ${shot.tool || 'browser'} · ${state.session || 'default'} · ${new Date(shot.updatedAt || Date.now()).toLocaleTimeString()}`);
     body.innerHTML = `<a href="${escapeHtml(shot.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(shot.url)}" alt="浏览器截图"></a>${shot.pageUrl ? `<small>${escapeHtml(shot.pageUrl)}</small>` : ''}`;
 }
 async function refreshAiBrowserPreview() {
     if (aiBrowserPreviewTimer) return;
     aiBrowserPreviewTimer = window.setTimeout(() => { aiBrowserPreviewTimer = 0; }, 800);
     try {
-        const data = await api('/api/ai/tools/run', { method: 'POST', body: JSON.stringify({ tool: 'browser_screenshot', args: { session: aiBrowserPreviewState.session || 'default' }, context: collectAiContext() }) });
-        aiBrowserPreviewState.preview = { ...(data.result || {}), tool: 'browser_screenshot', updatedAt: Date.now() };
-        aiBrowserPreviewState.visible = true;
+        const state = aiBrowserPreviewStateForSession(aiCurrentSessionId);
+        const data = await api('/api/ai/tools/run', { method: 'POST', body: JSON.stringify({ tool: 'browser_screenshot', args: { session: state.session || 'default' }, context: collectAiContext({ sessionId: aiCurrentSessionId }) }) });
+        state.preview = { ...(data.result || {}), tool: 'browser_screenshot', updatedAt: Date.now() };
+        state.visible = true;
         renderAiBrowserPreview();
     } catch (err) { toast(err.message || '刷新浏览器截图失败'); }
 }
@@ -3615,28 +3678,29 @@ async function performAiUiAction(action = {}) {
     if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
     throw new Error(`未知 UI 动作：${a}`);
 }
-async function handleAiClientCapture(data = {}, { providerId = '', model = '', options = {}, signal = null, original = '', depth = 0 } = {}) {
+async function handleAiClientCapture(data = {}, { providerId = '', model = '', options = {}, signal = null, original = '', depth = 0, sessionId = '' } = {}) {
+    const targetSessionId = sessionId || aiCurrentSessionId;
     if (!data?.clientCaptureRequired || !data.clientCapture) return false;
-    if (depth > 1) { appendAiMessage('实时截图已连续请求多次，先停止以避免卡住；请根据当前截图继续或手动重试。', 'system'); return true; }
+    if (depth > 1) { appendAiMessage('实时截图已连续请求多次，先停止以避免卡住；请根据当前截图继续或手动重试。', 'system', { sessionId: targetSessionId }); return true; }
     const capture = data.clientCapture || {};
     const targetTabId = String(capture.tabId || capture.targets?.[0]?.tabId || '').trim();
     const maxWidth = Number(capture.maxWidth || 640) || 640;
     const shot = await waitForFreshRemoteDesktopSnapshot(targetTabId, { maxWidth, timeoutMs: 2200 });
     const result = { screenshots: shot ? [shot] : [], message: shot?.dataUrl ? '已实时截取最新远程桌面画面' : (shot?.error || '实时截图不可用'), clientCaptured: true, capturedAt: Date.now() };
     const trace = { tool: 'remote_desktop_screenshot', args: capture.args || { tabId: targetTabId, maxWidth }, result, status: shot?.dataUrl ? 'success' : 'error' };
-    appendAiMessage(formatAiToolResult(trace), 'trace', { rawHtml: true });
+    appendAiMessage(formatAiToolResult(trace), 'trace', { rawHtml: true, sessionId: targetSessionId });
     const imagePart = shot?.dataUrl ? `\n\n最新远程桌面截图（实时截取）：\n${shot.dataUrl}` : '';
     const followup = `原问题：${original || '继续处理远程桌面操作'}\n\n你刚才请求实时读取远程桌面画面。前端已在此刻重新截取最新画面，截图结果摘要如下：\n${JSON.stringify(maskAiSensitive(result), null, 2).slice(0, 7000)}${imagePart}\n\n请根据这个最新画面继续判断是否完成，或给出下一步操作。不要说你看到的是旧截图；如果截图不可用，直接说明原因。`;
-    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: { ...(options || {}), max_tokens: 900, max_output_tokens: 900 }, context: collectAiContext({ includeRemoteDesktopImages: true }) }) });
-    if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
-    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original, depth: depth + 1 });
-    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() });
-    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: { ...(options || {}), max_tokens: 900, max_output_tokens: 900 }, context: collectAiContext({ includeRemoteDesktopImages: true, sessionId: targetSessionId }) }) });
+    if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults, { sessionId: targetSessionId }); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true, sessionId: targetSessionId }); }
+    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original, depth: depth + 1, sessionId: targetSessionId });
+    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext({ sessionId: targetSessionId }), sessionId: targetSessionId });
+    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / '), sessionId: targetSessionId });
     return true;
 }
-async function syncAiToolSideEffects(toolResults = []) {
+async function syncAiToolSideEffects(toolResults = [], { sessionId = '' } = {}) {
     for (const r of toolResults) {
-        updateAiBrowserPreviewFromToolResult(r);
+        updateAiBrowserPreviewFromToolResult(r, { sessionId });
         if (r.result?.uiAction === 'open_connection' && r.result?.connectionId) {
             try {
                 const openedTabId = await openConnection(r.result.connectionId);
@@ -3680,18 +3744,19 @@ function needsRemoteDesktopClientFollowup(toolResults = []) {
         return ['RDP', 'VNC'].includes(protocol) || action.startsWith('remote_desktop');
     });
 }
-async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null, toolResults = [] } = {}) {
+async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null, toolResults = [], sessionId = '' } = {}) {
+    const targetSessionId = sessionId || aiCurrentSessionId;
     const sideEffectSummary = JSON.stringify(maskAiSensitive((Array.isArray(toolResults) ? toolResults : []).map((r) => ({ tool: r.tool, args: r.args, result: r.result }))), null, 2).slice(0, 7000);
     const followup = `原问题：${original}\n\n前端已经尝试执行 RDP/VNC 打开或远程桌面操作。工具/前端执行结果摘要如下：\n${sideEffectSummary || '（无工具结果）'}\n\n现在请基于最新 Zephyr 上下文继续回答；如果结果里有 clientError 或 remoteDesktopAction.ok=false，必须直接告诉用户该操作失败和失败原因，不要声称已经完成；如果工具结果已经包含 remoteDesktopScreenshot/截图摘要，可直接依据它回答，不要重复截图；只有缺少截图且原问题确实询问当前画面时，才调用 remote_desktop_screenshot。不要重复打开同一连接或重复点击刚才的按钮。`;
     const nextOptions = { ...(options || {}), max_tokens: Math.min(Number(options?.max_tokens || 900), 900), max_output_tokens: Math.min(Number(options?.max_output_tokens || 900), 900) };
-    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: nextOptions, context: collectAiContext({ includeRemoteDesktopImages: false }) }) });
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: nextOptions, context: collectAiContext({ includeRemoteDesktopImages: false, sessionId: targetSessionId }) }) });
     if (next.toolResults?.length) {
-        await syncAiToolSideEffects(next.toolResults);
-        appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
+        await syncAiToolSideEffects(next.toolResults, { sessionId: targetSessionId });
+        appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true, sessionId: targetSessionId });
     }
-    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original });
-    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() });
-    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original, sessionId: targetSessionId });
+    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext({ sessionId: targetSessionId }), sessionId: targetSessionId });
+    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / '), sessionId: targetSessionId });
     return true;
 }
 function maskAiSensitive(value, tool = '') {
@@ -3778,13 +3843,16 @@ async function updateAiPlan(planId, action = {}) {
     } catch (err) { toast(err.message || '计划更新失败'); }
 }
 async function sendAiMessage() {
-    if (aiActiveAbortController) { stopAiResponse(); return; }
+    const session = aiCurrentSession();
+    const sessionId = session?.id || '';
+    if (!sessionId) return;
+    if (aiIsSessionRunning(sessionId)) { stopAiResponse(sessionId); return; }
     const input = $('#aiUserInput');
     const text = input.value.trim();
     if (!text) return;
-    const session = aiCurrentSession();
-    const editingIndex = aiEditingMessageIndex;
+    const editingIndex = aiEditingSessionId && aiEditingSessionId !== sessionId ? -1 : aiEditingMessageIndex;
     aiEditingMessageIndex = -1;
+    aiEditingSessionId = '';
     if (editingIndex >= 0) {
         session.messages = session.messages.slice(0, Math.max(0, editingIndex));
         renderAiChat();
@@ -3793,39 +3861,36 @@ async function sendAiMessage() {
     autoResizeAiInput(input);
     updateAiInputPreview();
     input.focus?.();
-    appendAiMessage(text, 'user');
+    appendAiMessage(text, 'user', { sessionId });
     const abortController = new AbortController();
-    aiActiveAbortController = abortController;
-    setAiTyping(true);
+    registerAiSessionRun(sessionId, abortController);
     try {
-        const context = collectAiContext();
+        const context = collectAiContext({ sessionId });
         const providerId = $('#aiProviderSelect').value;
         const model = $('#aiModelSelect').value;
         const options = aiIntensityOptions();
         const requestMessages = aiMessagesForRequest(session, text);
         const data = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: requestMessages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
-            await syncAiToolSideEffects(data.toolResults);
-            appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
+            await syncAiToolSideEffects(data.toolResults, { sessionId });
+            appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true, sessionId });
         }
         if (data.clientCaptureRequired) {
-            await handleAiClientCapture(data, { providerId, model, options, signal: abortController.signal, original: text });
+            await handleAiClientCapture(data, { providerId, model, options, signal: abortController.signal, original: text, sessionId });
         } else if (data.confirmationRequired) {
-            appendAiConfirmation(data.confirmation, { messages: requestMessages.slice(), providerId, model, options, context });
+            appendAiConfirmation(data.confirmation, { messages: requestMessages.slice(), providerId, model, options, context, sessionId });
         } else if (needsRemoteDesktopClientFollowup(data.toolResults || [])) {
-            await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal, toolResults: data.toolResults || [] });
+            await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal, toolResults: data.toolResults || [], sessionId });
         } else {
-            appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / ') });
+            appendAiMessage(data.message?.content || '执行完成。', 'assistant', { meta: [data.provider?.name, data.model].filter(Boolean).join(' / '), sessionId });
         }
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
-            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 回复已中断。', 'system');
-        } else appendAiMessage(`请求失败：${err.message || '请求失败'}\n\n建议：如果这是长对话或 RDP 操作后失败，点“压缩摘要”后重试；我已减少默认上下文和截图大小以降低这类失败。`, 'system');
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 回复已中断。', 'system', { sessionId });
+        } else appendAiMessage(`请求失败：${err.message || '请求失败'}\n\n建议：如果这是长对话或 RDP 操作后失败，点“压缩摘要”后重试；我已减少默认上下文和截图大小以降低这类失败。`, 'system', { sessionId });
     } finally {
-        const isCurrent = aiActiveAbortController === abortController;
-        if (isCurrent) aiActiveAbortController = null;
+        clearAiSessionRun(sessionId, abortController);
         aiStoppedControllers.delete(abortController);
-        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
     }
 }
 function readFileAsDataUrl(file) {
@@ -3851,72 +3916,94 @@ async function appendAiFiles(files = []) {
             parts.push(`附件：${file.name} (${file.type || 'unknown'}, ${file.size} bytes)；当前仅文本和图片会发送给 AI。`);
         }
     }
-    if (parts.length) appendAiMessage(parts.join('\n\n'), 'user');
+    if (parts.length) appendAiMessage(parts.join('\n\n'), 'user', { sessionId: aiCurrentSessionId });
 }
 async function continueAiAfterConfirmation(id, approve, data) {
-    if (aiActiveAbortController) { stopAiResponse(); return; }
     const pending = aiPendingConfirmations.get(id);
     aiPendingConfirmations.delete(id);
     if (!approve || !pending) return;
+    const sessionId = pending.sessionId || aiCurrentSessionId;
+    if (aiIsSessionRunning(sessionId)) { stopAiResponse(sessionId); return; }
     const original = (pending.messages || []).slice().reverse().find((m) => m.role === 'user')?.content || '';
+    const session = aiChatSessions.find((s) => s.id === sessionId);
+    if (session) {
+        session.messages = session.messages.filter((m) => m.confirmationId !== id);
+        saveAiChats();
+        if (sessionId === aiCurrentSessionId) renderAiChat();
+    }
     const followup = `原问题：${original}\n\n敏感操作已确认并执行，结果如下：\n${JSON.stringify(data.result || {}, null, 2).slice(0, 30000)}\n请基于这个结果继续回答原问题，直接给出结论，不要只复述 JSON。`;
     const abortController = new AbortController();
-    aiActiveAbortController = abortController;
+    registerAiSessionRun(sessionId, abortController);
     try {
-        setAiTyping(true);
-        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext({ includeRemoteDesktopImages: false }) }) });
-        if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
-        if (next.clientCaptureRequired) await handleAiClientCapture(next, { providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), signal: abortController.signal, original });
-        else if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
-        else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext({ includeRemoteDesktopImages: false, sessionId }) }) });
+        if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults, { sessionId }); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true, sessionId }); }
+        if (next.clientCaptureRequired) await handleAiClientCapture(next, { providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), signal: abortController.signal, original, sessionId });
+        else if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context, sessionId });
+        else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / '), sessionId });
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
-            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 后续处理已中断。', 'system');
-        } else appendAiMessage(`继续处理失败：${err.message}`, 'system');
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 后续处理已中断。', 'system', { sessionId });
+        } else appendAiMessage(`继续处理失败：${err.message}`, 'system', { sessionId });
     } finally {
-        const isCurrent = aiActiveAbortController === abortController;
-        if (isCurrent) aiActiveAbortController = null;
+        clearAiSessionRun(sessionId, abortController);
         aiStoppedControllers.delete(abortController);
-        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
     }
 }
-function appendAiConfirmation(confirmation, pending = {}) {
+function insertAiConfirmationCard(confirmation, messageIndex = -1) {
     const area = $('#aiChatArea');
     const typing = $('#aiTypingIndicator');
+    if (!area || !typing) return;
     const div = document.createElement('div');
     div.className = 'ai-message system ai-confirm-card';
-    div.innerHTML = `<strong>需要确认敏感操作</strong><p>${escapeHtml(confirmation.summary || '')}</p><pre>${escapeHtml(JSON.stringify(confirmation.args || {}, null, 2))}</pre><div class="form-actions"><button class="btn btn-primary" data-ai-confirm-approve="${escapeHtml(confirmation.id)}">确认执行</button><button class="btn danger" data-ai-confirm-deny="${escapeHtml(confirmation.id)}">拒绝</button></div>`;
+    div.dataset.aiMessageRole = 'confirmation';
+    if (messageIndex >= 0) div.dataset.aiMessageIndex = String(messageIndex);
+    div.dataset.aiMessageText = `需要确认敏感操作：${confirmation?.summary || ''}`;
+    div.innerHTML = `<strong>需要确认敏感操作</strong><p>${escapeHtml(confirmation?.summary || '')}</p><pre>${escapeHtml(JSON.stringify(confirmation?.args || {}, null, 2))}</pre><div class="form-actions"><button class="btn btn-primary" data-ai-confirm-approve="${escapeHtml(confirmation?.id || '')}">确认执行</button><button class="btn danger" data-ai-confirm-deny="${escapeHtml(confirmation?.id || '')}">拒绝</button></div>`;
     div.title = '';
     area.insertBefore(div, typing);
-    aiCurrentSession().messages.push({ role: 'assistant', content: `需要确认敏感操作：${confirmation.summary}` });
-    if (confirmation?.id) aiPendingConfirmations.set(confirmation.id, pending);
+}
+function appendAiConfirmation(confirmation, pending = {}) {
+    const sessionId = pending.sessionId || aiCurrentSessionId;
+    const text = `需要确认敏感操作：${confirmation.summary || ''}`;
+    if (confirmation?.id) aiPendingConfirmations.set(confirmation.id, { ...pending, sessionId, confirmation });
+    const session = aiChatSessions.find((s) => s.id === sessionId) || aiCurrentSession();
+    if (!session) return;
+    session.messages.push({ role: 'confirmation', content: text, confirmationId: confirmation?.id || '', summary: confirmation?.summary || '' });
+    const messageIndex = session.messages.length - 1;
     saveAiChats();
-    scrollAiChat();
+    renderAiChatList();
+    if (session.id === aiCurrentSessionId) {
+        insertAiConfirmationCard(confirmation, messageIndex);
+        scrollAiChat();
+    }
 }
 async function resolveAiConfirmation(id, approve) {
+    const pending = aiPendingConfirmations.get(id);
+    const sessionId = pending?.sessionId || aiCurrentSessionId;
+    if (aiIsSessionRunning(sessionId)) { stopAiResponse(sessionId); return; }
     const abortController = new AbortController();
-    aiActiveAbortController = abortController;
-    setAiTyping(true);
+    registerAiSessionRun(sessionId, abortController);
     try {
         const data = await api(`/api/ai/confirm/${encodeURIComponent(id)}`, { method: 'POST', signal: abortController.signal, body: JSON.stringify({ approve }) });
         if (approve && data.result) {
-            await syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }]);
-            appendAiMessage(formatAiToolResult({ tool: 'confirmed', result: data.result, args: data.args || {}, durationMs: data.durationMs }), 'trace', { rawHtml: true });
-            if (aiActiveAbortController === abortController) aiActiveAbortController = null;
+            await syncAiToolSideEffects([{ tool: data.toolName || (data.result?.plan ? 'plan_update' : ''), args: data.args || {}, result: data.result }], { sessionId });
+            appendAiMessage(formatAiToolResult({ tool: 'confirmed', result: data.result, args: data.args || {}, durationMs: data.durationMs }), 'trace', { rawHtml: true, sessionId });
+            clearAiSessionRun(sessionId, abortController);
             await continueAiAfterConfirmation(id, true, data);
         } else {
             aiPendingConfirmations.delete(id);
-            appendAiMessage('已拒绝执行敏感操作。', 'system');
+            const session = aiChatSessions.find((s) => s.id === sessionId);
+            if (session) session.messages = session.messages.filter((m) => m.confirmationId !== id);
+            appendAiMessage('已拒绝执行敏感操作。', 'system', { sessionId });
+            if (sessionId === aiCurrentSessionId) renderAiChat();
         }
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
-            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 确认操作已中断。', 'system');
-        } else appendAiMessage(`确认处理失败：${err.message}`, 'system');
+            if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 确认操作已中断。', 'system', { sessionId });
+        } else appendAiMessage(`确认处理失败：${err.message}`, 'system', { sessionId });
     } finally {
-        const isCurrent = aiActiveAbortController === abortController;
-        if (isCurrent) aiActiveAbortController = null;
+        clearAiSessionRun(sessionId, abortController);
         aiStoppedControllers.delete(abortController);
-        if (isCurrent || !aiActiveAbortController) setAiTyping(false);
     }
 }
 function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
@@ -3924,11 +4011,12 @@ function aiMessagesForRequest(session, latestText = '') {
     const messages = Array.isArray(session?.messages) ? session.messages : [];
     const latest = String(latestText || messages[messages.length - 1]?.content || '');
     const keep = messages
-        .filter((m) => ['user', 'assistant'].includes(String(m.role || '')) && !/^请求失败[:：]/.test(String(m.content || '')))
+        .filter((m) => ['user', 'assistant', 'confirmation'].includes(String(m.role || '')) && !/^请求失败[:：]/.test(String(m.content || '')))
         .slice(-12);
-    const last = keep[keep.length - 1];
-    if (latest && (!last || last.role !== 'user' || String(last.content || '') !== latest)) keep.push({ role: 'user', content: latest });
-    return keep;
+    const normalized = keep.map((m) => ({ ...m, role: m.role === 'confirmation' ? 'assistant' : m.role }));
+    const last = normalized[normalized.length - 1];
+    if (latest && (!last || last.role !== 'user' || String(last.content || '') !== latest)) normalized.push({ role: 'user', content: latest });
+    return normalized;
 }
 function startAiPanelWatchdog() {
     window.clearInterval(aiPanelWatchdogTimer);
@@ -4529,15 +4617,15 @@ function setupAiAssistant() {
     $('#aiFloatingBtn')?.addEventListener('click', (e) => toggleAiAssistantPanel(e.currentTarget));
     $('#aiJumpSettingsBtn')?.addEventListener('click', () => { switchView('settings'); document.querySelector('.settings-tab[data-settings="ai"]')?.click(); });
     $('#aiClosePanelBtn')?.addEventListener('click', closeAiAssistantPanel); $('#aiNewChatBtn')?.addEventListener('click', () => createAiChat());
-    $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; saveAiChats(); renderAiChat(); } });
-    $('#aiSendBtn')?.addEventListener('click', () => { if (aiActiveAbortController) stopAiResponse(); else sendAiMessage(); });
+    $('#aiChatList')?.addEventListener('click', (e) => { const del = e.target.closest('[data-ai-delete-chat]')?.dataset.aiDeleteChat; if (del) { e.preventDefault(); e.stopPropagation(); deleteAiChat(del); return; } const id = e.target.closest('[data-ai-chat]')?.dataset.aiChat || e.target.closest('[data-ai-chat-row]')?.dataset.aiChatRow; if (id) { aiCurrentSessionId = id; aiEditingMessageIndex = -1; aiEditingSessionId = ''; saveAiChats(); renderAiChat(); } });
+    $('#aiSendBtn')?.addEventListener('click', () => { if (aiIsSessionRunning(aiCurrentSessionId)) stopAiResponse(aiCurrentSessionId); else sendAiMessage(); });
     $('#aiUserInput')?.addEventListener('input', (e) => { autoResizeAiInput(e.target); updateAiInputPreview(); });
     $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAiMessage(); } });
     // Markdown preview toggle removed; messages are rendered as Markdown directly.
-    $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = []; renderAiChat(); });
-    $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
+    $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (aiIsSessionRunning(s?.id)) return toast('请先停止当前对话的 AI 回复'); s.messages = []; renderAiChat(); });
+    $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (aiIsSessionRunning(s?.id)) return toast('请先停止当前对话的 AI 回复'); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
     $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
-    $('#aiBrowserPreviewToggleBtn')?.addEventListener('click', () => { aiBrowserPreviewState.visible = !aiBrowserPreviewState.visible; renderAiBrowserPreview(); });
+    $('#aiBrowserPreviewToggleBtn')?.addEventListener('click', () => { const state = aiBrowserPreviewStateForSession(aiCurrentSessionId); state.visible = !state.visible; renderAiBrowserPreview(); });
     $('#aiBrowserPreviewRefreshBtn')?.addEventListener('click', refreshAiBrowserPreview);
     $('#aiRefreshStatusBtn')?.addEventListener('click', async () => { const r = await api('/api/ai/status'); settings.ai = normalizeAiSettings(r.ai || {}); renderAiSettingsForm(); toast('AI 配置已刷新'); });
     $('#aiChatArea')?.addEventListener('click', handleAiChatAreaClick);

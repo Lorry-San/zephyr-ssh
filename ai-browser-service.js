@@ -174,7 +174,7 @@ class AiBrowserService {
         const id = `${Date.now()}-${Math.random().toString(16).slice(2)}.png`;
         const file = path.join(SHOT_DIR, id);
         fs.writeFileSync(file, Buffer.from(shot.data || '', 'base64'));
-        return { id, path: file, url: `/api/ai/browser/screenshots/${encodeURIComponent(id)}`, bytes: fs.statSync(file).size };
+        return { id, path: file, url: `/api/ai/browser/screenshots/${encodeURIComponent(id)}`, bytes: fs.statSync(file).size, session };
     }
     async inspect({ session = 'default', max = 80 } = {}) {
         const page = await this.getPage(session);

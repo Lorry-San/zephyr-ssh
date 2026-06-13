@@ -7433,6 +7433,19 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .ai-chat-row .ai-chat-item,
 .ai-chat-row .ai-chat-item:hover,
 .ai-chat-row .ai-chat-item.active { background: transparent; color: inherit; }
+.ai-chat-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ai-chat-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ai-chat-running-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--success, #16a34a);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+    animation: aiRunningPulse 1.15s ease-in-out infinite;
+}
+.ai-chat-row.active .ai-chat-running-dot { background: #fff; box-shadow: 0 0 0 4px rgba(255,255,255,.22); }
+@keyframes aiRunningPulse { 0%, 100% { transform: scale(.78); opacity: .62; } 50% { transform: scale(1.08); opacity: 1; } }
 .ai-chat-delete {
     width: 28px;
     height: 28px;
@@ -7984,6 +7997,7 @@ body.app-body:not(.terminal-mode) .app-main {
     .ai-agent-panel *,
     .ai-tool-trace,
     .ai-chat-row,
+    .ai-chat-running-dot,
     .ai-message {
         animation: none !important;
         transition-duration: .01ms !important;

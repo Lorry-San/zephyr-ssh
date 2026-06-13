@@ -57,6 +57,15 @@ function clipText(value, max = MAX_TOOL_TEXT) {
     return text.length > max ? `${text.slice(0, max)}\n...[已截断 ${text.length - max} 字符]` : text;
 }
 function publicError(err) { return err?.message || String(err || '执行失败'); }
+function aiBrowserSession(args = {}, ctx = {}) {
+    const explicit = String(args.session || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
+    const chatId = String(ctx.context?.aiChatSessionId || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
+    if (!chatId) return explicit || 'default';
+    const base = `chat-${chatId}`;
+    if (!explicit || explicit === 'default' || explicit === base) return base;
+    if (explicit.startsWith(`${base}-`)) return explicit;
+    return `${base}-${explicit}`;
+}
 function unsupportedParameterName(err) {
     const text = String(err?.message || err || '');
     const match = text.match(/Unsupported parameter:\s*['"]?([A-Za-z0-9_.-]+)['"]?/i)
@@ -437,8 +446,8 @@ function toolDefinitions(ai = {}) {
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
-        tools.push({ type: 'function', function: { name: 'browser_navigate', description: '用内置 Chromium 打开 URL，并在 AI 浮窗里显示页面预览，像用户打开网页一样继续代操作。', parameters: { type: 'object', properties: { url: { type: 'string' }, session: { type: 'string' }, waitMs: { type: 'number' } }, required: ['url'] } } });
-        tools.push({ type: 'function', function: { name: 'browser_inspect', description: '列出当前页面可见的按钮、链接、输入框等可交互元素及 selector/坐标。点击或输入前优先调用它，避免盲点。', parameters: { type: 'object', properties: { session: { type: 'string' }, max: { type: 'number' } } } } });
+        tools.push({ type: 'function', function: { name: 'browser_navigate', description: '用内置 Chromium 打开 URL，并在 AI 浮窗里显示页面预览，像用户打开网页一样继续代操作。浏览器会话默认按当前 AI 对话隔离；通常不要填写 session，除非要在本对话内开多个网页上下文。', parameters: { type: 'object', properties: { url: { type: 'string' }, session: { type: 'string' }, waitMs: { type: 'number' } }, required: ['url'] } } });
+        tools.push({ type: 'function', function: { name: 'browser_inspect', description: '列出当前页面可见的按钮、链接、输入框等可交互元素及 selector/坐标。点击或输入前优先调用它，避免盲点。会话默认按当前 AI 对话隔离，通常不要填写 session。', parameters: { type: 'object', properties: { session: { type: 'string' }, max: { type: 'number' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_screenshot', description: '截取内置 Chromium 当前页面截图。', parameters: { type: 'object', properties: { session: { type: 'string' }, fullPage: { type: 'boolean' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_click', description: '点击当前页面中的 CSS 选择器或坐标。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } } } } });
         tools.push({ type: 'function', function: { name: 'browser_type', description: '向当前页面表单元素输入文本。', parameters: { type: 'object', properties: { session: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' }, clear: { type: 'boolean' } }, required: ['selector', 'text'] } } });
@@ -1375,45 +1384,47 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             return { url: String(args.url || ''), text: await fetchUrlText(args.url, args.maxChars) };
         case 'browser_navigate': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('navigate', await browserService.navigate({ url: args.url, session, waitMs: args.waitMs }), session);
         }
-        case 'browser_screenshot':
+        case 'browser_screenshot': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            return browserService.screenshot({ session: args.session || 'default', fullPage: !!args.fullPage });
+            const session = aiBrowserSession(args, ctx);
+            return browserService.screenshot({ session, fullPage: !!args.fullPage });
+        }
         case 'browser_inspect': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('inspect', await browserService.inspect({ session, max: args.max || 80 }), session);
         }
         case 'browser_click': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('click', await browserService.click({ session, selector: args.selector || '', x: args.x, y: args.y }), session);
         }
         case 'browser_type': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('type', await browserService.type({ session, selector: args.selector || '', text: args.text || '', clear: !!args.clear }), session);
         }
         case 'browser_scroll': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('scroll', await browserService.scroll({ session, direction: args.direction || 'down', amount: args.amount }), session);
         }
         case 'browser_text': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('text', { session, text: await browserService.text(session, clampNumber(args.maxChars, 1000, 120000, MAX_TOOL_TEXT)) }, session);
         }
         case 'browser_key': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('key', await browserService.key({ session, key: args.key || 'Enter' }), session);
         }
         case 'browser_wait': {
             if (p.browser === false) throw new Error('浏览器自动化权限未开启');
-            const session = args.session || 'default';
+            const session = aiBrowserSession(args, ctx);
             return browserResultWithPreview('wait', await browserService.wait({ session, ms: args.ms || 1000 }), session);
         }
         case 'open_connection': {
