@@ -79,6 +79,39 @@ function normalizeContextLimits(ai = {}, provider = {}) {
         memoryItems: clampNumber(raw.memoryItems, 0, 80, 28),
     };
 }
+
+function normalizeMultimodalContent(content, limits = {}) {
+    const perMessageChars = clampNumber(limits.perMessageChars, 1000, 300000, 60000);
+    if (Array.isArray(content)) {
+        return content.map((part) => {
+            if (!part || typeof part !== 'object') return { type: 'text', text: String(part || '') };
+            if (part.type === 'text') return { type: 'text', text: clipText(part.text || part.content || '', perMessageChars) };
+            if (part.type === 'image_url' && part.image_url?.url) return { type: 'image_url', image_url: { url: part.image_url.url, detail: part.image_url.detail || 'auto' } };
+            if (part.inlineData) return { inlineData: part.inlineData };
+            return { type: 'text', text: clipText(part.text || part.content || '', perMessageChars) };
+        }).filter((part) => part.inlineData || part.image_url || part.text);
+    }
+    const text = String(content || '');
+    const parts = [];
+    const re = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+/g;
+    let last = 0;
+    let idx = 0;
+    let m;
+    while ((m = re.exec(text)) && idx < 6) {
+        const before = text.slice(last, m.index).trim();
+        if (before) parts.push({ type: 'text', text: clipText(before, perMessageChars) });
+        const payload = dataUrlPayload(m[0].replace(/\s+/g, ''));
+        if (payload.data) parts.push({ type: 'image_url', image_url: { url: `data:${payload.mimeType};base64,${payload.data}`, detail: 'auto' } });
+        last = re.lastIndex;
+        idx += 1;
+    }
+    const rest = text.slice(last).trim();
+    if (rest) parts.push({ type: 'text', text: clipText(rest, perMessageChars) });
+    if (!parts.length) return clipText(text, perMessageChars);
+    parts.unshift({ type: 'text', text: '用户消息包含图片附件。请直接观察图片内容；不要把 data URL 当作普通文本，也不要声称看不到图片。' });
+    return parts;
+}
+
 function sanitizeMessages(messages = [], limits = {}) {
     const keepMessages = clampNumber(limits.keepMessages, 4, 160, 40);
     const perMessageChars = clampNumber(limits.perMessageChars, 1000, 300000, 60000);
@@ -86,12 +119,12 @@ function sanitizeMessages(messages = [], limits = {}) {
     const raw = (Array.isArray(messages) ? messages : [])
         .filter((item) => !['trace'].includes(String(item?.role || '').toLowerCase()))
         .slice(-keepMessages)
-        .map((item) => ({ role: normalizeRole(item.role), content: clipText(item.content || '', perMessageChars) }))
+        .map((item) => ({ role: normalizeRole(item.role), content: normalizeMultimodalContent(item.content || '', { ...limits, perMessageChars }) }))
         .filter((item) => item.content || item.role === 'assistant');
-    let total = raw.reduce((sum, item) => sum + String(item.content || '').length, 0);
+    let total = raw.reduce((sum, item) => sum + (Array.isArray(item.content) ? item.content.reduce((n, p) => n + String(p.text || '').length + (p.image_url || p.inlineData ? 1200 : 0), 0) : String(item.content || '').length), 0);
     while (raw.length > 2 && total > maxInputChars) {
         const removed = raw.shift();
-        total -= String(removed?.content || '').length;
+        total -= Array.isArray(removed?.content) ? removed.content.reduce((n, p) => n + String(p.text || '').length + (p.image_url || p.inlineData ? 1200 : 0), 0) : String(removed?.content || '').length;
     }
     return raw;
 }
@@ -172,7 +205,12 @@ function normalizeOptions(provider = {}, requestOptions = {}, mode = 'chat') {
     const extra = parseExtraObject(raw.extraJson);
     const out = {};
     const numberFields = ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty'];
-    numberFields.forEach((field) => { if (raw[field] !== '' && raw[field] !== undefined && raw[field] !== null) out[field] = Number(raw[field]); });
+    numberFields.forEach((field) => {
+        if (raw[field] === '' || raw[field] === undefined || raw[field] === null) return;
+        const n = Number(raw[field]);
+        // -1 means: do not send this parameter. Some models reject temperature/top_p.
+        if (Number.isFinite(n) && n >= 0) out[field] = n;
+    });
     if (raw.max_tokens !== '' && raw.max_tokens !== undefined && raw.max_tokens !== null) out.max_tokens = Math.max(1, Number(raw.max_tokens) || 4096);
     if (raw.max_output_tokens !== '' && raw.max_output_tokens !== undefined && raw.max_output_tokens !== null) out.max_output_tokens = Math.max(1, Number(raw.max_output_tokens) || 4096);
     if (raw.reasoning_effort) out.reasoning_effort = String(raw.reasoning_effort);
@@ -296,8 +334,12 @@ function buildSystemPrompt(ai = {}, context = {}, limits = {}) {
         ? `\n\n长期 Memory / 项目记忆（已按当前连接、项目、标签自动关联；按需参考，不要泄露敏感信息）：\n${relatedMemories.map((m) => `- ${memoryLabel(m)}: ${m.content || ''}`).join('\n')}`
         : '';
     const contextText = formatAiContextForPrompt(context);
-    const envNames = Array.isArray(ai.envVars) ? ai.envVars.filter((e) => e?.enabled !== false && e.name).map((e) => e.name).join(', ') : '';
-    const envText = envNames ? `\n\n可用 AI 环境变量名（值需通过 get_env_var 工具并经敏感确认后读取）：${envNames}` : '';
+    const envItems = Array.isArray(ai.envVars) ? ai.envVars.filter((e) => e?.enabled !== false && e.name && e.visibleToAi === true) : [];
+    const envText = envItems.length ? `\n\n可用 AI 环境变量（仅列出允许暴露给 AI 的条目）：\n${envItems.map((e) => {
+        const desc = e.description ? ` — ${e.description}` : '';
+        const val = e.valueVisibleToAi && e.value ? ` = ${String(e.value).slice(0, 4000)}` : '（值需通过 get_env_var 并经敏感确认读取）';
+        return `- ${e.name}${desc}${val}`;
+    }).join('\n')}` : '';
     const defaultPrompt = String(ai.defaultSystemPrompt || DEFAULT_ZEPHYR_SYSTEM_PROMPT || '').trim();
     const customPrompt = String(ai.systemPrompt || '').trim();
     return [
@@ -371,6 +413,20 @@ function normalizeOpenAiMessage(message = {}) {
         content: typeof message.content === 'string' ? message.content : Array.isArray(message.content) ? message.content.map((p) => p?.text || '').join('\n') : '',
         tool_calls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
     };
+}
+function openAiChatMessages(messages = []) {
+    return messages.map((m) => {
+        if (!Array.isArray(m.content)) return m;
+        return {
+            ...m,
+            content: m.content.map((part) => {
+                if (part?.type === 'text') return { type: 'text', text: String(part.text || '') };
+                if (part?.type === 'image_url') return { type: 'image_url', image_url: part.image_url || {} };
+                if (part?.inlineData) return { type: 'image_url', image_url: { url: `data:${part.inlineData.mimeType || 'image/jpeg'};base64,${part.inlineData.data || ''}`, detail: 'auto' } };
+                return { type: 'text', text: String(part?.text || part?.content || '') };
+            }).filter((part) => part.text || part.image_url?.url),
+        };
+    });
 }
 function toAnthropicTools(tools = []) {
     return tools.map((tool) => ({
@@ -521,7 +577,7 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
 async function callOpenAiCompatible(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
-    const payload = { model, messages, stream: false, ...normalizeOptions(provider, options, 'chat') };
+    const payload = { model, messages: openAiChatMessages(messages), stream: false, ...normalizeOptions(provider, options, 'chat') };
     if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
     const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
@@ -534,7 +590,10 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const normal = anthropicMessages(messages);
     const opts = normalizeOptions(provider, options, 'chat');
-    const payload = { model, system, messages: normal.length ? normal : [{ role: 'user', content: '你好' }], max_tokens: opts.max_tokens || 4096, temperature: opts.temperature, top_p: opts.top_p };
+    const payload = { model, messages: normal.length ? normal : [{ role: 'user', content: '你好' }], max_tokens: opts.max_tokens || 4096 };
+    if (system) payload.system = system;
+    if (opts.temperature !== undefined) payload.temperature = opts.temperature;
+    if (opts.top_p !== undefined) payload.top_p = opts.top_p;
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
     const data = await fetchJson(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
@@ -549,12 +608,18 @@ async function callGemini(provider, model, messages, options = {}, tools = [], s
     const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
     const contents = geminiContents(messages);
     const opts = normalizeOptions(provider, options, 'chat');
-    const generationConfig = { temperature: opts.temperature, topP: opts.top_p, maxOutputTokens: opts.max_tokens };
+    const generationConfig = { maxOutputTokens: opts.max_tokens };
+    if (opts.temperature !== undefined) generationConfig.temperature = opts.temperature;
+    if (opts.top_p !== undefined) generationConfig.topP = opts.top_p;
     Object.keys(generationConfig).forEach((k) => generationConfig[k] === undefined && delete generationConfig[k]);
-    const body = { contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '你好' }] }], generationConfig };
+    const body = { contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '你好' }] }] };
+    if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
     if (system) body.systemInstruction = { parts: [{ text: system }] };
     const geminiTools = toGeminiTools(tools);
-    if (geminiTools.length) body.tools = geminiTools;
+    if (geminiTools.length) {
+        body.tools = geminiTools;
+        body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+    }
     const data = await fetchJson(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), body: JSON.stringify(body), signal });
     const parts = (data.candidates || []).flatMap((c) => c.content?.parts || []);
     const content = parts.filter((p) => p.text).map((p) => p.text || '').join('\n');
@@ -678,10 +743,19 @@ function getSshConnections(deps) {
     return getAllConnections(deps).filter((c) => String(c.protocol || '').toUpperCase() === 'SSH');
 }
 function aiEnvList(ai = {}) {
-    return (Array.isArray(ai.envVars) ? ai.envVars : []).filter((item) => item?.enabled !== false && item.name);
+    return (Array.isArray(ai.envVars) ? ai.envVars : []).filter((item) => item?.enabled !== false && item.name && item.visibleToAi === true);
 }
 function publicEnvVar(item = {}) {
-    return { name: item.name, description: item.description || '', enabled: item.enabled !== false, hasValue: !!item.value, updatedAt: item.updatedAt || null };
+    return {
+        name: item.name,
+        description: item.description || '',
+        enabled: item.enabled !== false,
+        visibleToAi: item.visibleToAi === true,
+        valueVisibleToAi: item.valueVisibleToAi === true,
+        hasValue: !!item.value,
+        valuePreview: item.valueVisibleToAi ? String(item.value || '') : '',
+        updatedAt: item.updatedAt || null,
+    };
 }
 function searchMemories(ai = {}, query = '', scope = '', maxResults = 10, context = {}) {
     const q = String(query || '').toLowerCase();
@@ -1435,8 +1509,8 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
                 modelsPending: !modelList.length,
                 defaultModel: String(p.defaultModel || old.defaultModel || modelList[0] || '').slice(0, 160),
                 options: {
-                    temperature: p.options?.temperature ?? old.options?.temperature ?? 0.7,
-                    top_p: p.options?.top_p ?? old.options?.top_p ?? 1,
+                    temperature: p.options?.temperature ?? old.options?.temperature ?? -1,
+                    top_p: p.options?.top_p ?? old.options?.top_p ?? -1,
                     max_tokens: p.options?.max_tokens ?? old.options?.max_tokens ?? 4096,
                     max_output_tokens: p.options?.max_output_tokens ?? old.options?.max_output_tokens ?? p.options?.max_tokens ?? old.options?.max_tokens ?? 4096,
                     presence_penalty: p.options?.presence_penalty ?? old.options?.presence_penalty ?? 0,
@@ -1496,6 +1570,8 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
                 name: String(item.name || '').trim().replace(/[^A-Za-z0-9_]/g, '_').slice(0, 80),
                 description: String(item.description || '').slice(0, 500),
                 value: item.value === '******' ? (old.value || '') : String(item.value || ''),
+                visibleToAi: item.visibleToAi === true,
+                valueVisibleToAi: item.valueVisibleToAi === true,
                 enabled: item.enabled !== false,
                 updatedAt: Number(item.updatedAt || Date.now()),
             };
@@ -1518,7 +1594,11 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
 function safeAiSettings(ai = {}) {
     const copy = JSON.parse(JSON.stringify(ai || {}));
     if (Array.isArray(copy.providers)) copy.providers.forEach((p) => { if (p.apiKey) p.apiKey = '******'; });
-    if (Array.isArray(copy.envVars)) copy.envVars.forEach((item) => { item.hasValue = !!item.value; if (item.value) item.value = '******'; });
+    if (Array.isArray(copy.envVars)) copy.envVars.forEach((item) => {
+        item.hasValue = !!item.value;
+        item.valuePreview = item.valueVisibleToAi ? String(item.value || '') : '';
+        if (item.value) item.value = '******';
+    });
     return copy;
 }
 function cleanupPendingActions() {

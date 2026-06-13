@@ -2680,8 +2680,8 @@ function openAiProviderModal(provider = null) {
     $('#aiProviderDefaultModel').value = provider?.defaultModel || '';
     $('#aiProviderOrganization').value = provider?.organization || '';
     $('#aiProviderExtraHeaders').value = provider?.extraHeaders || '';
-    $('#aiProviderTemperature').value = provider?.options?.temperature ?? 0.7;
-    $('#aiProviderTopP').value = provider?.options?.top_p ?? 1;
+    $('#aiProviderTemperature').value = provider?.options?.temperature ?? -1;
+    $('#aiProviderTopP').value = provider?.options?.top_p ?? -1;
     $('#aiProviderMaxTokens').value = provider?.options?.max_tokens ?? provider?.options?.max_output_tokens ?? 4096;
     if ($('#aiProviderContextWindow')) $('#aiProviderContextWindow').value = provider?.options?.context?.windowTokens ?? '';
     if ($('#aiProviderUsePreviousResponse')) $('#aiProviderUsePreviousResponse').checked = !!provider?.options?.use_previous_response_id;
@@ -2716,8 +2716,8 @@ async function saveAiProvider(e) {
         models: $('#aiProviderModels').value,
         defaultModel: $('#aiProviderDefaultModel').value.trim(),
         options: {
-            temperature: Number($('#aiProviderTemperature').value),
-            top_p: Number($('#aiProviderTopP').value),
+            temperature: Number($('#aiProviderTemperature').value),  // -1 means omit
+            top_p: Number($('#aiProviderTopP').value),  // -1 means omit
             max_tokens: Number($('#aiProviderMaxTokens').value) || 4096,
             max_output_tokens: Number($('#aiProviderMaxTokens').value) || 4096,
             reasoning_effort: $('#aiProviderReasoningEffort').value,
@@ -2812,20 +2812,33 @@ function resetAiEnvForm() {
     $('#aiEnvValue').type = 'password';
     $('#toggleAiEnvValue').textContent = '👁️';
     $('#aiEnvEnabled').checked = true;
+    $('#aiEnvVisibleToAi').checked = false;
+    $('#aiEnvValueVisibleToAi').checked = false;
 }
 function renderAiEnvList() {
     const list = $('#aiEnvList');
     if (!list) return;
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
-    list.innerHTML = ai.envVars.length ? ai.envVars.map((item) => `<div class="ai-env-item" data-env-id="${escapeHtml(item.id)}"><div><strong>${escapeHtml(item.name || 'UNNAMED')}</strong><span>${item.enabled === false ? '已停用' : '已启用'} · ${item.hasValue || item.value ? '已保存值' : '无值'} · ${escapeHtml(item.description || '')}</span></div><button class="tool-btn" data-ai-edit-env="${escapeHtml(item.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-env="${escapeHtml(item.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无 AI 环境变量。变量值会加密保存，AI 读取时需要敏感确认。</p>';
+    list.innerHTML = ai.envVars.length ? ai.envVars.map((item) => `<div class="ai-env-item" data-env-id="${escapeHtml(item.id)}"><div><strong>${escapeHtml(item.name || 'UNNAMED')}</strong><span>${item.enabled === false ? '已停用' : '已启用'} · ${item.hasValue || item.value ? '已保存值' : '无值'} · ${item.visibleToAi ? 'AI可见' : 'AI屏蔽'}${item.valueVisibleToAi ? '/值可见' : ''} · ${escapeHtml(item.description || '')}</span></div><button class="tool-btn" data-ai-edit-env="${escapeHtml(item.id)}">编辑</button><button class="tool-btn danger" data-ai-delete-env="${escapeHtml(item.id)}">删除</button></div>`).join('') : '<p class="empty-state">暂无 AI 环境变量。变量值会加密保存，AI 读取时需要敏感确认。</p>';
 }
 async function saveAiEnv(e) {
     e.preventDefault();
     const ai = normalizeAiSettings(settings.ai || aiSettingsState || {});
     const id = $('#aiEnvId').value || `env-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const item = { id, name: $('#aiEnvName').value.trim(), description: $('#aiEnvDescription').value.trim(), value: $('#aiEnvValue').value, enabled: $('#aiEnvEnabled').checked, updatedAt: Date.now() };
-    if (!item.name) return toast('请填写变量名');
     const idx = ai.envVars.findIndex((x) => x.id === id);
+    const oldItem = idx >= 0 ? ai.envVars[idx] : {};
+    const rawValue = $('#aiEnvValue').value;
+    const item = {
+        id,
+        name: $('#aiEnvName').value.trim(),
+        description: $('#aiEnvDescription').value.trim(),
+        value: rawValue === '******' ? (oldItem.value || '') : rawValue,
+        enabled: $('#aiEnvEnabled').checked,
+        visibleToAi: $('#aiEnvVisibleToAi').checked,
+        valueVisibleToAi: $('#aiEnvValueVisibleToAi').checked,
+        updatedAt: Date.now(),
+    };
+    if (!item.name) return toast('请填写变量名');
     if (idx >= 0) ai.envVars[idx] = item; else ai.envVars.unshift(item);
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ ai }) });
     resetAiEnvForm(); renderAiSettingsForm(); toast('AI 环境变量已保存');
@@ -4361,7 +4374,11 @@ function updateAiProviderModalHints() {
     if (extra) {
         extra.placeholder = mode === 'responses'
             ? '{"text":{"format":{"type":"json_object"}},"reasoning":{"effort":"medium"}}'
-            : '{"response_format":{"type":"json_object"}}';
+            : type === 'gemini'
+                ? '{"thinkingConfig":{"thinkingBudget":1024}}'
+                : type === 'anthropic'
+                    ? '{"thinking":{"type":"enabled","budget_tokens":1024}}'
+                    : '{"response_format":{"type":"json_object"}}';
     }
 }
 function setupAiAssistant() {
@@ -4379,7 +4396,7 @@ function setupAiAssistant() {
     $('#aiEnvForm')?.addEventListener('submit', saveAiEnv);
     $('#aiEnvResetBtn')?.addEventListener('click', resetAiEnvForm);
     $('#toggleAiEnvValue')?.addEventListener('click', () => { const el = $('#aiEnvValue'); el.type = el.type === 'password' ? 'text' : 'password'; $('#toggleAiEnvValue').textContent = el.type === 'password' ? '👁️' : '🙈'; });
-    $('#aiEnvList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditEnv, del = e.target.dataset.aiDeleteEnv; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.envVars.find((x) => x.id === edit); if (!item) return; $('#aiEnvId').value = item.id; $('#aiEnvName').value = item.name || ''; $('#aiEnvDescription').value = item.description || ''; $('#aiEnvValue').value = item.hasValue || item.value ? '******' : ''; $('#aiEnvEnabled').checked = item.enabled !== false; } if (del) deleteAiEnv(del); });
+    $('#aiEnvList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditEnv, del = e.target.dataset.aiDeleteEnv; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.envVars.find((x) => x.id === edit); if (!item) return; $('#aiEnvId').value = item.id; $('#aiEnvName').value = item.name || ''; $('#aiEnvDescription').value = item.description || ''; $('#aiEnvValue').value = item.hasValue || item.value ? '******' : ''; $('#aiEnvEnabled').checked = item.enabled !== false; $('#aiEnvVisibleToAi').checked = item.visibleToAi === true; $('#aiEnvValueVisibleToAi').checked = item.valueVisibleToAi === true; } if (del) deleteAiEnv(del); });
     $('#aiMemoryForm')?.addEventListener('submit', saveAiMemory);
     $('#aiMemoryResetBtn')?.addEventListener('click', resetAiMemoryForm);
     $('#aiMemoryList')?.addEventListener('click', (e) => { const edit = e.target.dataset.aiEditMemory, del = e.target.dataset.aiDeleteMemory; const ai = normalizeAiSettings(settings.ai || {}); if (edit) { const item = ai.memories.find((x) => x.id === edit); if (!item) return; $('#aiMemoryId').value = item.id; $('#aiMemoryTitle').value = item.title || ''; $('#aiMemoryScope').value = item.scope || item.project || ''; $('#aiMemoryConnectionIds').value = (Array.isArray(item.connectionIds) ? item.connectionIds : splitCsv(item.connectionIds)).join(', '); $('#aiMemoryTags').value = (Array.isArray(item.tags) ? item.tags : splitCsv(item.tags)).join(', '); $('#aiMemoryContent').value = item.content || ''; $('#aiMemoryItemEnabled').checked = item.enabled !== false; } if (del) deleteAiMemory(del); });
