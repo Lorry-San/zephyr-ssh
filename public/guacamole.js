@@ -1,5 +1,5 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-06-09.1-rdp-ai-action-ack';
+const GUAC_CLIENT_VERSION = '2026-06-13.1-mobile-reconnect';
 console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -1308,6 +1308,7 @@ async function connect() {
         requestedRdpWidth = initialTarget.width;
         requestedRdpHeight = initialTarget.height;
         const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode, quality: qualityModes[qualityIdx] });
+        const connectionSeq = rdpReconnectSeq;
         tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
         tunnel.binaryType = 'arraybuffer';
 
@@ -1388,6 +1389,7 @@ async function connect() {
         };
         tunnel.onclose = (event) => {
             parser.flush();
+            if (connectionSeq !== rdpReconnectSeq) return;
             connected = false;
             notifyParentStatus('disconnected');
             if (decoder) { try { decoder.close(); } catch {} decoder = null; }
@@ -1406,7 +1408,7 @@ async function connect() {
             stopRdpAudio();
             stopClipboardAutoSync();
         };
-        tunnel.onerror = () => setStatus('error', `${label} WebSocket 连接失败`);
+        tunnel.onerror = () => { if (connectionSeq === rdpReconnectSeq) setStatus('error', `${label} WebSocket 连接失败`); };
         tunnel.onmessage = async (ev) => {
             if (typeof ev.data === 'string') {
                 try {
@@ -1481,7 +1483,7 @@ async function connect() {
 }
 
 function disconnect(userInitiated = true) {
-    if (tunnel && tunnel.readyState === WebSocket.OPEN) {
+    if (tunnel && tunnel.readyState !== WebSocket.CLOSED) {
         try { tunnel.close(); } catch {}
     }
     tunnel = null;
@@ -1497,6 +1499,19 @@ function disconnect(userInitiated = true) {
         setStatus('disconnected', `${protocolLabel()} 已断开`);
         try { sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params'); } catch {}
     }
+}
+
+function reconnect() {
+    const label = protocolLabel();
+    window.clearTimeout(rdpReconnectTimer);
+    rdpReconnectPending = false;
+    rdpReconnectSeq += 1;
+    rdpLastReconnectAt = Date.now();
+    setStatus('connecting', `正在重连 ${label}...`);
+    stopClipboardAutoSync();
+    stopRdpAudio();
+    disconnect(false);
+    window.setTimeout(() => connect(), 260);
 }
 
 function detectInteractionEnvironment() {
@@ -2949,7 +2964,7 @@ async function performAiRemoteDesktopAction(data = {}) {
     if (control === 'shortcuts') { togglePanel(shortcutsPanel, true); return { ok: true, control, panel: 'shortcuts' }; }
     if (control === 'joystick' || control === 'drag') { togglePanel(joystickPanel, true); updateJoystickHint(); return { ok: true, control, panel: 'joystick' }; }
     if (control === 'ctrl_alt_del' || control === 'cad') { sendCtrlAltDel(); return { ok: true, control: 'ctrl_alt_del' }; }
-    if (control === 'reconnect') { connect(); return { ok: true, control }; }
+    if (control === 'reconnect') { reconnect(); return { ok: true, control }; }
     if (control === 'disconnect') { disconnect(true); notifyParentCloseRequest('ai-disconnect'); return { ok: true, control }; }
     if (control === 'clipboard_read_local') { await readLocalClipboardIntoPanel(); return { ok: true, control }; }
     if (control === 'clipboard_copy_remote') { await copyRemoteClipboardToLocal(); return { ok: true, control }; }
@@ -3079,7 +3094,7 @@ if (qualityBtn) {
     qualityBtn.textContent = rdpQualityText();
     qualityBtn.addEventListener('click', () => activateRdpQualityMode());
 }
-reconnectBtn.addEventListener('click', () => connect());
+reconnectBtn.addEventListener('click', reconnect);
 disconnectBtn.addEventListener('click', () => {
     disconnect(true);
     if (embeddedMode) {
@@ -3098,6 +3113,7 @@ window.addEventListener('message', (event) => {
         stage?.focus?.({ preventScroll: true });
         focusMobileKeyboard();
     }
+    if (event.data.type === 'reconnect-terminal') reconnect();
     if (event.data.type === 'ai-remote-desktop-action') {
         const actionId = String(event.data.actionId || '');
         performAiRemoteDesktopAction(event.data).then((result = {}) => {

@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-09.1-rdp-ai-action-ack';
+const NOVNC_CLIENT_VERSION = '2026-06-13.1-mobile-reconnect';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -273,6 +273,8 @@ function disconnect({ closeTab = false } = {}) {
 
 function reconnect() {
     reconnecting = true;
+    manualClose = false;
+    setStatus('connecting', `正在重连 ${connectionLabel()}...`);
     try { rfb?.disconnect?.(); } catch {}
     window.setTimeout(connect, 260);
 }

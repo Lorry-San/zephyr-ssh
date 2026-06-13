@@ -51,6 +51,7 @@ let dockSwapAnimatingWindows = new Set();
 let dockLaunchAnimatingWindows = new Set();
 let terminalDragState = null;
 let terminalControlLongPress = false;
+const terminalReconnectFallbackTimers = new Map();
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
 let appKeyboardOpen = false;
@@ -1422,6 +1423,51 @@ function closeOtherTerminalWindowMenus(currentButton = null) {
         if (!currentButton || !el.contains(currentButton)) closeTerminalWindowMenu(el);
     });
 }
+function runTerminalWindowActionButton(action) {
+    if (!action) return;
+    const tabId = action.dataset.window;
+    const windowAction = action.dataset.windowAction;
+    applyTerminalWindowPreset(tabId, windowAction);
+    closeTerminalWindowMenu(action.closest('.terminal-window-titlebar'));
+}
+function reconnectTerminalSession(tabId) {
+    const t = getTerminalSession(tabId);
+    if (!t) return false;
+    restoreTerminalSession(tabId);
+    t.status = '重连中';
+    renderTerminalTabs({ rebuildWorkspace: false });
+    let frame = document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(tabId)}"]`);
+    if (!frame?.contentWindow) {
+        renderTerminalTabs({ rebuildWorkspace: true });
+        frame = document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(tabId)}"]`);
+    }
+    if (frame?.contentWindow) {
+        frame.contentWindow.postMessage({ source: 'zephyr-app', type: 'reconnect-terminal', tabId }, '*');
+    } else {
+        t.status = 'connecting';
+        renderTerminalTabs({ rebuildWorkspace: true });
+    }
+    const oldTimer = terminalReconnectFallbackTimers.get(tabId);
+    if (oldTimer) window.clearTimeout(oldTimer);
+    const timer = window.setTimeout(() => {
+        terminalReconnectFallbackTimers.delete(tabId);
+        const session = getTerminalSession(tabId);
+        if (!session || !session.iframe || session.status !== '重连中') return;
+        session.status = 'connecting';
+        const liveFrame = document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(tabId)}"]`);
+        if (liveFrame?.src) {
+            const src = liveFrame.src;
+            liveFrame.src = 'about:blank';
+            window.setTimeout(() => { liveFrame.src = src; }, 30);
+            renderTerminalTabs({ rebuildWorkspace: false });
+            return;
+        }
+        renderTerminalTabs({ rebuildWorkspace: true });
+    }, 2400);
+    terminalReconnectFallbackTimers.set(tabId, timer);
+    toast(`${t.protocol || '终端'} 正在重连...`);
+    return true;
+}
 function getMinimizedKeepAliveSessions() {
     const limit = getConfiguredMinimizedKeepAlive();
     const minimized = terminalTabs
@@ -1607,6 +1653,11 @@ function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
         visualLayout = visualLayout.filter((id) => id !== tabId);
         recentUseStack = recentUseStack.filter((id) => id !== tabId);
         closingTerminalTabs.delete(tabId);
+        const reconnectTimer = terminalReconnectFallbackTimers.get(tabId);
+        if (reconnectTimer) {
+            window.clearTimeout(reconnectTimer);
+            terminalReconnectFallbackTimers.delete(tabId);
+        }
         sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
         sessionStorage.removeItem(`zephyr_guac_params_${tabId}`);
         if (activeTerminalTab === tabId) activeTerminalTab = visualLayout[0] || terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || null;
@@ -1643,8 +1694,7 @@ function applyTerminalWindowPreset(tabId, action) {
     if (action === 'close') { closeTerminalTab(tabId); return; }
     if (action === 'exit-fullscreen') { exitTerminalFullscreen(); return; }
     if (action === 'reconnect-mobile') {
-        const frame = document.querySelector(`#terminalWorkspace .terminal-frame[data-frame="${CSS.escape(tabId)}"]`);
-        frame?.contentWindow?.postMessage({ source: 'zephyr-app', type: 'reconnect-terminal' }, '*');
+        reconnectTerminalSession(tabId);
         return;
     }
     if (action === 'fullscreen') { fullscreenTerminalTab(tabId).catch((err) => toast(err.message)); return; }
@@ -4812,6 +4862,15 @@ function bindEvents() {
         document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
     $('#terminalWorkspace').addEventListener('click', (e) => {
+        const action = e.target.closest('[data-window-action]');
+        if (!action) return;
+        noteTerminalWorkspaceActivity();
+        e.preventDefault();
+        e.stopPropagation();
+        action.dataset.windowActionHandled = '1';
+        runTerminalWindowActionButton(action);
+    }, true);
+    $('#terminalWorkspace').addEventListener('click', (e) => {
         noteTerminalWorkspaceActivity();
         const menuBtn = e.target.closest('[data-window-control]');
         closeOtherTerminalWindowMenus(menuBtn);
@@ -4837,16 +4896,20 @@ function bindEvents() {
         }
         const action = e.target.closest('[data-window-action]');
         if (action) {
+            e.preventDefault();
             e.stopPropagation();
-            const actionTitlebar = action.closest('.terminal-window-titlebar');
-            closeTerminalWindowMenu(actionTitlebar);
-            applyTerminalWindowPreset(action.dataset.window, action.dataset.windowAction);
+            if (!action.dataset.windowActionHandled) runTerminalWindowActionButton(action);
+            delete action.dataset.windowActionHandled;
             return;
         }
         const win = e.target.closest('[data-window]');
         if (win) { activeTerminalTab = win.dataset.window; touchTerminalSession(activeTerminalTab); renderTerminalTabs({ rebuildWorkspace: false }); }
     });
     $('#terminalWorkspace').addEventListener('pointerdown', (e) => {
+        if (e.target.closest('[data-window-action]')) {
+            e.stopPropagation();
+            return;
+        }
         const splitter = e.target.closest('[data-splitter]');
         if (splitter) { startWorkspaceSplitterDrag(e, splitter.dataset.splitter); return; }
         const control = e.target.closest('[data-window-control]');
@@ -4946,6 +5009,11 @@ function bindEvents() {
         }
         const t = terminalTabs.find((x) => x.id === e.data.tabId);
         if (t) {
+            const reconnectTimer = terminalReconnectFallbackTimers.get(t.id);
+            if (reconnectTimer && e.data.status) {
+                window.clearTimeout(reconnectTimer);
+                terminalReconnectFallbackTimers.delete(t.id);
+            }
             t.status = e.data.status || t.status;
             renderTerminalTabs({ rebuildWorkspace: false });
         }
