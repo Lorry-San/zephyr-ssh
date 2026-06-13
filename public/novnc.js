@@ -49,6 +49,7 @@ let manualClose = false;
 let reconnecting = false;
 let mobileComposing = false;
 let lastRemoteClipboard = '';
+let vncLastFrameAt = 0;
 let qualityMode = localStorage.getItem('zephyr-novnc-quality') || 'balanced';
 let fitMode = localStorage.getItem('zephyr-novnc-fit') || 'fit';
 
@@ -189,6 +190,8 @@ function captureCanvasSnapshotForAi(source, options = {}) {
 }
 function getRemoteDesktopSnapshotForAi(options = {}) {
     const source = screen?.querySelector?.('canvas');
+    const frameAt = source ? Date.now() : 0;
+    if (source) vncLastFrameAt = frameAt;
     const shot = captureCanvasSnapshotForAi(source, options);
     return {
         protocol: 'VNC',
@@ -200,6 +203,7 @@ function getRemoteDesktopSnapshotForAi(options = {}) {
         title: connInfo?.textContent || '',
         connected,
         at: Date.now(),
+        frameAt,
         ...shot,
     };
 }

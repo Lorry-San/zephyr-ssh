@@ -81,6 +81,7 @@ let suppressNextLayoutClick = false;
 let lastLocalClipboardText = '';
 let lastLocalClipboardSentAt = 0;
 let pasteShortcutInProgress = false;
+let rdpLastFrameAt = 0;
 let clipboardAutoSyncTimer = 0;
 let lastClipboardReadAttemptAt = 0;
 let rdpFileClipboardSeq = 0;
@@ -325,6 +326,7 @@ function getRemoteDesktopSnapshotForAi(options = {}) {
         title: connInfo?.textContent || '',
         connected,
         at: Date.now(),
+        frameAt: rdpLastFrameAt || 0,
         ...shot,
     };
 }
@@ -898,6 +900,7 @@ class WebCodecsH264Display {
         this.setSize(frame.displayWidth || frame.codedWidth || this.canvas.width || 1280,
                      frame.displayHeight || frame.codedHeight || this.canvas.height || 720);
         this.ctx.drawImage(frame, 0, 0, this.canvas.width, this.canvas.height);
+        rdpLastFrameAt = Date.now();
     }
 }
 

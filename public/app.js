@@ -3497,6 +3497,17 @@ function normalizeAiRemoteDesktopMouseAction(action = {}, tabId = '') {
     };
 }
 function delayMs(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+async function waitForFreshRemoteDesktopSnapshot(tabId = '', { maxWidth = 640, afterFrameAt = 0, timeoutMs = 1800 } = {}) {
+    const deadline = Date.now() + Math.max(300, Number(timeoutMs) || 1800);
+    let shot = null;
+    while (Date.now() < deadline) {
+        shot = readRemoteDesktopSnapshotForAi(tabId, maxWidth);
+        const frameAt = Number(shot?.frameAt || shot?.at || 0);
+        if (shot?.dataUrl && (!afterFrameAt || frameAt > afterFrameAt)) return shot;
+        await delayMs(180);
+    }
+    return shot || readRemoteDesktopSnapshotForAi(tabId, maxWidth);
+}
 function waitForAiRemoteDesktopActionAck(actionId, timeoutMs = 3200) {
     if (!actionId) return Promise.resolve(null);
     return new Promise((resolve) => {
@@ -3591,16 +3602,37 @@ async function performAiUiAction(action = {}) {
             actionId,
             desktopControl: actionForMessage.desktopControl || actionForMessage.control || (a === 'remote_desktop_send_text' ? 'text' : a === 'remote_desktop_mouse' ? 'mouse_click' : ''),
         });
+        const beforeShot = readRemoteDesktopSnapshotForAi(id, action.maxWidth || 640);
+        const beforeFrameAt = Number(beforeShot?.frameAt || beforeShot?.at || 0);
         const ackPromise = waitForAiRemoteDesktopActionAck(actionId, action.ackTimeoutMs || 5200);
         frame.contentWindow.postMessage(msg, '*');
         const ack = await ackPromise;
-        await delayMs(action.waitMs || 650);
-        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 640) };
+        await delayMs(action.waitMs || 450);
+        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: await waitForFreshRemoteDesktopSnapshot(id, { maxWidth: action.maxWidth || 640, afterFrameAt: beforeFrameAt, timeoutMs: action.freshTimeoutMs || 1800 }) };
         if (ack && ack.ok === false) result.clientError = ack.error || 'AI 远程桌面操作失败';
         return result;
     }
     if (a === 'toast') { toast(action.text || 'AI 已执行操作'); return; }
     throw new Error(`未知 UI 动作：${a}`);
+}
+async function handleAiClientCapture(data = {}, { providerId = '', model = '', options = {}, signal = null, original = '', depth = 0 } = {}) {
+    if (!data?.clientCaptureRequired || !data.clientCapture) return false;
+    if (depth > 1) { appendAiMessage('实时截图已连续请求多次，先停止以避免卡住；请根据当前截图继续或手动重试。', 'system'); return true; }
+    const capture = data.clientCapture || {};
+    const targetTabId = String(capture.tabId || capture.targets?.[0]?.tabId || '').trim();
+    const maxWidth = Number(capture.maxWidth || 640) || 640;
+    const shot = await waitForFreshRemoteDesktopSnapshot(targetTabId, { maxWidth, timeoutMs: 2200 });
+    const result = { screenshots: shot ? [shot] : [], message: shot?.dataUrl ? '已实时截取最新远程桌面画面' : (shot?.error || '实时截图不可用'), clientCaptured: true, capturedAt: Date.now() };
+    const trace = { tool: 'remote_desktop_screenshot', args: capture.args || { tabId: targetTabId, maxWidth }, result, status: shot?.dataUrl ? 'success' : 'error' };
+    appendAiMessage(formatAiToolResult(trace), 'trace', { rawHtml: true });
+    const imagePart = shot?.dataUrl ? `\n\n最新远程桌面截图（实时截取）：\n${shot.dataUrl}` : '';
+    const followup = `原问题：${original || '继续处理远程桌面操作'}\n\n你刚才请求实时读取远程桌面画面。前端已在此刻重新截取最新画面，截图结果摘要如下：\n${JSON.stringify(maskAiSensitive(result), null, 2).slice(0, 7000)}${imagePart}\n\n请根据这个最新画面继续判断是否完成，或给出下一步操作。不要说你看到的是旧截图；如果截图不可用，直接说明原因。`;
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: { ...(options || {}), max_tokens: 900, max_output_tokens: 900 }, context: collectAiContext({ includeRemoteDesktopImages: true }) }) });
+    if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
+    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original, depth: depth + 1 });
+    if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() });
+    else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
+    return true;
 }
 async function syncAiToolSideEffects(toolResults = []) {
     for (const r of toolResults) {
@@ -3610,7 +3642,7 @@ async function syncAiToolSideEffects(toolResults = []) {
                 const openedTabId = await openConnection(r.result.connectionId);
                 if (openedTabId) r.result.openedTabId = openedTabId;
                 const protocol = String(r.result?.connection?.protocol || '').toUpperCase();
-                if (['RDP', 'VNC'].includes(protocol)) r.result.remoteDesktopScreenshot = await waitForRemoteDesktopSnapshotForAi(openedTabId, 640, 5200);
+                if (['RDP', 'VNC'].includes(protocol)) r.result.remoteDesktopScreenshot = await waitForFreshRemoteDesktopSnapshot(openedTabId, { maxWidth: 640, timeoutMs: 5200 });
             } catch (err) { toast(err.message || 'AI 打开连接失败'); }
         }
         if (r.result?.uiAction === 'ui_action' && r.result?.action) {
@@ -3657,6 +3689,7 @@ async function continueAiAfterRemoteDesktopClientActions({ original = '', provid
         await syncAiToolSideEffects(next.toolResults);
         appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
     }
+    if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original });
     if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() });
     else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
     return true;
@@ -3694,7 +3727,7 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
     if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
-    if (tool === 'remote_desktop_screenshot') return `读取 ${(result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
+    if (tool === 'remote_desktop_screenshot') return result.clientCaptureRequired ? '请求前端实时截取最新远程桌面画面' : `读取 ${(result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
     if (tool === 'ui_action' && result.clientError) return `操作失败：${result.clientError}`;
     if (tool === 'ui_action' && result.remoteDesktopScreenshot) return `远程桌面操作完成：${result.remoteDesktopScreenshot.protocol || ''} ${result.remoteDesktopScreenshot.status || ''}`;
     if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;
@@ -3775,7 +3808,9 @@ async function sendAiMessage() {
             await syncAiToolSideEffects(data.toolResults);
             appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
         }
-        if (data.confirmationRequired) {
+        if (data.clientCaptureRequired) {
+            await handleAiClientCapture(data, { providerId, model, options, signal: abortController.signal, original: text });
+        } else if (data.confirmationRequired) {
             appendAiConfirmation(data.confirmation, { messages: requestMessages.slice(), providerId, model, options, context });
         } else if (needsRemoteDesktopClientFollowup(data.toolResults || [])) {
             await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal, toolResults: data.toolResults || [] });
@@ -3831,7 +3866,8 @@ async function continueAiAfterConfirmation(id, approve, data) {
         setAiTyping(true);
         const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext({ includeRemoteDesktopImages: false }) }) });
         if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
-        if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
+        if (next.clientCaptureRequired) await handleAiClientCapture(next, { providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), signal: abortController.signal, original });
+        else if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
