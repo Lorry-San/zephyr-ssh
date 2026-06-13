@@ -3269,9 +3269,11 @@ function stopAiResponse() {
 
 function aiIntensityOptions() {
     const v = $('#aiThinkIntensity')?.value || 'balanced';
-    if (v === 'fast') return { temperature: 0.3 };
-    if (v === 'deep') return { temperature: 0.7, reasoning_effort: 'high' };
-    return { temperature: 0.6 };
+    // Keep model sampling params under Provider settings. Some OpenAI reasoning
+    // models (and compatible gateways) reject temperature/top_p entirely.
+    if (v === 'deep') return { reasoning_effort: 'high' };
+    if (v === 'fast') return { reasoning_effort: 'low' };
+    return {};
 }
 function uniq(list = []) { return Array.from(new Set(list.map((x) => String(x || '').trim()).filter(Boolean))); }
 function collectAiContext() {

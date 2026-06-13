@@ -56,6 +56,59 @@ function clipText(value, max = MAX_TOOL_TEXT) {
     return text.length > max ? `${text.slice(0, max)}\n...[已截断 ${text.length - max} 字符]` : text;
 }
 function publicError(err) { return err?.message || String(err || '执行失败'); }
+function unsupportedParameterName(err) {
+    const text = String(err?.message || err || '');
+    const match = text.match(/Unsupported parameter:\s*['"]?([A-Za-z0-9_.-]+)['"]?/i)
+        || text.match(/Unsupported value:\s*['"]?([A-Za-z0-9_.-]+)['"]?/i)
+        || text.match(/(?:Unknown|Unrecognized|Invalid) parameter:\s*['"]?([A-Za-z0-9_.-]+)['"]?/i)
+        || text.match(/['"]([A-Za-z0-9_.-]+)['"]\s+(?:is|does)\s+not\s+support(?:ed)?/i)
+        || text.match(/['"]([A-Za-z0-9_.-]+)['"]\s+is not supported/i);
+    const key = match?.[1] || '';
+    return /^[A-Za-z0-9_.-]{1,80}$/.test(key) ? key : '';
+}
+function removePayloadParameter(payload, param) {
+    if (!payload || !param) return false;
+    const aliases = {
+        topP: ['topP', 'top_p'],
+        top_p: ['top_p', 'topP'],
+        maxOutputTokens: ['maxOutputTokens', 'max_output_tokens', 'max_tokens'],
+        max_output_tokens: ['max_output_tokens', 'maxOutputTokens', 'max_tokens'],
+        max_tokens: ['max_tokens', 'max_output_tokens', 'maxOutputTokens'],
+        reasoning_effort: ['reasoning_effort', 'reasoning'],
+        reasoning: ['reasoning', 'reasoning_effort'],
+    };
+    const names = new Set(aliases[param] || [param]);
+    let removed = false;
+    const removeFrom = (obj) => {
+        if (!obj || typeof obj !== 'object') return;
+        names.forEach((name) => {
+            if (Object.prototype.hasOwnProperty.call(obj, name)) {
+                delete obj[name];
+                removed = true;
+            }
+        });
+    };
+    removeFrom(payload);
+    removeFrom(payload.generationConfig);
+    removeFrom(payload.text);
+    return removed;
+}
+async function fetchJsonWithUnsupportedParamRetry(url, requestOptions = {}, payload = {}, label = 'AI provider') {
+    const body = payload && typeof payload === 'object' ? payload : {};
+    const removed = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+            return await fetchJson(url, { ...requestOptions, body: JSON.stringify(body) });
+        } catch (err) {
+            if (err?.name === 'AbortError') throw err;
+            const param = unsupportedParameterName(err);
+            if (!param || removed.includes(param) || !removePayloadParameter(body, param)) throw err;
+            removed.push(param);
+            console.warn(`[ai-agent] ${label} rejected unsupported parameter '${param}', retrying without it`);
+        }
+    }
+    return fetchJson(url, { ...requestOptions, body: JSON.stringify(body) });
+}
 function throwIfAborted(signal) {
     if (signal?.aborted) throw aiAbortError();
 }
@@ -559,7 +612,7 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
     if (system) payload.instructions = system;
     const responseTools = toResponsesTools(tools);
     if (responseTools.length) { payload.tools = responseTools; payload.tool_choice = 'auto'; }
-    const run = async (body) => fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(body), signal });
+    const run = async (body) => fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal }, body, `${provider.name || provider.type || 'OpenAI Responses'}/${model}`);
     let data;
     try {
         data = await run(payload);
@@ -579,7 +632,7 @@ async function callOpenAiCompatible(provider, model, messages, options = {}, too
     const url = joinApiUrl(base, '/chat/completions');
     const payload = { model, messages: openAiChatMessages(messages), stream: false, ...normalizeOptions(provider, options, 'chat') };
     if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
-    const data = await fetchJson(url, { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
+    const data = await fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'OpenAI Chat'}/${model}`);
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
         return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
     }
@@ -596,7 +649,7 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     if (opts.top_p !== undefined) payload.top_p = opts.top_p;
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
-    const data = await fetchJson(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), body: JSON.stringify(payload), signal });
+    const data = await fetchJsonWithUnsupportedParamRetry(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'Anthropic'}/${model}`);
     const blocks = Array.isArray(data.content) ? data.content : [];
     const content = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
     const toolCalls = blocks.filter((b) => b.type === 'tool_use' && b.name).map((b) => ({ id: b.id || crypto.randomUUID(), type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } }));
@@ -620,7 +673,7 @@ async function callGemini(provider, model, messages, options = {}, tools = [], s
         body.tools = geminiTools;
         body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
-    const data = await fetchJson(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), body: JSON.stringify(body), signal });
+    const data = await fetchJsonWithUnsupportedParamRetry(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), signal }, body, `${provider.name || provider.type || 'Gemini'}/${model}`);
     const parts = (data.candidates || []).flatMap((c) => c.content?.parts || []);
     const content = parts.filter((p) => p.text).map((p) => p.text || '').join('\n');
     const toolCalls = parts.filter((p) => p.functionCall?.name).map((p) => ({ id: crypto.randomUUID(), type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) } }));
