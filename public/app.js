@@ -2563,7 +2563,7 @@ function defaultAiSettings() {
         defaultSystemPrompt: DEFAULT_AI_GUIDANCE_TEXT,
         guidanceVersion: 1,
         codeCompletionEnabled: true,
-        context: { windowTokens: 128000, maxInputChars: 180000, keepMessages: 40, toolResultChars: 60000, memoryItems: 28, maxToolRounds: 0 },
+        context: { windowTokens: 64000, maxInputChars: 90000, keepMessages: 18, toolResultChars: 30000, memoryItems: 16, maxToolRounds: 0 },
         sensitive: { requireConfirmation: true, autoConfirm: false, autoConfirmDelayMs: 2500 },
         permissions: { webSearch: true, webFetch: true, browser: true, remoteExecute: true, fileRead: true, fileWrite: true, codeEdit: true, memory: true, env: true },
         planner: { enabled: true, requirePlanBeforeTools: false },
@@ -2645,10 +2645,10 @@ function renderAiSettingsForm() {
     $('#aiDefaultModel').value = ai.defaultModel || '';
     $('#aiSystemPrompt').value = ai.systemPrompt || '';
     $('#aiCodeCompletionEnabled').checked = ai.codeCompletionEnabled !== false;
-    if ($('#aiContextWindowTokens')) $('#aiContextWindowTokens').value = ai.context?.windowTokens ?? 128000;
-    if ($('#aiContextMaxInputChars')) $('#aiContextMaxInputChars').value = ai.context?.maxInputChars ?? 180000;
-    if ($('#aiContextKeepMessages')) $('#aiContextKeepMessages').value = ai.context?.keepMessages ?? 40;
-    if ($('#aiContextToolResultChars')) $('#aiContextToolResultChars').value = ai.context?.toolResultChars ?? 60000;
+    if ($('#aiContextWindowTokens')) $('#aiContextWindowTokens').value = ai.context?.windowTokens ?? 64000;
+    if ($('#aiContextMaxInputChars')) $('#aiContextMaxInputChars').value = ai.context?.maxInputChars ?? 90000;
+    if ($('#aiContextKeepMessages')) $('#aiContextKeepMessages').value = ai.context?.keepMessages ?? 18;
+    if ($('#aiContextToolResultChars')) $('#aiContextToolResultChars').value = ai.context?.toolResultChars ?? 30000;
     if ($('#aiContextMaxToolRounds')) $('#aiContextMaxToolRounds').value = ai.context?.maxToolRounds ?? 0;
     $('#aiRequireConfirmation').checked = ai.sensitive?.requireConfirmation !== false;
     $('#aiAutoConfirm').checked = !!ai.sensitive?.autoConfirm;
@@ -2686,11 +2686,11 @@ function collectAiSettingsForm() {
         systemPrompt: $('#aiSystemPrompt').value,
         codeCompletionEnabled: $('#aiCodeCompletionEnabled').checked,
         context: {
-            windowTokens: Number($('#aiContextWindowTokens')?.value) || 128000,
-            maxInputChars: Number($('#aiContextMaxInputChars')?.value) || 180000,
-            keepMessages: Number($('#aiContextKeepMessages')?.value) || 40,
-            toolResultChars: Number($('#aiContextToolResultChars')?.value) || 60000,
-            memoryItems: old.context?.memoryItems ?? 28,
+            windowTokens: Number($('#aiContextWindowTokens')?.value) || 64000,
+            maxInputChars: Number($('#aiContextMaxInputChars')?.value) || 90000,
+            keepMessages: Number($('#aiContextKeepMessages')?.value) || 18,
+            toolResultChars: Number($('#aiContextToolResultChars')?.value) || 30000,
+            memoryItems: old.context?.memoryItems ?? 16,
             maxToolRounds: Math.max(0, Number($('#aiContextMaxToolRounds')?.value) || 0),
         },
         sensitive: { requireConfirmation: $('#aiRequireConfirmation').checked, autoConfirm: $('#aiAutoConfirm').checked, autoConfirmDelayMs: Number($('#aiAutoConfirmDelayMs').value) || 0 },
@@ -3272,11 +3272,11 @@ function aiIntensityOptions() {
     // Keep model sampling params under Provider settings. Some OpenAI reasoning
     // models (and compatible gateways) reject temperature/top_p entirely.
     if (v === 'deep') return { reasoning_effort: 'high' };
-    if (v === 'fast') return { reasoning_effort: 'low' };
+    if (v === 'fast') return { reasoning_effort: 'minimal' };
     return {};
 }
 function uniq(list = []) { return Array.from(new Set(list.map((x) => String(x || '').trim()).filter(Boolean))); }
-function collectAiContext() {
+function collectAiContext(options = {}) {
     const active = terminalTabs.find((t) => t.id === activeTerminalTab);
     const ordered = [active, ...terminalTabs.filter((t) => t && t.id !== activeTerminalTab)].filter(Boolean);
     const activeConnectionIds = uniq(ordered.map((t) => t.connectionId));
@@ -3284,7 +3284,7 @@ function collectAiContext() {
     const tags = uniq(contextConnections.flatMap((c) => c.tags || []));
     const view = document.querySelector('.nav-tab.active')?.dataset.view || '';
     const terminalOutputs = collectAiTerminalOutputs();
-    const remoteDesktopSnapshots = collectAiRemoteDesktopSnapshots();
+    const remoteDesktopSnapshots = collectAiRemoteDesktopSnapshots({ includeImage: !!options.includeRemoteDesktopImages });
     return { view, activeChatTitle: aiCurrentSession()?.title || '', activeTerminalTab, activeConnectionIds, connections: contextConnections, tags, terminalOutputs, remoteDesktopSnapshots };
 }
 function browserShotFromResult(result = {}) {
@@ -3431,11 +3431,13 @@ function readRemoteDesktopSnapshotForAi(tabId = '', maxWidth = 960) {
         at: shot?.at || Date.now(),
     };
 }
-function collectAiRemoteDesktopSnapshots() {
-    const ids = uniq([activeTerminalTab, ...visualLayout, ...terminalTabs.filter((t) => !t.minimized).map((t) => t.id), ...terminalTabs.map((t) => t.id)]).slice(0, 5);
-    return ids.map((id, index) => readRemoteDesktopSnapshotForAi(id, index === 0 ? 960 : 720))
+function collectAiRemoteDesktopSnapshots({ includeImage = false } = {}) {
+    const ids = uniq([activeTerminalTab, ...visualLayout, ...terminalTabs.filter((t) => !t.minimized).map((t) => t.id), ...terminalTabs.map((t) => t.id)]).slice(0, includeImage ? 3 : 5);
+    const list = ids.map((id, index) => includeImage ? readRemoteDesktopSnapshotForAi(id, index === 0 ? 640 : 520) : readRemoteDesktopSnapshotForAi(id, 360))
         .filter((item) => item && ['RDP', 'VNC'].includes(item.protocol) && (item.dataUrl || item.error || item.connected))
-        .slice(0, 2);
+        .slice(0, includeImage ? 1 : 2);
+    if (includeImage) return list;
+    return list.map(({ dataUrl, ...item }) => ({ ...item, hasScreenshot: !!dataUrl, dataUrlLength: dataUrl ? dataUrl.length : 0 }));
 }
 function currentOrRequestedRemoteDesktopTab(tabId = '') {
     const requested = String(tabId || '').trim();
@@ -3589,11 +3591,11 @@ async function performAiUiAction(action = {}) {
             actionId,
             desktopControl: actionForMessage.desktopControl || actionForMessage.control || (a === 'remote_desktop_send_text' ? 'text' : a === 'remote_desktop_mouse' ? 'mouse_click' : ''),
         });
-        const ackPromise = waitForAiRemoteDesktopActionAck(actionId, action.ackTimeoutMs || 3600);
+        const ackPromise = waitForAiRemoteDesktopActionAck(actionId, action.ackTimeoutMs || 5200);
         frame.contentWindow.postMessage(msg, '*');
         const ack = await ackPromise;
         await delayMs(action.waitMs || 650);
-        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 960) };
+        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: readRemoteDesktopSnapshotForAi(id, action.maxWidth || 640) };
         if (ack && ack.ok === false) result.clientError = ack.error || 'AI 远程桌面操作失败';
         return result;
     }
@@ -3608,7 +3610,7 @@ async function syncAiToolSideEffects(toolResults = []) {
                 const openedTabId = await openConnection(r.result.connectionId);
                 if (openedTabId) r.result.openedTabId = openedTabId;
                 const protocol = String(r.result?.connection?.protocol || '').toUpperCase();
-                if (['RDP', 'VNC'].includes(protocol)) r.result.remoteDesktopScreenshot = await waitForRemoteDesktopSnapshotForAi(openedTabId, 960, 5200);
+                if (['RDP', 'VNC'].includes(protocol)) r.result.remoteDesktopScreenshot = await waitForRemoteDesktopSnapshotForAi(openedTabId, 640, 5200);
             } catch (err) { toast(err.message || 'AI 打开连接失败'); }
         }
         if (r.result?.uiAction === 'ui_action' && r.result?.action) {
@@ -3647,9 +3649,10 @@ function needsRemoteDesktopClientFollowup(toolResults = []) {
     });
 }
 async function continueAiAfterRemoteDesktopClientActions({ original = '', providerId = '', model = '', options = {}, signal = null, toolResults = [] } = {}) {
-    const sideEffectSummary = JSON.stringify(maskAiSensitive((Array.isArray(toolResults) ? toolResults : []).map((r) => ({ tool: r.tool, args: r.args, result: r.result }))), null, 2).slice(0, 12000);
-    const followup = `原问题：${original}\n\n前端已经尝试执行 RDP/VNC 打开或远程桌面操作。工具/前端执行结果摘要如下：\n${sideEffectSummary || '（无工具结果）'}\n\n现在请基于最新 Zephyr 上下文继续回答；如果结果里有 clientError 或 remoteDesktopAction.ok=false，必须直接告诉用户该操作失败和失败原因，不要声称已经完成；如果原问题涉及远程桌面当前画面，必须先调用 remote_desktop_screenshot 读取画面再描述，不要重复打开同一连接或重复点击刚才的按钮。`;
-    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext() }) });
+    const sideEffectSummary = JSON.stringify(maskAiSensitive((Array.isArray(toolResults) ? toolResults : []).map((r) => ({ tool: r.tool, args: r.args, result: r.result }))), null, 2).slice(0, 7000);
+    const followup = `原问题：${original}\n\n前端已经尝试执行 RDP/VNC 打开或远程桌面操作。工具/前端执行结果摘要如下：\n${sideEffectSummary || '（无工具结果）'}\n\n现在请基于最新 Zephyr 上下文继续回答；如果结果里有 clientError 或 remoteDesktopAction.ok=false，必须直接告诉用户该操作失败和失败原因，不要声称已经完成；如果工具结果已经包含 remoteDesktopScreenshot/截图摘要，可直接依据它回答，不要重复截图；只有缺少截图且原问题确实询问当前画面时，才调用 remote_desktop_screenshot。不要重复打开同一连接或重复点击刚才的按钮。`;
+    const nextOptions = { ...(options || {}), max_tokens: Math.min(Number(options?.max_tokens || 900), 900), max_output_tokens: Math.min(Number(options?.max_output_tokens || 900), 900) };
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: nextOptions, context: collectAiContext({ includeRemoteDesktopImages: false }) }) });
     if (next.toolResults?.length) {
         await syncAiToolSideEffects(next.toolResults);
         appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
@@ -3766,13 +3769,14 @@ async function sendAiMessage() {
         const providerId = $('#aiProviderSelect').value;
         const model = $('#aiModelSelect').value;
         const options = aiIntensityOptions();
-        const data = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: session.messages, providerId, model, options, context }) });
+        const requestMessages = aiMessagesForRequest(session, text);
+        const data = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: requestMessages, providerId, model, options, context }) });
         if (data.toolResults?.length) {
             await syncAiToolSideEffects(data.toolResults);
             appendAiMessage(data.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true });
         }
         if (data.confirmationRequired) {
-            appendAiConfirmation(data.confirmation, { messages: session.messages.slice(), providerId, model, options, context });
+            appendAiConfirmation(data.confirmation, { messages: requestMessages.slice(), providerId, model, options, context });
         } else if (needsRemoteDesktopClientFollowup(data.toolResults || [])) {
             await continueAiAfterRemoteDesktopClientActions({ original: text, providerId, model, options, signal: abortController.signal, toolResults: data.toolResults || [] });
         } else {
@@ -3781,7 +3785,7 @@ async function sendAiMessage() {
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
             if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 回复已中断。', 'system');
-        } else appendAiMessage(`请求失败：${err.message}`, 'system');
+        } else appendAiMessage(`请求失败：${err.message || '请求失败'}\n\n建议：如果这是长对话或 RDP 操作后失败，点“压缩摘要”后重试；我已减少默认上下文和截图大小以降低这类失败。`, 'system');
     } finally {
         const isCurrent = aiActiveAbortController === abortController;
         if (isCurrent) aiActiveAbortController = null;
@@ -3825,7 +3829,7 @@ async function continueAiAfterConfirmation(id, approve, data) {
     aiActiveAbortController = abortController;
     try {
         setAiTyping(true);
-        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext() }) });
+        const next = await api('/api/ai/chat', { method: 'POST', signal: abortController.signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options || aiIntensityOptions(), context: collectAiContext({ includeRemoteDesktopImages: false }) }) });
         if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true }); }
         if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId: pending.providerId, model: pending.model, options: pending.options, context: pending.context });
         else appendAiMessage(next.message?.content || '执行完成。', 'assistant', { meta: [next.provider?.name, next.model].filter(Boolean).join(' / ') });
@@ -3880,6 +3884,16 @@ async function resolveAiConfirmation(id, approve) {
     }
 }
 function autoResizeAiInput(textarea) { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(140, textarea.scrollHeight)}px`; }
+function aiMessagesForRequest(session, latestText = '') {
+    const messages = Array.isArray(session?.messages) ? session.messages : [];
+    const latest = String(latestText || messages[messages.length - 1]?.content || '');
+    const keep = messages
+        .filter((m) => ['user', 'assistant'].includes(String(m.role || '')) && !/^请求失败[:：]/.test(String(m.content || '')))
+        .slice(-12);
+    const last = keep[keep.length - 1];
+    if (latest && (!last || last.role !== 'user' || String(last.content || '') !== latest)) keep.push({ role: 'user', content: latest });
+    return keep;
+}
 function startAiPanelWatchdog() {
     window.clearInterval(aiPanelWatchdogTimer);
     aiPanelWatchdogTimer = window.setInterval(() => {

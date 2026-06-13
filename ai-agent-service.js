@@ -6,6 +6,7 @@ const { browserService, SHOT_DIR } = require('./ai-browser-service');
 const { DEFAULT_ZEPHYR_SYSTEM_PROMPT, DEFAULT_ZEPHYR_SKILLS } = require('./ai-defaults');
 
 const DEFAULT_TOOL_CALL_LIMIT = 0;
+const DEFAULT_AI_CONTEXT = { windowTokens: 64000, maxInputChars: 90000, keepMessages: 18, toolResultChars: 30000, memoryItems: 16, maxToolRounds: 0 };
 const MAX_TOOL_TEXT = 60 * 1024;
 const MAX_REMOTE_READ = 512 * 1024;
 const MAX_REMOTE_WRITE = 1024 * 1024;
@@ -122,14 +123,14 @@ function normalizeContextLimits(ai = {}, provider = {}) {
     const global = ai.context || {};
     const providerContext = provider.options?.context || {};
     const raw = { ...global, ...providerContext };
-    const windowTokens = clampNumber(raw.windowTokens, 1024, 1000000, 128000);
+    const windowTokens = clampNumber(raw.windowTokens, 1024, 1000000, DEFAULT_AI_CONTEXT.windowTokens);
     return {
         windowTokens,
-        keepMessages: clampNumber(raw.keepMessages, 4, 160, 40),
-        maxInputChars: clampNumber(raw.maxInputChars || Math.floor(windowTokens * 3.2), 8000, 1200000, 180000),
-        perMessageChars: clampNumber(raw.perMessageChars || Math.floor(windowTokens * 1.2), 1000, 300000, 60000),
-        toolResultChars: clampNumber(raw.toolResultChars, 1000, 240000, 60000),
-        memoryItems: clampNumber(raw.memoryItems, 0, 80, 28),
+        keepMessages: clampNumber(raw.keepMessages, 4, 160, DEFAULT_AI_CONTEXT.keepMessages),
+        maxInputChars: clampNumber(raw.maxInputChars || Math.floor(windowTokens * 2.4), 8000, 1200000, DEFAULT_AI_CONTEXT.maxInputChars),
+        perMessageChars: clampNumber(raw.perMessageChars || Math.floor(windowTokens * 0.85), 1000, 300000, 36000),
+        toolResultChars: clampNumber(raw.toolResultChars, 1000, 240000, DEFAULT_AI_CONTEXT.toolResultChars),
+        memoryItems: clampNumber(raw.memoryItems, 0, 80, DEFAULT_AI_CONTEXT.memoryItems),
     };
 }
 
@@ -170,7 +171,7 @@ function sanitizeMessages(messages = [], limits = {}) {
     const perMessageChars = clampNumber(limits.perMessageChars, 1000, 300000, 60000);
     const maxInputChars = clampNumber(limits.maxInputChars, 8000, 1200000, 180000);
     const raw = (Array.isArray(messages) ? messages : [])
-        .filter((item) => !['trace'].includes(String(item?.role || '').toLowerCase()))
+        .filter((item) => !['trace', 'system'].includes(String(item?.role || '').toLowerCase()))
         .slice(-keepMessages)
         .map((item) => ({ role: normalizeRole(item.role), content: normalizeMultimodalContent(item.content || '', { ...limits, perMessageChars }) }))
         .filter((item) => item.content || item.role === 'assistant');
@@ -432,7 +433,7 @@ function toolDefinitions(ai = {}) {
     tools.push({ type: 'function', function: { name: 'snippet_delete', description: '删除代码片段。', parameters: { type: 'object', properties: { snippetId: { type: 'string' } }, required: ['snippetId'] } } });
     tools.push({ type: 'function', function: { name: 'terminal_read_output', description: '读取用户当前 Zephyr SSH 终端输出快照（屏幕/scrollback 文本、当前输入框内容、连接信息）。当用户问“终端里显示什么/刚才命令输出/当前屏幕结果”时优先调用。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxChars: { type: 'number' }, allVisible: { type: 'boolean' } } } } });
     tools.push({ type: 'function', function: { name: 'remote_desktop_screenshot', description: '读取用户当前 Zephyr RDP/VNC 远程桌面画面快照（JPEG 截图）。RDP/VNC 没有文本终端输出，用本工具查看远程桌面当前画面。返回画面尺寸、状态和截图数据。', parameters: { type: 'object', properties: { tabId: { type: 'string' }, maxWidth: { type: 'number' } } } } });
-    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击 SSH 终端工具栏、以及点击/调整 RDP/VNC 远程桌面工具栏（画质、视图/适应、缩放、剪贴板、键盘、快捷键、视区/拖拽、Ctrl+Alt+Del、重连、断开、发送快捷键/文本）。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'remote_desktop_toolbar', 'remote_desktop_send_text', 'remote_desktop_mouse', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect', 'quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote'] }, desktopControl: { type: 'string', enum: ['quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'reconnect', 'disconnect', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote', 'shortcut', 'text', 'mouse_click'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' }, maxWidth: { type: 'number' }, qualityMode: { type: 'string', enum: ['balanced', 'performance', 'quality'] }, fitMode: { type: 'string', enum: ['fit', '1:1', '16:9', '4:3', 'original', 'drag'] }, zoomPercent: { type: 'number' }, sequence: { type: 'string' }, paste: { type: 'boolean' }, x: { type: 'number' }, y: { type: 'number' }, button: { type: 'number' }, coordinateSpace: { type: 'string', enum: ['remote', 'screenshot'] } }, required: ['action'] } } });
+    tools.push({ type: 'function', function: { name: 'ui_action', description: '在用户当前 Zephyr 页面执行可见 UI 代操作：切换视图、打开新增/编辑连接弹窗、打开/全屏/排列终端、点击 SSH 终端工具栏、以及点击/调整 RDP/VNC 远程桌面工具栏（画质、视图/适应、缩放、剪贴板、键盘、快捷键、视区/拖拽、Ctrl+Alt+Del、重连、断开、发送快捷键/文本）。RDP/VNC 动作执行后通常会返回 remoteDesktopScreenshot，可直接依据该截图继续，不要重复截图。打开远程网页优先 shortcut:win 或 ctrl-l + remote_desktop_send_text 粘贴 URL。terminal_send_input 且 run=true 会像用户按发送一样执行命令，需要确认；run=false 只填入输入框。不要用于安全/数据管理设置页。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['switch_view', 'open_add_connection', 'open_edit_connection', 'terminal_fullscreen', 'terminal_exit_fullscreen', 'terminal_window_action', 'terminal_toolbar', 'terminal_send_input', 'remote_desktop_toolbar', 'remote_desktop_send_text', 'remote_desktop_mouse', 'toast'] }, view: { type: 'string', enum: ['dashboard', 'terminal', 'remote', 'settings'] }, settingsSection: { type: 'string', enum: ['ai', 'appearance', 'terminal', 'network', 'profile', 'snippets'] }, connectionId: { type: 'string' }, tabId: { type: 'string' }, windowAction: { type: 'string', enum: ['fullscreen', 'exit-fullscreen', 'left-half', 'right-half', 'right-top', 'right-bottom', 'left-two-thirds', 'right-two-thirds', 'minimize', 'close', 'reconnect-mobile'] }, control: { type: 'string', enum: ['file', 'info', 'docker', 'snippet', 'shortcut', 'copy', 'paste', 'theme', 'wterm-theme', 'reconnect', 'disconnect', 'quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote'] }, desktopControl: { type: 'string', enum: ['quality', 'fit', 'zoom', 'clipboard', 'keyboard', 'shortcuts', 'joystick', 'drag', 'ctrl_alt_del', 'reconnect', 'disconnect', 'clipboard_send', 'clipboard_read_local', 'clipboard_copy_remote', 'shortcut', 'text', 'mouse_click'] }, text: { type: 'string' }, run: { type: 'boolean' }, maxChars: { type: 'number' }, maxWidth: { type: 'number' }, qualityMode: { type: 'string', enum: ['balanced', 'performance', 'quality'] }, fitMode: { type: 'string', enum: ['fit', '1:1', '16:9', '4:3', 'original', 'drag'] }, zoomPercent: { type: 'number' }, sequence: { type: 'string' }, paste: { type: 'boolean' }, x: { type: 'number' }, y: { type: 'number' }, button: { type: 'number' }, coordinateSpace: { type: 'string', enum: ['remote', 'screenshot'] } }, required: ['action'] } } });
     if (p.webSearch !== false) tools.push({ type: 'function', function: { name: 'web_search', description: '在网页上搜索实时信息，返回标题、链接和摘要。', parameters: { type: 'object', properties: { query: { type: 'string' }, maxResults: { type: 'number' } }, required: ['query'] } } });
     if (p.webFetch !== false) tools.push({ type: 'function', function: { name: 'fetch_url', description: '读取一个网页 URL 的正文文本。', parameters: { type: 'object', properties: { url: { type: 'string' }, maxChars: { type: 'number' } }, required: ['url'] } } });
     if (p.browser !== false) {
@@ -1619,11 +1620,11 @@ function normalizeAiSettingsInput(currentAi = {}, ai = {}) {
     next.defaultSystemPrompt = String(pick('defaultSystemPrompt', currentAi.defaultSystemPrompt || DEFAULT_ZEPHYR_SYSTEM_PROMPT) || DEFAULT_ZEPHYR_SYSTEM_PROMPT).slice(0, 40000);
     const contextIn = { ...(currentAi.context || {}), ...(Object.prototype.hasOwnProperty.call(partial, 'context') ? (partial.context || {}) : {}) };
     next.context = {
-        windowTokens: clampNumber(contextIn.windowTokens, 1024, 1000000, 128000),
-        maxInputChars: clampNumber(contextIn.maxInputChars, 8000, 1200000, 180000),
-        keepMessages: clampNumber(contextIn.keepMessages, 4, 160, 40),
-        toolResultChars: clampNumber(contextIn.toolResultChars, 1000, 240000, 60000),
-        memoryItems: clampNumber(contextIn.memoryItems, 0, 80, 28),
+        windowTokens: clampNumber(contextIn.windowTokens, 1024, 1000000, DEFAULT_AI_CONTEXT.windowTokens),
+        maxInputChars: clampNumber(contextIn.maxInputChars, 8000, 1200000, DEFAULT_AI_CONTEXT.maxInputChars),
+        keepMessages: clampNumber(contextIn.keepMessages, 4, 160, DEFAULT_AI_CONTEXT.keepMessages),
+        toolResultChars: clampNumber(contextIn.toolResultChars, 1000, 240000, DEFAULT_AI_CONTEXT.toolResultChars),
+        memoryItems: clampNumber(contextIn.memoryItems, 0, 80, DEFAULT_AI_CONTEXT.memoryItems),
         maxToolRounds: clampNumber(contextIn.maxToolRounds, 0, 100000, DEFAULT_TOOL_CALL_LIMIT),
     };
     next.guidanceVersion = Math.max(1, Number(pick('guidanceVersion', currentAi.guidanceVersion) || 1));

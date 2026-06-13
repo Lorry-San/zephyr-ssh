@@ -292,7 +292,7 @@ function setRdpScaleZoom(nextZoom, { preserveViewport = true } = {}) {
 function captureCanvasSnapshotForAi(source, options = {}) {
     if (!source || !source.width || !source.height) return { error: '当前远程桌面画面还没有可读取的 canvas' };
     const maxWidth = Math.max(320, Math.min(1600, Number(options.maxWidth) || 960));
-    const quality = Math.max(0.35, Math.min(0.9, Number(options.quality) || 0.68));
+    const quality = Math.max(0.28, Math.min(0.86, Number(options.quality) || 0.55));
     const scale = Math.min(1, maxWidth / Math.max(1, source.width));
     const width = Math.max(1, Math.round(source.width * scale));
     const height = Math.max(1, Math.round(source.height * scale));
@@ -2460,6 +2460,10 @@ async function runShortcut(name) {
         backspace: () => sendKeyDownUp(KEY.BACKSPACE, 'Backspace'),
         win: () => sendKeyDownUp(KEY.SUPER, 'Win'),
         'alt-tab': () => sendKeyCombo([KEY.ALT, KEY.TAB], 'Alt+Tab'),
+        'ctrl-l': () => sendKeyCombo([KEY.CTRL, ctrlChar('l')], 'Ctrl+L'),
+        'ctrl-r': () => sendKeyCombo([KEY.CTRL, ctrlChar('r')], 'Ctrl+R'),
+        'ctrl-v': () => sendKeyCombo([KEY.CTRL, ctrlChar('v')], 'Ctrl+V'),
+        'win-r': () => sendKeyCombo([KEY.SUPER, ctrlChar('r')], 'Win+R'),
         up: () => sendKeyDownUp(KEY.UP, '↑'),
         down: () => sendKeyDownUp(KEY.DOWN, '↓'),
         left: () => sendKeyDownUp(KEY.LEFT, '←'),
