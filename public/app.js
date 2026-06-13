@@ -3691,7 +3691,7 @@ async function handleAiClientCapture(data = {}, { providerId = '', model = '', o
     appendAiMessage(formatAiToolResult(trace), 'trace', { rawHtml: true, sessionId: targetSessionId });
     const imagePart = shot?.dataUrl ? `\n\n最新远程桌面截图（实时截取）：\n${shot.dataUrl}` : '';
     const followup = `原问题：${original || '继续处理远程桌面操作'}\n\n你刚才请求实时读取远程桌面画面。前端已在此刻重新截取最新画面，截图结果摘要如下：\n${JSON.stringify(maskAiSensitive(result), null, 2).slice(0, 7000)}${imagePart}\n\n请根据这个最新画面继续判断是否完成，或给出下一步操作。不要说你看到的是旧截图；如果截图不可用，直接说明原因。`;
-    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: { ...(options || {}), max_tokens: 900, max_output_tokens: 900 }, context: collectAiContext({ includeRemoteDesktopImages: true, sessionId: targetSessionId }) }) });
+    const next = await api('/api/ai/chat', { method: 'POST', signal, body: JSON.stringify({ messages: [{ role: 'user', content: followup }], providerId, model, options: { ...(options || {}), max_tokens: 900, max_output_tokens: 900 }, context: collectAiContext({ includeRemoteDesktopImages: false, sessionId: targetSessionId }) }) });
     if (next.toolResults?.length) { await syncAiToolSideEffects(next.toolResults, { sessionId: targetSessionId }); appendAiMessage(next.toolResults.map(formatAiToolResult).join(''), 'trace', { rawHtml: true, sessionId: targetSessionId }); }
     if (next.clientCaptureRequired) return handleAiClientCapture(next, { providerId, model, options, signal, original, depth: depth + 1, sessionId: targetSessionId });
     if (next.confirmationRequired) appendAiConfirmation(next.confirmation, { messages: [{ role: 'user', content: followup }], providerId, model, options, context: collectAiContext({ sessionId: targetSessionId }), sessionId: targetSessionId });
@@ -3792,7 +3792,11 @@ function summarizeAiToolResult(tool, result = {}) {
     if (tool === 'plan_delete') return `已删除计划 ${result.planId || ''}`;
     if (tool === 'open_connection') return result.message || `打开连接 ${result.connection?.name || result.connectionId || ''}`;
     if (tool === 'terminal_read_output') return `读取 ${(result.terminalOutputs || []).length || (result.terminalOutput ? 1 : 0)} 个终端输出快照`;
-    if (tool === 'remote_desktop_screenshot') return result.clientCaptureRequired ? '请求前端实时截取最新远程桌面画面' : `读取 ${(result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0)} 个远程桌面画面快照`;
+    if (tool === 'remote_desktop_screenshot') {
+        if (result.clientCaptureRequired) return '请求前端实时截取最新远程桌面画面';
+        const count = (result.screenshots || []).length || (result.remoteDesktopScreenshots || []).length || (result.screenshot ? 1 : 0);
+        return count ? `读取 ${count} 个远程桌面画面快照，已交给 AI 继续分析` : (result.message || '没有可读取的远程桌面画面快照');
+    }
     if (tool === 'ui_action' && result.clientError) return `操作失败：${result.clientError}`;
     if (tool === 'ui_action' && result.remoteDesktopScreenshot) return `远程桌面操作完成：${result.remoteDesktopScreenshot.protocol || ''} ${result.remoteDesktopScreenshot.status || ''}`;
     if (tool === 'ui_action' && result.terminalOutput) return `终端输出 ${result.terminalOutput.lineCount || 0} 行${result.terminalOutput.truncated ? '（已截断）' : ''}`;

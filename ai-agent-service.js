@@ -1565,6 +1565,11 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
                 .filter((r) => ['RDP', 'VNC'].includes(String(r.protocol || '').toUpperCase()) && (r.connected || r.hasScreenshot || r.dataUrl || r.error))
                 .slice(0, 3)
                 .map((r) => ({ tabId: r.tabId || '', protocol: r.protocol || '', title: r.title || r.name || '', host: r.host || '', port: r.port || '', status: r.status || '', connected: !!r.connected, width: r.width || 0, height: r.height || 0, originalWidth: r.originalWidth || 0, originalHeight: r.originalHeight || 0, at: r.at || 0 }));
+            const screenshots = (tabId ? raw.filter((r) => String(r.tabId || '') === tabId) : raw)
+                .filter((r) => ['RDP', 'VNC'].includes(String(r.protocol || '').toUpperCase()) && r.dataUrl)
+                .slice(0, 1)
+                .map((r) => ({ ...r, hasScreenshot: true }));
+            if (screenshots.length) return { screenshots, targets, clientCaptureRequired: false, tabId, maxWidth, message: '已读取当前上下文中的最新远程桌面画面' };
             if (!targets.length) return { screenshots: [], clientCaptureRequired: false, message: '当前没有可读取的 RDP/VNC 远程桌面画面；请先打开 RDP 或 VNC 连接。' };
             return { screenshots: [], targets, clientCaptureRequired: true, tabId, maxWidth, message: '需要前端实时截取最新远程桌面画面' };
         }
