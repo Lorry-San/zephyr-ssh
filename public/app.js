@@ -3670,8 +3670,8 @@ async function performAiUiAction(action = {}) {
         const ackPromise = waitForAiRemoteDesktopActionAck(actionId, action.ackTimeoutMs || 5200);
         frame.contentWindow.postMessage(msg, '*');
         const ack = await ackPromise;
-        await delayMs(action.waitMs || 450);
-        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: await waitForFreshRemoteDesktopSnapshot(id, { maxWidth: action.maxWidth || 640, afterFrameAt: beforeFrameAt, timeoutMs: action.freshTimeoutMs || 1800 }) };
+        await delayMs(action.waitMs ?? 2000);
+        const result = { remoteDesktopAction: ack || { ok: false, timeout: true }, remoteDesktopScreenshot: await waitForFreshRemoteDesktopSnapshot(id, { maxWidth: action.maxWidth || 640, afterFrameAt: beforeFrameAt, timeoutMs: action.freshTimeoutMs || 2600 }) };
         if (ack && ack.ok === false) result.clientError = ack.error || 'AI 远程桌面操作失败';
         return result;
     }
@@ -3681,7 +3681,7 @@ async function performAiUiAction(action = {}) {
 async function handleAiClientCapture(data = {}, { providerId = '', model = '', options = {}, signal = null, original = '', depth = 0, sessionId = '' } = {}) {
     const targetSessionId = sessionId || aiCurrentSessionId;
     if (!data?.clientCaptureRequired || !data.clientCapture) return false;
-    if (depth > 1) { appendAiMessage('实时截图已连续请求多次，先停止以避免卡住；请根据当前截图继续或手动重试。', 'system', { sessionId: targetSessionId }); return true; }
+    if (depth > 0) await delayMs(2000);
     const capture = data.clientCapture || {};
     const targetTabId = String(capture.tabId || capture.targets?.[0]?.tabId || '').trim();
     const maxWidth = Number(capture.maxWidth || 640) || 640;
