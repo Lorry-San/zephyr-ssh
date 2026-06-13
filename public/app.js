@@ -3077,8 +3077,13 @@ function showAiMessageMenu(messageEl, x, y) {
     if (!messageEl) return;
     const menu = ensureAiMessageMenu();
     const role = messageEl.dataset.aiMessageRole || '';
+    const selection = window.getSelection?.();
+    const selectedText = selection && !selection.isCollapsed && messageEl.contains(selection.anchorNode) && messageEl.contains(selection.focusNode)
+        ? selection.toString()
+        : '';
     aiMessageMenuState.index = Number(messageEl.dataset.aiMessageIndex || -1);
     aiMessageMenuState.text = messageEl.dataset.aiMessageText || '';
+    aiMessageMenuState.selectedText = selectedText;
     aiMessageMenuState.element = messageEl;
     menu.querySelectorAll('[data-ai-msg-action="edit"],[data-ai-msg-action="regen"]').forEach((btn) => { btn.hidden = role !== 'user'; });
     menu.classList.remove('hidden', 'closing');
@@ -3118,7 +3123,13 @@ function regenerateAiMessageFromMenu() {
 }
 function handleAiMessageMenuAction(action = '') {
     const a = String(action || '');
-    if (a === 'copy') aiCopyText(aiMessageMenuState.text || '');
+    if (a === 'copy') {
+        const selection = window.getSelection?.();
+        const selectedText = selection && !selection.isCollapsed && aiMessageMenuState.element?.contains(selection.anchorNode) && aiMessageMenuState.element?.contains(selection.focusNode)
+            ? selection.toString()
+            : (aiMessageMenuState.selectedText || '');
+        aiCopyText(selectedText || aiMessageMenuState.text || '');
+    }
     if (a === 'edit') editAiMessageFromMenu();
     if (a === 'regen') regenerateAiMessageFromMenu();
     if (a === 'select') selectAiMessageText(aiMessageMenuState.element);
@@ -4420,7 +4431,7 @@ function setupAiAssistant() {
     $('#aiSendBtn')?.addEventListener('click', () => { if (aiActiveAbortController) stopAiResponse(); else sendAiMessage(); });
     $('#aiUserInput')?.addEventListener('input', (e) => { autoResizeAiInput(e.target); updateAiInputPreview(); });
     $('#aiUserInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAiMessage(); } });
-    $('#aiMarkdownPreviewBtn')?.addEventListener('click', toggleAiMarkdownPreview);
+    // Markdown preview toggle removed; messages are rendered as Markdown directly.
     $('#aiClearChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); s.messages = []; renderAiChat(); });
     $('#aiCompressChatBtn')?.addEventListener('click', () => { const s = aiCurrentSession(); if (s.messages.length > 2) s.messages = [{ role: 'system', content: `历史已压缩：此前共有 ${s.messages.length} 条消息。` }, s.messages[s.messages.length - 1]]; renderAiChat(); });
     $('#aiProviderSelect')?.addEventListener('change', renderAiHeaderSelectors);
