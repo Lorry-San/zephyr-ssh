@@ -308,8 +308,15 @@ function joinApiUrl(base, suffix) {
     if (/\/chat\/completions$/i.test(raw) || /\/responses$/i.test(raw) || /\/messages$/i.test(raw) || /:generateContent$/i.test(raw)) return raw;
     return `${raw}${suffix}`;
 }
-function providerType(provider = {}) { return String(provider.type || 'openai-compatible').toLowerCase(); }
-function providerSupportsTools(provider = {}) { return ['openai-compatible', 'anthropic', 'gemini'].includes(providerType(provider)); }
+function providerType(provider = {}) {
+    const raw = String(provider.type || '').toLowerCase();
+    const base = String(provider.baseUrl || '').toLowerCase();
+    if (['anthropic', 'claude'].includes(raw) || base.includes('anthropic.com')) return 'anthropic';
+    if (['gemini', 'google', 'google-gemini'].includes(raw) || base.includes('generativelanguage.googleapis.com')) return 'gemini';
+    if (['openai', 'openai-compatible'].includes(raw)) return raw;
+    return raw || 'openai-compatible';
+}
+function providerSupportsTools(provider = {}) { return ['openai-compatible', 'openai', 'anthropic', 'gemini'].includes(providerType(provider)); }
 function selectProvider(ai = {}, body = {}) {
     const providers = Array.isArray(ai.providers) ? ai.providers.filter((p) => p && p.enabled !== false) : [];
     if (!providers.length) throw new Error('AI 助理尚未配置可用模型供应商');
@@ -328,7 +335,7 @@ function providerHeaders(provider = {}, contentType = 'application/json') {
     if (type === 'anthropic') {
         if (provider.apiKey) headers['x-api-key'] = provider.apiKey;
         headers['anthropic-version'] = provider.anthropicVersion || '2023-06-01';
-    } else if (provider.apiKey) {
+    } else if (type !== 'gemini' && provider.apiKey) {
         headers.Authorization = `Bearer ${provider.apiKey}`;
     }
     if (provider.organization) {
@@ -346,7 +353,7 @@ async function listProviderModels(provider = {}) {
                 return (data.data || []).map((m) => ({ id: m.id, name: m.display_name || m.id })).filter((m) => m.id);
             } catch (_) {}
         }
-        return ['claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest'].map((id) => ({ id }));
+        return ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5'].map((id) => ({ id }));
     }
     if (type === 'gemini') {
         const base = (provider.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
@@ -469,16 +476,19 @@ function normalizeOpenAiMessage(message = {}) {
 }
 function openAiChatMessages(messages = []) {
     return messages.map((m) => {
-        if (!Array.isArray(m.content)) return m;
-        return {
-            ...m,
-            content: m.content.map((part) => {
+        const role = normalizeRole(m.role);
+        const content = Array.isArray(m.content)
+            ? m.content.map((part) => {
                 if (part?.type === 'text') return { type: 'text', text: String(part.text || '') };
                 if (part?.type === 'image_url') return { type: 'image_url', image_url: part.image_url || {} };
                 if (part?.inlineData) return { type: 'image_url', image_url: { url: `data:${part.inlineData.mimeType || 'image/jpeg'};base64,${part.inlineData.data || ''}`, detail: 'auto' } };
                 return { type: 'text', text: String(part?.text || part?.content || '') };
-            }).filter((part) => part.text || part.image_url?.url),
-        };
+            }).filter((part) => part.text || part.image_url?.url)
+            : String(m.content || '');
+        const out = { role, content };
+        if (role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) out.tool_calls = m.tool_calls;
+        if (role === 'tool') out.tool_call_id = m.tool_call_id || m.name || 'tool';
+        return out;
     });
 }
 function closeJsonSchema(schema = {}) {
@@ -501,12 +511,30 @@ function openAiChatTools(tools = []) {
         },
     })).filter((tool) => tool.function?.name);
 }
+function anthropicSchema(schema = {}) {
+    if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) return schema.map((item) => anthropicSchema(item));
+    const out = { ...schema };
+    if (out.properties && typeof out.properties === 'object') out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, anthropicSchema(v)]));
+    if (out.items) out.items = anthropicSchema(out.items);
+    if (out.anyOf) out.anyOf = out.anyOf.map((item) => anthropicSchema(item));
+    if (out.oneOf) out.oneOf = out.oneOf.map((item) => anthropicSchema(item));
+    if ((out.type === 'object' || out.properties) && out.additionalProperties === undefined) out.additionalProperties = false;
+    return out;
+}
 function toAnthropicTools(tools = []) {
     return tools.map((tool) => ({
         name: tool.function?.name,
         description: tool.function?.description || '',
-        input_schema: tool.function?.parameters || { type: 'object', properties: {} },
+        input_schema: anthropicSchema(tool.function?.parameters || { type: 'object', properties: {} }),
+        strict: true,
     })).filter((tool) => tool.name);
+}
+function anthropicEffort(value = '') {
+    const v = String(value || '').toLowerCase();
+    if (['low', 'medium', 'high', 'xhigh', 'max'].includes(v)) return v;
+    if (v === 'minimal' || v === 'none') return 'low';
+    return '';
 }
 function anthropicMessages(messages = []) {
     const out = [];
@@ -516,6 +544,10 @@ function anthropicMessages(messages = []) {
             if (Array.isArray(m.content)) out.push({ role: 'user', content: normalizeAnthropicUserContent(m.content) });
             else out.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id || m.name || 'tool', content: String(m.content || '') }] });
         } else if (m.role === 'assistant') {
+            if (Array.isArray(m.parts) && m.parts.length) {
+                out.push({ role: 'assistant', content: m.parts });
+                continue;
+            }
             const content = [];
             if (m.content) content.push({ type: 'text', text: String(m.content) });
             (m.tool_calls || []).forEach((call) => {
@@ -531,10 +563,21 @@ function anthropicMessages(messages = []) {
 }
 function geminiSchema(schema = {}) {
     if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) return schema.map((item) => geminiSchema(item));
     const out = { ...schema };
-    if (typeof out.type === 'string') out.type = out.type.toUpperCase();
+    const convertType = (value) => {
+        const map = { string: 'STRING', number: 'NUMBER', integer: 'INTEGER', boolean: 'BOOLEAN', array: 'ARRAY', object: 'OBJECT' };
+        return map[String(value || '').toLowerCase()] || String(value || '').toUpperCase();
+    };
+    if (Array.isArray(out.type)) {
+        const withoutNull = out.type.filter((t) => String(t).toLowerCase() !== 'null');
+        out.type = convertType(withoutNull[0] || 'string');
+        out.nullable = true;
+    } else if (typeof out.type === 'string') out.type = convertType(out.type);
     if (out.properties) out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, geminiSchema(v)]));
     if (out.items) out.items = geminiSchema(out.items);
+    if (out.anyOf) out.anyOf = out.anyOf.map((item) => geminiSchema(item));
+    delete out.oneOf;
     delete out.additionalProperties;
     return out;
 }
@@ -546,20 +589,45 @@ function toGeminiTools(tools = []) {
     })).filter((tool) => tool.name);
     return functionDeclarations.length ? [{ functionDeclarations }] : [];
 }
+function geminiThinkingConfig(model = '', effort = '') {
+    const v = String(effort || '').toLowerCase();
+    if (!v) return null;
+    if (/gemini-(3|3\.)/i.test(String(model || ''))) {
+        const level = v === 'minimal' || v === 'none' ? 'minimal' : (['low', 'medium', 'high'].includes(v) ? v : 'medium');
+        return { thinkingLevel: level };
+    }
+    if (/gemini-2\.5/i.test(String(model || ''))) {
+        if (v === 'none') return { thinkingBudget: 0 };
+        if (v === 'minimal' || v === 'low') return { thinkingBudget: 1024 };
+        if (v === 'medium') return { thinkingBudget: -1 };
+        if (v === 'high' || v === 'xhigh') return { thinkingBudget: 8192 };
+    }
+    return null;
+}
 function geminiContents(messages = []) {
     const out = [];
     for (const m of messages) {
         if (m.role === 'system') continue;
         if (m.role === 'tool') {
             const response = safeJsonParse(m.content, { result: typeof m.content === 'string' ? String(m.content || '') : m.content });
-            out.push({ role: 'function', parts: [{ functionResponse: { name: m.name || m.tool_call_id || 'tool', response } }] });
+            const fn = { name: m.name || 'tool', response: response && typeof response === 'object' && !Array.isArray(response) ? response : { result: response } };
+            if (m.tool_call_id) fn.id = String(m.tool_call_id);
+            out.push({ role: 'user', parts: [{ functionResponse: fn }] });
             if (Array.isArray(m.parts) || Array.isArray(m.content)) out.push({ role: 'user', parts: normalizeGeminiUserParts(m) });
         } else if (m.role === 'assistant') {
+            if (Array.isArray(m.parts) && m.parts.length) {
+                out.push({ role: 'model', parts: m.parts });
+                continue;
+            }
             const parts = [];
             if (m.content) parts.push({ text: String(m.content) });
             (m.tool_calls || []).forEach((call) => {
                 const parsed = parseToolCall(call);
-                if (parsed.name) parts.push({ functionCall: { name: parsed.name, args: parsed.args || {} } });
+                if (parsed.name) {
+                    const fn = { name: parsed.name, args: parsed.args || {} };
+                    if (parsed.id) fn.id = parsed.id;
+                    parts.push({ functionCall: fn });
+                }
             });
             out.push({ role: 'model', parts: parts.length ? parts : [{ text: '' }] });
         } else {
@@ -667,13 +735,16 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     if (system) payload.system = system;
     if (opts.temperature !== undefined) payload.temperature = opts.temperature;
     if (opts.top_p !== undefined) payload.top_p = opts.top_p;
+    const effort = anthropicEffort(opts.reasoning_effort || opts.effort);
+    if (effort) payload.output_config = { ...(opts.output_config || {}), effort };
+    if (opts.thinking && typeof opts.thinking === 'object') payload.thinking = opts.thinking;
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
     const data = await fetchJsonWithUnsupportedParamRetry(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'Anthropic'}/${model}`);
     const blocks = Array.isArray(data.content) ? data.content : [];
     const content = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
     const toolCalls = blocks.filter((b) => b.type === 'tool_use' && b.name).map((b) => ({ id: b.id || crypto.randomUUID(), type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } }));
-    return { role: 'assistant', content, tool_calls: toolCalls };
+    return { role: 'assistant', content, tool_calls: toolCalls, parts: blocks };
 }
 async function callGemini(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = (provider.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
@@ -684,6 +755,8 @@ async function callGemini(provider, model, messages, options = {}, tools = [], s
     const generationConfig = { maxOutputTokens: opts.max_tokens };
     if (opts.temperature !== undefined) generationConfig.temperature = opts.temperature;
     if (opts.top_p !== undefined) generationConfig.topP = opts.top_p;
+    const thinkingConfig = opts.thinkingConfig || opts.thinking_config || geminiThinkingConfig(model, opts.reasoning_effort || opts.effort);
+    if (thinkingConfig && typeof thinkingConfig === 'object') generationConfig.thinkingConfig = thinkingConfig;
     Object.keys(generationConfig).forEach((k) => generationConfig[k] === undefined && delete generationConfig[k]);
     const body = { contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '你好' }] }] };
     if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
@@ -693,11 +766,12 @@ async function callGemini(provider, model, messages, options = {}, tools = [], s
         body.tools = geminiTools;
         body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
-    const data = await fetchJsonWithUnsupportedParamRetry(`${base}/models/${encodeURIComponent(model)}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), signal }, body, `${provider.name || provider.type || 'Gemini'}/${model}`);
+    const modelPath = String(model || '').startsWith('models/') ? String(model) : `models/${encodeURIComponent(model)}`;
+    const data = await fetchJsonWithUnsupportedParamRetry(`${base}/${modelPath}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), signal }, body, `${provider.name || provider.type || 'Gemini'}/${model}`);
     const parts = (data.candidates || []).flatMap((c) => c.content?.parts || []);
     const content = parts.filter((p) => p.text).map((p) => p.text || '').join('\n');
-    const toolCalls = parts.filter((p) => p.functionCall?.name).map((p) => ({ id: crypto.randomUUID(), type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) } }));
-    return { role: 'assistant', content, tool_calls: toolCalls };
+    const toolCalls = parts.filter((p) => p.functionCall?.name).map((p) => ({ id: p.functionCall.id || crypto.randomUUID(), type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) } }));
+    return { role: 'assistant', content, tool_calls: toolCalls, parts };
 }
 async function callProvider(provider, model, messages, options = {}, tools = [], signal = null) {
     throwIfAborted(signal);
@@ -1506,7 +1580,7 @@ function toolResultMessage(call, result, mode = 'chat', limits = {}, providerTyp
     }
     if (screenshots.length && providerType === 'gemini') {
         return [
-            { role: 'tool', tool_call_id: call.id, name: call.name, content: safeJson() },
+            { role: 'tool', tool_call_id: call.id, name: call.name || parseToolCall(call).name || '', content: safeJson() },
             { role: 'user', parts: geminiScreenshotParts(screenshots) },
         ];
     }
@@ -1516,8 +1590,9 @@ function toolResultMessage(call, result, mode = 'chat', limits = {}, providerTyp
             { role: 'user', content: openAiScreenshotParts(screenshots) },
         ];
     }
-    if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result), max) };
-    return { role: 'tool', tool_call_id: call.id, name: call.name, content: clipText(JSON.stringify(result, null, 2), max) };
+    const callName = call.name || parseToolCall(call).name || '';
+    if (mode === 'responses') return { role: 'tool', tool_call_id: call.id, name: callName, content: clipText(JSON.stringify(result), max) };
+    return { role: 'tool', tool_call_id: call.id, name: callName, content: clipText(JSON.stringify(result, null, 2), max) };
 }
 async function completeWithProvider(ai, body) {
     const { provider, model } = selectProvider(ai, body);
@@ -1746,7 +1821,7 @@ function registerAiRoutes(app, deps) {
                     deps.addActivity?.(`AI 助理对话：${provider.name || provider.type}/${model}`);
                     return res.json({ ok: true, message: { role: 'assistant', content: message.content || '' }, toolResults, provider: { id: provider.id, name: provider.name, type: provider.type }, model });
                 }
-                messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '' }];
+                messages = [...messages, { role: 'assistant', content: message.content || '', tool_calls: message.tool_calls, response_id: message.response_id || '', parts: Array.isArray(message.parts) ? message.parts : undefined }];
                 const followupToolMessages = [];
                 for (const call of calls) {
                     throwIfAborted(abortController.signal);
