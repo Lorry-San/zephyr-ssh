@@ -1,13 +1,13 @@
 const $ = (sel) => document.querySelector(sel);
-const GUAC_CLIENT_VERSION = '2026-06-13.1-mobile-reconnect';
-console.info('[guac-client]', 'script loaded', { version: GUAC_CLIENT_VERSION });
+const RDP_CLIENT_VERSION = '2026-06-13.2-native-rdp';
+console.info('[rdp-client]', 'script loaded', { version: RDP_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
 const connInfo = $('#connInfo');
-const overlay = $('#guacOverlay');
+const overlay = $('#rdpOverlay');
 const overlayMsg = $('#overlayMsg');
-const stage = $('#guacStage');
+const stage = $('#rdpStage');
 const displayRoot = $('#display');
 const displayShell = $('#displayShell');
 const fitBtn = $('#fitBtn');
@@ -45,9 +45,7 @@ let params = loadParams();
 const qualityModes = ['balanced', 'performance', 'quality'];
 let qualityIdx = qualityModes.indexOf(params.quality || 'balanced');
 if (qualityIdx < 0) qualityIdx = 0;
-let Guacamole = null;
-let tunnel = null;
-let client = null;
+let rdpSocket = null;
 let rdpInputSender = null;
 let rdpAudioSocket = null;
 let rdpAudioMediaSource = null;
@@ -123,7 +121,7 @@ const KEY = {
 };
 
 function loadParams() {
-    const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
+    const key = tabId ? `zephyr_remote_desktop_params_${tabId}` : 'zephyr_remote_desktop_params';
     try {
         return JSON.parse(sessionStorage.getItem(key) || '{}');
     } catch {
@@ -165,11 +163,11 @@ function notifyParentAiActionResult(actionId, payload = {}) {
 
 function notifyParentCloseRequest(reason = 'remote-desktop-closed') {
     if (embeddedMode && window.parent && window.parent !== window) {
-        console.info('[guac-client]', 'request parent to close tab', {
+        console.info('[rdp-client]', 'request parent to close tab', {
             tabId: params?.tabId || tabId,
             reason,
             connected,
-            hasTunnel: !!tunnel,
+            hasRdpSocket: !!rdpSocket,
             hasRdpInput: !!rdpInputSender,
         });
         window.parent.postMessage({ source: 'zephyr-terminal', type: 'close-request', tabId: params?.tabId || tabId, reason }, '*');
@@ -205,195 +203,18 @@ function setStatus(state, message = '') {
     }
 }
 
-function encodeInstruction(opcode, ...args) {
-    return [opcode, ...args].map((value) => {
-        const text = String(value ?? '');
-        return `${text.length}.${text}`;
-    }).join(',') + ';';
-}
-
-class GuacInstructionParser {
-    constructor(oninstruction) {
-        this.buffer = '';
-        this.elements = [];
-        this.oninstruction = oninstruction;
-    }
-
-    receive(data) {
-        this.buffer += String(data || '');
-        while (this.buffer.length) {
-            const lengthEnd = this.buffer.indexOf('.');
-            if (lengthEnd === -1) return;
-
-            const lengthText = this.buffer.slice(0, lengthEnd);
-            if (!/^\d+$/.test(lengthText)) throw new Error('非法 Guacamole 指令长度');
-            const length = Number.parseInt(lengthText, 10);
-            const elementStart = lengthEnd + 1;
-            const elementEnd = elementStart + length;
-            if (this.buffer.length <= elementEnd) return;
-
-            const terminator = this.buffer[elementEnd];
-            if (terminator !== ',' && terminator !== ';') throw new Error('非法 Guacamole 指令终止符');
-
-            this.elements.push(this.buffer.slice(elementStart, elementEnd));
-            this.buffer = this.buffer.slice(elementEnd + 1);
-
-            if (terminator === ';') {
-                const opcode = this.elements.shift();
-                const args = this.elements;
-                this.elements = [];
-                if (opcode) this.oninstruction?.(opcode, args);
-            }
-        }
-    }
-}
-
-class RawGuacWebSocketTunnel {
-    constructor(url) {
-        this.url = url;
-        this.uuid = '';
-        this.state = 2;
-        this.oninstruction = null;
-        this.onstatechange = null;
-        this.onuuid = null;
-        this.onerror = null;
-        this.socket = null;
-        this.parser = new GuacInstructionParser((opcode, args) => {
-            console.debug('[guac-client]', 'instruction', { opcode, argCount: args.length });
-            if (opcode === 'ready') {
-                this.setUUID(args[0] || `zephyr-${Date.now()}`);
-                console.info('[guac-client]', 'tunnel ready', { uuid: this.uuid });
-                this.setState(1);
-                return;
-            }
-            if (opcode === 'zephyr-rdp') {
-                handleZephyrRdpInstruction(args).catch((err) => console.warn('[guac-client]', 'zephyr-rdp instruction failed', { args, error: err.message }));
-                return;
-            }
-            if (opcode === 'error') {
-                const err = new Error(args[0] || 'Guacamole 隧道错误');
-                err.code = args[1] || '';
-                this.onerror?.(err);
-                return;
-            }
-            this.oninstruction?.(opcode, args);
-        });
-    }
-
-    setState(state) {
-        this.state = state;
-        this.onstatechange?.(state);
-    }
-
-    setUUID(uuid) {
-        this.uuid = uuid;
-        this.onuuid?.(uuid);
-    }
-
-    isConnected() {
-        return this.state === 1 || this.state === 3;
-    }
-
-    connect() {
-        if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
-        this.setState(0);
-        this.socket = new WebSocket(this.url);
-        this.socket.binaryType = 'arraybuffer';
-
-        this.socket.addEventListener('open', () => {
-            console.info('[guac-client]', 'websocket open; waiting for server ready', { url: this.url });
-        });
-
-        this.socket.addEventListener('message', (event) => {
-            try {
-                const data = typeof event.data === 'string'
-                    ? event.data
-                    : new TextDecoder().decode(event.data);
-                this.parser.receive(data);
-            } catch (err) {
-                console.error('[guac-client]', 'parse instruction failed', err);
-                this.onerror?.(err);
-            }
-        });
-
-        this.socket.addEventListener('close', (event) => {
-            console.info('[guac-client]', 'websocket closed', { code: event.code, reason: event.reason });
-            this.setState(2);
-        });
-
-        this.socket.addEventListener('error', () => {
-            const err = new Error(`${protocolLabel()} WebSocket 隧道异常`);
-            console.error('[guac-client]', err.message);
-            this.onerror?.(err);
-        });
-    }
-
-    disconnect() {
-        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            try { this.sendMessage('disconnect'); } catch {}
-            this.socket.close();
-        }
-        this.setState(2);
-    }
-
-    sendMessage(opcode, ...args) {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
-        const payload = encodeInstruction(opcode, ...args);
-        console.debug('[guac-client]', 'send instruction', { opcode, bytes: payload.length });
-        this.socket.send(payload);
-    }
-}
-
-async function loadGuacamole() {
-    if (Guacamole) return Guacamole;
-    const sources = [
-        '/vendor/guacamole-common-js/guacamole-common.min.js',
-        '/vendor/guacamole-common-js/guacamole-common.js',
-        'https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js',
-        'https://unpkg.com/guacamole-common-js@1.5.0/dist/esm/guacamole-common.min.js',
-        'https://cdn.jsdelivr.net/npm/guacamole-common-js@1.5.0/dist/esm/guacamole-common.js',
-    ];
-    let lastError = null;
-    for (const source of sources) {
-        try {
-            const mod = await import(source);
-            Guacamole = mod.default || mod.Guacamole || mod;
-            if (Guacamole?.Client) {
-                console.info('[guac-client]', 'guacamole-common-js loaded', { source });
-                return Guacamole;
-            }
-        } catch (err) {
-            lastError = err;
-            console.warn('[guac-client]', 'failed to load guacamole-common-js', { source, error: err.message });
-        }
-    }
-    throw new Error(`无法加载 guacamole-common-js：${lastError?.message || '未知错误'}`);
-}
-
-function guacamoleTunnelBaseUrl() {
+function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/guacamole`;
-}
-
-function guacamoleConnectQuery() {
-    const rect = stage.getBoundingClientRect();
-    const rawDpr = window.devicePixelRatio || 1;
-    const effDpr = Math.min(rawDpr, 2);
-    const width = Math.round(Math.max(800, Math.min(2560, (rect.width || innerWidth || 1280) * effDpr)));
-    const height = Math.round(Math.max(600, Math.min(1600, ((rect.height || innerHeight || 720) - 2) * effDpr)));
-    const dpi = Math.max(72, Math.round(96 * rawDpr));
+    const target = computeRdpTargetSize(fitModes[fitModeIdx]);
     const query = new URLSearchParams({
-        connectionId: params.connectionId || '',
-        width: String(width),
-        height: String(height),
-        dpi: String(dpi),
+        connectionId: params.connectionId || urlParams.get('connectionId') || '',
+        tabId: params.tabId || tabId,
+        width: String(target.width),
+        height: String(target.height),
+        mode: target.mode,
         quality: qualityModes[qualityIdx],
     });
-    return query.toString();
-}
-
-function wsUrl() {
-    return `${guacamoleTunnelBaseUrl()}?${guacamoleConnectQuery()}`;
+    return `${proto}//${location.host}/rdp-h264?${query.toString()}`;
 }
 
 function updateInfo() {
@@ -441,14 +262,14 @@ function computeRdpTargetSize(mode = fitModes[fitModeIdx]) {
 
 
 function requestRdpCanvasSize(mode = fitModes[fitModeIdx], force = false) {
-    if (!rdpInputSender || client || !connected) return false;
+    if (!rdpInputSender || !connected) return false;
     const target = computeRdpTargetSize(mode);
     const changed = Math.abs((requestedRdpWidth || 0) - target.width) >= 2 || Math.abs((requestedRdpHeight || 0) - target.height) >= 2;
     if (!force && !changed) return false;
     requestedRdpWidth = target.width;
     requestedRdpHeight = target.height;
     rdpInputSender({ type: 'resize', width: target.width, height: target.height, mode: target.mode, quality: qualityModes[qualityIdx] });
-    console.info('[guac-client]', 'rdp canvas remote resize requested', target);
+    console.info('[rdp-client]', 'rdp canvas remote resize requested', target);
     return true;
 }
 
@@ -491,10 +312,8 @@ function captureCanvasSnapshotForAi(source, options = {}) {
 function getRemoteDesktopSnapshotForAi(options = {}) {
     let source = null;
     try {
-        if (rdpInputSender && !client) source = displayRoot?.querySelector?.('#rdp-canvas') || null;
-        else if (client) source = client?.getDisplay?.()?.flatten?.() || null;
+        source = displayRoot?.querySelector?.('#rdp-canvas') || displayRoot?.querySelector?.('canvas') || null;
     } catch (_) {}
-    if (!source) source = displayRoot?.querySelector?.('#rdp-canvas') || displayRoot?.querySelector?.('canvas');
     const shot = captureCanvasSnapshotForAi(source, options);
     return {
         protocol: protocolLabel(),
@@ -514,7 +333,7 @@ window.__zephyrGetRemoteDesktopSnapshot = getRemoteDesktopSnapshotForAi;
 function applyDisplayScale() {
     if (!displayShell) return;
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
-    if (rdpCanvas && !client) {
+    if (rdpCanvas) {
         const bounds = stage.getBoundingClientRect();
         const curW = displayWidth || rdpCanvas.width || 1280;
         const curH = displayHeight || rdpCanvas.height || 720;
@@ -559,56 +378,22 @@ function applyDisplayScale() {
         rdpCanvas.style.objectFit = 'contain';
         return;
     }
-    if (!client) return;
-    const display = client.getDisplay();
-    const bounds = stage.getBoundingClientRect();
-    const curW = displayWidth || display.getWidth?.() || 1280;
-    const curH = displayHeight || display.getHeight?.() || 720;
-    if (!curW || !curH) return;
-
-    const mode = fitModes[fitModeIdx];
-
-    if (mode === '1:1') {
-        display.scale(1);
-        displayRoot.style.width = `${curW}px`;
-        displayRoot.style.height = `${curH}px`;
-        requestAnimationFrame(() => { updateJoystickHint(); });
-        console.debug('[guac-client]', 'display scale 1:1', { w: curW, h: curH });
-        return;
-    }
-
-    const scale = mode === 'fit' ? Math.max(bounds.width / curW, bounds.height / curH) : Math.min(bounds.width / curW, bounds.height / curH);
-    display.scale(Math.max(0.1, scale));
-    displayRoot.style.width = `${Math.ceil(curW * scale)}px`;
-    displayRoot.style.height = `${Math.ceil(curH * scale)}px`;
-    requestAnimationFrame(() => { updateJoystickHint(); });
-    console.debug('[guac-client]', `display scale ${mode}`, { w: curW, h: curH, scale });
+    return;
 }
 
 function switchFitMode(mode) {
-    if (!tunnel || !connected) return;
-    if (rdpInputSender && !client) {
-        setRdpScaleZoom(1, { preserveViewport: false });
-        rdpViewportOffsetX = 0;
-        rdpViewportOffsetY = 0;
-        requestRdpCanvasSize(mode, true);
-        applyDisplayScale();
-        return;
-    }
-    const target = computeRdpTargetSize(mode);
-    if (mode === '16:9' || mode === '4:3' || mode === 'fit' || mode === '1:1') {
-        tunnel.sendMessage('size', target.width, target.height);
-        console.debug('[guac-client]', 'display resize requested', target);
-    }
+    if (!connected) return;
+    setRdpScaleZoom(1, { preserveViewport: false });
+    rdpViewportOffsetX = 0;
+    rdpViewportOffsetY = 0;
+    requestRdpCanvasSize(mode, true);
+    applyDisplayScale();
 }
 
 function sendDisplaySize() {
-    if (!tunnel || !connected) return;
-    if (!client) { requestRdpCanvasSize(fitModes[fitModeIdx], false); applyDisplayScale(); return; }
-    const mode = fitModes[fitModeIdx];
-    const target = computeRdpTargetSize(mode);
-    tunnel.sendMessage('size', target.width, target.height);
-    console.debug('[guac-client]', 'display resize requested', target);
+    if (!connected) return;
+    requestRdpCanvasSize(fitModes[fitModeIdx], false);
+    applyDisplayScale();
 }
 
 function scheduleResize() {
@@ -621,26 +406,25 @@ function scheduleResize() {
 
 function getRemotePointerPosition(event) {
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
-    const displayEl = (rdpInputSender && !client && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot);
+    const displayEl = (rdpInputSender && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.rdp-display-element') || displayRoot?.firstElementChild || displayRoot);
     const rect = displayEl?.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
     const rawX = event.clientX - rect.left;
     const rawY = event.clientY - rect.top;
     if (rawX < -2 || rawY < -2 || rawX > rect.width + 2 || rawY > rect.height + 2) return null;
-    const remoteWidth = displayWidth || client?.getDisplay?.()?.getWidth?.() || rect.width;
-    const remoteHeight = displayHeight || client?.getDisplay?.()?.getHeight?.() || rect.height;
+    const remoteWidth = displayWidth || rdpCanvas?.width || rect.width;
+    const remoteHeight = displayHeight || rdpCanvas?.height || rect.height;
     const x = Math.max(0, Math.min(remoteWidth - 1, Math.round(rawX * remoteWidth / rect.width)));
     const y = Math.max(0, Math.min(remoteHeight - 1, Math.round(rawY * remoteHeight / rect.height)));
     return { x, y, rawX, rawY, rectWidth: rect.width, rectHeight: rect.height, remoteWidth, remoteHeight };
 }
 
 function createMouseState(x, y, left = false) {
-    if (Guacamole?.Mouse?.State) return new Guacamole.Mouse.State(x, y, left, false, false, false, false);
     return { x, y, left, middle: false, right: false, up: false, down: false };
 }
 
 function sendRdpPointer(message) {
-    if (!rdpInputSender || client || !connected) return false;
+    if (!rdpInputSender || !connected) return false;
     rdpInputSender(message);
     notifyParentActivity();
     return true;
@@ -648,10 +432,10 @@ function sendRdpPointer(message) {
 
 function remotePointerMetrics() {
     const rdpCanvas = displayRoot?.querySelector?.('#rdp-canvas');
-    const displayEl = (rdpInputSender && !client && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.guac-display-element') || displayRoot?.firstElementChild || displayRoot);
+    const displayEl = (rdpInputSender && rdpCanvas) ? rdpCanvas : (displayRoot?.querySelector?.('.rdp-display-element') || displayRoot?.firstElementChild || displayRoot);
     const rect = displayEl?.getBoundingClientRect?.();
-    const remoteWidth = displayWidth || client?.getDisplay?.()?.getWidth?.() || rdpCanvas?.width || rect?.width || 0;
-    const remoteHeight = displayHeight || client?.getDisplay?.()?.getHeight?.() || rdpCanvas?.height || rect?.height || 0;
+    const remoteWidth = displayWidth || rdpCanvas?.width || rect?.width || 0;
+    const remoteHeight = displayHeight || rdpCanvas?.height || rect?.height || 0;
     return { rect, remoteWidth, remoteHeight };
 }
 
@@ -680,7 +464,7 @@ function sendRemoteMouseClick(position, source = 'touch', button = 1) {
     if (!connected || !position) return false;
     position = enrichRemotePosition(position);
     if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return false;
-    console.info('[guac-client]', 'remote mouse click mapped', {
+    console.info('[rdp-client]', 'remote mouse click mapped', {
         source,
         button,
         x: position.x,
@@ -692,25 +476,18 @@ function sendRemoteMouseClick(position, source = 'touch', button = 1) {
         remoteWidth: position.remoteWidth,
         remoteHeight: position.remoteHeight,
     });
-    if (rdpInputSender && !client) {
+    if (rdpInputSender) {
         rdpInputSender({ type: 'mouse', x: position.x, y: position.y });
         window.setTimeout(() => rdpInputSender?.({ type: 'click', button }), 15);
         notifyParentActivity();
         return true;
     }
-    if (!client) return false;
-    const isRight = button === 3;
-    const down = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(position.x, position.y, !isRight, false, isRight, false, false) : createMouseState(position.x, position.y, !isRight);
-    const up = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(position.x, position.y, false, false, false, false, false) : createMouseState(position.x, position.y, false);
-    client.sendMouseState(down);
-    window.setTimeout(() => { try { client?.sendMouseState?.(up); } catch (err) { console.error('[guac-client]', 'remote mouse click release failed', { error: err.message }); } }, 45);
-    notifyParentActivity();
-    return true;
+    return false;
 }
 
-// Guacamole client 模式只保留长按右键；双指缩放已移到顶部缩放按钮，避免和双指滚动冲突。
-let guacTouches = new Map();   // pointerId → {sx, sy, pos, moved}
-let guacLongPress = null;
+// 自有 RDP 管线保留长按右键；双指缩放已移到顶部缩放按钮，避免和双指滚动冲突。
+let rdpTouches = new Map();   // pointerId → {sx, sy, pos, moved}
+let rdpLongPress = null;
 let rdpInputMode = localStorage.getItem('zephyr-rdp-input-mode') || 'touch';
 let rdpHudTimer = 0;
 
@@ -734,8 +511,8 @@ function setupMobilePointerMouse() {
     stage.style.touchAction = 'none';
     stage.style.webkitTouchCallout = 'none';
     stage.style.userSelect = 'none';
-    stage.addEventListener('contextmenu', (e) => { if (guacTouches.size > 0 || rdpInputSender) e.preventDefault(); });
-    const isUI = (el) => el?.closest?.('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input, select');
+    stage.addEventListener('contextmenu', (e) => { if (rdpTouches.size > 0 || rdpInputSender) e.preventDefault(); });
+    const isUI = (el) => el?.closest?.('.rdp-floating-panel, .rdp-mobile-keyboard-input, button, textarea, input, select');
     let lastTapAt = 0;
     let lastTapPos = null;
     let twoFingerState = null;
@@ -744,36 +521,22 @@ function setupMobilePointerMouse() {
         const pt = event.pointerType || '';
         if (pt === 'touch' || pt === 'pen') return true;
         if (pt === 'mouse') return false;
-        return !!(rdpInputSender && !client && ((navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches || isCompactScreen()));
+        return !!(rdpInputSender && ((navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches || isCompactScreen()));
     };
-    function cancelLP() { if (guacLongPress) { clearTimeout(guacLongPress); guacLongPress = null; } }
+    function cancelLP() { if (rdpLongPress) { clearTimeout(rdpLongPress); rdpLongPress = null; } }
     function sendMove(pos) {
         if (!pos || !connected) return false;
-        if (rdpInputSender && !client) return sendRdpPointer({ type: 'mouse', x: pos.x, y: pos.y });
-        if (client) { client.sendMouseState(createMouseState(pos.x, pos.y, false)); notifyParentActivity(); return true; }
-        return false;
+        return sendRdpPointer({ type: 'mouse', x: pos.x, y: pos.y });
     }
     function sendButton(pos, button, down) {
         if (!pos || !connected) return false;
-        if (rdpInputSender && !client) return sendRdpPointer({ type: down ? 'mousedown' : 'mouseup', button });
-        if (client) {
-            const st = Guacamole?.Mouse?.State ? new Guacamole.Mouse.State(pos.x, pos.y, button === 1 && down, button === 2 && down, button === 3 && down, false, false) : createMouseState(pos.x, pos.y, button === 1 && down);
-            client.sendMouseState(st);
-            notifyParentActivity();
-            return true;
-        }
-        return false;
+        return sendRdpPointer({ type: down ? 'mousedown' : 'mouseup', button });
     }
     function doRightClick(pos) { if (pos && connected) sendRemoteMouseClick(pos, 'long-press', 3); }
     function scrollBy(deltaY, deltaX = 0) {
         if (!connected) return;
-        if (rdpInputSender && !client) { rdpInputSender({ type: 'scroll', deltaY, deltaX }); notifyParentActivity(); return; }
-        if (client) {
-            const steps = Math.min(8, Math.max(1, Math.round(Math.abs(deltaY || deltaX) / 45)));
-            const key = deltaY > 0 || deltaX > 0 ? KEY.PAGE_DOWN : KEY.PAGE_UP;
-            for (let i = 0; i < steps; i++) setTimeout(() => { try { client.sendKeyEvent(1, key); client.sendKeyEvent(0, key); } catch {} }, i * 25);
-            notifyParentActivity();
-        }
+        rdpInputSender?.({ type: 'scroll', deltaY, deltaX });
+        notifyParentActivity();
     }
     stage.addEventListener('pointerdown', (event) => {
         if (!isTouchLikePointer(event)) return;
@@ -785,21 +548,21 @@ function setupMobilePointerMouse() {
         stage.focus({ preventScroll: true });
         stage.setPointerCapture?.(event.pointerId);
         const t = { id: event.pointerId, sx: event.clientX, sy: event.clientY, cx: event.clientX, cy: event.clientY, pos, lastPos: pos, moved: false, downSent: false };
-        guacTouches.set(event.pointerId, t);
+        rdpTouches.set(event.pointerId, t);
         updateRdpPointer(event.clientX, event.clientY, true);
-        if (guacTouches.size === 1) {
+        if (rdpTouches.size === 1) {
             cancelLP();
-            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || pos); t.rightClicked = true; } guacLongPress = null; }, 620);
-        } else if (guacTouches.size === 2) {
+            rdpLongPress = setTimeout(() => { if (rdpTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || pos); t.rightClicked = true; } rdpLongPress = null; }, 620);
+        } else if (rdpTouches.size === 2) {
             cancelLP();
-            const touches = Array.from(guacTouches.values());
+            const touches = Array.from(rdpTouches.values());
             twoFingerState = { x: (touches[0].cx + touches[1].cx) / 2, y: (touches[0].cy + touches[1].cy) / 2 };
         } else cancelLP();
     }, { passive: false });
     stage.addEventListener('pointermove', (event) => {
         if (!isTouchLikePointer(event)) return;
         lastPointerTouchAt = Date.now();
-        const t = guacTouches.get(event.pointerId);
+        const t = rdpTouches.get(event.pointerId);
         if (!t) return;
         event.preventDefault();
         const pos = getRemotePointerPosition(event);
@@ -808,8 +571,8 @@ function setupMobilePointerMouse() {
         updateRdpPointer(event.clientX, event.clientY, true);
         const dist = Math.hypot(t.cx - t.sx, t.cy - t.sy);
         if (!t.moved && dist > 12) { t.moved = true; cancelLP(); }
-        if (guacTouches.size === 2) {
-            const touches = Array.from(guacTouches.values());
+        if (rdpTouches.size === 2) {
+            const touches = Array.from(rdpTouches.values());
             const cx = (touches[0].cx + touches[1].cx) / 2;
             const cy = (touches[0].cy + touches[1].cy) / 2;
             if (twoFingerState) {
@@ -819,20 +582,20 @@ function setupMobilePointerMouse() {
             }
             return;
         }
-        if (guacTouches.size !== 1 || !pos || t.rightClicked) return;
+        if (rdpTouches.size !== 1 || !pos || t.rightClicked) return;
         if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; }
         else if (t.downSent) sendMove(pos);
     }, { passive: false });
     stage.addEventListener('pointerup', (event) => {
         if (!isTouchLikePointer(event)) return;
         lastPointerTouchAt = Date.now();
-        const t = guacTouches.get(event.pointerId);
+        const t = rdpTouches.get(event.pointerId);
         if (!t) return;
         event.preventDefault();
         const pos = getRemotePointerPosition(event) || t.lastPos || t.pos;
-        guacTouches.delete(event.pointerId);
-        if (guacTouches.size < 2) twoFingerState = null;
-        if (guacTouches.size === 0) cancelLP();
+        rdpTouches.delete(event.pointerId);
+        if (rdpTouches.size < 2) twoFingerState = null;
+        if (rdpTouches.size === 0) cancelLP();
         if (t.rightClicked) { updateRdpPointer(event.clientX, event.clientY, false); return; }
         if (t.downSent) sendButton(pos, 1, false);
         else if (!t.moved) {
@@ -845,10 +608,10 @@ function setupMobilePointerMouse() {
         updateRdpPointer(event.clientX, event.clientY, false);
     }, { passive: false });
     stage.addEventListener('pointercancel', (event) => {
-        const t = guacTouches.get(event.pointerId);
+        const t = rdpTouches.get(event.pointerId);
         if (t?.downSent) sendButton(t.lastPos || t.pos, 1, false);
-        guacTouches.delete(event.pointerId);
-        if (guacTouches.size === 0) { cancelLP(); twoFingerState = null; }
+        rdpTouches.delete(event.pointerId);
+        if (rdpTouches.size === 0) { cancelLP(); twoFingerState = null; }
         updateRdpPointer(event.clientX || 0, event.clientY || 0, false);
     }, { passive: true });
 
@@ -867,16 +630,16 @@ function setupMobilePointerMouse() {
             if (!pos) continue;
             const id = touchId(touch);
             const t = { id, sx: touch.clientX, sy: touch.clientY, cx: touch.clientX, cy: touch.clientY, pos, lastPos: pos, moved: false, downSent: false, touchFallback: true };
-            guacTouches.set(id, t);
+            rdpTouches.set(id, t);
             updateRdpPointer(touch.clientX, touch.clientY, true);
         }
-        if (guacTouches.size === 1) {
-            const t = Array.from(guacTouches.values())[0];
+        if (rdpTouches.size === 1) {
+            const t = Array.from(rdpTouches.values())[0];
             cancelLP();
-            guacLongPress = setTimeout(() => { if (guacTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || t.pos); t.rightClicked = true; } guacLongPress = null; }, 620);
-        } else if (guacTouches.size === 2) {
+            rdpLongPress = setTimeout(() => { if (rdpTouches.size === 1 && !t.moved) { doRightClick(t.lastPos || t.pos); t.rightClicked = true; } rdpLongPress = null; }, 620);
+        } else if (rdpTouches.size === 2) {
             cancelLP();
-            const arr = Array.from(guacTouches.values());
+            const arr = Array.from(rdpTouches.values());
             twoFingerState = { x: (arr[0].cx + arr[1].cx) / 2, y: (arr[0].cy + arr[1].cy) / 2 };
         } else cancelLP();
     }, { passive: false });
@@ -887,7 +650,7 @@ function setupMobilePointerMouse() {
         event.preventDefault();
         for (const touch of touches) {
             const id = touchId(touch);
-            const t = guacTouches.get(id);
+            const t = rdpTouches.get(id);
             if (!t) continue;
             const pos = getRemotePointerPosition(eventFromTouch(touch));
             t.cx = touch.clientX; t.cy = touch.clientY;
@@ -896,8 +659,8 @@ function setupMobilePointerMouse() {
             const dist = Math.hypot(t.cx - t.sx, t.cy - t.sy);
             if (!t.moved && dist > 12) { t.moved = true; cancelLP(); }
         }
-        if (guacTouches.size === 2) {
-            const arr = Array.from(guacTouches.values());
+        if (rdpTouches.size === 2) {
+            const arr = Array.from(rdpTouches.values());
             const cx = (arr[0].cx + arr[1].cx) / 2;
             const cy = (arr[0].cy + arr[1].cy) / 2;
             if (twoFingerState) {
@@ -907,7 +670,7 @@ function setupMobilePointerMouse() {
             }
             return;
         }
-        const t = Array.from(guacTouches.values()).find((x) => x.touchFallback);
+        const t = Array.from(rdpTouches.values()).find((x) => x.touchFallback);
         const pos = t?.lastPos;
         if (!t || !pos || t.rightClicked) return;
         if (t.moved && !t.downSent) { sendMove(pos); sendButton(pos, 1, true); t.downSent = true; }
@@ -920,10 +683,10 @@ function setupMobilePointerMouse() {
         event.preventDefault();
         for (const touch of touches) {
             const id = touchId(touch);
-            const t = guacTouches.get(id);
+            const t = rdpTouches.get(id);
             if (!t) continue;
             const pos = getRemotePointerPosition(eventFromTouch(touch)) || t.lastPos || t.pos;
-            guacTouches.delete(id);
+            rdpTouches.delete(id);
             if (t.rightClicked) continue;
             if (t.downSent) sendButton(pos, 1, false);
             else if (!t.moved) {
@@ -935,25 +698,25 @@ function setupMobilePointerMouse() {
             }
             updateRdpPointer(touch.clientX, touch.clientY, false);
         }
-        if (guacTouches.size < 2) twoFingerState = null;
-        if (guacTouches.size === 0) cancelLP();
+        if (rdpTouches.size < 2) twoFingerState = null;
+        if (rdpTouches.size === 0) cancelLP();
     }, { passive: false });
     stage.addEventListener('touchcancel', (event) => {
         if (Date.now() - lastPointerTouchAt < 450) return;
         for (const touch of Array.from(event.changedTouches || [])) {
             const id = touchId(touch);
-            const t = guacTouches.get(id);
+            const t = rdpTouches.get(id);
             if (t?.downSent) sendButton(t.lastPos || t.pos, 1, false);
-            guacTouches.delete(id);
+            rdpTouches.delete(id);
         }
-        if (guacTouches.size === 0) { cancelLP(); twoFingerState = null; }
+        if (rdpTouches.size === 0) { cancelLP(); twoFingerState = null; }
     }, { passive: true });
     stage.addEventListener('wheel', (event) => {
         if (isUI(event.target)) return;
         const pos = getRemotePointerPosition(event);
         if (!pos || !connected) return;
         event.preventDefault();
-        if (rdpInputSender && !client) { rdpInputSender({ type: 'mouse', x: pos.x, y: pos.y }); rdpInputSender({ type: 'scroll', deltaY: event.deltaY, deltaX: event.deltaX }); notifyParentActivity(); return; }
+        if (rdpInputSender) { rdpInputSender({ type: 'mouse', x: pos.x, y: pos.y }); rdpInputSender({ type: 'scroll', deltaY: event.deltaY, deltaX: event.deltaX }); notifyParentActivity(); return; }
         scrollBy(event.deltaY, event.deltaX);
     }, { passive: false });
 }
@@ -974,7 +737,7 @@ function bindCanvasTouch(canvas) {
         const rw = displayWidth||canvas.width||1280, rh = displayHeight||canvas.height||720;
         return { x: Math.max(0,Math.min(rw-1,Math.round((x-r.left)*rw/r.width))), y: Math.max(0,Math.min(rh-1,Math.round((y-r.top)*rh/r.height))) };
     };
-    const snd = (m) => { if (rdpInputSender&&!client&&connected) { rdpInputSender(m); notifyParentActivity(); return true; } else { console.warn('[rdp-touch] snd blocked',{is:!!rdpInputSender,cl:!!client,conn:connected}); return false; } };
+    const snd = (m) => { if (rdpInputSender && connected) { rdpInputSender(m); notifyParentActivity(); return true; } console.warn('[rdp-touch] snd blocked', { input: !!rdpInputSender, conn: connected }); return false; };
     const click = (pt, b=1) => { const ok = snd({type:'mouse',x:pt.x,y:pt.y}); if(ok) setTimeout(()=>snd({type:'click',button:b}),10); };
     const down = (b=1) => snd({type:'mousedown',button:b});
     const up = (b=1) => snd({type:'mouseup',button:b});
@@ -1109,14 +872,14 @@ function bindCanvasTouch(canvas) {
         if (e.clientX < rect.left-4 || e.clientX > rect.right+4 || e.clientY < rect.top-4 || e.clientY > rect.bottom+4) return;
         if (e.target === cv || cv.contains(e.target)) return; // already handled by canvas listener
         console.warn('[rdp-touch] pointerdown MISSED canvas, forwarding', {targetTag:e.target?.tagName, targetId:e.target?.id, x:e.clientX, y:e.clientY, connected});
-        if (!connected || !rdpInputSender || client) return;
+        if (!connected || !rdpInputSender) return;
         const x = Math.round((e.clientX-rect.left)*(displayWidth||cv.width||1280)/rect.width);
         const y = Math.round((e.clientY-rect.top)*(displayHeight||cv.height||720)/rect.height);
         rdpInputSender({type:'mouse',x,y}); rdpInputSender({type:'click',button:1});
         notifyParentActivity();
         setTransientStatus(`\u8865\u83b7\u70b9\u51fb (${x},${y})`);
     }, {capture:true,passive:false,signal:sig});
-    console.info('[guac-client]', 'canvas touch bound+fallback', {w:canvas.width,h:canvas.height, conn:connected, sender:!!rdpInputSender, client:!!client});
+    console.info('[rdp-client]', 'canvas touch bound+fallback', {w:canvas.width,h:canvas.height, conn:connected, sender:!!rdpInputSender});
 }
 
 class WebCodecsH264Display {
@@ -1292,7 +1055,6 @@ async function connect() {
 
     try {
         displayRoot.innerHTML = '';
-        client = null;
         const canvas = document.createElement('canvas');
         canvas.id = 'rdp-canvas';
         canvas.tabIndex = 0;
@@ -1307,10 +1069,10 @@ async function connect() {
         const initialTarget = computeRdpTargetSize(fitModes[fitModeIdx]);
         requestedRdpWidth = initialTarget.width;
         requestedRdpHeight = initialTarget.height;
-        const wsQuery = new URLSearchParams({ connectionId: params.connectionId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode, quality: qualityModes[qualityIdx] });
+        const wsQuery = new URLSearchParams({ connectionId: params.connectionId, tabId: params.tabId || tabId, width: String(initialTarget.width), height: String(initialTarget.height), mode: initialTarget.mode, quality: qualityModes[qualityIdx] });
         const connectionSeq = rdpReconnectSeq;
-        tunnel = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
-        tunnel.binaryType = 'arraybuffer';
+        rdpSocket = new WebSocket(`${wsBase}?${wsQuery.toString()}`);
+        rdpSocket.binaryType = 'arraybuffer';
 
         let decoder = null;
         let timestamp = 0;
@@ -1319,11 +1081,11 @@ async function connect() {
         let pendingFrames = [];
         let firstFrameDrawn = false;
         const wsInput = (message) => {
-            if (!tunnel || tunnel.readyState !== WebSocket.OPEN) return false;
-            try { tunnel.send(JSON.stringify(message)); return true; } catch { return false; }
+            if (!rdpSocket || rdpSocket.readyState !== WebSocket.OPEN) return false;
+            try { rdpSocket.send(JSON.stringify(message)); return true; } catch { return false; }
         };
         rdpInputSender = wsInput;
-        guacTouches.clear();
+        rdpTouches.clear();
         displayRoot.style.pointerEvents = 'auto';
         displayShell && (displayShell.style.pointerEvents = 'auto');
         canvas.style.pointerEvents = 'auto';
@@ -1381,20 +1143,20 @@ async function connect() {
             }
         }
 
-        tunnel.onopen = () => {
+        rdpSocket.onopen = () => {
             setStatus('connecting', `${label} 视频通道已建立，等待首帧...`);
             connected = true;
             canvas.focus({ preventScroll: true });
             notifyParentStatus('connecting');
         };
-        tunnel.onclose = (event) => {
+        rdpSocket.onclose = (event) => {
             parser.flush();
             if (connectionSeq !== rdpReconnectSeq) return;
             connected = false;
             notifyParentStatus('disconnected');
             if (decoder) { try { decoder.close(); } catch {} decoder = null; }
             if (event.code === 1012) {
-                guacTouches.clear();
+                rdpTouches.clear();
                 updateRdpPointer(0, 0, false);
                 stopClipboardAutoSync();
                 stopRdpAudio();
@@ -1408,8 +1170,8 @@ async function connect() {
             stopRdpAudio();
             stopClipboardAutoSync();
         };
-        tunnel.onerror = () => { if (connectionSeq === rdpReconnectSeq) setStatus('error', `${label} WebSocket 连接失败`); };
-        tunnel.onmessage = async (ev) => {
+        rdpSocket.onerror = () => { if (connectionSeq === rdpReconnectSeq) setStatus('error', `${label} WebSocket 连接失败`); };
+        rdpSocket.onmessage = async (ev) => {
             if (typeof ev.data === 'string') {
                 try {
                     const msg = JSON.parse(ev.data);
@@ -1439,7 +1201,7 @@ async function connect() {
             parser.push(new Uint8Array(buf));
         };
         const sendKeyboardEventToRdp = (e) => {
-            if (!rdpInputSender || client || !connected) return false;
+            if (!rdpInputSender || !connected) return false;
             const key = e.key || '';
             const code = e.code || '';
             if (e.isComposing || key === 'Process' || key === 'Dead') return false;
@@ -1472,32 +1234,34 @@ async function connect() {
         };
         canvas.addEventListener('keydown', sendKeyboardEventToRdp);
         document.addEventListener('keydown', (e) => {
-            if (!connected || !rdpInputSender || client) return;
+            if (!connected || !rdpInputSender) return;
             if (isTextInputTarget(e.target)) return;
             sendKeyboardEventToRdp(e);
         }, true);
     } catch (err) {
-        console.error('[guac-client]', 'connect failed', err);
+        console.error('[rdp-client]', 'connect failed', err);
         setStatus('error', err.message || `${label} 连接失败`);
     }
 }
 
 function disconnect(userInitiated = true) {
-    if (tunnel && tunnel.readyState !== WebSocket.CLOSED) {
-        try { tunnel.close(); } catch {}
+    if (rdpSocket && rdpSocket.readyState !== WebSocket.CLOSED) {
+        try { rdpSocket.close(); } catch {}
     }
-    tunnel = null;
+    rdpSocket = null;
     rdpInputSender = null;
     try { canvasTouchAbort?.abort(); } catch {}
     canvasTouchAbort = null;
-    guacTouches.clear();
+    rdpTouches.clear();
     updateRdpPointer(0, 0, false);
     connected = false;
     if (userInitiated) {
         stopClipboardAutoSync();
         stopRdpAudio();
         setStatus('disconnected', `${protocolLabel()} 已断开`);
-        try { sessionStorage.removeItem(params?.tabId ? `zephyr_guac_params_${params.tabId}` : 'zephyr_guac_params'); } catch {}
+        try {
+            sessionStorage.removeItem(params?.tabId ? `zephyr_remote_desktop_params_${params.tabId}` : 'zephyr_remote_desktop_params');
+        } catch {}
     }
 }
 
@@ -1597,7 +1361,7 @@ function ensureFloatingPanel(panel, defaults = {}) {
         height: `${height}px`,
     });
     panel.dataset.floatingReady = '1';
-    console.info('[guac-client]', 'floating panel initialized', { id: panel.id, left, top, width, height });
+    console.info('[rdp-client]', 'floating panel initialized', { id: panel.id, left, top, width, height });
 }
 
 function clampPanel(panel) {
@@ -1626,7 +1390,7 @@ function bringPanelToFront(panel) {
         window.clearTimeout(panel._frontSwitchTimer);
         panel._frontSwitchTimer = window.setTimeout(() => panel.classList.remove('front-switching'), 360);
     }
-    console.debug('[guac-client]', 'floating panel front', { id: panel.id });
+    console.debug('[rdp-client]', 'floating panel front', { id: panel.id });
 }
 
 function applyPanelLayout(panel, layout) {
@@ -1671,7 +1435,7 @@ function applyPanelLayout(panel, layout) {
         panel.classList.remove('layout-animating');
         clampPanel(panel);
     }, 480);
-    console.info('[guac-client]', 'floating panel layout applied', { id: panel.id, layout, left, top, width, height });
+    console.info('[rdp-client]', 'floating panel layout applied', { id: panel.id, layout, left, top, width, height });
 }
 
 let panelLayoutButton = null;
@@ -1808,7 +1572,7 @@ function setupPanelLayoutMenu() {
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
                 window.removeEventListener('pointercancel', onUp);
-                if (moved) console.info('[guac-client]', 'floating panel moved by traffic handle', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
+                if (moved) console.info('[rdp-client]', 'floating panel moved by traffic handle', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
             };
 
             window.addEventListener('pointermove', onMove, { passive: false });
@@ -1825,7 +1589,7 @@ function setupPanelLayoutMenu() {
             bringPanelToFront(panel);
             const willOpen = !panelLayoutMenu;
             console.info('[DynamicIslandDiagnostics]', {
-                event: 'guac-layout-menu-toggle',
+                event: 'rdp-layout-menu-toggle',
                 panelId: panel?.id || '',
                 buttonId: button?.id || '',
                 open: willOpen,
@@ -1845,12 +1609,12 @@ function setupPanelLayoutMenu() {
 function setupPanelDrag() {
     const handles = [
         ...document.querySelectorAll('[data-drag-panel]'),
-        ...document.querySelectorAll('.guac-floating-panel .panel-titlebar'),
+        ...document.querySelectorAll('.rdp-floating-panel .panel-titlebar'),
     ];
     handles.forEach((handle) => {
         const panel = handle.dataset.dragPanel
             ? document.getElementById(handle.dataset.dragPanel)
-            : handle.closest('.guac-floating-panel');
+            : handle.closest('.rdp-floating-panel');
         if (!panel) return;
         handle.addEventListener('pointerdown', (event) => {
             if (event.target.closest('button,input,select,textarea,label')) return;
@@ -1875,7 +1639,7 @@ function setupPanelDrag() {
                 panel.classList.remove('dragging');
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
-                console.info('[guac-client]', 'floating panel dragged', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
+                console.info('[rdp-client]', 'floating panel dragged', { id: panel.id, left: panel.offsetLeft, top: panel.offsetTop });
             };
             window.addEventListener('pointermove', onMove, { passive: false });
             window.addEventListener('pointerup', onUp, { once: true });
@@ -1932,7 +1696,7 @@ function setupPanelResize() {
                 panel.classList.remove('resizing');
                 window.removeEventListener('pointermove', onMove);
                 window.removeEventListener('pointerup', onUp);
-                console.info('[guac-client]', 'floating panel resized', { id: panel.id, width: panel.offsetWidth, height: panel.offsetHeight });
+                console.info('[rdp-client]', 'floating panel resized', { id: panel.id, width: panel.offsetWidth, height: panel.offsetHeight });
             };
             window.addEventListener('pointermove', onMove, { passive: false });
             window.addEventListener('pointerup', onUp, { once: true });
@@ -2054,7 +1818,7 @@ function setupFloatingPanels() {
     setupPanelResize();
 }
 
-function animateGuacPanelFromButton(panel, button, opening = true) {
+function animateRdpPanelFromButton(panel, button, opening = true) {
     if (!panel || !button) return;
     const panelRect = panel.getBoundingClientRect?.();
     const buttonRect = button.getBoundingClientRect?.();
@@ -2067,7 +1831,7 @@ function animateGuacPanelFromButton(panel, button, opening = true) {
     void panel.offsetWidth;
     panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
 }
-function clearGuacPanelMotion(panel) {
+function clearRdpPanelMotion(panel) {
     panel?.classList.remove('panel-opening', 'panel-closing');
 }
 
@@ -2081,13 +1845,13 @@ function togglePanel(panel, force, sourceButton = null) {
     if (panel === shortcutsPanel) shortcutsBtn?.classList.toggle('active', shouldShow);
     if (panel === joystickPanel) joystickBtn?.classList.toggle('active', shouldShow);
     const button = sourceButton || (panel === clipboardPanel ? clipboardBtn : panel === shortcutsPanel ? shortcutsBtn : panel === joystickPanel ? joystickBtn : null);
-    requestAnimationFrame(() => animateGuacPanelFromButton(panel, button, shouldShow));
+    requestAnimationFrame(() => animateRdpPanelFromButton(panel, button, shouldShow));
     if (shouldShow) bringPanelToFront(panel);
     else {
         closePanelLayoutMenu({ instant: true });
-        window.setTimeout(() => clearGuacPanelMotion(panel), 320);
+        window.setTimeout(() => clearRdpPanelMotion(panel), 320);
     }
-    console.info('[guac-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
+    console.info('[rdp-client]', 'floating panel toggled', { id: panel.id, open: shouldShow });
 }
 
 function setClipboardHint(message, level = 'info') {
@@ -2183,9 +1947,9 @@ function startRdpAudio() {
 }
 
 function ensureRemoteReady(action = '操作') {
-    if ((!client && !rdpInputSender) || !connected) {
+    if (!rdpInputSender || !connected) {
         const msg = `${protocolLabel()} 尚未连接，无法${action}`;
-        console.warn('[guac-client]', msg, { hasClient: !!client, hasRdpInput: !!rdpInputSender, connected });
+        console.warn('[rdp-client]', msg, { hasRdpInput: !!rdpInputSender, connected });
         setTransientStatus(msg);
         return false;
     }
@@ -2197,17 +1961,17 @@ async function writeHostClipboard(text) {
 
     try {
         const permission = await navigator.permissions?.query?.({ name: 'clipboard-write' });
-        console.debug('[guac-client]', 'clipboard-write permission', { state: permission?.state || 'unknown' });
+        console.debug('[rdp-client]', 'clipboard-write permission', { state: permission?.state || 'unknown' });
     } catch (err) {
-        console.debug('[guac-client]', 'clipboard-write permission query unavailable', { error: err.message });
+        console.debug('[rdp-client]', 'clipboard-write permission query unavailable', { error: err.message });
     }
 
     try {
         await navigator.clipboard.writeText(text);
-        console.info('[guac-client]', 'host clipboard written via Clipboard API', { length: text.length });
+        console.info('[rdp-client]', 'host clipboard written via Clipboard API', { length: text.length });
         return true;
     } catch (err) {
-        console.warn('[guac-client]', 'Clipboard API write failed, trying execCommand fallback', { error: err.message });
+        console.warn('[rdp-client]', 'Clipboard API write failed, trying execCommand fallback', { error: err.message });
     }
 
     const textarea = document.createElement('textarea');
@@ -2222,9 +1986,9 @@ async function writeHostClipboard(text) {
     let ok = false;
     try {
         ok = document.execCommand('copy');
-        console.info('[guac-client]', 'host clipboard fallback result', { ok, length: text.length });
+        console.info('[rdp-client]', 'host clipboard fallback result', { ok, length: text.length });
     } catch (err) {
-        console.warn('[guac-client]', 'host clipboard fallback failed', { error: err.message });
+        console.warn('[rdp-client]', 'host clipboard fallback failed', { error: err.message });
     } finally {
         textarea.remove();
         stage?.focus?.({ preventScroll: true });
@@ -2234,16 +1998,16 @@ async function writeHostClipboard(text) {
 
 function isTextInputTarget(target = document.activeElement) {
     if (!target) return false;
-    if (target.closest?.('.guac-floating-panel')) return true;
+    if (target.closest?.('.rdp-floating-panel')) return true;
     const tag = target.tagName?.toLowerCase();
     return tag === 'textarea' || tag === 'input' || target.isContentEditable;
 }
 
 function startClipboardAutoSync() {
-    if (rdpInputSender && !client) return;
+    if (!rdpInputSender) return;
     if (clipboardAutoSyncTimer) return;
     const tick = () => {
-        if (!connected || (!client && !rdpInputSender)) return;
+        if (!connected || !rdpInputSender) return;
         const now = Date.now();
         if (document.visibilityState !== 'visible') return;
         if (isTextInputTarget(document.activeElement) && document.activeElement !== mobileKeyboardInput) return;
@@ -2266,7 +2030,7 @@ async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipb
     try {
         text = await navigator.clipboard.readText();
     } catch (err) {
-        console.warn('[guac-client]', 'local clipboard sync read failed', { source, error: err.message });
+        console.warn('[rdp-client]', 'local clipboard sync read failed', { source, error: err.message });
         if (!silent) setClipboardHint('浏览器拒绝读取本机剪贴板，请打开剪贴板面板手动发送', 'warning');
         return false;
     }
@@ -2286,7 +2050,6 @@ async function syncLocalClipboardToRemote({ paste = false, source = 'local-clipb
     }
     if (paste) {
         pasteShortcutInProgress = true;
-        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent || '');
         await sleep(80);
         await sendRdpClipboardPaste(text, { paste: true });
         window.setTimeout(() => { pasteShortcutInProgress = false; }, 300);
@@ -2311,12 +2074,7 @@ function installLocalClipboardBridge() {
         lastLocalClipboardText = text;
         lastLocalClipboardSentAt = Date.now();
         if (clipboardText) clipboardText.value = text;
-        if (rdpInputSender && !client) await sendRdpClipboardPaste(text, { paste: true });
-        else {
-            sendRemoteClipboardText(text);
-            await sleep(70);
-            await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
-        }
+        await sendRdpClipboardPaste(text, { paste: true });
         setClipboardHint(`已捕获本机粘贴并发送到远程 ${text.length} 字符`, 'success');
     }, true);
     document.addEventListener('keydown', async (event) => {
@@ -2337,7 +2095,7 @@ function installLocalClipboardBridge() {
                     }
                 }
             } catch (err) {
-                console.debug('[guac-client]', 'clipboard file read unavailable', { error: err.message });
+                console.debug('[rdp-client]', 'clipboard file read unavailable', { error: err.message });
             }
             if (files.length) {
                 await sendRdpFilesClipboard(files, { paste: true, source: 'keyboard-paste-shortcut' });
@@ -2387,65 +2145,15 @@ function encodeRdpFileClipboardMimetype(file, reset = false, extra = {}) {
     return parts.join(';');
 }
 
-function sendRdpFileClipboardMetadata(file, { reset = false } = {}) {
-    if (!file || !client || !connected || protocolLabel() !== 'RDP') return false;
-    const id = `f${Date.now().toString(36)}${(++rdpFileClipboardSeq).toString(36)}`;
-    Object.defineProperty(file, '__rdpFileClipboardId', { value: id, configurable: true });
-    rdpFileClipboardFiles.set(id, file);
-    const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, reset, { id }));
-    stream.sendEnd();
-    console.info('[guac-client]', 'rdp file clipboard metadata sent', { id, name: file.name, size: file.size });
-    return true;
-}
-
-async function handleRdpFileRangeRequest(requestId, fileId, offsetText, lengthText) {
-    const file = rdpFileClipboardFiles.get(fileId);
-    if (!file || !client || !connected) {
-        console.warn('[guac-client]', 'rdp file range request missing file', { requestId, fileId });
-        return;
-    }
-    const offset = Math.max(0, Number(offsetText) || 0);
-    const length = Math.max(0, Number(lengthText) || 0);
-    const chunk = file.slice(offset, Math.min(offset + length, file.size));
-    const stream = client.createClipboardStream(encodeRdpFileClipboardMimetype(file, false, { id: fileId, response: 'range', request: requestId }));
-    const writer = new Guacamole.BlobWriter(stream);
-    await new Promise((resolve) => {
-        writer.onerror = (_blob, readOffset, error) => {
-            console.warn('[guac-client]', 'rdp file range read failed', { requestId, fileId, readOffset, error: error?.message || String(error) });
-            resolve(false);
-        };
-        writer.oncomplete = () => {
-            writer.sendEnd();
-            console.debug('[guac-client]', 'rdp file range response sent', { requestId, fileId, offset, length: chunk.size });
-            resolve(true);
-        };
-        writer.sendBlob(chunk);
-    });
-}
-
-async function handleZephyrRdpInstruction(args = []) {
-    const [op, ...rest] = args;
-    if (op === 'file-range-request') {
-        await handleRdpFileRangeRequest(rest[0], rest[1], rest[2], rest[3]);
-        return;
-    }
-    console.debug('[guac-client]', 'unknown zephyr-rdp instruction', { op, rest });
-}
-
-async function sendRdpFilesClipboard(files, { paste = true, source = 'file-clipboard' } = {}) {
+function sendRdpFileClipboardMetadata() { return false; }
+async function handleRdpFileRangeRequest() {}
+async function handleZephyrRdpInstruction() {}
+async function sendRdpFilesClipboard(files) {
     const list = Array.from(files || []).filter(Boolean);
     if (!list.length || protocolLabel() !== 'RDP') return false;
-    if (!ensureRemoteReady('同步 RDP 文件剪贴板')) return false;
-    list.forEach((file, index) => sendRdpFileClipboardMetadata(file, { reset: index === 0 }));
-    setClipboardHint(`已把 ${list.length} 个文件注册到 RDP 文件剪贴板${paste ? '，正在发送 Ctrl+V' : ''}`, 'success');
-    setTransientStatus(`RDP 文件剪贴板：${list.length} 个文件`);
-    console.info('[guac-client]', 'rdp file clipboard sent', { count: list.length, source, names: list.map((file) => file.name) });
-    notifyParentActivity();
-    if (paste) {
-        await sleep(160);
-        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
-    }
-    return true;
+    setClipboardHint('当前自有 RDP 管线支持文本剪贴板，文件剪贴板已禁用', 'warning');
+    setTransientStatus('RDP 文件剪贴板暂不可用');
+    return false;
 }
 
 function clipboardEventFiles(event) {
@@ -2454,7 +2162,7 @@ function clipboardEventFiles(event) {
 }
 
 async function sendRdpClipboardPaste(text, { paste = true } = {}) {
-    if (!text || !rdpInputSender || client || !connected) return false;
+    if (!text || !rdpInputSender || !connected) return false;
     rdpInputSender({ type: paste ? 'paste' : 'clipboard', text });
     notifyParentActivity();
     return true;
@@ -2462,29 +2170,14 @@ async function sendRdpClipboardPaste(text, { paste = true } = {}) {
 
 function sendRemoteClipboardText(text) {
     const label = protocolLabel();
-    if (rdpInputSender && !client) {
-        if (!connected) {
-            setTransientStatus(`${label} 尚未连接`);
-            return false;
-        }
-        if (!text) return false;
-        rdpInputSender({ type: 'clipboard', text });
-        notifyParentActivity();
-        console.info('[guac-client]', 'rdp clipboard text sent', { length: text.length, paste: false });
-        return true;
-    }
-    if (!client || !connected) {
+    if (!connected || !rdpInputSender) {
         setTransientStatus(`${label} 尚未连接`);
         return false;
     }
     if (!text) return false;
-    const G = Guacamole;
-    const stream = client.createClipboardStream('text/plain');
-    const writer = new G.StringWriter(stream);
-    writer.sendText(text);
-    writer.sendEnd();
-    console.info('[guac-client]', 'local clipboard sent to remote', { length: text.length });
+    rdpInputSender({ type: 'clipboard', text });
     notifyParentActivity();
+    console.info('[rdp-client]', 'rdp clipboard text sent', { length: text.length, paste: false });
     return true;
 }
 
@@ -2502,11 +2195,7 @@ async function sendTextByClipboardForAi(text, { paste = true, label = 'AI 文本
     }
     if (!sendRemoteClipboardText(value)) return false;
     await sleep(90);
-    if (rdpInputSender && !client) {
-        rdpInputSender({ type: 'paste', text: value });
-    } else if (client) {
-        await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
-    }
+    rdpInputSender?.({ type: 'paste', text: value });
     notifyParentActivity();
     setTransientStatus(`已粘贴 ${label} ${value.length} 字符`);
     return true;
@@ -2521,10 +2210,10 @@ async function readLocalClipboardIntoPanel() {
     try {
         const text = await navigator.clipboard.readText();
         clipboardText.value = text;
-        console.info('[guac-client]', 'local clipboard read', { length: text.length });
+        console.info('[rdp-client]', 'local clipboard read', { length: text.length });
         setClipboardHint('已读取本机剪贴板', 'success');
     } catch (err) {
-        console.warn('[guac-client]', 'local clipboard read failed', { error: err.message });
+        console.warn('[rdp-client]', 'local clipboard read failed', { error: err.message });
         setClipboardHint('浏览器拒绝读取，请手动粘贴', 'warning');
         clipboardText?.focus?.();
     }
@@ -2549,58 +2238,18 @@ async function copyRemoteClipboardToLocal() {
     }
 }
 
-function receiveRemoteClipboard(stream, mimetype) {
-    const isText = !mimetype || /^text\//i.test(mimetype);
-    if (!isText) {
-        console.warn('[guac-client]', 'remote clipboard ignored: unsupported mimetype', { mimetype });
-        setClipboardHint(`收到非文本剪贴板：${mimetype || 'unknown'}`, 'warning');
-        return;
-    }
-
-    const reader = new Guacamole.StringReader(stream);
-    const chunks = [];
-    reader.ontext = (text) => {
-        chunks.push(text);
-        console.debug('[guac-client]', 'remote clipboard chunk', { length: text.length });
-    };
-    reader.onend = async () => {
-        lastRemoteClipboard = chunks.join('');
-        if (remoteClipboardText) remoteClipboardText.value = lastRemoteClipboard;
-        togglePanel(clipboardPanel, true);
-        setClipboardHint(`收到远程剪贴板 ${lastRemoteClipboard.length} 字符，正在同步到本机...`, 'info');
-        console.info('[guac-client]', 'remote clipboard received', { length: lastRemoteClipboard.length, mimetype });
-
-        const ok = await writeHostClipboard(lastRemoteClipboard);
-        clipboardAutoWriteOk = ok;
-        clipboardAutoWriteFailed = !ok;
-        if (ok) {
-            setClipboardHint('远程剪贴板已自动同步到本机', 'success');
-            setTransientStatus('远程剪贴板已自动同步到本机');
-        } else {
-            setClipboardHint('已收到远程剪贴板；浏览器阻止自动写入，请点“复制到本机”或手动复制文本框内容', 'warning');
-            console.warn('[guac-client]', 'remote clipboard auto-write blocked by browser policy');
-            remoteClipboardText?.focus?.();
-            remoteClipboardText?.select?.();
-        }
-    };
-}
+function receiveRemoteClipboard() {}
 
 async function sendKeyDownUp(keysym, label = '快捷键') {
     if (!ensureRemoteReady(`发送${label}`)) return false;
     try {
-        console.info('[guac-client]', 'shortcut key send', { label, keysym });
-        if (client) {
-            client.sendKeyEvent(1, keysym);
-            await sleep(35);
-            client.sendKeyEvent(0, keysym);
-        } else if (rdpInputSender) {
-            rdpInputSender({ type: 'key', key: keysymToXdotool(keysym) });
-        }
+        console.info('[rdp-client]', 'shortcut key send', { label, keysym });
+        rdpInputSender?.({ type: 'key', key: keysymToXdotool(keysym) });
         notifyParentActivity();
         setTransientStatus(`已发送 ${label}`);
         return true;
     } catch (err) {
-        console.error('[guac-client]', 'shortcut key send failed', { label, keysym, error: err.message });
+        console.error('[rdp-client]', 'shortcut key send failed', { label, keysym, error: err.message });
         setTransientStatus(`${label} 发送失败`);
         return false;
     }
@@ -2609,25 +2258,13 @@ async function sendKeyDownUp(keysym, label = '快捷键') {
 async function sendKeyCombo(keysyms, label = '组合键') {
     if (!ensureRemoteReady(`发送${label}`)) return false;
     try {
-        console.info('[guac-client]', 'shortcut combo send', { label, keysyms });
-        if (client) {
-            for (const keysym of keysyms) {
-                client.sendKeyEvent(1, keysym);
-                await sleep(25);
-            }
-            await sleep(60);
-            for (const keysym of [...keysyms].reverse()) {
-                client.sendKeyEvent(0, keysym);
-                await sleep(25);
-            }
-        } else if (rdpInputSender) {
-            rdpInputSender({ type: 'key', key: keysyms.map(keysymToXdotool).join('+') });
-        }
+        console.info('[rdp-client]', 'shortcut combo send', { label, keysyms });
+        rdpInputSender?.({ type: 'key', key: keysyms.map(keysymToXdotool).join('+') });
         notifyParentActivity();
         setTransientStatus(`已发送 ${label}`);
         return true;
     } catch (err) {
-        console.error('[guac-client]', 'shortcut combo send failed', { label, keysyms, error: err.message });
+        console.error('[rdp-client]', 'shortcut combo send failed', { label, keysyms, error: err.message });
         setTransientStatus(`${label} 发送失败`);
         return false;
     }
@@ -2679,20 +2316,12 @@ function asciiKeysym(char) {
 }
 
 function sendTextToRemote(text) {
-    if (!text || (!client && !rdpInputSender) || !connected) return;
+    if (!text || !rdpInputSender || !connected) return;
     if (mobileKeyboardInput) mobileKeyboardInput.value = '';
     mobileInputMirror = '';
-    if (rdpInputSender && !client) {
-        rdpInputSender({ type: 'text', text });
-        notifyParentActivity();
-        console.info('[guac-client]', 'rdp mobile keyboard text sent', { length: text.length });
-        return;
-    }
-    for (const char of text) {
-        const keysym = asciiKeysym(char);
-        if (keysym) sendKeyDownUp(keysym);
-    }
-    console.info('[guac-client]', 'mobile keyboard text sent', { length: text.length });
+    rdpInputSender({ type: 'text', text });
+    notifyParentActivity();
+    console.info('[rdp-client]', 'rdp mobile keyboard text sent', { length: text.length });
 }
 
 function focusMobileKeyboard() {
@@ -2703,7 +2332,7 @@ function focusMobileKeyboard() {
     stage?.classList.add('keyboard-open');
     keyboardBtn?.classList.add('active');
     setTimeout(() => { try { mobileKeyboardInput.focus({ preventScroll: true }); } catch {} }, 80);
-    console.info('[guac-client]', 'mobile keyboard focused');
+    console.info('[rdp-client]', 'mobile keyboard focused');
 }
 
 function blurMobileKeyboard() {
@@ -2712,7 +2341,7 @@ function blurMobileKeyboard() {
     mobileKeyboardInput.style.pointerEvents = 'none';
     stage?.classList.remove('keyboard-open');
     keyboardBtn?.classList.remove('active');
-    console.info('[guac-client]', 'mobile keyboard blurred');
+    console.info('[rdp-client]', 'mobile keyboard blurred');
 }
 
 function toggleMobileKeyboard() {
@@ -2742,7 +2371,7 @@ function setupMobileKeyboard() {
         mobileInputMirror = '';
     };
     const sendBackspaceToRemote = () => {
-        if (rdpInputSender && !client && connected) {
+        if (rdpInputSender && connected) {
             rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
             notifyParentActivity();
             return true;
@@ -2750,7 +2379,7 @@ function setupMobileKeyboard() {
         return sendKeyDownUp(KEY.BACKSPACE, 'Backspace');
     };
     const sendEnterToRemote = () => {
-        if (rdpInputSender && !client && connected) {
+        if (rdpInputSender && connected) {
             rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.ENTER) });
             notifyParentActivity();
             return true;
@@ -2767,7 +2396,7 @@ function setupMobileKeyboard() {
     });
 
     mobileKeyboardInput.addEventListener('beforeinput', (event) => {
-        if ((!client && !rdpInputSender) || !connected) return;
+        if (!rdpInputSender || !connected) return;
         const inputType = event.inputType || '';
         if (inputType === 'insertCompositionText' || composing) return;
         event.preventDefault();
@@ -2798,7 +2427,7 @@ function setupMobileKeyboard() {
     });
 
     mobileKeyboardInput.addEventListener('keydown', (event) => {
-        if ((!client && !rdpInputSender) || !connected) return;
+        if (!rdpInputSender || !connected) return;
         if (event.key === 'Backspace') {
             event.preventDefault();
             sendBackspaceToRemote();
@@ -2822,7 +2451,7 @@ function setupMobileKeyboard() {
 async function runShortcut(name) {
     const lower = String(name || '').toLowerCase();
     const ctrlChar = (char) => char.toLowerCase().codePointAt(0);
-    console.info('[guac-client]', 'shortcut button activated', { name: lower, connected, hasClient: !!client });
+    console.info('[rdp-client]', 'shortcut button activated', { name: lower, connected, hasClient: false });
 
     const actions = {
         esc: () => sendKeyDownUp(KEY.ESC, 'Esc'),
@@ -2852,7 +2481,7 @@ async function runShortcut(name) {
 
     const action = actions[lower];
     if (!action) {
-        console.warn('[guac-client]', 'unknown shortcut', { name: lower });
+        console.warn('[rdp-client]', 'unknown shortcut', { name: lower });
         setTransientStatus(`未知快捷键：${lower}`);
         return false;
     }
@@ -2861,7 +2490,7 @@ async function runShortcut(name) {
 
 async function sendClipboard() {
     const label = protocolLabel();
-    if (!client || !connected) return setStatus('error', `${label} 尚未连接`);
+    if (!connected || !rdpInputSender) return setStatus('error', `${label} 尚未连接`);
     let text = '';
     try {
         text = await navigator.clipboard.readText();
@@ -2869,29 +2498,12 @@ async function sendClipboard() {
         text = prompt(`请输入要发送到远程 ${label} 的剪贴板文本：`) || '';
     }
     if (!text) return;
-    const stream = client.createClipboardStream('text/plain');
-    const writer = new Guacamole.StringWriter(stream);
-    writer.sendText(text);
-    writer.sendEnd();
-    console.debug('[guac-client]', 'clipboard sent', { length: text.length });
+    sendRemoteClipboardText(text);
 }
 
 function sendCtrlAltDel() {
     if (!ensureRemoteReady('发送 Ctrl+Alt+Del')) return;
-    const CTRL = 0xffe3;
-    const ALT = 0xffe9;
-    const DEL = 0xffff;
-    if (rdpInputSender && !client) {
-        rdpInputSender({ type: 'key', key: 'ctrl+alt+Delete' });
-        notifyParentActivity();
-        return;
-    }
-    client.sendKeyEvent(1, CTRL);
-    client.sendKeyEvent(1, ALT);
-    client.sendKeyEvent(1, DEL);
-    client.sendKeyEvent(0, DEL);
-    client.sendKeyEvent(0, ALT);
-    client.sendKeyEvent(0, CTRL);
+    rdpInputSender?.({ type: 'key', key: 'ctrl+alt+Delete' });
     notifyParentActivity();
 }
 
@@ -2901,7 +2513,7 @@ function rdpQualityText(mode = qualityModes[qualityIdx]) {
 
 function rememberRdpQuality(mode) {
     params.quality = mode;
-    const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
+    const key = tabId ? `zephyr_remote_desktop_params_${tabId}` : 'zephyr_remote_desktop_params';
     try { sessionStorage.setItem(key, JSON.stringify(params)); } catch {}
 }
 
@@ -2912,7 +2524,7 @@ function activateRdpFitMode(mode = '') {
     const m = fitModes[fitModeIdx];
     fitBtn.classList.toggle('active', m !== '1:1');
     fitBtn.textContent = m === 'fit' ? '适应' : m === '1:1' ? '1:1 原始' : m;
-    if (rdpInputSender && !client) {
+    if (rdpInputSender) {
         setRdpScaleZoom(1, { preserveViewport: false });
         const target = computeRdpTargetSize(m);
         applyDisplayScale();
@@ -2921,7 +2533,7 @@ function activateRdpFitMode(mode = '') {
         window.clearTimeout(rdpReconnectTimer);
         rdpReconnectTimer = window.setTimeout(() => {
             const now = Date.now();
-            if (!rdpInputSender || client || !connected || rdpReconnectPending) return;
+            if (!rdpInputSender || !connected || rdpReconnectPending) return;
             if (now - rdpLastReconnectAt < 1200) return;
             rdpReconnectPending = true;
             rdpLastReconnectAt = now;
@@ -2940,7 +2552,7 @@ function activateRdpQualityMode(mode = '') {
     qualityIdx = qualityModes.indexOf(nextMode);
     qualityBtn && (qualityBtn.textContent = rdpQualityText(nextMode));
     rememberRdpQuality(nextMode);
-    if (rdpInputSender && !client && connected) {
+    if (rdpInputSender && connected) {
         const target = computeRdpTargetSize(fitModes[fitModeIdx]);
         rdpReconnectPending = true;
         rdpLastReconnectAt = Date.now();
@@ -2974,8 +2586,7 @@ async function performAiRemoteDesktopAction(data = {}) {
         if (!sendRemoteClipboardText(value)) throw new Error('RDP 剪贴板发送失败：远程未连接或文本为空');
         if (data.paste !== false) {
             await sleep(90);
-            if (rdpInputSender && !client) rdpInputSender({ type: 'paste', text: value });
-            else if (client) await sendKeyCombo([KEY.CTRL, 0x0076], 'Ctrl+V');
+            rdpInputSender?.({ type: 'paste', text: value });
             notifyParentActivity();
             setTransientStatus(`已粘贴剪贴板文本 ${value.length} 字符`);
         }
@@ -3026,7 +2637,7 @@ clipboardSendBtn?.addEventListener('click', async () => {
     const text = clipboardText?.value || '';
     if (sendRemoteClipboardText(text)) {
         setClipboardHint(`已发送 ${text.length} 字符到远程剪贴板，可在远程 Ctrl+V 粘贴`, 'success');
-        if (rdpInputSender && !client) {
+        if (rdpInputSender) {
             await sleep(80);
             setTransientStatus('远程剪贴板已设置，正在粘贴');
             rdpInputSender({ type: 'paste', text });
@@ -3035,11 +2646,11 @@ clipboardSendBtn?.addEventListener('click', async () => {
 });
 clipboardCopyRemoteBtn?.addEventListener('click', () => copyRemoteClipboardToLocal());
 stage?.addEventListener('focus', () => {
-    if (connected && (client || rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus', silent: true }).catch(() => {});
+    if (connected && (rdpInputSender)) syncLocalClipboardToRemote({ paste: false, source: 'stage-focus', silent: true }).catch(() => {});
 });
 stage?.addEventListener('pointerdown', () => {
     ensureRdpAudioUnlocked();
-    if (connected && client) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
+    if (connected) syncLocalClipboardToRemote({ paste: false, source: 'stage-pointerdown', silent: true }).catch(() => {});
 }, { passive: true });
 
 keyboardBtn?.addEventListener('click', toggleMobileKeyboard);
@@ -3048,7 +2659,7 @@ mobileKeyboardInput?.addEventListener('blur', () => { keyboardBtn?.classList.rem
 mobileKeyboardInput?.addEventListener('keydown', (event) => {
     if (event.key !== 'Backspace' || mobileKeyboardInput.value) return;
     event.preventDefault();
-    if (rdpInputSender && !client) {
+    if (rdpInputSender) {
         rdpInputSender({ type: 'key', key: keysymToXdotool(KEY.BACKSPACE) });
         notifyParentActivity();
         return;
@@ -3071,7 +2682,7 @@ shortcutGrid?.addEventListener('pointerdown', (event) => {
     btn.classList.add('active');
     window.setTimeout(() => btn.classList.remove('active'), 140);
     runShortcut(btn.dataset.keyseq).catch((err) => {
-        console.error('[guac-client]', 'shortcut action failed', { keyseq: btn.dataset.keyseq, error: err.message });
+        console.error('[rdp-client]', 'shortcut action failed', { keyseq: btn.dataset.keyseq, error: err.message });
     });
 }, { capture: true });
 
@@ -3084,7 +2695,7 @@ shortcutGrid?.addEventListener('click', (event) => {
 
 stage?.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'touch' || event.pointerType === 'pen' || (!event.pointerType && ((navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches))) return;
-    if (event.target.closest('.guac-floating-panel, .guac-mobile-keyboard-input, button, textarea, input')) return;
+    if (event.target.closest('.rdp-floating-panel, .rdp-mobile-keyboard-input, button, textarea, input')) return;
     stage.focus({ preventScroll: true });
     notifyParentActivity();
 });
@@ -3119,7 +2730,7 @@ window.addEventListener('message', (event) => {
         performAiRemoteDesktopAction(event.data).then((result = {}) => {
             notifyParentAiActionResult(actionId, { ok: true, control: event.data?.control || '', result });
         }).catch((err) => {
-            console.warn('[guac-client]', 'AI remote desktop action failed', { error: err.message, control: event.data?.control });
+            console.warn('[rdp-client]', 'AI remote desktop action failed', { error: err.message, control: event.data?.control });
             setTransientStatus(err.message || 'AI 远程桌面操作失败');
             notifyParentAiActionResult(actionId, { ok: false, control: event.data?.control || '', error: err.message || 'AI 远程桌面操作失败' });
         });

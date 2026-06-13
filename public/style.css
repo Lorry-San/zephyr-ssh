@@ -313,7 +313,7 @@ body {
 }
 
 body:has(.terminal-page),
-body:has(.guac-page) {
+body:has(.rdp-page) {
     position: fixed;
     inset: 0;
     width: 100%;
@@ -4444,7 +4444,7 @@ html.keyboard-open .terminal-page {
 
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     body:has(.terminal-page),
-    body:has(.guac-page) {
+    body:has(.rdp-page) {
         min-height: 100dvh;
     }
 
@@ -4522,8 +4522,8 @@ html.keyboard-open .terminal-page {
     .fm-editor-minimap { width: 98px; flex-basis: 98px; }
 }
 
-/* ===== Guacamole / VNC 页面 ===== */
-.guac-page {
+/* ===== RDP / VNC 页面 ===== */
+.rdp-page {
     position: fixed;
     inset: 0;
     display: flex;
@@ -4540,12 +4540,12 @@ html.keyboard-open .terminal-page {
     border: 1px solid var(--border);
 }
 
-.guac-topbar {
+.rdp-topbar {
     position: relative;
     z-index: 5;
 }
 
-.guac-stage {
+.rdp-stage {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
@@ -4563,7 +4563,7 @@ html.keyboard-open .terminal-page {
     contain: layout paint;
 }
 
-.guac-display-shell {
+.rdp-display-shell {
     position: absolute;
     inset: 0;
     display: grid;
@@ -4581,7 +4581,7 @@ html.keyboard-open .terminal-page {
     background-position: 0 0, 0 14px, 14px -14px, -14px 0;
 }
 
-.guac-display {
+.rdp-display {
     position: relative;
     min-width: 1px;
     min-height: 1px;
@@ -4590,29 +4590,29 @@ html.keyboard-open .terminal-page {
     transform-origin: center center;
 }
 
-.guac-display-element {
+.rdp-display-element {
     display: block;
     transform-origin: 0 0;
     outline: none;
 }
 
-.guac-display canvas,
-.guac-display img {
+.rdp-display canvas,
+.rdp-display img {
     image-rendering: auto;
     max-width: none;
     max-height: none;
 }
 
-.guac-stage .terminal-overlay {
+.rdp-stage .terminal-overlay {
     z-index: 10;
 }
 
-.guac-stage .terminal-overlay.hidden {
+.rdp-stage .terminal-overlay.hidden {
     opacity: 0;
     pointer-events: none;
 }
 
-.guac-mobile-keyboard-input {
+.rdp-mobile-keyboard-input {
     position: absolute;
     left: 10px;
     bottom: 10px;
@@ -4631,7 +4631,7 @@ html.keyboard-open .terminal-page {
     pointer-events: none;
 }
 
-.guac-floating-panel {
+.rdp-floating-panel {
     position: absolute;
     z-index: 30;
     min-width: 300px;
@@ -4662,35 +4662,35 @@ html.keyboard-open .terminal-page {
         height .34s cubic-bezier(.16,1,.3,1);
 }
 
-.guac-floating-panel[hidden] {
+.rdp-floating-panel[hidden] {
     display: flex !important;
     pointer-events: none;
 }
 
-.guac-floating-panel.open {
+.rdp-floating-panel.open {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
     transform: translate3d(0, 0, 0) scale(1);
 }
 
-.guac-floating-panel.front {
+.rdp-floating-panel.front {
     z-index: 42;
     box-shadow: 0 34px 110px rgba(0,0,0,.54), inset 0 1px 0 rgba(255,255,255,.13);
 }
 
-.guac-floating-panel.front-switching {
+.rdp-floating-panel.front-switching {
     animation: panelFrontSwitch .28s cubic-bezier(.2,.8,.2,1);
 }
 
-.guac-floating-panel.dragging,
-.guac-floating-panel.resizing {
+.rdp-floating-panel.dragging,
+.rdp-floating-panel.resizing {
     transition: none;
     user-select: none;
     touch-action: none;
 }
 
-.guac-floating-panel.layout-animating {
+.rdp-floating-panel.layout-animating {
     transition:
         left .62s var(--ios-open),
         top .62s var(--ios-open),
@@ -4700,12 +4700,12 @@ html.keyboard-open .terminal-page {
         opacity .2s ease;
 }
 
-.guac-floating-panel .panel-drag-handle {
+.rdp-floating-panel .panel-drag-handle {
     height: 30px;
     background: color-mix(in srgb, var(--border) 30%, rgba(255,255,255,.08));
 }
 
-.guac-panel-content {
+.rdp-panel-content {
     min-height: 0;
     flex: 1;
     display: flex;
@@ -4717,31 +4717,31 @@ html.keyboard-open .terminal-page {
     -webkit-overflow-scrolling: touch;
 }
 
-.guac-panel-head,
-.guac-panel-actions {
+.rdp-panel-head,
+.rdp-panel-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
 }
 
-.guac-panel-head strong {
+.rdp-panel-head strong {
     font-size: 14px;
 }
 
-.guac-panel-head .icon-btn {
+.rdp-panel-head .icon-btn {
     width: 30px;
     height: 30px;
     flex: 0 0 auto;
 }
 
-.guac-panel-label {
+.rdp-panel-label {
     color: var(--text-secondary);
     font-size: 12px;
     font-weight: 800;
 }
 
-.guac-panel-textarea {
+.rdp-panel-textarea {
     width: 100%;
     min-height: 76px;
     max-height: 160px;
@@ -4759,36 +4759,36 @@ html.keyboard-open .terminal-page {
     -webkit-user-select: text;
 }
 
-.guac-panel-textarea:focus {
+.rdp-panel-textarea:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(88,166,255,.12);
 }
 
-.guac-panel-textarea[readonly] {
+.rdp-panel-textarea[readonly] {
     color: color-mix(in srgb, var(--text) 88%, var(--text-secondary));
 }
 
-.guac-panel-hint {
+.rdp-panel-hint {
     color: var(--text-secondary);
     font-size: 11px;
     line-height: 1.45;
 }
 
-.guac-panel-hint[data-level="success"] {
+.rdp-panel-hint[data-level="success"] {
     color: var(--success);
 }
 
-.guac-panel-hint[data-level="warning"] {
+.rdp-panel-hint[data-level="warning"] {
     color: var(--warning);
 }
 
-.guac-shortcut-grid {
+.rdp-shortcut-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
 }
 
-.guac-shortcut-grid .tool-btn {
+.rdp-shortcut-grid .tool-btn {
     min-width: 0;
     width: 100%;
     min-height: 34px;
@@ -4798,49 +4798,49 @@ html.keyboard-open .terminal-page {
 }
 
 @media (max-width: 480px) and (pointer: coarse) {
-    .guac-page .terminal-topbar {
+    .rdp-page .terminal-topbar {
         padding: 6px 10px;
     }
 
-    .guac-stage {
+    .rdp-stage {
         margin: 4px;
         border-radius: 10px;
     }
 
-    .guac-display-shell {
+    .rdp-display-shell {
         place-items: center;
     }
 
-    .guac-floating-panel {
+    .rdp-floating-panel {
         min-width: 260px;
         min-height: 220px;
         border-radius: 18px;
     }
 
-    .guac-panel-content {
+    .rdp-panel-content {
         padding: 10px;
     }
 
-    .guac-panel-actions {
+    .rdp-panel-actions {
         flex-wrap: wrap;
         justify-content: flex-start;
     }
 
-    .guac-panel-actions .btn-sm {
+    .rdp-panel-actions .btn-sm {
         flex: 1 1 auto;
     }
 
-    .guac-shortcut-grid {
+    .rdp-shortcut-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 5px;
     }
 
-    .guac-shortcut-grid .tool-btn {
+    .rdp-shortcut-grid .tool-btn {
         min-height: 36px;
         padding-inline: 5px;
     }
 
-    .guac-panel-textarea {
+    .rdp-panel-textarea {
         min-height: 68px;
         max-height: 120px;
         font-size: 12px;
@@ -4913,7 +4913,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .file-manager,
 .docker-panel,
 .info-modal,
-.guac-floating-panel,
+.rdp-floating-panel,
 .snippet-panel,
 .shortcut-panel {
     --panel-origin-x: 50%;
@@ -4924,7 +4924,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .ai-agent-panel.panel-opening,
 .docker-panel.panel-opening,
 .info-modal.panel-opening,
-.guac-floating-panel.panel-opening,
+.rdp-floating-panel.panel-opening,
 .snippet-panel.panel-opening,
 .shortcut-panel.panel-opening {
     animation: floatingPanelOpenFromButton .36s cubic-bezier(.16, 1, .3, 1) both;
@@ -4933,7 +4933,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .ai-agent-panel.panel-closing,
 .docker-panel.panel-closing,
 .info-modal.panel-closing,
-.guac-floating-panel.panel-closing,
+.rdp-floating-panel.panel-closing,
 .snippet-panel.panel-closing,
 .shortcut-panel.panel-closing {
     animation: floatingPanelCloseToButton .28s cubic-bezier(.4, 0, .2, 1) both;
@@ -5043,7 +5043,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .shortcut-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 12px; overflow: auto; }
 .shortcut-grid .tool-btn { min-width: 0; width: 100%; min-height: 36px; padding-inline: 6px; font-size: 11px; }
 .shortcut-grid .fn-key,
-.guac-shortcut-grid .tool-btn[data-keyseq^="f"] { order: 20; }
+.rdp-shortcut-grid .tool-btn[data-keyseq^="f"] { order: 20; }
 .snippet-form { max-width: min(720px, 100%); }
 .snippet-settings-list { display: grid; gap: 10px; margin-top: 12px; }
 .snippet-settings-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
@@ -5256,7 +5256,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     body:has(.terminal-page),
-    body:has(.guac-page) {
+    body:has(.rdp-page) {
         position: static;
         inset: auto;
         width: auto;
@@ -6547,7 +6547,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
     transform: translate3d(0,0,0);
 }
 
-.guac-stage.keyboard-open .guac-display-shell {
+.rdp-stage.keyboard-open .rdp-display-shell {
     padding-bottom: min(34vh, 260px);
     scroll-padding-bottom: min(34vh, 260px);
 }
@@ -6710,13 +6710,13 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 
 /* ===== RDP 顶栏：复用 SSH 页同类 CSS 图标实现，替换 Emoji/字符图标 ===== */
-.guac-page .topbar-actions .btn-sm[data-rdp-icon] {
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
 }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon]::before {
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon]::before {
     content: '';
     display: inline-block;
     width: 15px;
@@ -6726,38 +6726,38 @@ body.smartbar-trash-hover .smartbar-trash-target {
     -webkit-mask: var(--rdp-toolbar-icon) center / contain no-repeat;
     mask: var(--rdp-toolbar-icon) center / contain no-repeat;
 }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="quality"] { --rdp-toolbar-icon-color: #d9aa18; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="fit"] { --rdp-toolbar-icon-color: #4aa3df; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 4h7v2H7.4l4.1 4.1-1.4 1.4L6 7.4V11H4V4zm9 0h7v7h-2V7.4l-4.1 4.1-1.4-1.4L16.6 6H13V4zM4 13h2v3.6l4.1-4.1 1.4 1.4L7.4 18H11v2H4v-7zm14 0h2v7h-7v-2h3.6l-4.1-4.1 1.4-1.4 4.1 4.1V13z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="zoom"] { --rdp-toolbar-icon-color: #6b7684; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-rule='evenodd' d='M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm1 2H9v2H7v2h2v2h2v-2h2v-2h-2V8zm4.7 7.3 4.5 4.5-1.4 1.4-4.5-4.5 1.4-1.4z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="clipboard"] { --rdp-toolbar-icon-color: #9a6a3a; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3h6l1 2h3v16H5V5h3l1-2zm1 4h4l1-2h-6l1 2zm-3 1v11h10V8h-2v2H9V8H7z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="keyboard"] { --rdp-toolbar-icon-color: #6b7684; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 6h18v12H3V6zm2 2v8h14V8H5zm1 1h2v2H6V9zm3 0h2v2H9V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM6 12h2v2H6v-2zm3 0h6v2H9v-2zm7 0h2v2h-2v-2z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="shortcuts"] { --rdp-toolbar-icon-color: #d9aa18; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="joystick"] { --rdp-toolbar-icon-color: #ffb14f; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 9h10a5 5 0 0 1 4.8 3.6l.8 3A3.5 3.5 0 0 1 19.2 20c-1 0-1.9-.4-2.6-1.1L14.7 17H9.3l-1.9 1.9A3.7 3.7 0 0 1 4.8 20a3.5 3.5 0 0 1-3.4-4.4l.8-3A5 5 0 0 1 7 9zm1 3H6v2H4v2h2v2h2v-2h2v-2H8v-2zm8.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM18 10a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM11 4h2v5h-2V4z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="security"] { --rdp-toolbar-icon-color: #2f81f7; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2 5 5v6c0 4.6 2.9 8.8 7 10 4.1-1.2 7-5.4 7-10V5l-7-3zm0 3.2 5 2.1V11c0 3.3-2 6.4-5 7.6-3-1.2-5-4.3-5-7.6V7.3l5-2.1zM11 8h2v5h-2V8zm0 7h2v2h-2v-2z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="reconnect"] { --rdp-toolbar-icon-color: #2f81f7; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z'/%3E%3C/svg%3E"); }
-.guac-page .topbar-actions .btn-sm[data-rdp-icon="disconnect"] { --rdp-toolbar-icon-color: #f85149; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 3h10v2H7V3zm4 4h2v7h-2V7zm-5.6 3.2 1.5 1.3A6 6 0 1 0 17.1 11.5l1.5-1.3a8 8 0 1 1-13.2 0z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="quality"] { --rdp-toolbar-icon-color: #d9aa18; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="fit"] { --rdp-toolbar-icon-color: #4aa3df; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 4h7v2H7.4l4.1 4.1-1.4 1.4L6 7.4V11H4V4zm9 0h7v7h-2V7.4l-4.1 4.1-1.4-1.4L16.6 6H13V4zM4 13h2v3.6l4.1-4.1 1.4 1.4L7.4 18H11v2H4v-7zm14 0h2v7h-7v-2h3.6l-4.1-4.1 1.4-1.4 4.1 4.1V13z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="zoom"] { --rdp-toolbar-icon-color: #6b7684; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-rule='evenodd' d='M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm1 2H9v2H7v2h2v2h2v-2h2v-2h-2V8zm4.7 7.3 4.5 4.5-1.4 1.4-4.5-4.5 1.4-1.4z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="clipboard"] { --rdp-toolbar-icon-color: #9a6a3a; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3h6l1 2h3v16H5V5h3l1-2zm1 4h4l1-2h-6l1 2zm-3 1v11h10V8h-2v2H9V8H7z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="keyboard"] { --rdp-toolbar-icon-color: #6b7684; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 6h18v12H3V6zm2 2v8h14V8H5zm1 1h2v2H6V9zm3 0h2v2H9V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM6 12h2v2H6v-2zm3 0h6v2H9v-2zm7 0h2v2h-2v-2z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="shortcuts"] { --rdp-toolbar-icon-color: #d9aa18; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="joystick"] { --rdp-toolbar-icon-color: #ffb14f; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 9h10a5 5 0 0 1 4.8 3.6l.8 3A3.5 3.5 0 0 1 19.2 20c-1 0-1.9-.4-2.6-1.1L14.7 17H9.3l-1.9 1.9A3.7 3.7 0 0 1 4.8 20a3.5 3.5 0 0 1-3.4-4.4l.8-3A5 5 0 0 1 7 9zm1 3H6v2H4v2h2v2h2v-2h2v-2H8v-2zm8.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM18 10a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM11 4h2v5h-2V4z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="security"] { --rdp-toolbar-icon-color: #2f81f7; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2 5 5v6c0 4.6 2.9 8.8 7 10 4.1-1.2 7-5.4 7-10V5l-7-3zm0 3.2 5 2.1V11c0 3.3-2 6.4-5 7.6-3-1.2-5-4.3-5-7.6V7.3l5-2.1zM11 8h2v5h-2V8zm0 7h2v2h-2v-2z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="reconnect"] { --rdp-toolbar-icon-color: #2f81f7; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z'/%3E%3C/svg%3E"); }
+.rdp-page .topbar-actions .btn-sm[data-rdp-icon="disconnect"] { --rdp-toolbar-icon-color: #f85149; --rdp-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 3h10v2H7V3zm4 4h2v7h-2V7zm-5.6 3.2 1.5 1.3A6 6 0 1 0 17.1 11.5l1.5-1.3a8 8 0 1 1-13.2 0z'/%3E%3C/svg%3E"); }
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    .guac-page .topbar-actions .btn-sm[data-rdp-icon] { gap: 0; }
-    .guac-page .topbar-actions .btn-sm[data-rdp-icon]::before {
+    .rdp-page .topbar-actions .btn-sm[data-rdp-icon] { gap: 0; }
+    .rdp-page .topbar-actions .btn-sm[data-rdp-icon]::before {
         width: 21px;
         height: 21px;
         flex-basis: 21px;
     }
 }
 
-.guac-page .zoom-control {
+.rdp-page .zoom-control {
     gap: 7px;
     min-width: 172px;
     padding-inline: 10px;
     cursor: default;
 }
-.guac-page .zoom-control input[type="range"] {
+.rdp-page .zoom-control input[type="range"] {
     width: 78px;
     height: 18px;
     accent-color: var(--accent);
     cursor: pointer;
 }
-.guac-page .zoom-control em {
+.rdp-page .zoom-control em {
     min-width: 38px;
     font-style: normal;
     font-weight: 800;
@@ -6766,8 +6766,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
     text-align: right;
 }
 @media (max-width: 560px) {
-    .guac-page .zoom-control { min-width: 146px; }
-    .guac-page .zoom-control input[type="range"] { width: 56px; }
+    .rdp-page .zoom-control { min-width: 146px; }
+    .rdp-page .zoom-control input[type="range"] { width: 56px; }
 }
 
 /* Mobile SSH stable input mode: keep desktop unchanged, decouple keyboard from PTY resize. */

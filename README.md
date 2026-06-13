@@ -33,7 +33,7 @@
 - 🌊 **DOM 终端渲染**：基于 `@wterm/dom`，终端文本可像普通网页一样拖选复制。
 - 📱 **移动端友好**：支持移动端长按、拖拽选择和系统复制菜单。
 - 🗂️ **连接资产管理**：支持 SSH / RDP / VNC 连接管理、搜索、排序、标签和备注。
-- 🖥️ **RDP / VNC 远程桌面**：RDP 继续使用 Apache Guacamole / `guacd`，VNC 改为内置 noVNC 页面和 Zephyr WebSocket 代理，在浏览器内打开远程桌面。
+- 🖥️ **RDP / VNC 远程桌面**：RDP 使用 Zephyr 自有 FreeRDP + H.264 WebSocket 管线，VNC 使用内置 noVNC 页面和 Zephyr WebSocket 代理，在浏览器内打开远程桌面。
 - 🧭 **代理与跳板路由**：支持 SOCKS5 / HTTP CONNECT 代理、SSH 跳板机和多级 SSH 跳板链路。
 - ⚡ **远程批量执行**：可对多个 SSH 连接批量执行命令并查看结果。
 - 🧰 **远程运维能力**：支持远程状态监控、Docker 容器/镜像查看、日志查看、镜像拉取等 SSH 运维操作。
@@ -53,7 +53,7 @@
 - 💾 **SQLite 数据存储**：使用 `better-sqlite3` 持久化用户、连接、设置、安全事件等数据。
 - 🔐 **敏感数据加密**：连接密码/私钥、代理密码、SSH 密钥、TOTP Secret、SMTP/CAPTCHA 密钥等字段使用 ML-KEM-768 + AES-256-GCM 混合加密后落盘。
 - 📦 **数据备份**：支持加密备份导出、备份导入，并在导入前自动生成本地数据库备份。
-- 🐳 **Docker 部署**：Docker 镜像内置 Node.js 运行时与 `guacd`，可直接部署使用。
+- 🐳 **Docker 部署**：Docker 镜像内置 Node.js 运行时、FreeRDP、noVNC 所需运行依赖，可直接部署使用。
 
 ---
 
@@ -70,15 +70,15 @@
 - **SSH** 既可以作为目标连接，也可以作为跳板机。
 - **RDP / VNC** 可以作为目标连接，并且可以通过 SSH 跳板链路访问。
 - **RDP / VNC 不能作为跳板机**。跳板机只能选择 SSH 连接。
-- RDP / VNC 通过跳板访问时，Zephyr 会在服务端建立临时链路：RDP 仍由 `guacd` 连接本地临时端口，VNC 则由 Zephyr 的 noVNC WebSocket 代理直接完成 VNC 握手与转发。
+- RDP / VNC 通过跳板访问时，Zephyr 会在服务端建立临时链路：RDP 由 Zephyr 自有 RDP H.264 管线连接目标端口，VNC 由 Zephyr 的 noVNC WebSocket 代理直接完成 VNC 握手与转发。
 
 RDP 经 SSH 跳板访问链路：
 
 ```text
 浏览器
-  -> Zephyr /guacamole WebSocket
-  -> guacd
-  -> 127.0.0.1:临时端口
+  -> Zephyr /rdp-h264 WebSocket
+  -> FreeRDP/Xvfb/ffmpeg H.264 管线
+  -> 127.0.0.1:临时端口（如使用代理/跳板）
   -> SSH 跳板链路
   -> 目标 RDP 主机
 ```
@@ -153,7 +153,7 @@ npm start
 http://localhost:3000
 ```
 
-本地开发运行 RDP 时，需要本机可用的 `guacd`，或配置外部 `guacd`；仅使用 SSH/VNC 时不需要 guacd。Docker 镜像部署时已内置 `guacd`，通常无需额外配置 RDP 依赖。
+本地开发运行 RDP 时，需要本机可用的 `xfreerdp`、`Xvfb`、`ffmpeg`、`xdotool` 等运行依赖；Docker 镜像已内置这些依赖。
 
 ---
 
@@ -176,11 +176,6 @@ PORT=3000
 | `ZEPHYR_DATA_MLKEM768_PUBLIC_KEY_B64` / `ZEPHYR_DATA_MLKEM768_SECRET_KEY_B64` | 可选：外部注入 ML-KEM-768 数据字段加密密钥对；未设置时会自动生成到 `data/crypto/ml-kem-768-keypair.json` | 自动生成 |
 | `ZEPHYR_DATA_MLKEM768_KEY_FILE` | 可选：自动生成/读取 ML-KEM-768 数据字段加密密钥文件路径 | `data/crypto/ml-kem-768-keypair.json` |
 | `PUBLIC_ORIGIN` | Passkey / WebAuthn 使用的站点来源，应与浏览器访问地址一致 | `http://localhost:3000` |
-| `GUACD_HOST` | guacd 地址；Docker 镜像默认使用内置本机 guacd | `127.0.0.1` |
-| `GUACD_PORT` | guacd 监听端口 | `4822` |
-| `GUACD_EMBEDDED` | 是否由 Zephyr 自动启动内置 guacd | `true` |
-| `GUACD_BIN` | guacd 可执行文件路径 | `guacd` |
-| `GUACD_LOG_LEVEL` | guacd 日志级别 | `info` |
 
 注意：
 
@@ -284,25 +279,25 @@ Zephyr 自带的默认 Skill 已经写入了本地运维常用规则，重点包
 
 RDP 和 VNC 都不需要把目标端口暴露到公网，浏览器只连接 Zephyr：
 
-- **RDP**：继续使用 Apache Guacamole 的 `guacd` RDP 插件，浏览器通过 `/guacamole` WebSocket 隧道接入。
-- **VNC**：改为内置 **noVNC** 前端，浏览器通过 `/novnc` WebSocket 连接 Zephyr；Zephyr 在服务端直连/代理/SSH 跳板到目标 VNC Server，并在服务端使用保存的 VNC 密码完成 VNCAuth，密码不会下发到浏览器。
+- **RDP**：使用 Zephyr 自有 **FreeRDP + Xvfb + ffmpeg/WebCodecs H.264** 管线。浏览器通过 `/rdp-h264` WebSocket 接收 H.264 视频帧，并通过同一连接发送鼠标、键盘、剪贴板和重连/分辨率切换指令。
+- **VNC**：使用内置 **noVNC** 前端，浏览器通过 `/novnc` WebSocket 连接 Zephyr；Zephyr 在服务端直连/代理/SSH 跳板到目标 VNC Server，并在服务端使用保存的 VNC 密码完成 VNCAuth，密码不会下发到浏览器。
 
-### Docker 镜像内置 guacd
+### Docker 镜像内置 RDP/VNC 运行依赖
 
-项目 Docker 镜像运行层基于官方 `guacamole/guacd:1.5.5`，已包含：
+项目 Docker 镜像运行层基于 Alpine，已包含：
 
-- `guacd`
-- RDP 客户端插件
-- 相关运行依赖
+- FreeRDP / `xfreerdp`（含 Zephyr H.264 导出版 FreeRDP）
+- `Xvfb`、`ffmpeg`、`xdotool`、`xclip`、PulseAudio 等 RDP 管线运行依赖
+- noVNC 前端依赖
 
-Zephyr 启动时会自动检测并启动本机 `guacd`，Docker 部署通常不需要额外启动 `guacamole/guacd` 容器。VNC 已走 noVNC + Zephyr WebSocket 代理，不再依赖 `guacd` VNC 插件。
+项目不再包含旧的远程桌面网关组件，也不再依赖浏览器侧第三方 RDP 客户端库。
 
 ### 默认端口
 
 | 协议 | 默认端口 | 说明 |
 | --- | --- | --- |
 | `SSH` | `22` | WebSSH 终端 |
-| `RDP` | `3389` | Windows 远程桌面，经 guacd RDP 插件 |
+| `RDP` | `3389` | Windows 远程桌面，经 Zephyr `/rdp-h264` 自有管线 |
 | `VNC` | `5900` | VNC Server，经 noVNC + Zephyr `/novnc` 代理 |
 
 ### RDP/VNC 使用跳板
@@ -324,26 +319,6 @@ RDP/VNC 本身不是 SSH 协议，也不能作为 SSH 跳板机；但 Zephyr 支
 - RDP/VNC 可以作为最终目标，通过 SSH 跳板访问。
 - 多级跳板中的每一级都必须是 SSH 连接。
 
-### 外部 guacd
-
-本地开发或特殊部署如果只使用 SSH/VNC，不需要 guacd；如果要使用 RDP，仍需要可用的 guacd：
-
-```bash
-docker run -d \
-  --name zephyr-guacd \
-  -p 4822:4822 \
-  --restart unless-stopped \
-  guacamole/guacd:1.5.5
-```
-
-然后在 Zephyr `.env` 中配置：
-
-```env
-GUACD_EMBEDDED=false
-GUACD_HOST=127.0.0.1
-GUACD_PORT=4822
-```
-
 ### 常见排查
 
 RDP：
@@ -364,12 +339,11 @@ VNC：
 服务端日志关键字：
 
 ```text
+[rdp-h264]
+[rdp-audio]
+[rdp-test]
 [novnc-ws]
 [novnc-test]
-[guacd]
-[guacamole]
-[guacamole-ws]
-[guacamole-test]
 [tcp-forward]
 [route-plan]
 ```
@@ -421,7 +395,7 @@ services:
         max-file: "3"
 ```
 
-> Docker 镜像已内置 `guacd`、RDP 插件和相关运行依赖；VNC 走 noVNC + Zephyr `/novnc` 代理，通常不需要额外启动 `guacamole/guacd` 容器。
+> Docker 镜像已内置 FreeRDP/Xvfb/ffmpeg/xdotool/xclip/PulseAudio 等 RDP 管线依赖；VNC 走 noVNC + Zephyr `/novnc` 代理，不需要额外启动远程桌面网关容器。
 
 ### 3. 启动服务
 
@@ -581,11 +555,11 @@ docker run -d \
 
 Dockerfile 说明：
 
-- 构建阶段使用 `node:20-alpine`。
-- 运行阶段基于 `guacamole/guacd:1.5.5`。
-- 镜像内复制 Node.js 运行时和生产依赖。
-- 镜像内置 guacd、RDP 插件和运行依赖；VNC 使用 noVNC + Zephyr `/novnc` 代理。
-- 构建时会验证 `guacd`、`node`、`npm` 是否可执行。
+- 构建阶段使用 `node:20-alpine3.20` 与 `alpine:3.20`。
+- 运行阶段基于 `node:20-alpine3.20`。
+- 镜像内复制应用代码和生产依赖。
+- 镜像内置 FreeRDP/Xvfb/ffmpeg/xdotool/xclip/PulseAudio 等 RDP 管线依赖；VNC 使用 noVNC + Zephyr `/novnc` 代理。
+- 构建时会验证 `xfreerdp`、`node`、`npm` 是否可执行。
 
 ---
 
@@ -645,8 +619,8 @@ zephyr-ssh/
 │   ├── terminal.html    # SSH 终端页面
 │   ├── terminal.js      # SSH 终端逻辑
 │   ├── preview/image/   # 图片预览前端模块（Viewer.js UI 接入与样式）
-│   ├── guacamole.html   # RDP 远程桌面页面（Guacamole/guacd）
-│   ├── guacamole.js     # RDP Guacamole 前端逻辑
+│   ├── rdp.html          # RDP 远程桌面页面（Zephyr 自有管线）
+│   ├── rdp.js            # RDP WebCodecs/H.264 前端逻辑
 │   ├── novnc.html       # VNC noVNC 远程桌面页面
 │   ├── novnc.js         # VNC noVNC 前端逻辑
 │   └── style.css        # 全局样式
@@ -743,5 +717,4 @@ docker run -d \
 - [wterm](https://github.com/vercel-labs/wterm)
 - [ssh2](https://github.com/mscdex/ssh2)
 - [SimpleWebAuthn](https://simplewebauthn.dev/)
-- [Apache Guacamole](https://guacamole.apache.org/)
 - [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)

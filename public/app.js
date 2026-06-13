@@ -493,7 +493,7 @@ function updateProtocolFields({ preservePort = true } = {}) {
     $('#connPrivateKey')?.closest('.form-group')?.classList.toggle('force-hidden', protocol !== 'SSH');
     updateConnectionSecretRevealChrome(protocol);
     $('.advanced-route-panel')?.classList.remove('force-hidden');
-    console.debug('[guac-client]', 'protocol fields updated', { protocol, defaultPort, usernameRequired: protocol === 'SSH', routePanelEnabled: true });
+    console.debug('[rdp-client]', 'protocol fields updated', { protocol, defaultPort, usernameRequired: protocol === 'SSH', routePanelEnabled: true });
 }
 function setConnectionTestLatency(text = '', state = '') {
     const el = $('#connectionTestLatency');
@@ -919,7 +919,7 @@ async function testConnection() {
     setConnectionTestLatency('测试中...', 'pending');
     try {
         const payload = connectionPayload({ forTest: true });
-        console.debug('[guac-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port });
+        console.debug('[rdp-client]', 'test connection', { protocol: payload.protocol, host: payload.host, port: payload.port });
         const result = await api('/api/connections/test', { method: 'POST', body: JSON.stringify({ ...payload, connectionId: editingId || '', timeoutSeconds: 10 }) });
         setConnectionTestLatency(`连接延迟：${result.durationMs}ms`, 'success');
         toast(result.message || '连接测试成功');
@@ -951,9 +951,9 @@ async function openConnection(id) {
     const protocol = String(c.protocol || 'SSH').toUpperCase();
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     if (protocol === 'RDP' || protocol === 'VNC') {
-        sessionStorage.setItem(`zephyr_guac_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
-        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: protocol === 'VNC' ? 'novnc' : 'guacamole', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
-        console.debug(protocol === 'VNC' ? '[novnc-client]' : '[guac-client]', 'open remote desktop tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
+        sessionStorage.setItem(`zephyr_remote_desktop_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
+        terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: protocol === 'VNC' ? 'novnc' : 'rdp', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
+        console.debug(protocol === 'VNC' ? '[novnc-client]' : '[rdp-client]', 'open remote desktop tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {
         const sshParams = { connectionId: c.id, host: c.host, port: c.port, username: c.username, init: '', tabId, embedded: !isCompactTerminalWorkspace(), timestamp: Date.now(), snippets: settings?.snippets || [] };
         sessionStorage.setItem(`zephyr_ssh_params_${tabId}`, JSON.stringify(sshParams));
@@ -1491,8 +1491,8 @@ function createTerminalWindowElement(t) {
         const frame = document.createElement('iframe');
         frame.className = 'terminal-frame active';
         frame.dataset.frame = t.id;
-        frame.src = t.page === 'guacamole'
-            ? `/guacamole.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
+        frame.src = t.page === 'rdp'
+            ? `/rdp.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
             : t.page === 'novnc'
                 ? `/novnc.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
                 : `/terminal.html?embed=1&tabId=${encodeURIComponent(t.id)}`;
@@ -1659,7 +1659,7 @@ function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
             terminalReconnectFallbackTimers.delete(tabId);
         }
         sessionStorage.removeItem(`zephyr_ssh_params_${tabId}`);
-        sessionStorage.removeItem(`zephyr_guac_params_${tabId}`);
+        sessionStorage.removeItem(`zephyr_remote_desktop_params_${tabId}`);
         if (activeTerminalTab === tabId) activeTerminalTab = visualLayout[0] || terminalTabs.find((t) => !t.minimized)?.id || terminalTabs[0]?.id || null;
         if (!terminalTabs.length) {
             activeTerminalTab = null;

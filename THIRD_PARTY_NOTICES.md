@@ -22,8 +22,8 @@ The Zephyr-SSH project itself is licensed under the GNU General Public License v
 | unzipper | MIT | ZIP archive extraction | <https://github.com/ZJONSSON/node-unzipper> |
 | ipaddr.js | MIT | IP address parsing and validation | <https://github.com/whitequark/ipaddr.js> |
 | sharp | Apache-2.0 | Image processing and preview conversion | <https://sharp.pixelplumbing.com/> |
-| Apache Guacamole / guacamole-server | Apache-2.0 | Remote desktop gateway components used by the Docker build | <https://guacamole.apache.org/> |
-| guacamole-common-js | Apache-2.0 | Browser-side Guacamole client library | <https://guacamole.apache.org/> |
+| FreeRDP | Apache-2.0 | RDP client runtime used by Zephyr's native RDP pipeline | <https://www.freerdp.com/> |
+| noVNC | MPL-2.0 | Browser-side VNC client | <https://novnc.com/> |
 
 ## Editor and frontend dependencies
 

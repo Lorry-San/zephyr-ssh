@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-13.1-mobile-reconnect';
+const NOVNC_CLIENT_VERSION = '2026-06-13.2-native-rdp';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -56,7 +56,7 @@ const qualityModes = ['balanced', 'performance', 'quality'];
 const fitModes = ['fit', 'original', 'drag'];
 
 function loadParams() {
-    const key = tabId ? `zephyr_guac_params_${tabId}` : 'zephyr_guac_params';
+    const key = tabId ? `zephyr_remote_desktop_params_${tabId}` : 'zephyr_remote_desktop_params';
     try { return JSON.parse(sessionStorage.getItem(key) || '{}'); } catch { return {}; }
 }
 
