@@ -447,7 +447,7 @@ function toolDefinitions(ai = {}) {
         tools.push({ type: 'function', function: { name: 'list_env_vars', description: '列出 AI 专用环境变量名称和说明，不返回值。', parameters: { type: 'object', properties: {} } } });
         tools.push({ type: 'function', function: { name: 'get_env_var', description: '读取 AI 专用环境变量的值。敏感操作，需要用户确认。', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } });
     }
-    tools.push({ type: 'function', function: { name: 'open_connection', description: '在用户当前 Zephyr 页面里直接打开一个 SSH/RDP/VNC 连接，相当于用户点击连接卡片。用于需要 AI 代用户打开页面/会话时。', parameters: { type: 'object', properties: { connectionId: { type: 'string' } }, required: ['connectionId'] } } });
+    tools.push({ type: 'function', function: { name: 'open_connection', description: '在用户当前 Zephyr 页面里直接打开一个已存在的 SSH/RDP/VNC 连接，相当于用户点击连接卡片。必须传 connectionId；如果用户给的是连接名称（如 hytron），先用 list_connections 获取并匹配 id。不要用 connection_create / connection_update 来打开已有连接。', parameters: { type: 'object', properties: { connectionId: { type: 'string', description: '已有连接的 id，不是名称；名称需先 list_connections 匹配。' } }, required: ['connectionId'] } } });
     tools.push({ type: 'function', function: { name: 'plan_task', description: '创建执行计划，返回 planId；后续用 plan_update 更新步骤状态。', parameters: { type: 'object', properties: { title: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, risk: { type: 'string' } }, required: ['title', 'steps'] } } });
     tools.push({ type: 'function', function: { name: 'plan_update', description: '更新任务计划：步骤状态、暂停/继续、失败重试、追加日志。', parameters: { type: 'object', properties: { planId: { type: 'string' }, status: { type: 'string', enum: ['planned', 'running', 'paused', 'completed', 'failed', 'cancelled'] }, pause: { type: 'boolean' }, resume: { type: 'boolean' }, retryFailed: { type: 'boolean' }, note: { type: 'string' }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, index: { type: 'number' }, status: { type: 'string', enum: ['pending', 'running', 'paused', 'completed', 'failed', 'skipped', 'retrying'] }, note: { type: 'string' }, error: { type: 'string' } } } } }, required: ['planId'] } } });
     tools.push({ type: 'function', function: { name: 'plan_delete', description: '删除一个任务计划。', parameters: { type: 'object', properties: { planId: { type: 'string' } }, required: ['planId'] } } });
@@ -480,6 +480,26 @@ function openAiChatMessages(messages = []) {
             }).filter((part) => part.text || part.image_url?.url),
         };
     });
+}
+function closeJsonSchema(schema = {}) {
+    if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) return schema.map((item) => closeJsonSchema(item));
+    const out = { ...schema };
+    if (out.properties && typeof out.properties === 'object') out.properties = Object.fromEntries(Object.entries(out.properties).map(([k, v]) => [k, closeJsonSchema(v)]));
+    if (out.items) out.items = closeJsonSchema(out.items);
+    if (out.anyOf) out.anyOf = out.anyOf.map((item) => closeJsonSchema(item));
+    if (out.oneOf) out.oneOf = out.oneOf.map((item) => closeJsonSchema(item));
+    if ((out.type === 'object' || out.properties) && out.additionalProperties === undefined) out.additionalProperties = false;
+    return out;
+}
+function openAiChatTools(tools = []) {
+    return tools.map((tool) => ({
+        ...tool,
+        function: {
+            ...(tool.function || {}),
+            parameters: closeJsonSchema(tool.function?.parameters || { type: 'object', properties: {} }),
+        },
+    })).filter((tool) => tool.function?.name);
 }
 function toAnthropicTools(tools = []) {
     return tools.map((tool) => ({
@@ -588,7 +608,7 @@ function toResponsesInput(messages = []) {
     return out;
 }
 function toResponsesTools(tools = []) {
-    return tools.map((tool) => ({ type: 'function', name: tool.function?.name, description: tool.function?.description || '', parameters: tool.function?.parameters || { type: 'object', properties: {} } })).filter((tool) => tool.name);
+    return tools.map((tool) => ({ type: 'function', name: tool.function?.name, description: tool.function?.description || '', parameters: closeJsonSchema(tool.function?.parameters || { type: 'object', properties: {} }) })).filter((tool) => tool.name);
 }
 async function callOpenAiResponses(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
@@ -631,7 +651,7 @@ async function callOpenAiCompatible(provider, model, messages, options = {}, too
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
     const payload = { model, messages: openAiChatMessages(messages), stream: false, ...normalizeOptions(provider, options, 'chat') };
-    if (tools.length) { payload.tools = tools; payload.tool_choice = 'auto'; }
+    if (tools.length) { payload.tools = openAiChatTools(tools); payload.tool_choice = 'auto'; }
     const data = await fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'OpenAI Chat'}/${model}`);
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
         return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
@@ -723,6 +743,15 @@ function connectionSummary(conn) {
 }
 function getAllConnections(deps) {
     return (deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] }).connections || []);
+}
+function findConnectionByIdOrName(deps, value = '') {
+    const key = String(value || '').trim();
+    if (!key) return null;
+    const list = getAllConnections(deps);
+    return list.find((c) => c.id === key)
+        || list.find((c) => String(c.name || '').toLowerCase() === key.toLowerCase())
+        || list.find((c) => String(c.host || '').toLowerCase() === key.toLowerCase())
+        || null;
 }
 function saveConnectionsStore(deps, store) {
     if (typeof deps.writeJSON !== 'function') throw new Error('连接写入接口不可用');
@@ -1130,6 +1159,7 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             return publicResourceList(deps, args.resources || []);
         case 'connection_create':
             return maybeRequireConfirmation(toolName, args, ctx, async () => {
+                if (!String(args.name || '').trim() || !String(args.host || '').trim()) throw new Error('connection_create 只能用于新增连接，必须提供 name 和 host；如果是打开已有连接，请先 list_connections 再 open_connection({ connectionId })');
                 const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [], activities: [] });
                 const conn = normalizeConnectionForSave(args, null);
                 store.connections = [conn, ...(store.connections || [])];
@@ -1164,6 +1194,8 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             if (typeof deps.testConnection !== 'function') throw new Error('连接测试接口不可用');
             const store = deps.readJSON(deps.CONNECTIONS_FILE, { connections: [] });
             const old = args.connectionId ? (store.connections || []).find((c) => c.id === String(args.connectionId)) : null;
+            if (args.connectionId && !old) throw new Error('连接不存在；如果你只有连接名称，请先 list_connections 匹配 connectionId');
+            if (!old && (!String(args.name || '').trim() || !String(args.host || '').trim())) throw new Error('connection_test 测试临时连接必须提供 name 和 host；测试已有连接请传 connectionId');
             const conn = normalizeConnectionForSave(args, old || null);
             return deps.testConnection(conn, clampNumber(args.timeoutSeconds, 1, 30, 10));
         }
@@ -1310,9 +1342,9 @@ async function executeAiTool(toolName, args = {}, ctx, deps) {
             return browserResultWithPreview('wait', await browserService.wait({ session, ms: args.ms || 1000 }), session);
         }
         case 'open_connection': {
-            const connectionId = String(args.connectionId || '').trim();
-            const conn = getAllConnections(deps).find((c) => c.id === connectionId);
-            if (!conn) throw new Error('连接不存在');
+            const requested = String(args.connectionId || args.name || args.host || '').trim();
+            const conn = findConnectionByIdOrName(deps, requested);
+            if (!conn) throw new Error('连接不存在；请先调用 list_connections 获取可用连接并使用返回的 connectionId');
             deps.addActivity?.(`AI 请求打开连接：${conn.name || conn.id}`);
             return { uiAction: 'open_connection', connectionId: conn.id, connection: connectionSummary(conn), message: `准备在页面打开 ${conn.protocol || 'SSH'} 连接：${conn.name || conn.host}` };
         }
@@ -1719,13 +1751,21 @@ function registerAiRoutes(app, deps) {
                 for (const call of calls) {
                     throwIfAborted(abortController.signal);
                     const startedAt = Date.now();
-                    const result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider), signal: abortController.signal }, deps);
+                    let result;
+                    let status = 'success';
+                    try {
+                        result = await executeAiTool(call.name, call.args, { req, context, responseMode: openAiApiMode(provider), signal: abortController.signal }, deps);
+                    } catch (toolErr) {
+                        if (toolErr?.name === 'AbortError' || abortController.signal.aborted) throw toolErr;
+                        status = 'error';
+                        result = { ok: false, error: publicError(toolErr), hint: '工具调用失败。请根据错误修正下一步：例如打开已有连接应先 list_connections 再 open_connection；不要把打开连接误用为 connection_create。' };
+                    }
                     throwIfAborted(abortController.signal);
                     const endedAt = Date.now();
                     if (result?.confirmationRequired) {
                         return res.json({ ok: true, message: { role: 'assistant', content: message.content || '需要用户确认后继续执行。' }, confirmationRequired: true, confirmation: result.confirmation, toolResults });
                     }
-                    toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result, status: 'success', startedAt, endedAt, durationMs: endedAt - startedAt });
+                    toolResults.push({ tool: call.name, args: publicToolArgs(call.name, call.args), result, status, startedAt, endedAt, durationMs: endedAt - startedAt });
                     const toolMessage = toolResultMessage(call, result, openAiApiMode(provider), limits, provider.type || '');
                     const toolMessages = Array.isArray(toolMessage) ? toolMessage : [toolMessage];
                     for (const item of toolMessages) {
