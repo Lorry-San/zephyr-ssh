@@ -72,15 +72,22 @@ const DEFAULT_BRAND_NAME = 'Zephyr';
 const DEFAULT_BRAND_ICON = '🌬️';
 let pendingBrandIcon = DEFAULT_BRAND_ICON;
 
+function apiErrorFromResponse(res, data = {}) {
+    const err = new Error(data.error || data.message || `请求失败（HTTP ${res.status}）`);
+    err.status = res.status;
+    err.transient = !!data.transient || res.status === 502 || res.status === 503 || res.status === 504;
+    err.payload = data;
+    return err;
+}
 function api(path, options = {}) {
     return fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options })
-        .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || data.message || '请求失败'); return data; });
+        .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw apiErrorFromResponse(res, data); return data; });
 }
 function apiMaybeForm(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (!(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
     return fetch(path, { credentials: 'same-origin', headers, ...options })
-        .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || data.message || '请求失败'); return data; });
+        .then(async (res) => { const data = await res.json().catch(() => ({})); if (!res.ok) throw apiErrorFromResponse(res, data); return data; });
 }
 function toast(message) { const el = $('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2600); }
 const systemThemeQuery = matchMedia('(prefers-color-scheme: dark)');
@@ -3871,6 +3878,14 @@ async function updateAiPlan(planId, action = {}) {
         toast('计划已更新');
     } catch (err) { toast(err.message || '计划更新失败'); }
 }
+function formatAiRequestFailure(err) {
+    const message = String(err?.message || '请求失败');
+    const transient = !!err?.transient || /网络请求失败|网络连接中断|请求超时|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|502|503|504/i.test(message);
+    if (transient) {
+        return `请求失败：${message}\n\n我已在服务端对上游 AI fetch failed / 断连 / 超时做自动重试；如果仍出现，多半是当前供应商线路或模型临时不稳。你可以直接重试，或切换模型/供应商。`;
+    }
+    return `请求失败：${message}\n\n建议：如果这是长对话或 RDP 操作后失败，点“压缩摘要”后重试；我已减少默认上下文和截图大小以降低这类失败。`;
+}
 async function sendAiMessage() {
     const session = aiCurrentSession();
     const sessionId = session?.id || '';
@@ -3916,7 +3931,7 @@ async function sendAiMessage() {
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
             if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 回复已中断。', 'system', { sessionId });
-        } else appendAiMessage(`请求失败：${err.message || '请求失败'}\n\n建议：如果这是长对话或 RDP 操作后失败，点“压缩摘要”后重试；我已减少默认上下文和截图大小以降低这类失败。`, 'system', { sessionId });
+        } else appendAiMessage(formatAiRequestFailure(err), 'system', { sessionId });
     } finally {
         clearAiSessionRun(sessionId, abortController);
         aiStoppedControllers.delete(abortController);
@@ -3972,7 +3987,7 @@ async function continueAiAfterConfirmation(id, approve, data) {
     } catch (err) {
         if (err.name === 'AbortError' || /aborted|abort|已停止/i.test(String(err.message || ''))) {
             if (!aiStoppedControllers.has(abortController)) appendAiMessage('AI 后续处理已中断。', 'system', { sessionId });
-        } else appendAiMessage(`继续处理失败：${err.message}`, 'system', { sessionId });
+        } else appendAiMessage(formatAiRequestFailure(err).replace(/^请求失败/, '继续处理失败'), 'system', { sessionId });
     } finally {
         clearAiSessionRun(sessionId, abortController);
         aiStoppedControllers.delete(abortController);

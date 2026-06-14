@@ -57,6 +57,30 @@ function clipText(value, max = MAX_TOOL_TEXT) {
     return text.length > max ? `${text.slice(0, max)}\n...[已截断 ${text.length - max} 字符]` : text;
 }
 function publicError(err) { return err?.message || String(err || '执行失败'); }
+function isTransientAiFetchError(err) {
+    const message = String(err?.message || err || '');
+    const code = String(err?.code || err?.cause?.code || '');
+    return err?.name === 'TimeoutError'
+        || /fetch failed|terminated|socket hang up|network socket disconnected|other side closed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|UND_ERR/i.test(message)
+        || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|UND_ERR/i.test(code);
+}
+function aiFetchErrorMessage(err, label = 'AI provider') {
+    const message = String(err?.message || err || '请求失败');
+    const cause = err?.cause;
+    const causeCode = cause?.code ? ` (${cause.code})` : '';
+    if (err?.name === 'TimeoutError') return `${label} 请求超时，请稍后重试或切换模型/供应商`;
+    if (/fetch failed/i.test(message)) return `${label} 网络请求失败${causeCode}：可能是上游接口临时断连、代理/DNS/TLS 不稳定或响应过慢`;
+    if (isTransientAiFetchError(err)) return `${label} 网络连接中断${causeCode}：${message}`;
+    return message;
+}
+function aiProviderTimeoutMs(provider = {}, options = {}) {
+    const raw = options.timeoutMs || options.timeout_ms || provider.timeoutMs || provider.timeout_ms || provider.options?.timeoutMs || 120000;
+    return clampNumber(raw, 15000, 300000, 120000);
+}
+function aiProviderRetryCount(provider = {}, options = {}) {
+    const raw = options.retries ?? options.retryCount ?? provider.retries ?? provider.retryCount ?? provider.options?.retries ?? 2;
+    return clampNumber(raw, 0, 5, 2);
+}
 function aiBrowserSession(args = {}, ctx = {}) {
     const explicit = String(args.session || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
     const chatId = String(ctx.context?.aiChatSessionId || '').trim().replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 80);
@@ -106,18 +130,30 @@ function removePayloadParameter(payload, param) {
 async function fetchJsonWithUnsupportedParamRetry(url, requestOptions = {}, payload = {}, label = 'AI provider') {
     const body = payload && typeof payload === 'object' ? payload : {};
     const removed = [];
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    const retryCount = clampNumber(requestOptions.retries, 0, 5, 2);
+    let transientRetries = 0;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
         try {
-            return await fetchJson(url, { ...requestOptions, body: JSON.stringify(body) });
+            return await fetchJson(url, { ...requestOptions, label, body: JSON.stringify(body) });
         } catch (err) {
             if (err?.name === 'AbortError') throw err;
             const param = unsupportedParameterName(err);
-            if (!param || removed.includes(param) || !removePayloadParameter(body, param)) throw err;
-            removed.push(param);
-            console.warn(`[ai-agent] ${label} rejected unsupported parameter '${param}', retrying without it`);
+            if (param && !removed.includes(param) && removePayloadParameter(body, param)) {
+                removed.push(param);
+                console.warn(`[ai-agent] ${label} rejected unsupported parameter '${param}', retrying without it`);
+                continue;
+            }
+            if (isTransientAiFetchError(err) && transientRetries < retryCount) {
+                transientRetries += 1;
+                const waitMs = 450 * transientRetries;
+                console.warn(`[ai-agent] ${label} transient fetch error, retry ${transientRetries}/${retryCount} after ${waitMs}ms: ${err.message}`);
+                await delay(waitMs, requestOptions.signal);
+                continue;
+            }
+            throw err;
         }
     }
-    return fetchJson(url, { ...requestOptions, body: JSON.stringify(body) });
+    return fetchJson(url, { ...requestOptions, label, body: JSON.stringify(body) });
 }
 function throwIfAborted(signal) {
     if (signal?.aborted) throw aiAbortError();
@@ -286,7 +322,7 @@ function normalizeOptions(provider = {}, requestOptions = {}, mode = 'chat') {
     }
     const merged = { ...out, ...extra };
     const apiMode = String(mode || 'chat').toLowerCase();
-    ['context', 'windowTokens', 'maxInputChars', 'keepMessages', 'toolResultChars', 'memoryItems'].forEach((key) => delete merged[key]);
+    ['context', 'windowTokens', 'maxInputChars', 'keepMessages', 'toolResultChars', 'memoryItems', 'timeoutMs', 'timeout_ms', 'retries', 'retryCount'].forEach((key) => delete merged[key]);
     if (apiMode === 'responses') {
         if (merged.max_tokens && !merged.max_output_tokens) merged.max_output_tokens = merged.max_tokens;
         delete merged.max_tokens;
@@ -359,7 +395,7 @@ async function listProviderModels(provider = {}) {
     if (type === 'anthropic') {
         if (!provider.baseUrl && provider.apiKey) {
             try {
-                const data = await fetchJson('https://api.anthropic.com/v1/models', { method: 'GET', headers: providerHeaders(provider) });
+                const data = await fetchJson('https://api.anthropic.com/v1/models', { method: 'GET', headers: providerHeaders(provider), timeoutMs: 30000, label: `${provider.name || provider.type || 'Anthropic'}/models` });
                 return (data.data || []).map((m) => ({ id: m.id, name: m.display_name || m.id })).filter((m) => m.id);
             } catch (_) {}
         }
@@ -368,23 +404,55 @@ async function listProviderModels(provider = {}) {
     if (type === 'gemini') {
         const base = (provider.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
         const keyParam = provider.apiKey ? `?key=${encodeURIComponent(provider.apiKey)}` : '';
-        const data = await fetchJson(`${base}/models${keyParam}`, { method: 'GET', headers: providerHeaders({ ...provider, apiKey: '' }) });
+        const data = await fetchJson(`${base}/models${keyParam}`, { method: 'GET', headers: providerHeaders({ ...provider, apiKey: '' }), timeoutMs: 30000, label: `${provider.name || provider.type || 'Gemini'}/models` });
         return (data.models || []).map((m) => ({ id: String(m.name || '').replace(/^models\//, ''), name: m.displayName || m.name })).filter((m) => m.id && /generateContent/.test((m.supportedGenerationMethods || []).join(' ')));
     }
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base.replace(/\/(chat\/completions|responses)$/i, ''), '/models');
-    const data = await fetchJson(url, { method: 'GET', headers: providerHeaders(provider) });
+    const data = await fetchJson(url, { method: 'GET', headers: providerHeaders(provider), timeoutMs: 30000, label: `${provider.name || provider.type || 'OpenAI'}/models` });
     return (data.data || data.models || []).map((m) => ({ id: m.id || m.name, name: m.name || m.id })).filter((m) => m.id);
 }
 async function fetchJson(url, options = {}) {
-    const res = await fetch(url, options);
-    const text = await res.text();
-    const data = safeJsonParse(text, null);
-    if (!res.ok) {
-        const message = data?.error?.message || data?.message || text.slice(0, 500) || `HTTP ${res.status}`;
-        throw new Error(message);
+    const { timeoutMs = 0, label = 'AI provider', ...fetchOptions } = options || {};
+    const parentSignal = fetchOptions.signal || null;
+    const controller = timeoutMs ? new AbortController() : null;
+    let timer = null;
+    let abortListener = null;
+    if (controller) {
+        fetchOptions.signal = controller.signal;
+        timer = setTimeout(() => {
+            try { controller.abort(new DOMException('AI provider request timeout', 'TimeoutError')); } catch { controller.abort(); }
+        }, Math.max(1000, Number(timeoutMs) || 0));
+        if (parentSignal) {
+            abortListener = () => {
+                try { controller.abort(parentSignal.reason || aiAbortError()); } catch { controller.abort(); }
+            };
+            if (parentSignal.aborted) abortListener();
+            else parentSignal.addEventListener?.('abort', abortListener, { once: true });
+        }
     }
-    return data ?? {};
+    try {
+        const res = await fetch(url, fetchOptions);
+        const text = await res.text();
+        const data = safeJsonParse(text, null);
+        if (!res.ok) {
+            const message = data?.error?.message || data?.message || text.slice(0, 500) || `HTTP ${res.status}`;
+            throw new Error(message);
+        }
+        return data ?? {};
+    } catch (err) {
+        if (parentSignal?.aborted) throw aiAbortError();
+        if (controller?.signal?.aborted && timer) {
+            const timeoutErr = new Error(`${label} 请求超时`);
+            timeoutErr.name = 'TimeoutError';
+            timeoutErr.cause = err;
+            throw timeoutErr;
+        }
+        throw new Error(aiFetchErrorMessage(err, label), { cause: err });
+    } finally {
+        if (timer) clearTimeout(timer);
+        if (parentSignal && abortListener) parentSignal.removeEventListener?.('abort', abortListener);
+    }
 }
 function mergeZephyrDefaultSkills(skills = []) {
     const list = Array.isArray(skills) ? skills.slice() : [];
@@ -710,7 +778,7 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
     if (system) payload.instructions = system;
     const responseTools = toResponsesTools(tools);
     if (responseTools.length) { payload.tools = responseTools; payload.tool_choice = 'auto'; }
-    const run = async (body) => fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal }, body, `${provider.name || provider.type || 'OpenAI Responses'}/${model}`);
+    const run = async (body) => fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal, timeoutMs: aiProviderTimeoutMs(provider, options), retries: aiProviderRetryCount(provider, options) }, body, `${provider.name || provider.type || 'OpenAI Responses'}/${model}`);
     let data;
     try {
         data = await run(payload);
@@ -728,9 +796,10 @@ async function callOpenAiResponses(provider, model, messages, options = {}, tool
 async function callOpenAiCompatible(provider, model, messages, options = {}, tools = [], signal = null) {
     const base = provider.baseUrl || 'https://api.openai.com/v1';
     const url = joinApiUrl(base, '/chat/completions');
-    const payload = { model, messages: openAiChatMessages(messages), stream: false, ...normalizeOptions(provider, options, 'chat') };
+    const opts = normalizeOptions(provider, options, 'chat');
+    const payload = { model, messages: openAiChatMessages(messages), stream: false, ...opts };
     if (tools.length) { payload.tools = openAiChatTools(tools); payload.tool_choice = 'auto'; }
-    const data = await fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'OpenAI Chat'}/${model}`);
+    const data = await fetchJsonWithUnsupportedParamRetry(url, { method: 'POST', headers: providerHeaders(provider), signal, timeoutMs: aiProviderTimeoutMs(provider, options), retries: aiProviderRetryCount(provider, options) }, payload, `${provider.name || provider.type || 'OpenAI Chat'}/${model}`);
     if (openAiApiMode(provider) === 'responses' && Array.isArray(data.output)) {
         return { role: 'assistant', content: responseOutputText(data), tool_calls: responseToolCalls(data), response_id: data.id || '' };
     }
@@ -750,7 +819,7 @@ async function callAnthropic(provider, model, messages, options = {}, tools = []
     if (opts.thinking && typeof opts.thinking === 'object') payload.thinking = opts.thinking;
     const anthropicTools = toAnthropicTools(tools);
     if (anthropicTools.length) payload.tools = anthropicTools;
-    const data = await fetchJsonWithUnsupportedParamRetry(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), signal }, payload, `${provider.name || provider.type || 'Anthropic'}/${model}`);
+    const data = await fetchJsonWithUnsupportedParamRetry(joinApiUrl(base, '/messages'), { method: 'POST', headers: providerHeaders(provider), signal, timeoutMs: aiProviderTimeoutMs(provider, options), retries: aiProviderRetryCount(provider, options) }, payload, `${provider.name || provider.type || 'Anthropic'}/${model}`);
     const blocks = Array.isArray(data.content) ? data.content : [];
     const content = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
     const toolCalls = blocks.filter((b) => b.type === 'tool_use' && b.name).map((b) => ({ id: b.id || crypto.randomUUID(), type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } }));
@@ -777,7 +846,7 @@ async function callGemini(provider, model, messages, options = {}, tools = [], s
         body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
     const modelPath = String(model || '').startsWith('models/') ? String(model) : `models/${encodeURIComponent(model)}`;
-    const data = await fetchJsonWithUnsupportedParamRetry(`${base}/${modelPath}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), signal }, body, `${provider.name || provider.type || 'Gemini'}/${model}`);
+    const data = await fetchJsonWithUnsupportedParamRetry(`${base}/${modelPath}:generateContent${keyParam}`, { method: 'POST', headers: providerHeaders({ ...provider, apiKey: '' }), signal, timeoutMs: aiProviderTimeoutMs(provider, options), retries: aiProviderRetryCount(provider, options) }, body, `${provider.name || provider.type || 'Gemini'}/${model}`);
     const parts = (data.candidates || []).flatMap((c) => c.content?.parts || []);
     const content = parts.filter((p) => p.text).map((p) => p.text || '').join('\n');
     const toolCalls = parts.filter((p) => p.functionCall?.name).map((p) => ({ id: p.functionCall.id || crypto.randomUUID(), type: 'function', function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) } }));
@@ -1803,7 +1872,7 @@ function registerAiRoutes(app, deps) {
             if (!provider) return res.status(404).json({ error: '模型供应商不存在' });
             const models = await listProviderModels(provider);
             res.json({ ok: true, models: models.slice(0, 300) });
-        } catch (err) { res.status(400).json({ error: publicError(err) }); }
+        } catch (err) { res.status(isTransientAiFetchError(err) ? 502 : 400).json({ error: publicError(err), transient: isTransientAiFetchError(err) }); }
     });
 
     app.post('/api/ai/chat', deps.requireAuth, async (req, res) => {
@@ -1875,7 +1944,8 @@ function registerAiRoutes(app, deps) {
                 return;
             }
             console.error('[ai-agent] chat failed:', err);
-            res.status(400).json({ error: publicError(err) });
+            const status = isTransientAiFetchError(err) ? 502 : 400;
+            res.status(status).json({ error: publicError(err), transient: status === 502 });
         } finally {
             req.off?.('aborted', abortRequest);
             res.off?.('close', abortRequest);
