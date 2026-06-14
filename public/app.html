@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260614-theme-palettes">
+    <link rel="stylesheet" href="style.css?v=20260614-theme-palettes-v2">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -123,12 +123,13 @@
                                     <option value="cyber">极夜青 Cyber Teal</option>
                                     <option value="custom">自定义 CSS/JS 与配色</option>
                                 </select>
-                                <p class="field-hint" id="appearanceThemeHint">熔岩流/极夜青固定深色，浅葱影固定浅色；凝霜蓝保留原深浅色切换。</p>
+                                <p class="field-hint" id="appearanceThemeHint">四个默认配色都同时支持深色和浅色；可自动跟随系统，也可手动固定。图标使用对应配色的 Zephyr 风线条渐变。</p>
+                                <label>深浅模式</label>
+                                <select id="themeModeSelect"><option value="auto">跟随系统</option><option value="dark">深色</option><option value="light">浅色</option></select>
                                 <label class="check-line"><input type="checkbox" id="autoThemeEnabled"> 自动跟随系统深色/浅色模式</label>
-                                <p class="field-hint">开启后默认根据系统外观自动切换；关闭后可手动固定深色或浅色。</p>
+                                <p class="field-hint">开启后根据系统外观自动切换；关闭后使用上面的深色或浅色模式。</p>
                                 <div class="custom-theme-panel force-hidden" id="customThemePanel">
-                                    <label>自定义模式</label>
-                                    <select id="customThemeMode"><option value="dark">深色</option><option value="light">浅色</option><option value="auto">跟随系统</option></select>
+                                    <input id="customThemeMode" type="hidden" value="dark">
                                     <div class="custom-color-grid">
                                         <label>大背景<input type="color" data-custom-color="bgMain" value="#0d1117"></label>
                                         <label>卡片背景<input type="color" data-custom-color="bgCard" value="#161b22"></label>
@@ -145,7 +146,7 @@
                                     <textarea id="customCssInput" rows="6" spellcheck="false" placeholder=":root { --accent: #00e5ff; }\n.connection-card { border-radius: 22px; }"></textarea>
                                     <label>自定义 JS</label>
                                     <textarea id="customJsInput" rows="5" spellcheck="false" placeholder="// 保存后在前端页面执行；请只填写可信代码"></textarea>
-                                    <p class="field-hint">自定义 JS 会在登录页、后台和远程窗口前端执行，请只保存你信任的代码。</p>
+                                    <p class="field-hint">自定义 CSS/JS 只在选择“自定义”配色时生效；JS 会在登录页、后台和远程窗口前端执行，请只保存你信任的代码。</p>
                                 </div>
                                 <h3>SSH 终端自定义</h3>
                                 <label>终端背景来源</label>
@@ -432,6 +433,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260614-theme-palettes" type="module"></script>
+    <script src="app.js?v=20260614-theme-palettes-v2" type="module"></script>
 </body>
 </html>

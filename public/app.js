@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, brandIconColor, DEFAULT_CUSTOM_THEME_COLORS, forcedThemeForAppearance, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -98,8 +98,6 @@ function getAppearance() { return settings?.appearance || {}; }
 function isAutoThemeEnabled() { return getAppearance().autoThemeEnabled !== false; }
 function getPreferredTheme() {
     const appearance = getAppearance();
-    const schemeTheme = forcedThemeForAppearance(appearance, getSystemTheme);
-    if (schemeTheme) return schemeTheme;
     if (isAutoThemeEnabled() || appearance.theme === 'auto') return getSystemTheme();
     if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
     const saved = localStorage.getItem('zephyr-theme');
@@ -185,7 +183,7 @@ function applyTheme(theme, { persist = false } = {}) {
     setFavicon(pendingBrandIcon || DEFAULT_BRAND_ICON);
     SMARTBAR_TEXT_IMAGE_CACHE.clear();
     if (terminalTabs.length) renderTerminalSmartbar();
-    if (persist) localStorage.setItem('zephyr-theme', theme);
+    if (persist || getAppearance().autoThemeEnabled === false) localStorage.setItem('zephyr-theme', theme);
     $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
     $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
     syncAppearanceSchemeControls();
@@ -203,7 +201,7 @@ async function toggleTheme() {
 }
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function iconHtml(icon = DEFAULT_BRAND_ICON) { return zephyrBrandIconHtml(icon); }
-function faviconHref(icon = DEFAULT_BRAND_ICON) { return zephyrFaviconHref(icon, brandIconColor()); }
+function faviconHref(icon = DEFAULT_BRAND_ICON) { return zephyrFaviconHref(icon); }
 function setFavicon(icon = DEFAULT_BRAND_ICON) {
     let link = document.querySelector('link[rel="icon"]');
     if (!link) {
@@ -242,8 +240,9 @@ async function saveAppearance(e) {
     e.preventDefault();
     const previous = getAppearance();
     const colorScheme = $('#colorSchemeSelect')?.value || previous.colorScheme || 'frost';
-    const autoThemeEnabled = colorScheme === 'frost' ? $('#autoThemeEnabled').checked : false;
-    const theme = autoThemeEnabled ? 'auto' : (forcedThemeForAppearance({ ...previous, colorScheme, customThemeMode: $('#customThemeMode')?.value || previous.customThemeMode || 'dark' }, getSystemTheme) || document.documentElement.getAttribute('data-theme') || getSystemTheme());
+    const autoThemeEnabled = $('#autoThemeEnabled').checked;
+    const explicitMode = $('#themeModeSelect')?.value || previous.theme || 'auto';
+    const theme = autoThemeEnabled || explicitMode === 'auto' ? 'auto' : (explicitMode === 'light' || explicitMode === 'dark' ? explicitMode : (document.documentElement.getAttribute('data-theme') || getSystemTheme()));
     const terminalBgSource = $('#terminalBgSource')?.value || 'none';
     const appearance = {
         ...previous,
@@ -288,9 +287,8 @@ function syncAppearanceSchemeControls(appearance = getAppearance()) {
     if (colorSelect) colorSelect.value = scheme;
     const customPanel = $('#customThemePanel');
     if (customPanel) customPanel.classList.toggle('force-hidden', scheme !== 'custom');
-    const frostOnly = scheme === 'frost';
-    $('#autoThemeEnabled')?.closest?.('.check-line')?.classList.toggle('force-hidden', !frostOnly);
-    $('#appearanceThemeHint')?.classList.toggle('force-hidden', frostOnly);
+    $('#appearanceThemeHint')?.classList.remove('force-hidden');
+    if ($('#themeModeSelect')) $('#themeModeSelect').value = appearance.autoThemeEnabled !== false || appearance.theme === 'auto' ? 'auto' : (appearance.theme === 'light' ? 'light' : 'dark');
     if ($('#customThemeMode')) $('#customThemeMode').value = appearance.customThemeMode || 'dark';
     const colors = normalizeCustomThemeColors(appearance.customColors || {});
     Object.keys(DEFAULT_CUSTOM_THEME_COLORS).forEach((key) => {
@@ -346,6 +344,8 @@ function setupAppearanceControls() {
         applyTheme(getPreferredTheme());
         syncAppearanceSchemeControls(appearance);
     });
+    $('#themeModeSelect')?.addEventListener('change', () => { const mode = $('#themeModeSelect').value; settings.appearance = { ...getAppearance(), theme: mode, autoThemeEnabled: mode === 'auto' }; if ($('#autoThemeEnabled')) $('#autoThemeEnabled').checked = mode === 'auto'; applyTheme(getPreferredTheme()); });
+    $('#autoThemeEnabled')?.addEventListener('change', () => { const auto = $('#autoThemeEnabled').checked; const mode = auto ? 'auto' : ($('#themeModeSelect')?.value === 'light' ? 'light' : 'dark'); settings.appearance = { ...getAppearance(), theme: mode, autoThemeEnabled: auto }; if ($('#themeModeSelect')) $('#themeModeSelect').value = mode; applyTheme(getPreferredTheme()); });
     $('#customThemeMode')?.addEventListener('change', () => { settings.appearance = { ...getAppearance(), customThemeMode: $('#customThemeMode').value }; applyTheme(getPreferredTheme()); });
     $$('.custom-color-grid input[type="color"]').forEach((input) => input.addEventListener('input', () => {
         settings.appearance = { ...getAppearance(), colorScheme: 'custom', customColors: readCustomThemeColors() };

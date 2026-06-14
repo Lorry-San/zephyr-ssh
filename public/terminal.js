@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, forcedThemeForAppearance } from './theme-runtime.js?v=20260614-theme-palettes';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260614-theme-palettes-v2';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -793,12 +793,12 @@ function hasTerminalThemeOverride() {
 }
 function getSystemTheme() { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 function getPreferredTheme() {
-    const schemeTheme = forcedThemeForAppearance(terminalAppearance || {}, getSystemTheme);
-    if (schemeTheme) return schemeTheme;
     const terminalOverride = localStorage.getItem(TERMINAL_THEME_OVERRIDE_KEY);
     if (terminalOverride === 'light' || terminalOverride === 'dark') return terminalOverride;
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
+    const appearanceTheme = terminalAppearance?.theme;
+    if (terminalAppearance?.autoThemeEnabled === false && (appearanceTheme === 'light' || appearanceTheme === 'dark')) return appearanceTheme;
     return getSystemTheme();
 }
 function applyTheme(theme, { persist = false, terminalOverride = false } = {}) {

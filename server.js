@@ -1080,8 +1080,7 @@ function normalizeSettingsInput(body) {
         const isAllowedIcon = rawIcon === '🌬️' || /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(rawIcon);
         const colorScheme = ['frost', 'lava', 'asagi', 'cyber', 'custom'].includes(body.appearance.colorScheme) ? body.appearance.colorScheme : (currentAppearance.colorScheme || 'frost');
         const customThemeMode = ['light', 'dark', 'auto'].includes(body.appearance.customThemeMode) ? body.appearance.customThemeMode : (currentAppearance.customThemeMode || 'dark');
-        const forcedTheme = colorScheme === 'lava' || colorScheme === 'cyber' ? 'dark' : colorScheme === 'asagi' ? 'light' : '';
-        const theme = forcedTheme || (body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto');
+        const theme = body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto';
         const defaultColors = { bgMain: '#0d1117', bgCard: '#161b22', primary: '#58a6ff', primaryHover: '#79c0ff', text: '#e6edf3', textSecondary: '#8b949e', border: '#30363d', danger: '#f85149', success: '#3fb950', warning: '#d2991d' };
         const customColors = Object.fromEntries(Object.entries(defaultColors).map(([key, fallback]) => {
             const value = String(body.appearance.customColors?.[key] || currentAppearance.customColors?.[key] || fallback).trim();
@@ -1112,7 +1111,7 @@ function normalizeSettingsInput(body) {
             customJs: String(body.appearance.customJs ?? currentAppearance.customJs ?? '').slice(0, 200000),
             terminalBackground,
             terminalFontColor,
-            autoThemeEnabled: colorScheme === 'frost' && body.appearance.autoThemeEnabled !== false,
+            autoThemeEnabled: body.appearance.autoThemeEnabled !== false,
         };
         console.info('[appearance-settings]', 'normalized appearance settings', {
             brandName,

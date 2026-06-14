@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, brandIconColor, forcedThemeForAppearance, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes';
+import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const errorBanner = $('#errorBanner');
@@ -173,8 +173,6 @@ function isAutoThemeEnabled() { return publicSettings.appearance?.autoThemeEnabl
 function getSystemTheme() { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 function getPreferredTheme() {
     const appearance = publicSettings.appearance || {};
-    const schemeTheme = forcedThemeForAppearance(appearance, getSystemTheme);
-    if (schemeTheme) return schemeTheme;
     if (isAutoThemeEnabled() || appearance.theme === 'auto') return getSystemTheme();
     if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
     const saved = localStorage.getItem('zephyr-theme');
@@ -182,7 +180,7 @@ function getPreferredTheme() {
 }
 
 function iconHtml(icon = DEFAULT_BRAND_ICON) { return zephyrBrandIconHtml(icon); }
-function faviconHref(icon = DEFAULT_BRAND_ICON) { return zephyrFaviconHref(icon, brandIconColor()); }
+function faviconHref(icon = DEFAULT_BRAND_ICON) { return zephyrFaviconHref(icon); }
 function setFavicon(icon = DEFAULT_BRAND_ICON) {
     let link = document.querySelector('link[rel="icon"]');
     if (!link) {
