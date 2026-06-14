@@ -9464,7 +9464,7 @@ body.app-body:not(.terminal-mode) .app-main {
     color: var(--text-secondary);
     font-size: 12px;
 }
-.custom-color-grid input[type="color"] { width: 100%; height: 34px; padding: 2px; border-radius: 9px; }
+/* color inputs are custom hex + swatch controls, not native browser color inputs. */
 .terminal-bg-preview {
     min-height: 74px;
     display: grid;
@@ -9505,3 +9505,69 @@ body.app-body:not(.terminal-mode) .app-main {
     color: var(--wterm-custom-fg, var(--wterm-fg)) !important;
 }
 :root[data-wterm-theme="custom"][data-wterm-font-custom="1"] .terminal-container .wterm-wrapper * { color: var(--wterm-custom-fg, var(--wterm-fg)); }
+
+.zephyr-color-picker {
+    --picker-color: #58a6ff;
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+}
+.zephyr-color-picker .color-swatch {
+    width: 42px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,.28), rgba(0,0,0,.12)),
+        var(--picker-color);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 8px 18px var(--accent-glow, rgba(0,0,0,.12));
+    cursor: pointer;
+}
+.zephyr-color-picker.disabled { opacity: .55; }
+.zephyr-color-picker.disabled .color-swatch { cursor: not-allowed; }
+.color-hex-input {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    text-transform: lowercase;
+}
+.zephyr-color-panel {
+    position: fixed;
+    z-index: 10000;
+    width: 224px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface) 94%, var(--bg));
+    box-shadow: 0 24px 70px rgba(0,0,0,.22);
+}
+.zephyr-color-panel.hidden { display: none; }
+.color-panel-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 7px;
+}
+.color-panel-grid button {
+    width: 26px;
+    height: 26px;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: 9px;
+    background: var(--preset-color);
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35);
+}
+.color-panel-actions { display: flex; justify-content: flex-end; margin-top: 9px; }
+.color-panel-actions button {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    cursor: pointer;
+}

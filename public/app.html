@@ -123,7 +123,6 @@
                                     <option value="cyber">极夜青 Cyber Teal</option>
                                     <option value="custom">自定义 CSS/JS 与配色</option>
                                 </select>
-                                <p class="field-hint" id="appearanceThemeHint">四个默认配色都同时支持深色和浅色；可自动跟随系统，也可手动固定。图标使用对应配色的 Zephyr 风线条渐变。</p>
                                 <label>深浅模式</label>
                                 <select id="themeModeSelect"><option value="auto">跟随系统</option><option value="dark">深色</option><option value="light">浅色</option></select>
                                 <label class="check-line"><input type="checkbox" id="autoThemeEnabled"> 自动跟随系统深色/浅色模式</label>
@@ -131,16 +130,16 @@
                                 <div class="custom-theme-panel force-hidden" id="customThemePanel">
                                     <input id="customThemeMode" type="hidden" value="dark">
                                     <div class="custom-color-grid">
-                                        <label>大背景<input type="color" data-custom-color="bgMain" value="#0d1117"></label>
-                                        <label>卡片背景<input type="color" data-custom-color="bgCard" value="#161b22"></label>
-                                        <label>主按钮<input type="color" data-custom-color="primary" value="#58a6ff"></label>
-                                        <label>按钮 Hover<input type="color" data-custom-color="primaryHover" value="#79c0ff"></label>
-                                        <label>文字<input type="color" data-custom-color="text" value="#e6edf3"></label>
-                                        <label>次级文字<input type="color" data-custom-color="textSecondary" value="#8b949e"></label>
-                                        <label>边框<input type="color" data-custom-color="border" value="#30363d"></label>
-                                        <label>危险色<input type="color" data-custom-color="danger" value="#f85149"></label>
-                                        <label>成功色<input type="color" data-custom-color="success" value="#3fb950"></label>
-                                        <label>警告色<input type="color" data-custom-color="warning" value="#d2991d"></label>
+                                        <label>大背景<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#0d1117" aria-label="选择大背景颜色"></button><input class="color-hex-input" data-custom-color="bgMain" value="#0d1117" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>卡片背景<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#161b22" aria-label="选择卡片背景颜色"></button><input class="color-hex-input" data-custom-color="bgCard" value="#161b22" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>主按钮<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#58a6ff" aria-label="选择主按钮颜色"></button><input class="color-hex-input" data-custom-color="primary" value="#58a6ff" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>按钮 Hover<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#79c0ff" aria-label="选择按钮 Hover颜色"></button><input class="color-hex-input" data-custom-color="primaryHover" value="#79c0ff" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>文字<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#e6edf3" aria-label="选择文字颜色"></button><input class="color-hex-input" data-custom-color="text" value="#e6edf3" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>次级文字<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#8b949e" aria-label="选择次级文字颜色"></button><input class="color-hex-input" data-custom-color="textSecondary" value="#8b949e" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>边框<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#30363d" aria-label="选择边框颜色"></button><input class="color-hex-input" data-custom-color="border" value="#30363d" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>危险色<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#f85149" aria-label="选择危险色颜色"></button><input class="color-hex-input" data-custom-color="danger" value="#f85149" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>成功色<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#3fb950" aria-label="选择成功色颜色"></button><input class="color-hex-input" data-custom-color="success" value="#3fb950" maxlength="7" spellcheck="false" inputmode="text"></div></label>
+                                        <label>警告色<div class="zephyr-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#d2991d" aria-label="选择警告色颜色"></button><input class="color-hex-input" data-custom-color="warning" value="#d2991d" maxlength="7" spellcheck="false" inputmode="text"></div></label>
                                     </div>
                                     <label>自定义 CSS</label>
                                     <textarea id="customCssInput" rows="6" spellcheck="false" placeholder=":root { --accent: #00e5ff; }\n.connection-card { border-radius: 22px; }"></textarea>
@@ -160,8 +159,8 @@
                                     <div class="form-group"><label>背景强度 <span id="terminalBgOpacityValue">35%</span></label><input id="terminalBgOpacity" type="range" min="0" max="1" step="0.05" value="0.35"></div>
                                 </div>
                                 <label class="check-line"><input type="checkbox" id="terminalFontColorEnabled"> 启用自定义 SSH 终端字体颜色</label>
-                                <input id="terminalFontColor" type="color" value="#e6edf3">
-                                <p class="field-hint">终端背景支持更大的图片（最高 12MB），上传后会作为 Data URL 保存在外观设置里；URL 适合使用 CDN/对象存储图片。</p>
+                                <div class="zephyr-color-picker terminal-font-color-picker" data-color-picker><button type="button" class="color-swatch" data-color-swatch style="--picker-color:#e6edf3" aria-label="选择 SSH 终端字体颜色"></button><input id="terminalFontColor" class="color-hex-input" value="#e6edf3" maxlength="7" spellcheck="false" inputmode="text"></div>
+                                <p class="field-hint">上传图片最高 12MB；URL 适合使用 CDN/对象存储图片。</p>
                                 <div class="form-actions">
                                     <button class="btn btn-primary" type="submit">保存外观</button>
                                     <button class="btn" type="button" id="settingsThemeToggle">切换深色/浅色模式</button>
@@ -190,8 +189,6 @@
                                     <option value="windows">Windows / Linux</option>
                                     <option value="mac">macOS</option>
                                 </select>
-                                <p class="field-hint">控制 SSH 文件管理右键菜单中的快捷键显示，并决定 Ctrl / ⌘ 快捷键逻辑；移动端仍为单击选中、双击打开、长按呼出菜单。</p>
-                                <p class="field-hint">超过限制的新连接会按开启顺序自动最小化旧窗口；移动端始终强制单窗。</p>
                                 <button class="btn btn-primary" type="submit">保存终端布局</button>
                             </form>
                         </div>

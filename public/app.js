@@ -287,13 +287,13 @@ function syncAppearanceSchemeControls(appearance = getAppearance()) {
     if (colorSelect) colorSelect.value = scheme;
     const customPanel = $('#customThemePanel');
     if (customPanel) customPanel.classList.toggle('force-hidden', scheme !== 'custom');
-    $('#appearanceThemeHint')?.classList.remove('force-hidden');
+    // Appearance hint text was removed from the settings form.
     if ($('#themeModeSelect')) $('#themeModeSelect').value = appearance.autoThemeEnabled !== false || appearance.theme === 'auto' ? 'auto' : (appearance.theme === 'light' ? 'light' : 'dark');
     if ($('#customThemeMode')) $('#customThemeMode').value = appearance.customThemeMode || 'dark';
     const colors = normalizeCustomThemeColors(appearance.customColors || {});
     Object.keys(DEFAULT_CUSTOM_THEME_COLORS).forEach((key) => {
         const input = document.querySelector(`[data-custom-color="${key}"]`);
-        if (input) input.value = colors[key];
+        if (input) setColorPickerValue(input, colors[key]);
     });
     if ($('#customCssInput')) $('#customCssInput').value = appearance.customCss || '';
     if ($('#customJsInput')) $('#customJsInput').value = appearance.customJs || '';
@@ -311,8 +311,9 @@ function syncAppearanceSchemeControls(appearance = getAppearance()) {
     if ($('#terminalBgOpacityValue')) $('#terminalBgOpacityValue').textContent = `${Math.round(Number(bg.opacity ?? 0.35) * 100)}%`;
     if ($('#terminalFontColorEnabled')) $('#terminalFontColorEnabled').checked = !!appearance.terminalFontColor;
     if ($('#terminalFontColor')) {
-        $('#terminalFontColor').value = appearance.terminalFontColor || '#e6edf3';
+        setColorPickerValue($('#terminalFontColor'), appearance.terminalFontColor || '#e6edf3');
         $('#terminalFontColor').disabled = !appearance.terminalFontColor;
+        $('#terminalFontColor')?.closest('[data-color-picker]')?.classList.toggle('disabled', !appearance.terminalFontColor);
     }
     if ($('#terminalBgPreview')) {
         const url = bg.type === 'url' ? ($('#terminalBgUrl')?.value.trim() || bg.url || '') : (bg.url || '');
@@ -326,6 +327,80 @@ function readCustomThemeColors() {
     Object.keys(DEFAULT_CUSTOM_THEME_COLORS).forEach((key) => { out[key] = document.querySelector(`[data-custom-color="${key}"]`)?.value || DEFAULT_CUSTOM_THEME_COLORS[key]; });
     return normalizeCustomThemeColors(out);
 }
+
+const COLOR_PICKER_PRESETS = ['#e0f2fe', '#93c5fd', '#60a5fa', '#f97316', '#dc2626', '#7f1d1d', '#a7f3d0', '#6ee7b7', '#10b981', '#111827', '#0f172a', '#00897b', '#0d1117', '#161b22', '#30363d', '#f5f5f7', '#8b949e', '#ff5252'];
+let activeColorPickerInput = null;
+function normalizeHexInputClient(value, fallback = '#000000') {
+    const text = String(value || '').trim();
+    if (/^#[0-9a-f]{6}$/i.test(text)) return text.toLowerCase();
+    if (/^[0-9a-f]{6}$/i.test(text)) return `#${text.toLowerCase()}`;
+    return fallback;
+}
+function setColorPickerValue(input, value, { dispatch = false } = {}) {
+    if (!input) return;
+    const normalized = normalizeHexInputClient(value, input.value || '#000000');
+    input.value = normalized;
+    const picker = input.closest('[data-color-picker]');
+    picker?.style.setProperty('--picker-color', normalized);
+    picker?.querySelector('[data-color-swatch]')?.style.setProperty('--picker-color', normalized);
+    if (dispatch) input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function ensureColorPickerPanel() {
+    let panel = document.getElementById('zephyrColorPickerPanel');
+    if (panel) return panel;
+    panel = document.createElement('div');
+    panel.id = 'zephyrColorPickerPanel';
+    panel.className = 'zephyr-color-panel hidden';
+    panel.innerHTML = `<div class="color-panel-grid">${COLOR_PICKER_PRESETS.map((color) => `<button type="button" data-color-preset="${color}" style="--preset-color:${color}" aria-label="${color}"></button>`).join('')}</div><div class="color-panel-actions"><button type="button" data-color-close>关闭</button></div>`;
+    document.body.appendChild(panel);
+    panel.addEventListener('click', (event) => {
+        const preset = event.target.closest('[data-color-preset]')?.dataset.colorPreset;
+        if (preset && activeColorPickerInput) {
+            setColorPickerValue(activeColorPickerInput, preset, { dispatch: true });
+            return;
+        }
+        if (event.target.closest('[data-color-close]')) closeColorPickerPanel();
+    });
+    return panel;
+}
+function closeColorPickerPanel() {
+    document.getElementById('zephyrColorPickerPanel')?.classList.add('hidden');
+    activeColorPickerInput = null;
+}
+function openColorPickerPanel(input, anchor) {
+    if (!input || input.disabled) return;
+    activeColorPickerInput = input;
+    const panel = ensureColorPickerPanel();
+    const rect = anchor.getBoundingClientRect();
+    const margin = 10;
+    const width = 224;
+    const left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.left));
+    const top = Math.min(window.innerHeight - 220 - margin, Math.max(margin, rect.bottom + 8));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+    panel.classList.remove('hidden');
+}
+function setupColorPickers() {
+    if (setupColorPickers._bound) return;
+    setupColorPickers._bound = true;
+    $$('[data-color-picker] .color-hex-input').forEach((input) => {
+        setColorPickerValue(input, input.value || '#000000');
+        input.addEventListener('input', () => {
+            const text = String(input.value || '').trim();
+            if (/^#?[0-9a-f]{6}$/i.test(text)) setColorPickerValue(input, text);
+        });
+        input.addEventListener('blur', () => setColorPickerValue(input, input.value || '#000000'));
+    });
+    document.addEventListener('click', (event) => {
+        const swatch = event.target.closest('[data-color-swatch]');
+        if (swatch) {
+            const input = swatch.closest('[data-color-picker]')?.querySelector('.color-hex-input');
+            openColorPickerPanel(input, swatch);
+            return;
+        }
+        if (!event.target.closest('#zephyrColorPickerPanel')) closeColorPickerPanel();
+    });
+}
 function readTerminalBackgroundAsDataUrl(file) {
     return new Promise((resolve, reject) => {
         if (!file) return resolve('');
@@ -338,6 +413,7 @@ function readTerminalBackgroundAsDataUrl(file) {
     });
 }
 function setupAppearanceControls() {
+    setupColorPickers();
     $('#colorSchemeSelect')?.addEventListener('change', () => {
         const appearance = { ...getAppearance(), colorScheme: $('#colorSchemeSelect').value, customThemeMode: $('#customThemeMode')?.value || 'dark', customColors: readCustomThemeColors(), customCss: $('#customCssInput')?.value || '', customJs: $('#customJsInput')?.value || '' };
         settings.appearance = appearance;
@@ -347,14 +423,14 @@ function setupAppearanceControls() {
     $('#themeModeSelect')?.addEventListener('change', () => { const mode = $('#themeModeSelect').value; settings.appearance = { ...getAppearance(), theme: mode, autoThemeEnabled: mode === 'auto' }; if ($('#autoThemeEnabled')) $('#autoThemeEnabled').checked = mode === 'auto'; applyTheme(getPreferredTheme()); });
     $('#autoThemeEnabled')?.addEventListener('change', () => { const auto = $('#autoThemeEnabled').checked; const mode = auto ? 'auto' : ($('#themeModeSelect')?.value === 'light' ? 'light' : 'dark'); settings.appearance = { ...getAppearance(), theme: mode, autoThemeEnabled: auto }; if ($('#themeModeSelect')) $('#themeModeSelect').value = mode; applyTheme(getPreferredTheme()); });
     $('#customThemeMode')?.addEventListener('change', () => { settings.appearance = { ...getAppearance(), customThemeMode: $('#customThemeMode').value }; applyTheme(getPreferredTheme()); });
-    $$('.custom-color-grid input[type="color"]').forEach((input) => input.addEventListener('input', () => {
+    $$('.custom-color-grid [data-custom-color]').forEach((input) => input.addEventListener('input', () => {
         settings.appearance = { ...getAppearance(), colorScheme: 'custom', customColors: readCustomThemeColors() };
         applyZephyrColorScheme(settings.appearance, { theme: getPreferredTheme(), page: 'app', executeCustomJs: false });
         setFavicon(pendingBrandIcon || DEFAULT_BRAND_ICON);
     }));
     $('#terminalBgSource')?.addEventListener('change', () => syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { ...(getAppearance().terminalBackground || {}), type: $('#terminalBgSource').value } }));
     $('#terminalBgUrl')?.addEventListener('input', () => syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { type: 'url', url: $('#terminalBgUrl').value.trim(), fit: $('#terminalBgFit')?.value || 'cover', opacity: Number($('#terminalBgOpacity')?.value || 0.35) } }));
-    $('#terminalFontColorEnabled')?.addEventListener('change', () => { if ($('#terminalFontColor')) $('#terminalFontColor').disabled = !$('#terminalFontColorEnabled').checked; });
+    $('#terminalFontColorEnabled')?.addEventListener('change', () => { if ($('#terminalFontColor')) { $('#terminalFontColor').disabled = !$('#terminalFontColorEnabled').checked; $('#terminalFontColor').closest('[data-color-picker]')?.classList.toggle('disabled', !$('#terminalFontColorEnabled').checked); } });
     $('#terminalBgOpacity')?.addEventListener('input', () => { if ($('#terminalBgOpacityValue')) $('#terminalBgOpacityValue').textContent = `${Math.round(Number($('#terminalBgOpacity').value || 0.35) * 100)}%`; });
     $('#terminalBgFile')?.addEventListener('change', async (e) => { try { const dataUrl = await readTerminalBackgroundAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; $('#terminalBgDataUrl').value = dataUrl; $('#terminalBgSource').value = 'upload'; syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { type: 'upload', url: dataUrl, fit: $('#terminalBgFit')?.value || 'cover', opacity: Number($('#terminalBgOpacity')?.value || 0.35) } }); toast('终端背景已载入，保存外观后生效'); } catch (err) { e.target.value = ''; toast(err.message); } });
 }
