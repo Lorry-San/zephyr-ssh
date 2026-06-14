@@ -8979,6 +8979,9 @@ body.app-body:not(.terminal-mode) .app-main {
     line-height: 1.5;
 }
 .novnc-page .novnc-panel.rdp-floating-panel {
+    --panel-origin-x: 50%;
+    --panel-origin-y: 0%;
+    transform-origin: var(--panel-origin-x) var(--panel-origin-y);
     position: absolute;
     z-index: 30;
     min-width: 300px;
@@ -9019,6 +9022,24 @@ body.app-body:not(.terminal-mode) .app-main {
 .novnc-page .novnc-panel.rdp-floating-panel.front {
     z-index: 42;
     box-shadow: 0 34px 110px rgba(0,0,0,.54), inset 0 1px 0 rgba(255,255,255,.13);
+}
+.novnc-page .novnc-panel.rdp-floating-panel.front-switching {
+    animation: panelFrontSwitch .28s cubic-bezier(.2,.8,.2,1);
+}
+.novnc-page .novnc-panel.rdp-floating-panel.dragging,
+.novnc-page .novnc-panel.rdp-floating-panel.resizing {
+    transition: none;
+    user-select: none;
+    touch-action: none;
+}
+.novnc-page .novnc-panel.rdp-floating-panel.layout-animating {
+    transition:
+        left .62s var(--ios-open),
+        top .62s var(--ios-open),
+        width .62s var(--ios-open),
+        height .62s var(--ios-open),
+        transform .72s var(--ios-bounce),
+        opacity .2s ease;
 }
 .novnc-page .novnc-panel .panel-drag-handle {
     height: 30px;
@@ -9070,6 +9091,17 @@ body.app-body:not(.terminal-mode) .app-main {
     padding: 6px 7px;
     font-size: 11px;
     background: var(--bg);
+}
+.novnc-page .joystick-panel.rdp-floating-panel {
+    min-width: 240px;
+    min-height: 210px;
+    overflow: visible;
+}
+.novnc-page .joystick-panel .joystick-panel-content {
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+    padding: 18px 12px 14px;
 }
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     .novnc-page .novnc-topbar.terminal-topbar { padding: 6px 10px; }

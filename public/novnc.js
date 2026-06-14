@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-theme-fix';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-rdp-panels';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -37,6 +37,9 @@ const clipboardCopyRemoteBtn = $('#clipboardCopyRemoteBtn');
 const clipboardHint = $('#clipboardHint');
 const shortcutsPanel = $('#shortcutsPanel');
 const shortcutGrid = $('#shortcutGrid');
+const joystickPanel = $('#joystickPanel');
+const joystickContainer = $('#joystickContainer');
+const joystickKnob = $('#joystickKnob');
 
 const urlParams = new URLSearchParams(location.search);
 const tabId = urlParams.get('tabId') || '';
@@ -50,6 +53,10 @@ let reconnecting = false;
 let mobileComposing = false;
 let lastRemoteClipboard = '';
 let vncLastFrameAt = 0;
+let panelLayoutMenu = null;
+let panelLayoutButton = null;
+let suppressNextLayoutClick = false;
+let joystickState = null;
 let qualityMode = localStorage.getItem('zephyr-novnc-quality') || 'balanced';
 let fitMode = localStorage.getItem('zephyr-novnc-fit') || 'fit';
 
@@ -332,10 +339,42 @@ function toggleDragMode() {
     applyDisplayOptions();
 }
 
+function floatingPanels() {
+    return [clipboardPanel, shortcutsPanel, joystickPanel].filter(Boolean);
+}
+function isCompactScreen() {
+    return Math.min(window.innerWidth, window.innerHeight) <= 700;
+}
+function panelDefaults(panel) {
+    const parent = stage?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+    if (isCompactScreen()) {
+        if (panel === joystickPanel) return { left: 10, top: Math.max(48, parent.height - 274), width: Math.min(300, parent.width - 20), height: 248 };
+        return { left: 8, top: 44, width: Math.max(280, parent.width - 16), height: Math.max(260, Math.min(parent.height - 58, panel === shortcutsPanel ? 360 : 430)) };
+    }
+    if (panel === shortcutsPanel) return { width: Math.min(460, parent.width - 24), height: Math.min(360, parent.height - 80), left: 18, top: 54 };
+    if (panel === joystickPanel) return { width: 286, height: 244, left: 18, top: Math.max(60, parent.height - 270) };
+    return { width: Math.min(440, parent.width - 24), height: Math.min(500, parent.height - 80), left: Math.max(18, parent.width - 460), top: 54 };
+}
+function ensurePanelPosition(panel) {
+    if (!panel || panel.dataset.floatingReady === '1') return;
+    const d = panelDefaults(panel);
+    Object.assign(panel.style, { left: `${d.left}px`, top: `${d.top}px`, right: 'auto', bottom: 'auto', width: `${d.width}px`, height: `${d.height}px` });
+    panel.dataset.floatingReady = '1';
+}
+function clampPanel(panel) {
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const parent = stage.getBoundingClientRect();
+    const minVisible = isCompactScreen() ? 140 : 80;
+    const left = Math.min(Math.max(rect.left - parent.left, -rect.width + minVisible), parent.width - minVisible);
+    const top = Math.min(Math.max(rect.top - parent.top, 8), parent.height - minVisible);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
 function bringPanelToFront(panel) {
     if (!panel) return;
     const wasFront = panel.classList.contains('front');
-    [clipboardPanel, shortcutsPanel].filter(Boolean).forEach((item) => {
+    floatingPanels().forEach((item) => {
         item.classList.remove('front');
         if (item !== panel) item.classList.remove('front-switching');
     });
@@ -348,32 +387,268 @@ function bringPanelToFront(panel) {
         panel._frontSwitchTimer = window.setTimeout(() => panel.classList.remove('front-switching'), 360);
     }
 }
-function openPanel(panel) {
-    [clipboardPanel, shortcutsPanel].forEach((item) => {
-        if (!item) return;
-        const show = item === panel && item.hidden;
-        item.hidden = !show;
-        item.classList.toggle('open', show);
-        item.classList.toggle('panel-opening', show);
-        item.classList.remove('panel-closing');
-        if (show) {
-            ensurePanelPosition(item);
-            bringPanelToFront(item);
-            window.setTimeout(() => item.classList.remove('panel-opening'), 420);
-        }
-    });
+function animatePanelFromButton(panel, button, opening = true) {
+    if (!panel || !button) return;
+    const panelRect = panel.getBoundingClientRect?.();
+    const buttonRect = button.getBoundingClientRect?.();
+    if (!panelRect || !buttonRect || panelRect.width <= 1 || panelRect.height <= 1) return;
+    const originX = ((buttonRect.left + buttonRect.width / 2 - panelRect.left) / panelRect.width) * 100;
+    const originY = ((buttonRect.top + buttonRect.height / 2 - panelRect.top) / panelRect.height) * 100;
+    panel.style.setProperty('--panel-origin-x', `${Math.max(8, Math.min(92, originX))}%`);
+    panel.style.setProperty('--panel-origin-y', `${Math.max(8, Math.min(92, originY))}%`);
+    panel.classList.remove('panel-opening', 'panel-closing');
+    void panel.offsetWidth;
+    panel.classList.add(opening ? 'panel-opening' : 'panel-closing');
+}
+function clearPanelMotion(panel) { panel?.classList.remove('panel-opening', 'panel-closing'); }
+function panelButton(panel) {
+    if (panel === clipboardPanel) return clipboardBtn;
+    if (panel === shortcutsPanel) return shortcutsBtn;
+    if (panel === joystickPanel) return dragBtn;
+    return null;
+}
+function syncPanelButtons() {
     clipboardBtn?.classList.toggle('active', clipboardPanel && !clipboardPanel.hidden);
     shortcutsBtn?.classList.toggle('active', shortcutsPanel && !shortcutsPanel.hidden);
+    dragBtn?.classList.toggle('active', joystickPanel && !joystickPanel.hidden);
 }
-
+function togglePanel(panel, force, sourceButton = null) {
+    if (!panel) return;
+    ensurePanelPosition(panel);
+    const shouldShow = force ?? panel.hidden;
+    panel.hidden = !shouldShow;
+    panel.classList.toggle('open', shouldShow);
+    syncPanelButtons();
+    const button = sourceButton || panelButton(panel);
+    requestAnimationFrame(() => animatePanelFromButton(panel, button, shouldShow));
+    if (shouldShow) bringPanelToFront(panel);
+    else {
+        closePanelLayoutMenu({ instant: true });
+        window.setTimeout(() => clearPanelMotion(panel), 320);
+    }
+}
+function openPanel(panel) { togglePanel(panel, undefined, panelButton(panel)); }
 function closePanel(id) {
     const panel = document.getElementById(id);
+    if (panel) togglePanel(panel, false, panelButton(panel));
+}
+function applyPanelLayout(panel, layout) {
     if (!panel) return;
-    panel.classList.remove('open', 'panel-opening');
-    panel.classList.add('panel-closing');
-    window.setTimeout(() => { panel.hidden = true; panel.classList.remove('panel-closing', 'front'); }, 260);
-    clipboardBtn?.classList.toggle('active', clipboardPanel && !clipboardPanel.hidden && panel !== clipboardPanel);
-    shortcutsBtn?.classList.toggle('active', shortcutsPanel && !shortcutsPanel.hidden && panel !== shortcutsPanel);
+    const parent = stage.getBoundingClientRect();
+    const margin = isCompactScreen() ? 6 : 12;
+    const topbar = isCompactScreen() ? 38 : 52;
+    let left = margin, top = topbar, width = parent.width - margin * 2, height = parent.height - topbar - margin;
+    if (layout === 'half') { width = parent.width; height = Math.max(260, parent.height / 2); left = 0; top = parent.height - height; }
+    else if (layout === 'left-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = 0; top = topbar; }
+    else if (layout === 'right-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = parent.width - width; top = topbar; }
+    panel.classList.add('layout-animating');
+    window.clearTimeout(panel._layoutAnimationTimer);
+    Object.assign(panel.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
+    bringPanelToFront(panel);
+    panel._layoutAnimationTimer = window.setTimeout(() => { panel.classList.remove('layout-animating'); clampPanel(panel); }, 480);
+}
+function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
+    if (!menu || !button) return;
+    const rect = button.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const vvWidth = viewport?.width || window.innerWidth;
+    const anchorX = rect.left + rect.width / 2;
+    const finalWidth = Math.min(284, Math.max(160, vvWidth - 16));
+    const finalLeft = anchorX - finalWidth / 2;
+    menu.style.left = `${collapsed ? rect.left : finalLeft}px`;
+    menu.style.top = `${rect.top}px`;
+    menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
+    menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : 50}px`);
+    menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
+    menu.dataset.placement = 'inline';
+}
+function closePanelLayoutMenu({ instant = false } = {}) {
+    const menu = panelLayoutMenu;
+    const button = panelLayoutButton;
+    if (!menu) { button?.classList.remove('active-layout'); panelLayoutButton = null; return; }
+    window.clearTimeout(menu._closeTimer);
+    if (instant || !button?.isConnected) {
+        button?.classList.remove('active-layout'); button?.style.removeProperty('opacity'); menu.remove(); panelLayoutMenu = null; panelLayoutButton = null; return;
+    }
+    menu.style.transition = 'none';
+    positionPanelLayoutMenu(menu, button, { collapsed: false });
+    menu.style.opacity = '1';
+    void menu.offsetWidth;
+    menu.classList.remove('island-open');
+    menu.classList.add('island-closing', 'island-animating');
+    button.classList.remove('active-layout');
+    button.style.opacity = '0';
+    requestAnimationFrame(() => { menu.style.removeProperty('transition'); positionPanelLayoutMenu(menu, button, { collapsed: true }); });
+    menu._closeTimer = window.setTimeout(() => {
+        button.classList.remove('active-layout'); button.style.opacity = '1'; requestAnimationFrame(() => button.style.removeProperty('opacity')); menu.remove();
+        if (panelLayoutMenu === menu) panelLayoutMenu = null;
+        if (panelLayoutButton === button) panelLayoutButton = null;
+    }, 460);
+}
+function openPanelLayoutMenu(button, panel) {
+    closePanelLayoutMenu({ instant: true });
+    panelLayoutButton = button;
+    const menu = document.createElement('div');
+    menu.className = 'panel-layout-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '窗口布局');
+    menu.innerHTML = '<button data-layout="full" title="全屏" aria-label="全屏"><span class="panel-layout-icon full"></span></button><button data-layout="half" title="半屏" aria-label="半屏"><span class="panel-layout-icon half"></span></button><button data-layout="left-quarter" title="左侧四分之一" aria-label="左侧四分之一"><span class="panel-layout-icon left"></span></button><button data-layout="right-quarter" title="右侧四分之一" aria-label="右侧四分之一"><span class="panel-layout-icon right"></span></button><button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>';
+    menu.style.transition = 'none';
+    document.body.appendChild(menu);
+    panelLayoutMenu = menu;
+    positionPanelLayoutMenu(menu, button, { collapsed: true });
+    button.style.opacity = '0';
+    menu.style.opacity = '1';
+    menu.classList.add('island-animating');
+    void menu.offsetWidth;
+    requestAnimationFrame(() => {
+        menu.style.removeProperty('transition');
+        menu.classList.add('island-open');
+        positionPanelLayoutMenu(menu, button, { collapsed: false });
+        window.setTimeout(() => { menu.classList.remove('island-animating'); menu.style.removeProperty('opacity'); }, 540);
+    });
+    menu.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-layout]');
+        if (!item) return;
+        if (item.dataset.layout === 'close') togglePanel(panel, false);
+        else { applyPanelLayout(panel, item.dataset.layout); closePanelLayoutMenu(); }
+    });
+}
+function setupPanelLayoutMenu() {
+    document.querySelectorAll('[data-layout-panel]').forEach((button) => {
+        const panel = document.getElementById(button.dataset.layoutPanel);
+        if (!panel || button.dataset.novncLayoutReady === '1') return;
+        button.dataset.novncLayoutReady = '1';
+        button.addEventListener('pointerdown', (event) => {
+            event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); button.classList.add('pressing'); button.setPointerCapture?.(event.pointerId);
+            const start = { x: event.clientX, y: event.clientY, left: panel.offsetLeft, top: panel.offsetTop };
+            let moved = false;
+            const move = (ev) => {
+                ev.preventDefault();
+                const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+                if (!moved && Math.hypot(dx, dy) > 7) { moved = true; closePanelLayoutMenu({ instant: true }); panel.classList.add('dragging'); }
+                if (!moved) return;
+                panel.style.left = `${start.left + dx}px`; panel.style.top = `${start.top + dy}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampPanel(panel);
+            };
+            const up = () => { panel.classList.remove('dragging'); button.classList.remove('pressing'); suppressNextLayoutClick = moved; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', up, { once: true });
+            window.addEventListener('pointercancel', up, { once: true });
+        });
+        button.addEventListener('click', (event) => {
+            event.preventDefault(); event.stopPropagation();
+            if (suppressNextLayoutClick) { suppressNextLayoutClick = false; return; }
+            bringPanelToFront(panel);
+            if (navigator.vibrate) navigator.vibrate(8);
+            if (panelLayoutMenu && panelLayoutButton === button) closePanelLayoutMenu(); else openPanelLayoutMenu(button, panel);
+        });
+    });
+    document.addEventListener('pointerdown', (event) => {
+        if (panelLayoutMenu && !event.target.closest('.panel-layout-menu') && !event.target.closest('[data-layout-panel]')) closePanelLayoutMenu();
+    });
+}
+function setupPanelDrag() {
+    const handles = [...document.querySelectorAll('[data-drag-panel]'), ...document.querySelectorAll('.novnc-panel .panel-titlebar')];
+    handles.forEach((handle) => {
+        const panel = handle.dataset.dragPanel ? document.getElementById(handle.dataset.dragPanel) : handle.closest('.novnc-panel');
+        if (!panel || handle.dataset.novncDragReady === '1') return;
+        handle.dataset.novncDragReady = '1';
+        handle.addEventListener('pointerdown', (event) => {
+            if (event.target.closest('button,input,select,textarea,label')) return;
+            event.preventDefault(); bringPanelToFront(panel); panel.classList.add('dragging'); handle.setPointerCapture?.(event.pointerId);
+            const start = { x: event.clientX, y: event.clientY, left: panel.offsetLeft, top: panel.offsetTop };
+            const move = (ev) => { ev.preventDefault(); panel.style.left = `${start.left + ev.clientX - start.x}px`; panel.style.top = `${start.top + ev.clientY - start.y}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampPanel(panel); };
+            const up = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', up, { once: true });
+        });
+    });
+}
+function setupPanelResize() {
+    document.querySelectorAll('[data-resize-panel]').forEach((handle) => {
+        const panel = document.getElementById(handle.dataset.resizePanel);
+        if (!panel || handle.dataset.novncResizeReady === '1') return;
+        handle.dataset.novncResizeReady = '1';
+        handle.addEventListener('pointerdown', (event) => {
+            event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); panel.classList.add('resizing'); handle.setPointerCapture?.(event.pointerId);
+            const start = { x: event.clientX, y: event.clientY, width: panel.offsetWidth, height: panel.offsetHeight, left: panel.offsetLeft };
+            const edge = handle.dataset.resizeEdge || 'right';
+            const parent = stage.getBoundingClientRect();
+            const minWidth = isCompactScreen() ? 260 : 320;
+            const minHeight = isCompactScreen() ? 220 : 260;
+            const move = (ev) => {
+                ev.preventDefault();
+                let width = start.width + ev.clientX - start.x;
+                let left = start.left;
+                if (edge === 'left') { width = start.width - (ev.clientX - start.x); left = start.left + (ev.clientX - start.x); if (width < minWidth) { left -= minWidth - width; width = minWidth; } panel.style.left = `${Math.max(8, left)}px`; }
+                panel.style.width = `${Math.min(Math.max(minWidth, width), parent.width - panel.offsetLeft - 12)}px`;
+                panel.style.height = `${Math.min(Math.max(minHeight, start.height + ev.clientY - start.y), parent.height - panel.offsetTop - 12)}px`;
+            };
+            const up = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', up, { once: true });
+        });
+    });
+}
+function setupViewportJoystick() {
+    if (!joystickContainer || !joystickKnob || joystickContainer.dataset.ready === '1') return;
+    joystickContainer.dataset.ready = '1';
+    const icons = joystickContainer.querySelectorAll('.rdp-joystick-icon');
+    const maxRadius = 24;
+    const deadzone = 4;
+    const maxTilt = 14;
+    let active = false, startX = 0, startY = 0, raf = 0, resetTimer = 0;
+    const clearHighlights = () => icons.forEach((icon) => icon.classList.remove('active'));
+    const applyVisual = (x, y) => {
+        const clampedX = Math.min(Math.max(x, -maxRadius), maxRadius);
+        const clampedY = Math.min(Math.max(y, -maxRadius), maxRadius);
+        const distance = Math.hypot(clampedX, clampedY);
+        const normX = distance > .01 ? clampedX / maxRadius : 0;
+        const normY = distance > .01 ? clampedY / maxRadius : 0;
+        joystickKnob.style.transform = `translate(${clampedX}px, ${clampedY}px) rotateX(${normY * -maxTilt}deg) rotateY(${normX * maxTilt}deg)`;
+        if (distance < deadzone) { clearHighlights(); return { x: 0, y: 0, intensity: 0 }; }
+        const angleDeg = (Math.atan2(normY, normX) * 180 / Math.PI + 360) % 360;
+        const activeIndex = angleDeg >= 45 && angleDeg < 135 ? 2 : angleDeg >= 135 && angleDeg < 225 ? 3 : angleDeg >= 225 && angleDeg < 315 ? 0 : 1;
+        clearHighlights(); icons[activeIndex]?.classList.add('active');
+        return { x: normX, y: normY, intensity: Math.min(distance / maxRadius, 1) };
+    };
+    const reset = (smooth = true) => {
+        if (raf) cancelAnimationFrame(raf); raf = 0;
+        if (smooth) joystickKnob.classList.add('smooth-back');
+        joystickKnob.style.transform = 'translate(0px, 0px) rotateX(0deg) rotateY(0deg)';
+        clearHighlights(); window.clearTimeout(resetTimer); resetTimer = window.setTimeout(() => joystickKnob.classList.remove('smooth-back'), 220); joystickState = null;
+    };
+    const pump = () => {
+        if (!active || !joystickState || !screenShell) { raf = 0; return; }
+        const maxX = Math.max(0, screenShell.scrollWidth - screenShell.clientWidth);
+        const maxY = Math.max(0, screenShell.scrollHeight - screenShell.clientHeight);
+        const speed = 4 + 24 * joystickState.intensity;
+        screenShell.scrollLeft = Math.max(0, Math.min(maxX, screenShell.scrollLeft + joystickState.x * speed));
+        screenShell.scrollTop = Math.max(0, Math.min(maxY, screenShell.scrollTop + joystickState.y * speed));
+        raf = requestAnimationFrame(pump);
+    };
+    const move = (event) => {
+        if (!active) return;
+        event.preventDefault();
+        const dx = event.clientX - startX, dy = event.clientY - startY, dist = Math.hypot(dx, dy);
+        joystickState = applyVisual(dist > maxRadius ? dx / dist * maxRadius : dx, dist > maxRadius ? dy / dist * maxRadius : dy);
+        if (!raf) raf = requestAnimationFrame(pump);
+    };
+    const end = () => { if (!active) return; active = false; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); reset(true); };
+    joystickKnob.addEventListener('pointerdown', (event) => {
+        event.preventDefault(); event.stopPropagation(); bringPanelToFront(joystickPanel); active = true; startX = event.clientX; startY = event.clientY; window.clearTimeout(resetTimer); joystickKnob.classList.remove('smooth-back'); joystickState = applyVisual(0, 0);
+        window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', end, { once: true }); window.addEventListener('pointercancel', end, { once: true }); joystickKnob.setPointerCapture?.(event.pointerId);
+    });
+    joystickContainer.addEventListener('dragstart', (event) => event.preventDefault());
+    window.addEventListener('blur', () => { if (active) { active = false; reset(true); } });
+    reset(false);
+}
+function setupFloatingPanels() {
+    setupViewportJoystick();
+    floatingPanels().forEach((panel) => { ensurePanelPosition(panel); panel.addEventListener('pointerdown', () => bringPanelToFront(panel)); });
+    setupPanelLayoutMenu();
+    setupPanelDrag();
+    setupPanelResize();
 }
 
 function sendKey(keysym, code = '', down = undefined) {
@@ -381,20 +656,14 @@ function sendKey(keysym, code = '', down = undefined) {
     rfb.sendKey(keysym, code, down);
     notifyParentActivity();
 }
-
 function tapKey(keysym, code = '') { sendKey(keysym, code); }
 function down(keysym, code = '') { sendKey(keysym, code, true); }
 function up(keysym, code = '') { sendKey(keysym, code, false); }
-
 function currentCanvas() { return screen?.querySelector?.('canvas') || null; }
 function touchToCanvasPoint(touch, canvas = currentCanvas()) {
     const rect = canvas?.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return null;
-    return {
-        x: Math.max(0, Math.min(rect.width - 1, Number(touch.clientX) - rect.left)),
-        y: Math.max(0, Math.min(rect.height - 1, Number(touch.clientY) - rect.top)),
-        rect,
-    };
+    return { x: Math.max(0, Math.min(rect.width - 1, Number(touch.clientX) - rect.left)), y: Math.max(0, Math.min(rect.height - 1, Number(touch.clientY) - rect.top)), rect };
 }
 function dispatchCanvasMouse(canvas, type, point, button = 0, buttons = 0) {
     if (!canvas || !point) return;
@@ -430,22 +699,17 @@ function installDirectTouchFallback() {
         if (!isTap || !point) return;
         dispatchCanvasMouse(canvas, 'mousemove', point, 0, 0);
         dispatchCanvasMouse(canvas, 'mousedown', point, 0, 1);
-        window.setTimeout(() => {
-            dispatchCanvasMouse(canvas, 'mouseup', point, 0, 0);
-            dispatchCanvasMouse(canvas, 'click', point, 0, 0);
-        }, 18);
+        window.setTimeout(() => { dispatchCanvasMouse(canvas, 'mouseup', point, 0, 0); dispatchCanvasMouse(canvas, 'click', point, 0, 0); }, 18);
         notifyParentActivity();
     }, { passive: true });
     canvas.addEventListener('touchcancel', () => { state = null; }, { passive: true });
 }
-
 function charKeysym(ch) {
     if (!ch) return 0;
     const code = ch.codePointAt(0);
     if (code >= 0x20 && code <= 0xff) return code;
     return 0;
 }
-
 function sendText(text) {
     if (!text || !rfb || !connected) return;
     const value = String(text);
@@ -465,7 +729,6 @@ function sendText(text) {
         }
     }
 }
-
 function sendSequence(seq) {
     const s = String(seq || '').toLowerCase();
     const special = {
@@ -475,198 +738,29 @@ function sendSequence(seq) {
         super: [KeyTable.XK_Super_L, 'MetaLeft'], win: [KeyTable.XK_Super_L, 'MetaLeft'],
     };
     if (s === 'ctrl-alt-del') { rfb?.sendCtrlAltDel?.(); return; }
-    if (s === 'alt-tab') {
-        down(KeyTable.XK_Alt_L, 'AltLeft'); tapKey(KeyTable.XK_Tab, 'Tab'); up(KeyTable.XK_Alt_L, 'AltLeft'); return;
-    }
-    if (s === 'win-r') {
-        down(KeyTable.XK_Super_L, 'MetaLeft'); tapKey('r'.charCodeAt(0), 'KeyR'); up(KeyTable.XK_Super_L, 'MetaLeft'); return;
-    }
+    if (s === 'alt-tab') { down(KeyTable.XK_Alt_L, 'AltLeft'); tapKey(KeyTable.XK_Tab, 'Tab'); up(KeyTable.XK_Alt_L, 'AltLeft'); return; }
+    if (s === 'win-r') { down(KeyTable.XK_Super_L, 'MetaLeft'); tapKey('r'.charCodeAt(0), 'KeyR'); up(KeyTable.XK_Super_L, 'MetaLeft'); return; }
     const fn = s.match(/^f(\d{1,2})$/);
-    if (fn) {
-        const n = Number(fn[1]);
-        if (n >= 1 && n <= 12) tapKey(KeyTable[`XK_F${n}`], `F${n}`);
-        return;
-    }
+    if (fn) { const n = Number(fn[1]); if (n >= 1 && n <= 12) tapKey(KeyTable[`XK_F${n}`], `F${n}`); return; }
     const ctrl = s.match(/^ctrl-([a-z])$/);
-    if (ctrl) {
-        const letter = ctrl[1];
-        down(KeyTable.XK_Control_L, 'ControlLeft'); tapKey(letter.charCodeAt(0), `Key${letter.toUpperCase()}`); up(KeyTable.XK_Control_L, 'ControlLeft'); return;
-    }
+    if (ctrl) { const letter = ctrl[1]; down(KeyTable.XK_Control_L, 'ControlLeft'); tapKey(letter.charCodeAt(0), `Key${letter.toUpperCase()}`); up(KeyTable.XK_Control_L, 'ControlLeft'); return; }
     if (special[s]) tapKey(special[s][0], special[s][1]);
 }
-
 function focusMobileKeyboard() {
     mobileKeyboardInput.value = '';
     mobileKeyboardInput.focus({ preventScroll: true });
 }
-
 function setupMobileInput() {
     mobileKeyboardInput.addEventListener('compositionstart', () => { mobileComposing = true; });
-    mobileKeyboardInput.addEventListener('compositionend', (event) => {
-        mobileComposing = false;
-        sendText(event.data || mobileKeyboardInput.value || '');
-        mobileKeyboardInput.value = '';
-    });
-    mobileKeyboardInput.addEventListener('beforeinput', (event) => {
-        if (event.inputType?.startsWith('delete')) {
-            event.preventDefault();
-            tapKey(KeyTable.XK_BackSpace, 'Backspace');
-        }
-    });
-    mobileKeyboardInput.addEventListener('input', () => {
-        if (mobileComposing) return;
-        const value = mobileKeyboardInput.value;
-        if (value) sendText(value);
-        mobileKeyboardInput.value = '';
-    });
+    mobileKeyboardInput.addEventListener('compositionend', (event) => { mobileComposing = false; sendText(event.data || mobileKeyboardInput.value || ''); mobileKeyboardInput.value = ''; });
+    mobileKeyboardInput.addEventListener('beforeinput', (event) => { if (event.inputType?.startsWith('delete')) { event.preventDefault(); tapKey(KeyTable.XK_BackSpace, 'Backspace'); } });
+    mobileKeyboardInput.addEventListener('input', () => { if (mobileComposing) return; const value = mobileKeyboardInput.value; if (value) sendText(value); mobileKeyboardInput.value = ''; });
 }
-
 function setupClipboard() {
-    clipboardSendBtn.addEventListener('click', () => {
-        if (!rfb || !connected) return;
-        const text = clipboardText.value || '';
-        rfb.clipboardPasteFrom(text);
-        clipboardHint.textContent = `已发送 ${text.length} 字符到远程剪贴板`;
-    });
-    clipboardReadLocalBtn.addEventListener('click', async () => {
-        try { clipboardText.value = await navigator.clipboard.readText(); }
-        catch (err) { clipboardHint.textContent = err.message || '读取本机剪贴板失败'; }
-    });
-    clipboardCopyRemoteBtn.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(remoteClipboardText.value || lastRemoteClipboard || ''); clipboardHint.textContent = '已复制到本机剪贴板'; }
-        catch (err) { clipboardHint.textContent = err.message || '复制失败'; }
-    });
-    window.addEventListener('paste', (event) => {
-        if (!connected || document.activeElement === clipboardText || document.activeElement === remoteClipboardText) return;
-        const text = event.clipboardData?.getData('text/plain') || '';
-        if (text) { event.preventDefault(); sendText(text); }
-    });
-}
-
-function panelDefaults(panel) {
-    const parent = stage?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
-    const compact = Math.min(window.innerWidth, window.innerHeight) <= 700;
-    if (compact) return { left: 8, top: 44, width: Math.max(280, parent.width - 16), height: Math.max(260, Math.min(parent.height - 58, panel === shortcutsPanel ? 360 : 430)) };
-    if (panel === shortcutsPanel) return { width: Math.min(460, parent.width - 24), height: Math.min(360, parent.height - 80), left: 18, top: 54 };
-    return { width: Math.min(440, parent.width - 24), height: Math.min(500, parent.height - 80), left: Math.max(18, parent.width - 460), top: 54 };
-}
-function ensurePanelPosition(panel) {
-    if (!panel || panel.dataset.floatingReady === '1') return;
-    const d = panelDefaults(panel);
-    Object.assign(panel.style, { left: `${d.left}px`, top: `${d.top}px`, right: 'auto', bottom: 'auto', width: `${d.width}px`, height: `${d.height}px` });
-    panel.dataset.floatingReady = '1';
-}
-function clampPanel(panel) {
-    if (!panel) return;
-    const rect = panel.getBoundingClientRect();
-    const parent = stage.getBoundingClientRect();
-    const minVisible = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 140 : 80;
-    const left = Math.min(Math.max(rect.left - parent.left, -rect.width + minVisible), parent.width - minVisible);
-    const top = Math.min(Math.max(rect.top - parent.top, 8), parent.height - minVisible);
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
-}
-function applyPanelLayout(panel, layout) {
-    if (!panel) return;
-    const parent = stage.getBoundingClientRect();
-    const compact = Math.min(window.innerWidth, window.innerHeight) <= 700;
-    const margin = compact ? 6 : 12;
-    const topbar = compact ? 38 : 52;
-    let left = margin, top = topbar, width = parent.width - margin * 2, height = parent.height - topbar - margin;
-    if (layout === 'half') { width = parent.width; height = Math.max(260, parent.height / 2); left = 0; top = parent.height - height; }
-    else if (layout === 'left-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = 0; top = topbar; }
-    else if (layout === 'right-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = parent.width - width; top = topbar; }
-    panel.classList.add('layout-animating');
-    Object.assign(panel.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
-    bringPanelToFront(panel);
-    window.clearTimeout(panel._layoutAnimationTimer);
-    panel._layoutAnimationTimer = window.setTimeout(() => { panel.classList.remove('layout-animating'); clampPanel(panel); }, 480);
-}
-let panelLayoutMenu = null;
-let panelLayoutButton = null;
-function closePanelLayoutMenu({ instant = false } = {}) {
-    const menu = panelLayoutMenu;
-    const button = panelLayoutButton;
-    if (!menu) { button?.classList.remove('active-layout'); panelLayoutButton = null; return; }
-    button?.classList.remove('active-layout');
-    button?.style.removeProperty('opacity');
-    menu.remove();
-    panelLayoutMenu = null;
-    panelLayoutButton = null;
-}
-function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
-    const rect = button.getBoundingClientRect();
-    const vw = window.visualViewport?.width || window.innerWidth;
-    const anchorX = rect.left + rect.width / 2;
-    const finalWidth = Math.min(284, Math.max(160, vw - 16));
-    menu.style.left = `${collapsed ? rect.left : anchorX - finalWidth / 2}px`;
-    menu.style.top = `${rect.top}px`;
-    menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
-    menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : 50}px`);
-    menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
-}
-function openPanelLayoutMenu(button, panel) {
-    closePanelLayoutMenu({ instant: true });
-    panelLayoutButton = button;
-    const menu = document.createElement('div');
-    menu.className = 'panel-layout-menu';
-    menu.innerHTML = '<button data-layout="full" title="全屏"><span class="panel-layout-icon full"></span></button><button data-layout="half" title="半屏"><span class="panel-layout-icon half"></span></button><button data-layout="left-quarter" title="左侧四分之一"><span class="panel-layout-icon left"></span></button><button data-layout="right-quarter" title="右侧四分之一"><span class="panel-layout-icon right"></span></button><button data-layout="close" class="panel-layout-close" title="关闭窗口"><span class="panel-layout-icon close"></span></button>';
-    document.body.appendChild(menu);
-    panelLayoutMenu = menu;
-    positionPanelLayoutMenu(menu, button, { collapsed: true });
-    button.classList.add('active-layout');
-    button.style.opacity = '0';
-    menu.classList.add('island-animating');
-    void menu.offsetWidth;
-    requestAnimationFrame(() => { menu.classList.add('island-open'); positionPanelLayoutMenu(menu, button, { collapsed: false }); window.setTimeout(() => menu.classList.remove('island-animating'), 540); });
-    menu.addEventListener('click', (event) => {
-        const item = event.target.closest('[data-layout]');
-        if (!item) return;
-        if (item.dataset.layout === 'close') closePanel(panel.id);
-        else { applyPanelLayout(panel, item.dataset.layout); closePanelLayoutMenu(); }
-    });
-}
-function makeDraggable(panel) {
-    ensurePanelPosition(panel);
-    const handles = [panel?.querySelector('[data-drag-panel]'), panel?.querySelector('.panel-titlebar')].filter(Boolean);
-    handles.forEach((head) => {
-        head.addEventListener('pointerdown', (event) => {
-            if (event.target.closest('button,input,select,textarea,label')) return;
-            event.preventDefault();
-            bringPanelToFront(panel);
-            panel.classList.add('dragging');
-            const start = { x: event.clientX, y: event.clientY, left: panel.offsetLeft, top: panel.offsetTop };
-            const move = (ev) => { ev.preventDefault(); panel.style.left = `${start.left + ev.clientX - start.x}px`; panel.style.top = `${start.top + ev.clientY - start.y}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampPanel(panel); };
-            const end = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
-            window.addEventListener('pointermove', move, { passive: false });
-            window.addEventListener('pointerup', end, { once: true });
-        });
-    });
-    panel.querySelectorAll('[data-layout-panel]').forEach((button) => {
-        button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); if (panelLayoutMenu && panelLayoutButton === button) closePanelLayoutMenu(); else openPanelLayoutMenu(button, panel); });
-    });
-    panel.querySelectorAll('[data-resize-panel]').forEach((handle) => {
-        handle.addEventListener('pointerdown', (event) => {
-            event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); panel.classList.add('resizing');
-            const start = { x: event.clientX, y: event.clientY, width: panel.offsetWidth, height: panel.offsetHeight, left: panel.offsetLeft };
-            const edge = handle.dataset.resizeEdge || 'right';
-            const parent = stage.getBoundingClientRect();
-            const minWidth = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 260 : 320;
-            const minHeight = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 220 : 260;
-            const move = (ev) => {
-                ev.preventDefault();
-                let width = start.width + ev.clientX - start.x;
-                let left = start.left;
-                if (edge === 'left') { width = start.width - (ev.clientX - start.x); left = start.left + (ev.clientX - start.x); if (width < minWidth) { left -= minWidth - width; width = minWidth; } panel.style.left = `${Math.max(8, left)}px`; }
-                panel.style.width = `${Math.min(Math.max(minWidth, width), parent.width - panel.offsetLeft - 12)}px`;
-                panel.style.height = `${Math.min(Math.max(minHeight, start.height + ev.clientY - start.y), parent.height - panel.offsetTop - 12)}px`;
-            };
-            const end = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
-            window.addEventListener('pointermove', move, { passive: false });
-            window.addEventListener('pointerup', end, { once: true });
-        });
-    });
-    panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+    clipboardSendBtn.addEventListener('click', () => { if (!rfb || !connected) return; const text = clipboardText.value || ''; rfb.clipboardPasteFrom(text); clipboardHint.textContent = `已发送 ${text.length} 字符到远程剪贴板`; });
+    clipboardReadLocalBtn.addEventListener('click', async () => { try { clipboardText.value = await navigator.clipboard.readText(); } catch (err) { clipboardHint.textContent = err.message || '读取本机剪贴板失败'; } });
+    clipboardCopyRemoteBtn.addEventListener('click', async () => { try { await navigator.clipboard.writeText(remoteClipboardText.value || lastRemoteClipboard || ''); clipboardHint.textContent = '已复制到本机剪贴板'; } catch (err) { clipboardHint.textContent = err.message || '复制失败'; } });
+    window.addEventListener('paste', (event) => { if (!connected || document.activeElement === clipboardText || document.activeElement === remoteClipboardText) return; const text = event.clipboardData?.getData('text/plain') || ''; if (text) { event.preventDefault(); sendText(text); } });
 }
 
 function sleep(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
@@ -693,10 +787,10 @@ async function performAiRemoteDesktopAction(data = {}) {
     const text = String(data.text || '');
     if (control === 'quality') { cycleQuality(data.qualityMode || ''); return { ok: true, control, qualityMode }; }
     if (control === 'fit') { cycleFit(data.fitMode || ''); return { ok: true, control, fitMode }; }
-    if (control === 'joystick' || control === 'drag') { toggleDragMode(); return { ok: true, control, fitMode }; }
-    if (control === 'clipboard') { openPanel(clipboardPanel); clipboardText?.focus?.(); return { ok: true, control, panel: 'clipboard' }; }
+    if (control === 'joystick' || control === 'drag') { togglePanel(joystickPanel, true, dragBtn); return { ok: true, control, panel: 'joystick' }; }
+    if (control === 'clipboard') { togglePanel(clipboardPanel, true, clipboardBtn); clipboardText?.focus?.(); return { ok: true, control, panel: 'clipboard' }; }
     if (control === 'keyboard') { focusMobileKeyboard(); return { ok: true, control }; }
-    if (control === 'shortcuts') { openPanel(shortcutsPanel); return { ok: true, control, panel: 'shortcuts' }; }
+    if (control === 'shortcuts') { togglePanel(shortcutsPanel, true, shortcutsBtn); return { ok: true, control, panel: 'shortcuts' }; }
     if (control === 'ctrl_alt_del' || control === 'cad') { rfb?.sendCtrlAltDel?.(); notifyParentActivity(); return { ok: true, control: 'ctrl_alt_del' }; }
     if (control === 'reconnect') { reconnect(); return { ok: true, control }; }
     if (control === 'disconnect') { disconnect({ closeTab: true }); return { ok: true, control }; }
@@ -750,9 +844,9 @@ async function performAiRemoteDesktopAction(data = {}) {
 function bindEvents() {
     qualityBtn.addEventListener('click', () => cycleQuality());
     fitBtn.addEventListener('click', () => cycleFit());
-    dragBtn.addEventListener('click', toggleDragMode);
-    clipboardBtn.addEventListener('click', () => openPanel(clipboardPanel));
-    shortcutsBtn.addEventListener('click', () => openPanel(shortcutsPanel));
+    dragBtn.addEventListener('click', () => togglePanel(joystickPanel, undefined, dragBtn));
+    clipboardBtn.addEventListener('click', () => togglePanel(clipboardPanel, undefined, clipboardBtn));
+    shortcutsBtn.addEventListener('click', () => togglePanel(shortcutsPanel, undefined, shortcutsBtn));
     keyboardBtn.addEventListener('click', focusMobileKeyboard);
     cadBtn.addEventListener('click', () => rfb?.sendCtrlAltDel?.());
     reconnectBtn.addEventListener('click', reconnect);
@@ -792,8 +886,7 @@ function bindEvents() {
     window.addEventListener('beforeunload', () => { try { rfb?.disconnect?.(); } catch {} });
     setupMobileInput();
     setupClipboard();
-    makeDraggable(clipboardPanel);
-    makeDraggable(shortcutsPanel);
+    setupFloatingPanels();
 }
 
 applyDisplayOptions();
