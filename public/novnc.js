@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-touch-fix';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-theme-fix';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -52,6 +52,16 @@ let lastRemoteClipboard = '';
 let vncLastFrameAt = 0;
 let qualityMode = localStorage.getItem('zephyr-novnc-quality') || 'balanced';
 let fitMode = localStorage.getItem('zephyr-novnc-fit') || 'fit';
+
+function initialTheme() {
+    const saved = localStorage.getItem('zephyr-theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light';
+}
+function applyFrameTheme(theme = initialTheme()) {
+    document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
+}
+applyFrameTheme();
 
 const qualityModes = ['balanced', 'performance', 'quality'];
 const fitModes = ['fit', 'original', 'drag'];
@@ -765,6 +775,7 @@ function bindEvents() {
     });
     window.addEventListener('message', (event) => {
         if (event.data?.source !== 'zephyr-app') return;
+        if (event.data.type === 'theme-change') applyFrameTheme(event.data.theme);
         if (event.data.type === 'reconnect-terminal') reconnect();
         if (event.data.type === 'focus-terminal') rfb?.focus?.();
         if (event.data.type === 'ai-remote-desktop-action') {

@@ -8801,6 +8801,9 @@ body.app-body:not(.terminal-mode) .app-main {
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
 }
+:root[data-theme="light"] .novnc-page.rdp-page {
+    background: #ffffff !important;
+}
 .novnc-page .novnc-topbar.terminal-topbar {
     position: relative;
     z-index: 5;
@@ -8889,11 +8892,17 @@ body.app-body:not(.terminal-mode) .app-main {
     background:
         radial-gradient(circle at 20% 0%, rgba(88,166,255,.12), transparent 30%),
         radial-gradient(circle at 82% 10%, rgba(240,136,62,.10), transparent 30%),
-        #05070a;
+        var(--bg);
     display: grid;
     place-items: center;
     outline: none;
     contain: layout paint;
+}
+:root[data-theme="light"] .novnc-page .novnc-stage.rdp-stage {
+    background:
+        radial-gradient(circle at 20% 0%, rgba(9,105,218,.10), transparent 30%),
+        radial-gradient(circle at 82% 10%, rgba(154,103,0,.08), transparent 30%),
+        #ffffff;
 }
 .novnc-page .novnc-screen-shell.rdp-display-shell {
     position: absolute;
@@ -8904,11 +8913,11 @@ body.app-body:not(.terminal-mode) .app-main {
     overscroll-behavior: contain;
     touch-action: none;
     background:
-        linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%),
-        linear-gradient(-45deg, rgba(255,255,255,.025) 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, rgba(255,255,255,.025) 75%),
-        linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.025) 75%),
-        #05070a;
+        linear-gradient(45deg, color-mix(in srgb, var(--text) 3%, transparent) 25%, transparent 25%),
+        linear-gradient(-45deg, color-mix(in srgb, var(--text) 3%, transparent) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--text) 3%, transparent) 75%),
+        linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--text) 3%, transparent) 75%),
+        var(--bg);
     background-size: 28px 28px;
     background-position: 0 0, 0 14px, 14px -14px, -14px 0;
 }
@@ -8957,7 +8966,7 @@ body.app-body:not(.terminal-mode) .app-main {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    background: rgba(13,17,23,.86);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
 }
 .novnc-page .novnc-overlay.terminal-overlay.hidden {
     opacity: 0;
