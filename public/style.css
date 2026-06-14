@@ -8565,10 +8565,12 @@ body.app-body:not(.terminal-mode) .app-main {
         box-shadow .18s ease !important;
 }
 .nav-actions .ai-floating-btn[data-ai-morph-source="1"] {
-    color: rgba(255,255,255,.4) !important;
+    opacity: .74 !important;
+    color: var(--accent-hover) !important;
+    -webkit-text-fill-color: currentColor !important;
 }
 .nav-actions .ai-floating-btn[data-ai-morph-source="1"]::before {
-    opacity: 0;
+    opacity: .28;
 }
 .nav-actions .ai-floating-btn:active {
     transform: scale(.92);

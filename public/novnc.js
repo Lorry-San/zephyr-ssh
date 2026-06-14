@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-rdp-panels';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-controls-fix';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -57,6 +57,7 @@ let panelLayoutMenu = null;
 let panelLayoutButton = null;
 let suppressNextLayoutClick = false;
 let joystickState = null;
+let joystickPreviousFitMode = null;
 let qualityMode = localStorage.getItem('zephyr-novnc-quality') || 'balanced';
 let fitMode = localStorage.getItem('zephyr-novnc-fit') || 'fit';
 
@@ -176,7 +177,10 @@ function applyDisplayOptions() {
     const q = qualityConfig();
     qualityLabel.textContent = q.label;
     fitLabel.textContent = fitLabelText();
-    dragBtn.classList.toggle('active', fitMode === 'drag');
+    qualityBtn.title = `当前：${q.label}模式，点击切换性能/画质模式`;
+    qualityBtn.dataset.qualityMode = qualityMode;
+    qualityBtn.classList.toggle('active', qualityMode !== 'balanced');
+    dragBtn.classList.toggle('active', joystickPanel && !joystickPanel.hidden);
     screenShell.classList.toggle('fit-mode', fitMode === 'fit');
     screenShell.classList.toggle('original-mode', fitMode === 'original');
     screenShell.classList.toggle('drag-mode', fitMode === 'drag');
@@ -323,6 +327,10 @@ function cycleQuality(mode = '') {
     qualityMode = next;
     localStorage.setItem('zephyr-novnc-quality', qualityMode);
     applyDisplayOptions();
+    qualityBtn.classList.add('active', 'pressing');
+    window.clearTimeout(qualityBtn._qualityPressTimer);
+    qualityBtn._qualityPressTimer = window.setTimeout(() => qualityBtn.classList.remove('pressing'), 180);
+    if (connected) setStatus('connected', `VNC ${qualityConfig().label}模式`);
 }
 
 function cycleFit(mode = '') {
@@ -416,9 +424,23 @@ function togglePanel(panel, force, sourceButton = null) {
     if (!panel) return;
     ensurePanelPosition(panel);
     const shouldShow = force ?? panel.hidden;
+    if (panel === joystickPanel) {
+        if (shouldShow && fitMode !== 'drag') {
+            joystickPreviousFitMode = fitMode;
+            fitMode = 'drag';
+            localStorage.setItem('zephyr-novnc-fit', fitMode);
+            applyDisplayOptions();
+        } else if (!shouldShow && joystickPreviousFitMode && fitMode === 'drag') {
+            fitMode = joystickPreviousFitMode;
+            joystickPreviousFitMode = null;
+            localStorage.setItem('zephyr-novnc-fit', fitMode);
+            applyDisplayOptions();
+        }
+    }
     panel.hidden = !shouldShow;
     panel.classList.toggle('open', shouldShow);
     syncPanelButtons();
+    applyDisplayOptions();
     const button = sourceButton || panelButton(panel);
     requestAnimationFrame(() => animatePanelFromButton(panel, button, shouldShow));
     if (shouldShow) bringPanelToFront(panel);
@@ -620,11 +642,15 @@ function setupViewportJoystick() {
     };
     const pump = () => {
         if (!active || !joystickState || !screenShell) { raf = 0; return; }
-        const maxX = Math.max(0, screenShell.scrollWidth - screenShell.clientWidth);
-        const maxY = Math.max(0, screenShell.scrollHeight - screenShell.clientHeight);
         const speed = 4 + 24 * joystickState.intensity;
-        screenShell.scrollLeft = Math.max(0, Math.min(maxX, screenShell.scrollLeft + joystickState.x * speed));
-        screenShell.scrollTop = Math.max(0, Math.min(maxY, screenShell.scrollTop + joystickState.y * speed));
+        if (rfb?._display?.viewportChangePos) {
+            rfb._display.viewportChangePos(joystickState.x * speed, joystickState.y * speed);
+        } else {
+            const maxX = Math.max(0, screenShell.scrollWidth - screenShell.clientWidth);
+            const maxY = Math.max(0, screenShell.scrollHeight - screenShell.clientHeight);
+            screenShell.scrollLeft = Math.max(0, Math.min(maxX, screenShell.scrollLeft + joystickState.x * speed));
+            screenShell.scrollTop = Math.max(0, Math.min(maxY, screenShell.scrollTop + joystickState.y * speed));
+        }
         raf = requestAnimationFrame(pump);
     };
     const move = (event) => {
