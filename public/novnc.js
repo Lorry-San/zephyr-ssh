@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-redesign';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-connect-fix';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -147,6 +147,14 @@ function fitLabelText(mode = fitMode) {
     return '适应';
 }
 
+function refreshDisplaySize() {
+    if (!rfb) return;
+    try {
+        rfb.scaleViewport = fitMode === 'fit';
+        rfb.clipViewport = fitMode === 'drag';
+    } catch {}
+}
+
 function applyDisplayOptions() {
     const q = qualityConfig();
     qualityLabel.textContent = q.label;
@@ -162,6 +170,7 @@ function applyDisplayOptions() {
     rfb.clipViewport = fitMode === 'drag';
     rfb.dragViewport = fitMode === 'drag';
     rfb.resizeSession = false;
+    window.requestAnimationFrame(refreshDisplaySize);
 }
 
 function clearScreen() {
@@ -218,18 +227,23 @@ async function connect() {
     clearScreen();
     try {
         if (rfb) { try { rfb.disconnect(); } catch {} rfb = null; }
-        rfb = new RFB(screen, wsUrl(), { shared: true, credentials: {} });
+        if (!params.connectionId && !urlParams.get('connectionId')) throw new Error('缺少 VNC 连接 ID，请从连接列表重新打开');
+        screen.style.width = '100%';
+        screen.style.height = '100%';
+        rfb = new RFB(screen, wsUrl(), { shared: true, credentials: { password: '' } });
         rfb.background = 'transparent';
         rfb.focusOnClick = true;
         applyDisplayOptions();
         rfb.addEventListener('connect', () => {
             setStatus('connected', 'VNC 已连接');
             notifyParentActivity();
-            window.setTimeout(() => rfb?.focus?.(), 80);
+            window.setTimeout(() => { refreshDisplaySize(); rfb?.focus?.(); }, 80);
+            window.setTimeout(refreshDisplaySize, 320);
         });
         rfb.addEventListener('disconnect', (event) => {
             const clean = event?.detail?.clean;
-            const message = clean ? 'VNC 已断开' : 'VNC 异常断开';
+            const detail = event?.detail?.reason || event?.detail?.message || '';
+            const message = clean ? 'VNC 已断开' : (detail ? `VNC 异常断开：${detail}` : 'VNC 异常断开');
             if (manualClose) {
                 setStatus('disconnected', 'VNC 已断开');
                 notifyParentCloseRequest('novnc-disconnect-button');
@@ -239,6 +253,10 @@ async function connect() {
         });
         rfb.addEventListener('securityfailure', (event) => {
             const reason = event?.detail?.reason || 'VNC 安全协商失败';
+            setStatus('error', reason);
+        });
+        rfb.addEventListener('error', (event) => {
+            const reason = event?.detail?.message || event?.message || 'noVNC 客户端错误';
             setStatus('error', reason);
         });
         rfb.addEventListener('credentialsrequired', () => {
@@ -666,8 +684,8 @@ async function performAiRemoteDesktopAction(data = {}) {
 }
 
 function bindEvents() {
-    qualityBtn.addEventListener('click', cycleQuality);
-    fitBtn.addEventListener('click', cycleFit);
+    qualityBtn.addEventListener('click', () => cycleQuality());
+    fitBtn.addEventListener('click', () => cycleFit());
     dragBtn.addEventListener('click', toggleDragMode);
     clipboardBtn.addEventListener('click', () => openPanel(clipboardPanel));
     shortcutsBtn.addEventListener('click', () => openPanel(shortcutsPanel));
@@ -686,7 +704,7 @@ function bindEvents() {
     document.addEventListener('pointerdown', (event) => {
         if (panelLayoutMenu && !event.target.closest('.panel-layout-menu') && !event.target.closest('[data-layout-panel]')) closePanelLayoutMenu();
     });
-    window.addEventListener('resize', () => closePanelLayoutMenu({ instant: true }));
+    window.addEventListener('resize', () => { closePanelLayoutMenu({ instant: true }); refreshDisplaySize(); });
     screenShell.addEventListener('pointerdown', () => { rfb?.focus?.(); notifyParentActivity(); }, { passive: true });
     stage.addEventListener('keydown', (event) => {
         if (event.ctrlKey && event.altKey && event.key === 'Delete') { event.preventDefault(); rfb?.sendCtrlAltDel?.(); }

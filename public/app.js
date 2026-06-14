@@ -991,7 +991,7 @@ async function openConnection(id) {
     const protocol = String(c.protocol || 'SSH').toUpperCase();
     const tabId = `tab_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     if (protocol === 'RDP' || protocol === 'VNC') {
-        sessionStorage.setItem(`zephyr_remote_desktop_params_${tabId}`, JSON.stringify({ connectionId: c.id, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
+        sessionStorage.setItem(`zephyr_remote_desktop_params_${tabId}`, JSON.stringify({ connectionId: c.id, name: c.name, host: c.host, port: c.port, username: c.username, protocol, tabId, embedded: true, timestamp: Date.now() }));
         terminalTabs.push({ id: tabId, name: c.name, protocol, status: 'connecting', iframe: true, page: protocol === 'VNC' ? 'novnc' : 'rdp', connectionId: c.id, createdAt: Date.now(), lastUsedAt: Date.now(), minimized: false });
         console.debug(protocol === 'VNC' ? '[novnc-client]' : '[rdp-client]', 'open remote desktop tab', { protocol, tabId, connectionId: c.id, host: c.host, port: c.port });
     } else {

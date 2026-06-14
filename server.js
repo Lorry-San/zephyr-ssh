@@ -4199,7 +4199,8 @@ noVncWss.on('connection', async (ws, req) => {
         try { remoteSocket?.destroy?.(); } catch {}
         (routed?.clients || []).reverse().forEach((client) => { try { client.end(); } catch {} });
         if (closeBrowser && ws.readyState === ws.OPEN) {
-            try { ws.close(1011, String(reason).slice(0, 120)); } catch {}
+            const code = /unauthorized|connection not found|not a VNC/i.test(String(reason)) ? 1008 : 1011;
+            try { ws.close(code, String(reason).slice(0, 120)); } catch {}
         }
     };
 
@@ -4227,8 +4228,16 @@ noVncWss.on('connection', async (ws, req) => {
         remoteSocket = routed.socket;
         try { remoteSocket.setNoDelay?.(true); } catch {}
         remoteSocket.on('data', (chunk) => { if (proxying) sendBrowser(chunk); else serverReader.push(chunk); });
-        remoteSocket.once('close', () => { serverReader.close(new Error('VNC 服务端已关闭连接')); if (!cleaned && ws.readyState === ws.OPEN) ws.close(1011, 'vnc server closed'); cleanup('vnc-server-close', false); });
-        remoteSocket.once('error', (err) => { serverReader.close(err); if (!cleaned && ws.readyState === ws.OPEN) ws.close(1011, 'vnc server error'); cleanup(err.message || 'vnc-server-error', false); });
+        remoteSocket.once('close', () => {
+            serverReader.close(new Error('VNC 服务端已关闭连接'));
+            if (!cleaned && ws.readyState === ws.OPEN) ws.close(proxying ? 1000 : 1011, 'vnc server closed');
+            cleanup('vnc-server-close', false);
+        });
+        remoteSocket.once('error', (err) => {
+            serverReader.close(err);
+            if (!cleaned && ws.readyState === ws.OPEN) ws.close(1011, err.message || 'vnc server error');
+            cleanup(err.message || 'vnc-server-error', false);
+        });
 
         const serverVersion = parseRfbVersion(await serverReader.read(12, timeout, 'VNC 协议版本'));
         const minor = Math.min(serverVersion.minor || 8, 8);
@@ -4255,7 +4264,7 @@ noVncWss.on('connection', async (ws, req) => {
         if (pendingBrowser.length) remoteSocket.write(pendingBrowser);
         const pendingServer = serverReader.takeBuffered();
         if (pendingServer.length) sendBrowser(pendingServer);
-        console.info('[novnc-ws]', 'proxy ready', { connectionId: connId, name: conn.name, target: `${conn.host}:${targetPort}`, route: routed.route || 'direct', securityType: auth.securityType === 2 ? 'VNCAuth' : 'None' });
+        console.info('[novnc-ws]', 'proxy ready', { connectionId: connId, name: conn.name, target: `${conn.host}:${targetPort}`, route: routed.route || 'direct', rfbVersion: `3.${String(minor).padStart(3, '0')}`, securityType: auth.securityType === 2 ? 'VNCAuth' : 'None' });
     } catch (err) {
         const message = String(err?.message || err || 'noVNC 连接失败');
         console.warn('[novnc-ws]', 'failed to open proxy', { connectionId: connId, error: message });
