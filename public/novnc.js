@@ -1,8 +1,9 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260614-theme-palettes';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-controls-fix';
+const NOVNC_CLIENT_VERSION = '2026-06-14-theme-palettes';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -66,8 +67,10 @@ function initialTheme() {
     if (saved === 'light' || saved === 'dark') return saved;
     return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light';
 }
-function applyFrameTheme(theme = initialTheme()) {
-    document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
+function applyFrameTheme(theme = initialTheme(), appearance = {}) {
+    const normalized = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', normalized);
+    applyZephyrColorScheme(appearance || {}, { theme: normalized, page: 'novnc' });
 }
 applyFrameTheme();
 
@@ -895,7 +898,7 @@ function bindEvents() {
     });
     window.addEventListener('message', (event) => {
         if (event.data?.source !== 'zephyr-app') return;
-        if (event.data.type === 'theme-change') applyFrameTheme(event.data.theme);
+        if (event.data.type === 'theme-change') applyFrameTheme(event.data.theme, event.data.appearance || {});
         if (event.data.type === 'reconnect-terminal') reconnect();
         if (event.data.type === 'focus-terminal') rfb?.focus?.();
         if (event.data.type === 'ai-remote-desktop-action') {

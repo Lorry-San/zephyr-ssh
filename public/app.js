@@ -1,3 +1,5 @@
+import { applyZephyrColorScheme, brandIconColor, DEFAULT_CUSTOM_THEME_COLORS, forcedThemeForAppearance, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes';
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -96,6 +98,8 @@ function getAppearance() { return settings?.appearance || {}; }
 function isAutoThemeEnabled() { return getAppearance().autoThemeEnabled !== false; }
 function getPreferredTheme() {
     const appearance = getAppearance();
+    const schemeTheme = forcedThemeForAppearance(appearance, getSystemTheme);
+    if (schemeTheme) return schemeTheme;
     if (isAutoThemeEnabled() || appearance.theme === 'auto') return getSystemTheme();
     if (appearance.theme === 'light' || appearance.theme === 'dark') return appearance.theme;
     const saved = localStorage.getItem('zephyr-theme');
@@ -162,7 +166,7 @@ function scheduleTerminalLayoutStabilize(reason = 'layout-stabilize', options = 
         });
     }, 24);
 }
-function broadcastThemeToTerminals(theme) { $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme }, '*')); scheduleTerminalLayoutStabilize('theme-change', { focus: false, tabId: null }); }
+function broadcastThemeToTerminals(theme) { const appearance = getAppearance(); $$('#terminalWorkspace iframe.terminal-frame').forEach((frame) => frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'theme-change', theme, appearance }, '*')); scheduleTerminalLayoutStabilize('theme-change', { focus: false, tabId: null }); }
 function applyTheme(theme, { persist = false } = {}) {
     const root = document.documentElement;
     const previousTheme = root.getAttribute('data-theme') || getSystemTheme();
@@ -177,29 +181,29 @@ function applyTheme(theme, { persist = false } = {}) {
         document.body?.classList.remove('theme-ripple-active');
     }, 460);
     root.setAttribute('data-theme', theme);
+    applyZephyrColorScheme(getAppearance(), { theme, page: 'app' });
+    setFavicon(pendingBrandIcon || DEFAULT_BRAND_ICON);
     SMARTBAR_TEXT_IMAGE_CACHE.clear();
     if (terminalTabs.length) renderTerminalSmartbar();
     if (persist) localStorage.setItem('zephyr-theme', theme);
     $('#appThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
     $('#settingsThemeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+    syncAppearanceSchemeControls();
     console.debug('[appearance-client]', 'theme transition applied', { previousTheme, theme, changed });
     broadcastThemeToTerminals(theme);
 }
 async function toggleTheme() {
     const nextTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     localStorage.setItem('zephyr-theme', nextTheme);
-    const appearance = { ...getAppearance(), theme: nextTheme, autoThemeEnabled: false };
+    const appearance = { ...getAppearance(), colorScheme: 'frost', theme: nextTheme, autoThemeEnabled: false };
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) }).catch((err) => { toast(err.message); return settings; });
     $('#autoThemeEnabled').checked = false;
     applyTheme(nextTheme, { persist: true });
     console.debug('[appearance-client]', 'manual theme selected', { theme: nextTheme, autoThemeEnabled: false });
 }
 function escapeHtml(str) { return String(str || '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
-function iconHtml(icon = DEFAULT_BRAND_ICON) { return String(icon).startsWith('data:image/') ? `<img src="${icon}" alt="">` : escapeHtml(icon || DEFAULT_BRAND_ICON); }
-function faviconHref(icon = DEFAULT_BRAND_ICON) {
-    if (String(icon).startsWith('data:image/')) return icon;
-    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">${icon || DEFAULT_BRAND_ICON}</text></svg>`)}`;
-}
+function iconHtml(icon = DEFAULT_BRAND_ICON) { return zephyrBrandIconHtml(icon); }
+function faviconHref(icon = DEFAULT_BRAND_ICON) { return zephyrFaviconHref(icon, brandIconColor()); }
 function setFavicon(icon = DEFAULT_BRAND_ICON) {
     let link = document.querySelector('link[rel="icon"]');
     if (!link) {
@@ -218,6 +222,7 @@ function applyAppearance(appearance = getAppearance()) {
     $('#brandNameInput').value = brandName;
     $('#brandIconPreview').innerHTML = iconHtml(brandIcon);
     $('#autoThemeEnabled').checked = appearance.autoThemeEnabled !== false;
+    syncAppearanceSchemeControls(appearance);
     document.title = brandName;
     setFavicon(brandIcon);
     console.debug('[appearance-client]', 'appearance applied', { brandName, customIcon: brandIcon !== DEFAULT_BRAND_ICON, autoThemeEnabled: appearance.autoThemeEnabled !== false, theme: appearance.theme || 'auto' });
@@ -235,9 +240,30 @@ function readImageAsDataUrl(file) {
 }
 async function saveAppearance(e) {
     e.preventDefault();
-    const autoThemeEnabled = $('#autoThemeEnabled').checked;
-    const theme = autoThemeEnabled ? 'auto' : (document.documentElement.getAttribute('data-theme') || getSystemTheme());
-    const appearance = { ...getAppearance(), brandName: $('#brandNameInput').value.trim() || DEFAULT_BRAND_NAME, brandIcon: pendingBrandIcon || DEFAULT_BRAND_ICON, autoThemeEnabled, theme };
+    const previous = getAppearance();
+    const colorScheme = $('#colorSchemeSelect')?.value || previous.colorScheme || 'frost';
+    const autoThemeEnabled = colorScheme === 'frost' ? $('#autoThemeEnabled').checked : false;
+    const theme = autoThemeEnabled ? 'auto' : (forcedThemeForAppearance({ ...previous, colorScheme, customThemeMode: $('#customThemeMode')?.value || previous.customThemeMode || 'dark' }, getSystemTheme) || document.documentElement.getAttribute('data-theme') || getSystemTheme());
+    const terminalBgSource = $('#terminalBgSource')?.value || 'none';
+    const appearance = {
+        ...previous,
+        brandName: $('#brandNameInput').value.trim() || DEFAULT_BRAND_NAME,
+        brandIcon: pendingBrandIcon || DEFAULT_BRAND_ICON,
+        colorScheme,
+        autoThemeEnabled,
+        theme,
+        customThemeMode: $('#customThemeMode')?.value || previous.customThemeMode || 'dark',
+        customColors: readCustomThemeColors(),
+        customCss: $('#customCssInput')?.value || '',
+        customJs: $('#customJsInput')?.value || '',
+        terminalBackground: {
+            type: terminalBgSource,
+            url: terminalBgSource === 'upload' ? ($('#terminalBgDataUrl')?.value || previous.terminalBackground?.url || '') : terminalBgSource === 'url' ? ($('#terminalBgUrl')?.value.trim() || '') : '',
+            fit: $('#terminalBgFit')?.value || 'cover',
+            opacity: Number($('#terminalBgOpacity')?.value || 0.35),
+        },
+        terminalFontColor: $('#terminalFontColorEnabled')?.checked ? ($('#terminalFontColor')?.value || '') : '',
+    };
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) });
     localStorage.removeItem('zephyr-theme');
     if (!autoThemeEnabled) localStorage.setItem('zephyr-theme', theme);
@@ -247,13 +273,90 @@ async function saveAppearance(e) {
     toast('外观设置已保存');
 }
 async function resetAppearance() {
-    const appearance = { ...getAppearance(), brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON };
+    const appearance = { ...getAppearance(), brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, colorScheme: 'frost', customCss: '', customJs: '', terminalBackground: { type: 'none', url: '', fit: 'cover', opacity: 0.35 }, terminalFontColor: '' };
     settings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ appearance }) });
     $('#brandIconFile').value = '';
     applyAppearance(settings.appearance || appearance);
     applyTheme(getPreferredTheme());
     console.info('[appearance-client]', 'brand reset to defaults');
     toast('名称和图标已重置');
+}
+
+function syncAppearanceSchemeControls(appearance = getAppearance()) {
+    const scheme = appearance.colorScheme || 'frost';
+    const colorSelect = $('#colorSchemeSelect');
+    if (colorSelect) colorSelect.value = scheme;
+    const customPanel = $('#customThemePanel');
+    if (customPanel) customPanel.classList.toggle('force-hidden', scheme !== 'custom');
+    const frostOnly = scheme === 'frost';
+    $('#autoThemeEnabled')?.closest?.('.check-line')?.classList.toggle('force-hidden', !frostOnly);
+    $('#appearanceThemeHint')?.classList.toggle('force-hidden', frostOnly);
+    if ($('#customThemeMode')) $('#customThemeMode').value = appearance.customThemeMode || 'dark';
+    const colors = normalizeCustomThemeColors(appearance.customColors || {});
+    Object.keys(DEFAULT_CUSTOM_THEME_COLORS).forEach((key) => {
+        const input = document.querySelector(`[data-custom-color="${key}"]`);
+        if (input) input.value = colors[key];
+    });
+    if ($('#customCssInput')) $('#customCssInput').value = appearance.customCss || '';
+    if ($('#customJsInput')) $('#customJsInput').value = appearance.customJs || '';
+    const bg = appearance.terminalBackground || {};
+    const bgType = bg.type || 'none';
+    if ($('#terminalBgSource')) $('#terminalBgSource').value = bgType;
+    if ($('#terminalBgUrl')) {
+        $('#terminalBgUrl').value = bgType === 'url' ? (bg.url || '') : '';
+        $('#terminalBgUrl').disabled = bgType !== 'url';
+    }
+    if ($('#terminalBgFile')) $('#terminalBgFile').disabled = bgType !== 'upload';
+    if ($('#terminalBgDataUrl')) $('#terminalBgDataUrl').value = bgType === 'upload' ? (bg.url || '') : '';
+    if ($('#terminalBgFit')) $('#terminalBgFit').value = bg.fit || 'cover';
+    if ($('#terminalBgOpacity')) $('#terminalBgOpacity').value = String(bg.opacity ?? 0.35);
+    if ($('#terminalBgOpacityValue')) $('#terminalBgOpacityValue').textContent = `${Math.round(Number(bg.opacity ?? 0.35) * 100)}%`;
+    if ($('#terminalFontColorEnabled')) $('#terminalFontColorEnabled').checked = !!appearance.terminalFontColor;
+    if ($('#terminalFontColor')) {
+        $('#terminalFontColor').value = appearance.terminalFontColor || '#e6edf3';
+        $('#terminalFontColor').disabled = !appearance.terminalFontColor;
+    }
+    if ($('#terminalBgPreview')) {
+        const url = bg.type === 'url' ? ($('#terminalBgUrl')?.value.trim() || bg.url || '') : (bg.url || '');
+        const hasBg = (bg.type === 'upload' || bg.type === 'url') && url;
+        $('#terminalBgPreview').style.backgroundImage = hasBg ? `linear-gradient(rgba(0,0,0,.16), rgba(0,0,0,.16)), url("${String(url).replace(/"/g, '%22')}")` : '';
+        $('#terminalBgPreview').textContent = hasBg ? '已选择背景' : '未设置背景';
+    }
+}
+function readCustomThemeColors() {
+    const out = {};
+    Object.keys(DEFAULT_CUSTOM_THEME_COLORS).forEach((key) => { out[key] = document.querySelector(`[data-custom-color="${key}"]`)?.value || DEFAULT_CUSTOM_THEME_COLORS[key]; });
+    return normalizeCustomThemeColors(out);
+}
+function readTerminalBackgroundAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        if (!file) return resolve('');
+        if (!/^image\/(png|jpeg|jpg|gif|webp|svg\+xml|avif)$/i.test(file.type)) return reject(new Error('终端背景仅支持 PNG/JPEG/GIF/WebP/AVIF/SVG'));
+        if (file.size > 12 * 1024 * 1024) return reject(new Error('终端背景图片不能超过 12MB'));
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('读取终端背景失败'));
+        reader.readAsDataURL(file);
+    });
+}
+function setupAppearanceControls() {
+    $('#colorSchemeSelect')?.addEventListener('change', () => {
+        const appearance = { ...getAppearance(), colorScheme: $('#colorSchemeSelect').value, customThemeMode: $('#customThemeMode')?.value || 'dark', customColors: readCustomThemeColors(), customCss: $('#customCssInput')?.value || '', customJs: $('#customJsInput')?.value || '' };
+        settings.appearance = appearance;
+        applyTheme(getPreferredTheme());
+        syncAppearanceSchemeControls(appearance);
+    });
+    $('#customThemeMode')?.addEventListener('change', () => { settings.appearance = { ...getAppearance(), customThemeMode: $('#customThemeMode').value }; applyTheme(getPreferredTheme()); });
+    $$('.custom-color-grid input[type="color"]').forEach((input) => input.addEventListener('input', () => {
+        settings.appearance = { ...getAppearance(), colorScheme: 'custom', customColors: readCustomThemeColors() };
+        applyZephyrColorScheme(settings.appearance, { theme: getPreferredTheme(), page: 'app', executeCustomJs: false });
+        setFavicon(pendingBrandIcon || DEFAULT_BRAND_ICON);
+    }));
+    $('#terminalBgSource')?.addEventListener('change', () => syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { ...(getAppearance().terminalBackground || {}), type: $('#terminalBgSource').value } }));
+    $('#terminalBgUrl')?.addEventListener('input', () => syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { type: 'url', url: $('#terminalBgUrl').value.trim(), fit: $('#terminalBgFit')?.value || 'cover', opacity: Number($('#terminalBgOpacity')?.value || 0.35) } }));
+    $('#terminalFontColorEnabled')?.addEventListener('change', () => { if ($('#terminalFontColor')) $('#terminalFontColor').disabled = !$('#terminalFontColorEnabled').checked; });
+    $('#terminalBgOpacity')?.addEventListener('input', () => { if ($('#terminalBgOpacityValue')) $('#terminalBgOpacityValue').textContent = `${Math.round(Number($('#terminalBgOpacity').value || 0.35) * 100)}%`; });
+    $('#terminalBgFile')?.addEventListener('change', async (e) => { try { const dataUrl = await readTerminalBackgroundAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; $('#terminalBgDataUrl').value = dataUrl; $('#terminalBgSource').value = 'upload'; syncAppearanceSchemeControls({ ...getAppearance(), terminalBackground: { type: 'upload', url: dataUrl, fit: $('#terminalBgFit')?.value || 'cover', opacity: Number($('#terminalBgOpacity')?.value || 0.35) } }); toast('终端背景已载入，保存外观后生效'); } catch (err) { e.target.value = ''; toast(err.message); } });
 }
 function safeJsonParseClient(value, fallback = null) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return fallback; } }
 function escapeAttr(str) { return escapeHtml(str).replace(/'/g, '&#39;'); }
@@ -4744,7 +4847,7 @@ async function loadSettings() {
     $('#terminalMinimizedKeepAlive').value = String(getConfiguredMinimizedKeepAlive());
     $('#terminalSmartbarOrder').value = getTerminalSmartbarOrder();
     $('#terminalShortcutPlatform').value = getTerminalShortcutPlatform();
-    settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, ...(settings.appearance || {}) };
+    settings.appearance = { brandName: DEFAULT_BRAND_NAME, brandIcon: DEFAULT_BRAND_ICON, theme: 'auto', autoThemeEnabled: true, colorScheme: 'frost', customThemeMode: 'dark', customColors: normalizeCustomThemeColors(), customCss: '', customJs: '', terminalBackground: { type: 'none', url: '', fit: 'cover', opacity: 0.35 }, terminalFontColor: '', ...(settings.appearance || {}) };
     settings.ai = normalizeAiSettings(settings.ai || {});
     applyAppearance(settings.appearance);
     applyTheme(getPreferredTheme());
@@ -5259,6 +5362,7 @@ function bindEvents() {
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#sshKeyForm').addEventListener('submit', saveSshKey); $('#resetSshKeyForm').addEventListener('click', resetSshKeyForm);
     setupAiAssistant();
     $('#brandIconFile').addEventListener('change', async (e) => { try { const dataUrl = await readImageAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; pendingBrandIcon = dataUrl; $('#brandIconPreview').innerHTML = iconHtml(dataUrl); console.debug('[appearance-client]', 'brand icon file loaded', { size: e.target.files?.[0]?.size || 0, type: e.target.files?.[0]?.type || '' }); } catch (err) { e.target.value = ''; toast(err.message); } });
+    setupAppearanceControls();
     $('#resetAppearanceBtn').addEventListener('click', () => resetAppearance().catch((err) => toast(err.message)));
     $('#proxyList').addEventListener('click', async (e) => { const id = e.target.dataset.editProxy || e.target.dataset.openProxy || e.target.dataset.delProxy; if (!id) return; const p = proxies.find((x) => x.id === id); if (e.target.dataset.editProxy) { $('#proxyId').value = p.id; $('#proxyName').value = p.name; $('#proxyType').value = p.type || 'socks5'; $('#proxyHost').value = p.host; $('#proxyPort').value = p.port; $('#proxyUsername').value = p.username || ''; $('#proxyPassword').value = p.hasPassword ? '******' : ''; } else if (e.target.dataset.openProxy) { await openProxySecret(id); } else if (confirm('删除代理？')) { await api(`/api/proxies/${id}`, { method: 'DELETE' }); await loadNetwork(); } });
     $('#sshKeyList').addEventListener('click', async (e) => { const editId = e.target.dataset.editSshKey, openId = e.target.dataset.openSshKey, delId = e.target.dataset.delSshKey; if (editId) { const k = sshKeys.find((x) => x.id === editId); if (!k) return; $('#sshKeyId').value = k.id; $('#sshKeyName').value = k.name || ''; $('#sshKeyPrivateKey').value = k.hasPrivateKey ? '******' : ''; $('#sshKeyPassphrase').value = k.hasPassphrase ? '******' : ''; $('#sshKeyRemark').value = k.remark || ''; return; } if (openId) { await openSshKeySecret(openId); return; } if (delId && confirm('删除该 SSH 密钥？已选择它的连接将无法再使用该密钥。')) { await api(`/api/ssh-keys/${delId}`, { method: 'DELETE' }); await loadNetwork(); toast('SSH 密钥已删除'); } });

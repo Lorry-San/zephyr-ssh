@@ -1,5 +1,7 @@
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260614-theme-palettes';
+
 const $ = (sel) => document.querySelector(sel);
-const RDP_CLIENT_VERSION = '2026-06-13.2-native-rdp';
+const RDP_CLIENT_VERSION = '2026-06-14-theme-palettes';
 console.info('[rdp-client]', 'script loaded', { version: RDP_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -2726,7 +2728,7 @@ window.addEventListener('resize', scheduleResize, { passive: true });
 window.addEventListener('beforeunload', () => disconnect(false));
 window.addEventListener('message', (event) => {
     if (event.data?.source !== 'zephyr-app') return;
-    if (event.data.type === 'theme-change') document.documentElement.setAttribute('data-theme', event.data.theme);
+    if (event.data.type === 'theme-change') { document.documentElement.setAttribute('data-theme', event.data.theme); applyZephyrColorScheme(event.data.appearance || {}, { theme: event.data.theme, page: 'rdp' }); }
     if (event.data.type === 'focus-terminal') {
         stage?.focus?.({ preventScroll: true });
         focusMobileKeyboard();

@@ -1,3 +1,5 @@
+import { applyZephyrColorScheme, forcedThemeForAppearance } from './theme-runtime.js?v=20260614-theme-palettes';
+
 const $ = (sel) => document.querySelector(sel);
 
 function getParams() {
@@ -106,6 +108,7 @@ let fileLongPressTimer = null;
 let mobileFileSelectMode = false;
 let sftpClipboardAvailable = false;
 let terminalShortcutPlatform = localStorage.getItem('zephyr-shortcut-platform') || 'auto';
+let terminalAppearance = {};
 let fmEditorModal = $('#fmEditorModal');
 let fmEditorTitle = $('#fmEditorTitle');
 let fmEditorMain = $('#fmEditorMain');
@@ -788,12 +791,15 @@ function hasTerminalThemeOverride() {
     const saved = localStorage.getItem(TERMINAL_THEME_OVERRIDE_KEY);
     return saved === 'light' || saved === 'dark';
 }
+function getSystemTheme() { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
 function getPreferredTheme() {
+    const schemeTheme = forcedThemeForAppearance(terminalAppearance || {}, getSystemTheme);
+    if (schemeTheme) return schemeTheme;
     const terminalOverride = localStorage.getItem(TERMINAL_THEME_OVERRIDE_KEY);
     if (terminalOverride === 'light' || terminalOverride === 'dark') return terminalOverride;
     const saved = localStorage.getItem('zephyr-theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return getSystemTheme();
 }
 function applyTheme(theme, { persist = false, terminalOverride = false } = {}) {
     if (document.documentElement.getAttribute('data-theme') !== theme) {
@@ -804,11 +810,39 @@ function applyTheme(theme, { persist = false, terminalOverride = false } = {}) {
         }, 300);
     }
     document.documentElement.setAttribute('data-theme', theme);
+    applyZephyrColorScheme(terminalAppearance || {}, { theme, page: 'terminal' });
+    applyTerminalAppearance(terminalAppearance || {});
     if (terminalOverride) localStorage.setItem(TERMINAL_THEME_OVERRIDE_KEY, theme);
     else if (persist) localStorage.setItem('zephyr-theme', theme);
     themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
 }
 applyTheme(getPreferredTheme());
+
+function applyTerminalAppearance(appearance = {}) {
+    terminalAppearance = appearance || {};
+    const root = document.documentElement;
+    const bg = terminalAppearance.terminalBackground || {};
+    const hasBg = (bg.type === 'upload' || bg.type === 'url') && bg.url;
+    const safeUrl = String(bg.url || '').replace(/"/g, '%22');
+    if (hasBg) {
+        root.style.setProperty('--wterm-custom-bg-image', `url("${safeUrl}")`);
+        root.style.setProperty('--wterm-custom-bg-size', bg.fit || 'cover');
+        root.style.setProperty('--wterm-custom-bg-opacity', String(Math.max(0, Math.min(1, Number(bg.opacity ?? 0.35)))));
+    } else {
+        root.style.removeProperty('--wterm-custom-bg-image');
+        root.style.removeProperty('--wterm-custom-bg-size');
+        root.style.removeProperty('--wterm-custom-bg-opacity');
+    }
+    if (terminalAppearance.terminalFontColor) {
+        root.style.setProperty('--wterm-custom-fg', terminalAppearance.terminalFontColor);
+        root.style.setProperty('--wterm-fg', terminalAppearance.terminalFontColor);
+        root.setAttribute('data-wterm-font-custom', '1');
+    } else {
+        root.style.removeProperty('--wterm-custom-fg');
+        root.style.removeProperty('--wterm-fg');
+        root.removeAttribute('data-wterm-font-custom');
+    }
+}
 
 function getPreferredWtermTheme() {
     const saved = localStorage.getItem('zephyr-wterm-theme');
@@ -816,7 +850,9 @@ function getPreferredWtermTheme() {
 }
 
 function applyWtermTheme(theme) {
-    const normalized = theme === 'light' ? 'light' : 'default';
+    const bg = terminalAppearance?.terminalBackground || {};
+    const customTerm = ((bg.type === 'upload' || bg.type === 'url') && bg.url) || terminalAppearance?.terminalFontColor;
+    const normalized = customTerm ? 'custom' : (theme === 'light' ? 'light' : 'default');
     const changed = document.documentElement.getAttribute('data-wterm-theme') !== normalized;
     if (changed) {
         document.documentElement.classList.add('wterm-theme-transitioning');
@@ -835,16 +871,22 @@ function applyWtermTheme(theme) {
     document.documentElement.setAttribute('data-wterm-theme', normalized);
     localStorage.setItem('zephyr-wterm-theme', normalized);
     if (wtermThemeToggle) {
-        wtermThemeToggle.textContent = normalized === 'light' ? '终端: Light' : '终端: 默认';
-        wtermThemeToggle.classList.toggle('active', normalized === 'light');
-        wtermThemeToggle.setAttribute('aria-pressed', normalized === 'light' ? 'true' : 'false');
+        wtermThemeToggle.textContent = normalized === 'custom' ? '终端: 自定义' : normalized === 'light' ? '终端: Light' : '终端: 默认';
+        wtermThemeToggle.classList.toggle('active', normalized === 'light' || normalized === 'custom');
+        wtermThemeToggle.setAttribute('aria-pressed', normalized === 'light' || normalized === 'custom' ? 'true' : 'false');
     }
     try { term?.setOption?.('theme', normalized === 'light' ? 'light' : 'default'); } catch (_) {}
+    applyTerminalAppearance(terminalAppearance || {});
     scheduleTerminalScrollbarUpdate();
 }
 
 applyWtermTheme(getPreferredWtermTheme());
 wtermThemeToggle?.addEventListener('click', () => {
+    const bg = terminalAppearance?.terminalBackground || {};
+    if (((bg.type === 'upload' || bg.type === 'url') && bg.url) || terminalAppearance?.terminalFontColor) {
+        applyWtermTheme('custom');
+        return;
+    }
     const current = document.documentElement.getAttribute('data-wterm-theme');
     applyWtermTheme(current === 'light' ? 'default' : 'light');
 });
@@ -863,6 +905,10 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e)
 window.addEventListener('message', (e) => {
     if (e.data?.source !== 'zephyr-app') return;
     if (e.data.type === 'theme-change' && ['light', 'dark'].includes(e.data.theme)) {
+        if (e.data.appearance) terminalAppearance = e.data.appearance || {};
+        applyZephyrColorScheme(terminalAppearance || {}, { theme: e.data.theme, page: 'terminal' });
+        applyTerminalAppearance(terminalAppearance || {});
+        applyWtermTheme(getPreferredWtermTheme());
         if (!hasTerminalThemeOverride()) applyTheme(e.data.theme);
         requestStableTerminalLayout('parent-theme-change', { includeResize: false });
     }
@@ -3335,7 +3381,10 @@ async function loadTerminalSettings() {
         if (!res.ok) return;
         const data = await res.json();
         terminalShortcutPlatform = data?.terminal?.shortcutPlatform || localStorage.getItem('zephyr-shortcut-platform') || 'auto';
+        terminalAppearance = data?.appearance || {};
         localStorage.setItem('zephyr-shortcut-platform', terminalShortcutPlatform);
+        applyTheme(getPreferredTheme());
+        applyWtermTheme(getPreferredWtermTheme());
     } catch (_) {}
 }
 loadTerminalSettings();

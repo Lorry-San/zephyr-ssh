@@ -1078,20 +1078,51 @@ function normalizeSettingsInput(body) {
         const brandName = String(body.appearance.brandName ?? currentAppearance.brandName ?? 'Zephyr').trim().slice(0, 40) || 'Zephyr';
         const rawIcon = String(body.appearance.brandIcon ?? currentAppearance.brandIcon ?? '🌬️').trim();
         const isAllowedIcon = rawIcon === '🌬️' || /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(rawIcon);
-        const theme = body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto';
+        const colorScheme = ['frost', 'lava', 'asagi', 'cyber', 'custom'].includes(body.appearance.colorScheme) ? body.appearance.colorScheme : (currentAppearance.colorScheme || 'frost');
+        const customThemeMode = ['light', 'dark', 'auto'].includes(body.appearance.customThemeMode) ? body.appearance.customThemeMode : (currentAppearance.customThemeMode || 'dark');
+        const forcedTheme = colorScheme === 'lava' || colorScheme === 'cyber' ? 'dark' : colorScheme === 'asagi' ? 'light' : '';
+        const theme = forcedTheme || (body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto');
+        const defaultColors = { bgMain: '#0d1117', bgCard: '#161b22', primary: '#58a6ff', primaryHover: '#79c0ff', text: '#e6edf3', textSecondary: '#8b949e', border: '#30363d', danger: '#f85149', success: '#3fb950', warning: '#d2991d' };
+        const customColors = Object.fromEntries(Object.entries(defaultColors).map(([key, fallback]) => {
+            const value = String(body.appearance.customColors?.[key] || currentAppearance.customColors?.[key] || fallback).trim();
+            return [key, /^#[0-9a-f]{6}$/i.test(value) ? value : fallback];
+        }));
+        const terminalBg = body.appearance.terminalBackground || currentAppearance.terminalBackground || {};
+        const terminalBgType = ['none', 'upload', 'url'].includes(terminalBg.type) ? terminalBg.type : 'none';
+        const terminalBgUrlRaw = terminalBgType === 'none' ? '' : String(terminalBg.url || '').trim();
+        const allowedTerminalBgUrl = /^https?:\/\//i.test(terminalBgUrlRaw) || /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml|avif);base64,/i.test(terminalBgUrlRaw);
+        const terminalBackground = {
+            type: allowedTerminalBgUrl ? terminalBgType : 'none',
+            url: allowedTerminalBgUrl ? terminalBgUrlRaw.slice(0, 20 * 1024 * 1024) : '',
+            fit: ['cover', 'contain', 'auto'].includes(terminalBg.fit) ? terminalBg.fit : 'cover',
+            opacity: Math.max(0, Math.min(1, Number(terminalBg.opacity ?? 0.35))),
+        };
+        const rawTerminalFontColor = body.appearance.terminalFontColor !== undefined ? body.appearance.terminalFontColor : (currentAppearance.terminalFontColor ?? '');
+        const terminalFontColor = /^#[0-9a-f]{6}$/i.test(String(rawTerminalFontColor || '')) ? String(rawTerminalFontColor) : '';
         next.appearance = {
             ...currentAppearance,
             ...body.appearance,
             brandName,
             brandIcon: isAllowedIcon ? rawIcon : (currentAppearance.brandIcon || '🌬️'),
             theme,
-            autoThemeEnabled: body.appearance.autoThemeEnabled !== false,
+            colorScheme,
+            customThemeMode,
+            customColors,
+            customCss: String(body.appearance.customCss ?? currentAppearance.customCss ?? '').slice(0, 200000),
+            customJs: String(body.appearance.customJs ?? currentAppearance.customJs ?? '').slice(0, 200000),
+            terminalBackground,
+            terminalFontColor,
+            autoThemeEnabled: colorScheme === 'frost' && body.appearance.autoThemeEnabled !== false,
         };
         console.info('[appearance-settings]', 'normalized appearance settings', {
             brandName,
             customIcon: next.appearance.brandIcon !== '🌬️',
             theme: next.appearance.theme,
+            colorScheme: next.appearance.colorScheme,
             autoThemeEnabled: next.appearance.autoThemeEnabled,
+            customCss: !!next.appearance.customCss,
+            customJs: !!next.appearance.customJs,
+            terminalBackground: next.appearance.terminalBackground.type,
         });
     }
     if (body.beian) {
@@ -1410,7 +1441,7 @@ async function zipBuffer(files) {
 }
 
 initData();
-app.use(express.json({ limit: '8mb' }));
+app.use(express.json({ limit: '24mb' }));
 
 app.post('/api/auth/login', async (req, res) => {
     const { username, password, captchaToken, remember } = req.body || {};
@@ -1711,6 +1742,11 @@ app.get('/api/public/settings', (req, res) => {
             brandIcon: String(appearance.brandIcon || '🌬️'),
             theme: appearance.theme === 'light' || appearance.theme === 'dark' ? appearance.theme : 'auto',
             autoThemeEnabled: appearance.autoThemeEnabled !== false,
+            colorScheme: ['frost', 'lava', 'asagi', 'cyber', 'custom'].includes(appearance.colorScheme) ? appearance.colorScheme : 'frost',
+            customThemeMode: ['light', 'dark', 'auto'].includes(appearance.customThemeMode) ? appearance.customThemeMode : 'dark',
+            customColors: appearance.customColors || {},
+            customCss: String(appearance.customCss || ''),
+            customJs: String(appearance.customJs || ''),
         },
         icp: s.icp || s.beian?.icp || '',
         icpUrl: s.icpUrl || s.beian?.icpUrl || '',

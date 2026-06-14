@@ -184,6 +184,13 @@ function defaultSettings(legacySettings = {}) {
             brandIcon: '🌬️',
             theme: 'auto',
             autoThemeEnabled: true,
+            colorScheme: 'frost',
+            customThemeMode: 'dark',
+            customColors: {},
+            customCss: '',
+            customJs: '',
+            terminalBackground: { type: 'none', url: '', fit: 'cover', opacity: 0.35 },
+            terminalFontColor: '',
         },
         terminal: {
             maxWindows: 3,

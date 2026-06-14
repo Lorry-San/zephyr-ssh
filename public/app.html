@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260614-vnc-ai-controls">
+    <link rel="stylesheet" href="style.css?v=20260614-theme-palettes">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -115,8 +115,52 @@
                                     <input id="brandIconFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">
                                 </div>
                                 <p class="field-hint">图标支持上传常见图片格式，建议使用正方形 PNG/SVG；保存后会同步到页面标题、favicon 与登录页。</p>
+                                <label>配色方案</label>
+                                <select id="colorSchemeSelect">
+                                    <option value="frost">凝霜蓝（默认）</option>
+                                    <option value="lava">熔岩流 Lava Flow</option>
+                                    <option value="asagi">浅葱影 Asagi</option>
+                                    <option value="cyber">极夜青 Cyber Teal</option>
+                                    <option value="custom">自定义 CSS/JS 与配色</option>
+                                </select>
+                                <p class="field-hint" id="appearanceThemeHint">熔岩流/极夜青固定深色，浅葱影固定浅色；凝霜蓝保留原深浅色切换。</p>
                                 <label class="check-line"><input type="checkbox" id="autoThemeEnabled"> 自动跟随系统深色/浅色模式</label>
                                 <p class="field-hint">开启后默认根据系统外观自动切换；关闭后可手动固定深色或浅色。</p>
+                                <div class="custom-theme-panel force-hidden" id="customThemePanel">
+                                    <label>自定义模式</label>
+                                    <select id="customThemeMode"><option value="dark">深色</option><option value="light">浅色</option><option value="auto">跟随系统</option></select>
+                                    <div class="custom-color-grid">
+                                        <label>大背景<input type="color" data-custom-color="bgMain" value="#0d1117"></label>
+                                        <label>卡片背景<input type="color" data-custom-color="bgCard" value="#161b22"></label>
+                                        <label>主按钮<input type="color" data-custom-color="primary" value="#58a6ff"></label>
+                                        <label>按钮 Hover<input type="color" data-custom-color="primaryHover" value="#79c0ff"></label>
+                                        <label>文字<input type="color" data-custom-color="text" value="#e6edf3"></label>
+                                        <label>次级文字<input type="color" data-custom-color="textSecondary" value="#8b949e"></label>
+                                        <label>边框<input type="color" data-custom-color="border" value="#30363d"></label>
+                                        <label>危险色<input type="color" data-custom-color="danger" value="#f85149"></label>
+                                        <label>成功色<input type="color" data-custom-color="success" value="#3fb950"></label>
+                                        <label>警告色<input type="color" data-custom-color="warning" value="#d2991d"></label>
+                                    </div>
+                                    <label>自定义 CSS</label>
+                                    <textarea id="customCssInput" rows="6" spellcheck="false" placeholder=":root { --accent: #00e5ff; }\n.connection-card { border-radius: 22px; }"></textarea>
+                                    <label>自定义 JS</label>
+                                    <textarea id="customJsInput" rows="5" spellcheck="false" placeholder="// 保存后在前端页面执行；请只填写可信代码"></textarea>
+                                    <p class="field-hint">自定义 JS 会在登录页、后台和远程窗口前端执行，请只保存你信任的代码。</p>
+                                </div>
+                                <h3>SSH 终端自定义</h3>
+                                <label>终端背景来源</label>
+                                <select id="terminalBgSource"><option value="none">不使用自定义背景</option><option value="upload">上传图片</option><option value="url">图片 URL</option></select>
+                                <input id="terminalBgFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif,image/svg+xml">
+                                <input id="terminalBgDataUrl" type="hidden">
+                                <input id="terminalBgUrl" type="url" placeholder="https://example.com/background.jpg">
+                                <div class="terminal-bg-preview" id="terminalBgPreview">未设置背景</div>
+                                <div class="form-row">
+                                    <div class="form-group"><label>背景适配</label><select id="terminalBgFit"><option value="cover">覆盖</option><option value="contain">完整显示</option><option value="auto">原始尺寸</option></select></div>
+                                    <div class="form-group"><label>背景强度 <span id="terminalBgOpacityValue">35%</span></label><input id="terminalBgOpacity" type="range" min="0" max="1" step="0.05" value="0.35"></div>
+                                </div>
+                                <label class="check-line"><input type="checkbox" id="terminalFontColorEnabled"> 启用自定义 SSH 终端字体颜色</label>
+                                <input id="terminalFontColor" type="color" value="#e6edf3">
+                                <p class="field-hint">终端背景支持更大的图片（最高 12MB），上传后会作为 Data URL 保存在外观设置里；URL 适合使用 CDN/对象存储图片。</p>
                                 <div class="form-actions">
                                     <button class="btn btn-primary" type="submit">保存外观</button>
                                     <button class="btn" type="button" id="settingsThemeToggle">切换深色/浅色模式</button>
@@ -388,6 +432,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260614-ai-fetch" type="module"></script>
+    <script src="app.js?v=20260614-theme-palettes" type="module"></script>
 </body>
 </html>
