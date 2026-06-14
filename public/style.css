@@ -5742,29 +5742,6 @@ body.smartbar-trash-hover .smartbar-trash-target {
     }
 }
 
-/* 仅保留：移动端全屏小白点放回右上角，不改 SSH 输入/复制逻辑 */
-@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
-    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle,
-    .terminal-workspace.compact.custom-fullscreen .mobile-fullscreen-dock-toggle,
-    .terminal-workspace.compact.custom-fullscreen .terminal-window > .mobile-fullscreen-dock-toggle {
-        top: max(8px, env(safe-area-inset-top)) !important;
-        right: max(10px, env(safe-area-inset-right)) !important;
-        left: auto !important;
-        transform: none !important;
-        position: fixed !important;
-        z-index: 1006 !important;
-    }
-    body.terminal-custom-fullscreen-open .terminal-smartbar {
-        top: max(48px, calc(env(safe-area-inset-top) + 48px)) !important;
-        right: max(8px, env(safe-area-inset-right)) !important;
-        left: auto !important;
-        transform: none !important;
-    }
-    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
-        transform-origin: 100% -18px !important;
-    }
-}
-
 /* ===== 最终修复：移动端图标不要继承透明文字色，使用明确颜色 ===== */
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     .terminal-page .topbar-actions .btn-sm[data-mobile-icon]::before {
@@ -9093,15 +9070,16 @@ body.app-body:not(.terminal-mode) .app-main {
     background: var(--bg);
 }
 .novnc-page .joystick-panel.rdp-floating-panel {
-    min-width: 240px;
-    min-height: 210px;
-    overflow: visible;
+    min-width: 248px;
+    min-height: 220px;
+    overflow: hidden;
 }
 .novnc-page .joystick-panel .joystick-panel-content {
     align-items: center;
     justify-content: center;
-    overflow: visible;
-    padding: 18px 12px 14px;
+    gap: 10px;
+    overflow: hidden;
+    padding: 12px;
 }
 @media (max-width: 700px) and (hover: none) and (pointer: coarse) {
     .novnc-page .novnc-topbar.terminal-topbar { padding: 6px 10px; }
@@ -9111,4 +9089,76 @@ body.app-body:not(.terminal-mode) .app-main {
     .novnc-page .novnc-panel.rdp-floating-panel { min-width: 260px; min-height: 220px; border-radius: 18px; }
     .novnc-page .novnc-panel .rdp-panel-content { padding: 10px; }
     .novnc-page .novnc-panel .rdp-shortcut-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+
+/* ===== Terminal smartbar: pinned to the expanded nav shelf ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-smartbar {
+        top: calc(var(--smartbar-top) - 22px) !important;
+        left: 50% !important;
+        right: auto !important;
+        width: 0 !important;
+        height: 0 !important;
+        transform: translateX(-50%) !important;
+        z-index: 82 !important;
+        pointer-events: none !important;
+        transition: top .62s cubic-bezier(.16,1,.3,1) !important;
+    }
+    .smartbar-handle {
+        top: -1px !important;
+        left: 50% !important;
+        width: 118px !important;
+        height: 16px !important;
+        transform: translate3d(-50%, -5px, 0) scaleX(.72) !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: transform .62s cubic-bezier(.16,1,.3,1), opacity .22s ease !important;
+    }
+    .smartbar-handle span {
+        width: 74px !important;
+        height: 4px !important;
+        background: color-mix(in srgb, var(--text-secondary) 58%, transparent) !important;
+    }
+    body.terminal-mode .terminal-smartbar .smartbar-handle,
+    body.terminal-mode-entering .terminal-smartbar .smartbar-handle,
+    .terminal-smartbar.open .smartbar-handle,
+    .terminal-smartbar.closing .smartbar-handle {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transform: translate3d(-50%, 0, 0) scaleX(1) !important;
+    }
+    body:not(.terminal-mode) .terminal-smartbar:not(.open):not(.closing) .smartbar-handle {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transform: translate3d(-50%, -5px, 0) scaleX(.62) !important;
+    }
+    body.terminal-mode-entering .terminal-smartbar .smartbar-handle {
+        animation: dockBarShelfReveal .66s cubic-bezier(.16,1,.3,1) both !important;
+    }
+    .terminal-smartbar .smartbar-panel {
+        top: 18px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        top: calc(var(--smartbar-top) - 22px) !important;
+        left: 50% !important;
+        right: auto !important;
+        width: 0 !important;
+        transform: translateX(-50%) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        position: absolute !important;
+        top: 18px !important;
+        left: 50% !important;
+        width: min(max-content, calc(100vw - 36px)) !important;
+        max-width: min(760px, calc(100vw - 36px)) !important;
+        transform-origin: top center !important;
+        transform: translate3d(-50%, -18px, 0) scale3d(.46, .20, 1) !important;
+        border-radius: 30px !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        transform: translate3d(-50%, 0, 0) scale3d(1, 1, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.closing .smartbar-panel {
+        animation: smartbarPanelMacClose .72s cubic-bezier(.16,1,.3,1) both !important;
+    }
 }
