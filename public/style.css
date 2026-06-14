@@ -5946,8 +5946,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
         touch-action: none !important;
     }
     body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle:active,
-    body.terminal-custom-fullscreen-open .terminal-smartbar.open ~ .mobile-fullscreen-dock-toggle {
-        transform: scale(.94) !important;
+    body.terminal-custom-fullscreen-open .mobile-fullscreen-dock-toggle.is-pressing,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle.is-pressing {
+        transform: translateY(-50%) scale(.94) !important;
         border-color: rgba(88,166,255,.36) !important;
         box-shadow:
             0 6px 16px rgba(0,0,0,.20),
@@ -9571,4 +9572,206 @@ body.app-body:not(.terminal-mode) .app-main {
     color: var(--text-secondary);
     padding: 5px 10px;
     cursor: pointer;
+}
+
+/* ===== Robust mobile terminal fixes: Dock tap target + anchored bottom bars ===== */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .terminal-workspace.compact.custom-fullscreen {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        grid-template-rows: minmax(0, 1fr) !important;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left) !important;
+        overflow: hidden !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window {
+        display: flex !important;
+        flex-direction: column !important;
+        min-height: 0 !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        overflow: hidden !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window-titlebar {
+        flex: 0 0 auto !important;
+        min-height: 34px !important;
+        padding-right: 50px !important;
+        overflow: visible !important;
+        touch-action: manipulation !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window-body {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        height: auto !important;
+        overflow: hidden !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-frame {
+        display: block !important;
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        max-height: 100% !important;
+    }
+
+    .mobile-fullscreen-dock-toggle {
+        display: none !important;
+        pointer-events: none !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle {
+        display: grid !important;
+        pointer-events: auto !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        position: absolute !important;
+        top: 50% !important;
+        right: 10px !important;
+        left: auto !important;
+        bottom: auto !important;
+        width: 32px !important;
+        height: 32px !important;
+        z-index: 120 !important;
+        place-items: center !important;
+        border-radius: 999px !important;
+        transform: translateY(-50%) !important;
+        touch-action: manipulation !important;
+        -webkit-tap-highlight-color: transparent !important;
+        cursor: pointer !important;
+    }
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle:active,
+    .terminal-workspace.compact.custom-fullscreen .terminal-window.active .terminal-window-titlebar > .mobile-fullscreen-dock-toggle.is-pressing {
+        transform: translateY(-50%) scale(.94) !important;
+    }
+
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        position: fixed !important;
+        top: calc(env(safe-area-inset-top) + 40px) !important;
+        right: max(8px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        bottom: auto !important;
+        width: 92px !important;
+        height: auto !important;
+        transform: none !important;
+        z-index: 1008 !important;
+        pointer-events: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        pointer-events: auto !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        right: 0 !important;
+        left: auto !important;
+        top: 0 !important;
+        width: 92px !important;
+        max-width: 92px !important;
+        max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 52px) !important;
+        overflow: hidden !important;
+        transform-origin: calc(100% - 25px) -18px !important;
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        transform: translate3d(0, 0, 0) scale3d(1, 1, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.closing .smartbar-panel {
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open ~ .terminal-workspace .terminal-frame {
+        pointer-events: none !important;
+    }
+
+    html.mobile-stable-input,
+    body.mobile-stable-input {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+    }
+    html.mobile-stable-input .terminal-page {
+        position: absolute !important;
+        inset: 0 !important;
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        grid-template-rows: auto minmax(0, 1fr) auto auto !important;
+        grid-template-areas:
+            "mobile-input"
+            "mobile-terminal"
+            "mobile-actions"
+            "mobile-aux" !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        transform: none !important;
+        padding: 0 !important;
+    }
+    html.mobile-stable-input .terminal-topbar {
+        display: contents !important;
+    }
+    html.mobile-stable-input .terminal-topbar > .status,
+    html.mobile-stable-input .terminal-topbar > .info {
+        display: none !important;
+    }
+    html.mobile-stable-input .terminal-top-input {
+        grid-area: mobile-input !important;
+        display: block !important;
+        min-height: 0 !important;
+        z-index: 4 !important;
+    }
+    html.mobile-stable-input .terminal-container {
+        grid-area: mobile-terminal !important;
+        align-self: stretch !important;
+        justify-self: stretch !important;
+        width: auto !important;
+        height: auto !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        margin: 6px !important;
+        overflow: hidden !important;
+        contain: layout paint !important;
+    }
+    html.mobile-stable-input .terminal-container .wterm-wrapper,
+    html.mobile-stable-input .terminal-container .wterm-wrapper.wterm {
+        width: 100% !important;
+        height: 100% !important;
+        min-width: 0 !important;
+        min-height: 0 !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+    html.mobile-stable-input .topbar-actions {
+        grid-area: mobile-actions !important;
+        position: static !important;
+        display: flex !important;
+        align-self: stretch !important;
+        justify-self: stretch !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 6px 8px !important;
+        transform: none !important;
+        z-index: 5 !important;
+        background: var(--surface) !important;
+    }
+    html.mobile-stable-input .terminal-bottom-bar {
+        grid-area: mobile-aux !important;
+        position: static !important;
+        display: block !important;
+        align-self: stretch !important;
+        justify-self: stretch !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding-bottom: max(2px, env(safe-area-inset-bottom)) !important;
+        transform: none !important;
+        z-index: 5 !important;
+        background: var(--surface) !important;
+    }
+    html.mobile-stable-input .mobile-aux-keys {
+        display: flex !important;
+        min-height: 44px !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+    }
 }

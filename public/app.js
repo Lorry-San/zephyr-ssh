@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-theme-palettes-v2';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-mobile-terminal-fix';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -54,6 +54,8 @@ let dockSwapAnimatingWindows = new Set();
 let dockLaunchAnimatingWindows = new Set();
 let terminalDragState = null;
 let terminalControlLongPress = false;
+let mobileDockTogglePressState = null;
+let mobileDockToggleLastToggleAt = 0;
 const terminalReconnectFallbackTimers = new Map();
 let fullscreenLoadingTimer = 0;
 let appKeyboardBaseline = 0;
@@ -2102,19 +2104,24 @@ function applyTerminalWorkspaceKeyboard(metrics = {}) {
             ? Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0)
             : Math.min(viewRect?.bottom || window.innerHeight || 0, window.innerHeight || 0);
 
-        // Keyboard top: prefer parent visualViewport (resizes-content truth),
-        // fall back to iframe metrics (overlays-content).
-        let kbTop;
-        if (parentInset >= 80) {
-            kbTop = parentKeyboardTop;
-        } else if (inset >= 80 && metricsKeyboardTop > 0) {
-            kbTop = metricsKeyboardTop;
-        } else {
-            kbTop = normalBottom;
-        }
+        // Keyboard top: use the most credible bottom boundary from parent/iframe
+        // metrics. Android WebView sometimes reports a transient visualViewport
+        // bottom near the top edge during IME animation; trusting that single value
+        // compresses the iframe so the bottom toolbars appear to fly upward. Pick
+        // the max sane candidate and clamp absurdly tiny heights.
+        let kbTop = keyboardOpen ? (keyboardTop || metricsKeyboardTop || parentKeyboardTop || normalBottom) : normalBottom;
         kbTop = Math.min(kbTop, normalBottom);
-
-        const usableHeight = Math.max(0, Math.round(kbTop - wsRect.top));
+        const fullUsableHeight = Math.max(0, Math.round(normalBottom - wsRect.top));
+        let usableHeight = Math.max(0, Math.round(kbTop - wsRect.top));
+        if (keyboardOpen && fullUsableHeight >= 360) {
+            const minUsableHeight = Math.min(fullUsableHeight, Math.max(260, Math.round(fullUsableHeight * 0.38)));
+            if (usableHeight < minUsableHeight) {
+                const maxKeyboardInset = Math.round(fullUsableHeight * 0.58);
+                const clampedInset = Math.min(Math.max(effectiveInset || 0, Math.round(fullUsableHeight * 0.34)), maxKeyboardInset);
+                kbTop = Math.min(normalBottom, Math.max(kbTop, normalBottom - clampedInset, wsRect.top + minUsableHeight));
+                usableHeight = Math.max(0, Math.round(kbTop - wsRect.top));
+            }
+        }
 
         appKeyboardPendingMetrics = keyboardOpen
             ? { ...metrics, stableInput: true, keyboardOpen: true, keyboardInset: effectiveInset, viewportHeight: metricsViewportHeight || parentVvHeight || Math.max(1, layoutHeight - effectiveInset), layoutHeight, offsetTop: parentOffsetTop }
@@ -5217,24 +5224,64 @@ function bindEvents() {
         if (tab) activateTerminalFromDock(tab, tabButton);
     });
     document.addEventListener('pointerdown', (e) => {
-        if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
-            e.preventDefault();
-            e.stopPropagation();
+        const toggle = e.target.closest('.mobile-fullscreen-dock-toggle');
+        if (!toggle) return;
+        e.preventDefault();
+        e.stopPropagation();
+        mobileDockTogglePressState = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            moved: false,
+            toggle,
+        };
+        toggle.classList.add('is-pressing');
+        try { toggle.setPointerCapture?.(e.pointerId); } catch (_) {}
+        document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = 'none');
+    }, true);
+    document.addEventListener('pointermove', (e) => {
+        const state = mobileDockTogglePressState;
+        if (!state || e.pointerId !== state.pointerId) return;
+        if (Math.hypot(e.clientX - state.startX, e.clientY - state.startY) > 10) state.moved = true;
+        e.preventDefault();
+        e.stopPropagation();
+    }, true);
+    document.addEventListener('pointerup', (e) => {
+        const state = mobileDockTogglePressState;
+        if (!state || e.pointerId !== state.pointerId) return;
+        e.preventDefault();
+        e.stopPropagation();
+        mobileDockTogglePressState = null;
+        state.toggle?.classList.remove('is-pressing');
+        try { state.toggle?.releasePointerCapture?.(e.pointerId); } catch (_) {}
+        if (!state.moved) {
+            mobileDockToggleLastToggleAt = Date.now();
             setTerminalSmartbarOpen(!terminalSmartbarOpen);
-            document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = terminalSmartbarOpen ? 'none' : '');
-            return;
+        } else if (!terminalSmartbarOpen) {
+            document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
         }
+    }, true);
+    document.addEventListener('pointercancel', (e) => {
+        const state = mobileDockTogglePressState;
+        if (!state || e.pointerId !== state.pointerId) return;
+        mobileDockTogglePressState = null;
+        state.toggle?.classList.remove('is-pressing');
+        if (!terminalSmartbarOpen) document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
     document.addEventListener('click', (e) => {
         if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
             e.preventDefault();
             e.stopPropagation();
+            if (Date.now() - mobileDockToggleLastToggleAt > 450) {
+                mobileDockToggleLastToggleAt = Date.now();
+                setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            }
             return;
         }
         if (e.target.closest('[data-smartbar-picker-close]')) { terminalSmartbarPickerOpen = false; renderTerminalSmartbar(); return; }
         const connect = e.target.closest('[data-smartbar-connect]')?.dataset.smartbarConnect;
         if (connect) { terminalSmartbarPickerOpen = false; setTerminalSmartbarOpen(false); openConnection(connect).catch((err) => toast(err.message)); }
-    });
+    }, true);
     $('#sessionTabs').addEventListener('pointerdown', (e) => {
         const tabBtn = e.target.closest('[data-smartbar-tab]');
         if (!tabBtn) return;

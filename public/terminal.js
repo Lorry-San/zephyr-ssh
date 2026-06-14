@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260614-theme-palettes-v2';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260614-mobile-terminal-fix';
 
 const $ = (sel) => document.querySelector(sel);
 
