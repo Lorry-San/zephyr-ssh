@@ -2,12 +2,12 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-13.2-native-rdp';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-redesign';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
 const statusText = $('#statusText');
-const statusCard = $('#statusCard');
+const statusCard = $('#statusCard') || document.querySelector('.novnc-topbar');
 const connInfo = $('#connInfo');
 const connTitle = $('#connTitle');
 const overlay = $('#novncOverlay');
@@ -200,7 +200,7 @@ function getRemoteDesktopSnapshotForAi(options = {}) {
         host: params?.host || '',
         port: params?.port || 5900,
         status: statusText?.textContent || '',
-        title: connInfo?.textContent || '',
+        title: connTitle?.textContent || connInfo?.textContent || '',
         connected,
         at: Date.now(),
         frameAt,
@@ -213,8 +213,7 @@ async function connect() {
     manualClose = false;
     reconnecting = false;
     params = loadParams();
-    if (params.host) connTitle.textContent = params.name || 'VNC 远程桌面';
-    connInfo.textContent = connectionLabel();
+    if (params.host) connTitle.textContent = `${params.name || 'VNC 远程桌面'} · ${connectionLabel()}`;
     setStatus('connecting', `正在连接 ${connectionLabel()}...`);
     clearScreen();
     try {
@@ -255,7 +254,7 @@ async function connect() {
         });
         rfb.addEventListener('desktopname', (event) => {
             const name = event?.detail?.name || '';
-            if (name) connTitle.textContent = name;
+            if (name) connTitle.textContent = `${name} · ${connectionLabel()}`;
         });
         rfb.addEventListener('bell', () => {
             stage.classList.add('bell');
@@ -304,20 +303,48 @@ function toggleDragMode() {
     applyDisplayOptions();
 }
 
+function bringPanelToFront(panel) {
+    if (!panel) return;
+    const wasFront = panel.classList.contains('front');
+    [clipboardPanel, shortcutsPanel].filter(Boolean).forEach((item) => {
+        item.classList.remove('front');
+        if (item !== panel) item.classList.remove('front-switching');
+    });
+    panel.classList.add('front');
+    if (!wasFront) {
+        panel.classList.remove('front-switching');
+        void panel.offsetWidth;
+        panel.classList.add('front-switching');
+        window.clearTimeout(panel._frontSwitchTimer);
+        panel._frontSwitchTimer = window.setTimeout(() => panel.classList.remove('front-switching'), 360);
+    }
+}
 function openPanel(panel) {
     [clipboardPanel, shortcutsPanel].forEach((item) => {
         if (!item) return;
         const show = item === panel && item.hidden;
         item.hidden = !show;
         item.classList.toggle('open', show);
+        item.classList.toggle('panel-opening', show);
+        item.classList.remove('panel-closing');
+        if (show) {
+            ensurePanelPosition(item);
+            bringPanelToFront(item);
+            window.setTimeout(() => item.classList.remove('panel-opening'), 420);
+        }
     });
+    clipboardBtn?.classList.toggle('active', clipboardPanel && !clipboardPanel.hidden);
+    shortcutsBtn?.classList.toggle('active', shortcutsPanel && !shortcutsPanel.hidden);
 }
 
 function closePanel(id) {
     const panel = document.getElementById(id);
     if (!panel) return;
-    panel.classList.remove('open');
-    window.setTimeout(() => { panel.hidden = true; }, 150);
+    panel.classList.remove('open', 'panel-opening');
+    panel.classList.add('panel-closing');
+    window.setTimeout(() => { panel.hidden = true; panel.classList.remove('panel-closing', 'front'); }, 260);
+    clipboardBtn?.classList.toggle('active', clipboardPanel && !clipboardPanel.hidden && panel !== clipboardPanel);
+    shortcutsBtn?.classList.toggle('active', shortcutsPanel && !shortcutsPanel.hidden && panel !== shortcutsPanel);
 }
 
 function sendKey(keysym, code = '', down = undefined) {
@@ -434,30 +461,130 @@ function setupClipboard() {
     });
 }
 
-function makeDraggable(panel) {
-    const head = panel?.querySelector('.novnc-panel-head');
-    if (!panel || !head) return;
-    head.addEventListener('pointerdown', (event) => {
-        if (event.target.closest('button')) return;
-        event.preventDefault();
-        panel.setPointerCapture?.(event.pointerId);
-        const rect = panel.getBoundingClientRect();
-        const parent = stage.getBoundingClientRect();
-        const start = { x: event.clientX, y: event.clientY, left: rect.left - parent.left, top: rect.top - parent.top };
-        const move = (ev) => {
-            const left = Math.max(10, Math.min(parent.width - panel.offsetWidth - 10, start.left + ev.clientX - start.x));
-            const top = Math.max(10, Math.min(parent.height - panel.offsetHeight - 10, start.top + ev.clientY - start.y));
-            panel.style.left = `${left}px`;
-            panel.style.top = `${top}px`;
-            panel.style.right = 'auto';
-        };
-        const end = () => {
-            window.removeEventListener('pointermove', move);
-            window.removeEventListener('pointerup', end);
-        };
-        window.addEventListener('pointermove', move, { passive: false });
-        window.addEventListener('pointerup', end, { once: true });
+function panelDefaults(panel) {
+    const parent = stage?.getBoundingClientRect?.() || { width: window.innerWidth, height: window.innerHeight };
+    const compact = Math.min(window.innerWidth, window.innerHeight) <= 700;
+    if (compact) return { left: 8, top: 44, width: Math.max(280, parent.width - 16), height: Math.max(260, Math.min(parent.height - 58, panel === shortcutsPanel ? 360 : 430)) };
+    if (panel === shortcutsPanel) return { width: Math.min(460, parent.width - 24), height: Math.min(360, parent.height - 80), left: 18, top: 54 };
+    return { width: Math.min(440, parent.width - 24), height: Math.min(500, parent.height - 80), left: Math.max(18, parent.width - 460), top: 54 };
+}
+function ensurePanelPosition(panel) {
+    if (!panel || panel.dataset.floatingReady === '1') return;
+    const d = panelDefaults(panel);
+    Object.assign(panel.style, { left: `${d.left}px`, top: `${d.top}px`, right: 'auto', bottom: 'auto', width: `${d.width}px`, height: `${d.height}px` });
+    panel.dataset.floatingReady = '1';
+}
+function clampPanel(panel) {
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    const parent = stage.getBoundingClientRect();
+    const minVisible = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 140 : 80;
+    const left = Math.min(Math.max(rect.left - parent.left, -rect.width + minVisible), parent.width - minVisible);
+    const top = Math.min(Math.max(rect.top - parent.top, 8), parent.height - minVisible);
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+}
+function applyPanelLayout(panel, layout) {
+    if (!panel) return;
+    const parent = stage.getBoundingClientRect();
+    const compact = Math.min(window.innerWidth, window.innerHeight) <= 700;
+    const margin = compact ? 6 : 12;
+    const topbar = compact ? 38 : 52;
+    let left = margin, top = topbar, width = parent.width - margin * 2, height = parent.height - topbar - margin;
+    if (layout === 'half') { width = parent.width; height = Math.max(260, parent.height / 2); left = 0; top = parent.height - height; }
+    else if (layout === 'left-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = 0; top = topbar; }
+    else if (layout === 'right-quarter') { width = Math.max(260, parent.width / 4); height = parent.height - topbar; left = parent.width - width; top = topbar; }
+    panel.classList.add('layout-animating');
+    Object.assign(panel.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px` });
+    bringPanelToFront(panel);
+    window.clearTimeout(panel._layoutAnimationTimer);
+    panel._layoutAnimationTimer = window.setTimeout(() => { panel.classList.remove('layout-animating'); clampPanel(panel); }, 480);
+}
+let panelLayoutMenu = null;
+let panelLayoutButton = null;
+function closePanelLayoutMenu({ instant = false } = {}) {
+    const menu = panelLayoutMenu;
+    const button = panelLayoutButton;
+    if (!menu) { button?.classList.remove('active-layout'); panelLayoutButton = null; return; }
+    button?.classList.remove('active-layout');
+    button?.style.removeProperty('opacity');
+    menu.remove();
+    panelLayoutMenu = null;
+    panelLayoutButton = null;
+}
+function positionPanelLayoutMenu(menu, button, { collapsed = false } = {}) {
+    const rect = button.getBoundingClientRect();
+    const vw = window.visualViewport?.width || window.innerWidth;
+    const anchorX = rect.left + rect.width / 2;
+    const finalWidth = Math.min(284, Math.max(160, vw - 16));
+    menu.style.left = `${collapsed ? rect.left : anchorX - finalWidth / 2}px`;
+    menu.style.top = `${rect.top}px`;
+    menu.style.setProperty('--panel-island-menu-width', `${collapsed ? rect.width : finalWidth}px`);
+    menu.style.setProperty('--panel-island-menu-height', `${collapsed ? rect.height : 50}px`);
+    menu.style.setProperty('--panel-island-radius', `${Math.round((collapsed ? rect.height : 36) / 2)}px`);
+}
+function openPanelLayoutMenu(button, panel) {
+    closePanelLayoutMenu({ instant: true });
+    panelLayoutButton = button;
+    const menu = document.createElement('div');
+    menu.className = 'panel-layout-menu';
+    menu.innerHTML = '<button data-layout="full" title="全屏"><span class="panel-layout-icon full"></span></button><button data-layout="half" title="半屏"><span class="panel-layout-icon half"></span></button><button data-layout="left-quarter" title="左侧四分之一"><span class="panel-layout-icon left"></span></button><button data-layout="right-quarter" title="右侧四分之一"><span class="panel-layout-icon right"></span></button><button data-layout="close" class="panel-layout-close" title="关闭窗口"><span class="panel-layout-icon close"></span></button>';
+    document.body.appendChild(menu);
+    panelLayoutMenu = menu;
+    positionPanelLayoutMenu(menu, button, { collapsed: true });
+    button.classList.add('active-layout');
+    button.style.opacity = '0';
+    menu.classList.add('island-animating');
+    void menu.offsetWidth;
+    requestAnimationFrame(() => { menu.classList.add('island-open'); positionPanelLayoutMenu(menu, button, { collapsed: false }); window.setTimeout(() => menu.classList.remove('island-animating'), 540); });
+    menu.addEventListener('click', (event) => {
+        const item = event.target.closest('[data-layout]');
+        if (!item) return;
+        if (item.dataset.layout === 'close') closePanel(panel.id);
+        else { applyPanelLayout(panel, item.dataset.layout); closePanelLayoutMenu(); }
     });
+}
+function makeDraggable(panel) {
+    ensurePanelPosition(panel);
+    const handles = [panel?.querySelector('[data-drag-panel]'), panel?.querySelector('.panel-titlebar')].filter(Boolean);
+    handles.forEach((head) => {
+        head.addEventListener('pointerdown', (event) => {
+            if (event.target.closest('button,input,select,textarea,label')) return;
+            event.preventDefault();
+            bringPanelToFront(panel);
+            panel.classList.add('dragging');
+            const start = { x: event.clientX, y: event.clientY, left: panel.offsetLeft, top: panel.offsetTop };
+            const move = (ev) => { ev.preventDefault(); panel.style.left = `${start.left + ev.clientX - start.x}px`; panel.style.top = `${start.top + ev.clientY - start.y}px`; panel.style.right = 'auto'; panel.style.bottom = 'auto'; clampPanel(panel); };
+            const end = () => { panel.classList.remove('dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', end, { once: true });
+        });
+    });
+    panel.querySelectorAll('[data-layout-panel]').forEach((button) => {
+        button.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); if (panelLayoutMenu && panelLayoutButton === button) closePanelLayoutMenu(); else openPanelLayoutMenu(button, panel); });
+    });
+    panel.querySelectorAll('[data-resize-panel]').forEach((handle) => {
+        handle.addEventListener('pointerdown', (event) => {
+            event.preventDefault(); event.stopPropagation(); bringPanelToFront(panel); panel.classList.add('resizing');
+            const start = { x: event.clientX, y: event.clientY, width: panel.offsetWidth, height: panel.offsetHeight, left: panel.offsetLeft };
+            const edge = handle.dataset.resizeEdge || 'right';
+            const parent = stage.getBoundingClientRect();
+            const minWidth = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 260 : 320;
+            const minHeight = Math.min(window.innerWidth, window.innerHeight) <= 700 ? 220 : 260;
+            const move = (ev) => {
+                ev.preventDefault();
+                let width = start.width + ev.clientX - start.x;
+                let left = start.left;
+                if (edge === 'left') { width = start.width - (ev.clientX - start.x); left = start.left + (ev.clientX - start.x); if (width < minWidth) { left -= minWidth - width; width = minWidth; } panel.style.left = `${Math.max(8, left)}px`; }
+                panel.style.width = `${Math.min(Math.max(minWidth, width), parent.width - panel.offsetLeft - 12)}px`;
+                panel.style.height = `${Math.min(Math.max(minHeight, start.height + ev.clientY - start.y), parent.height - panel.offsetTop - 12)}px`;
+            };
+            const end = () => { panel.classList.remove('resizing'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); };
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', end, { once: true });
+        });
+    });
+    panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
 }
 
 function sleep(ms = 0) { return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
@@ -556,6 +683,10 @@ function bindEvents() {
         const close = event.target.closest('[data-close-panel]');
         if (close) closePanel(close.dataset.closePanel);
     });
+    document.addEventListener('pointerdown', (event) => {
+        if (panelLayoutMenu && !event.target.closest('.panel-layout-menu') && !event.target.closest('[data-layout-panel]')) closePanelLayoutMenu();
+    });
+    window.addEventListener('resize', () => closePanelLayoutMenu({ instant: true }));
     screenShell.addEventListener('pointerdown', () => { rfb?.focus?.(); notifyParentActivity(); }, { passive: true });
     stage.addEventListener('keydown', (event) => {
         if (event.ctrlKey && event.altKey && event.key === 'Delete') { event.preventDefault(); rfb?.sendCtrlAltDel?.(); }

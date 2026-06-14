@@ -2,91 +2,92 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Zephyr - noVNC</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <title>Zephyr - VNC 远程桌面</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260608-novnc-ui">
+    <link rel="stylesheet" href="style.css?v=20260614-vnc-redesign">
 </head>
 <body>
-    <div class="novnc-page">
-        <header class="novnc-topbar">
-            <div class="novnc-identity">
-                <div class="novnc-orb" aria-hidden="true"><span></span></div>
-                <div class="novnc-title-group">
-                    <span class="novnc-eyebrow">Zephyr noVNC</span>
-                    <strong id="connTitle">VNC 远程桌面</strong>
-                </div>
-            </div>
-            <div class="novnc-status-card" id="statusCard">
+    <div class="novnc-page rdp-page">
+        <div class="terminal-topbar rdp-topbar novnc-topbar">
+            <div class="status">
                 <span class="status-dot" id="statusDot"></span>
                 <span id="statusText">连接中...</span>
-                <em id="connInfo"></em>
             </div>
-            <div class="novnc-toolbar" role="toolbar" aria-label="noVNC 控制栏">
-                <button class="novnc-tool" id="qualityBtn" type="button" title="切换画质/性能"><span>画质</span><strong id="qualityLabel">平衡</strong></button>
-                <button class="novnc-tool" id="fitBtn" type="button" title="切换适应/原始/拖拽视区"><span>视图</span><strong id="fitLabel">适应</strong></button>
-                <button class="novnc-icon-btn" id="dragBtn" type="button" title="拖动画面">⇄</button>
-                <button class="novnc-icon-btn" id="clipboardBtn" type="button" title="剪贴板">⌘</button>
-                <button class="novnc-icon-btn" id="keyboardBtn" type="button" title="手机键盘">⌨</button>
-                <button class="novnc-icon-btn" id="shortcutsBtn" type="button" title="快捷键">⌁</button>
-                <button class="novnc-icon-btn" id="cadBtn" type="button" title="发送 Ctrl+Alt+Del">CAD</button>
-                <button class="novnc-icon-btn" id="reconnectBtn" type="button" title="重新连接">↻</button>
-                <button class="novnc-icon-btn danger" id="disconnectBtn" type="button" title="断开">⏻</button>
+            <span class="info" id="connInfo"><strong id="connTitle">VNC 远程桌面</strong></span>
+            <div class="topbar-actions novnc-toolbar" role="toolbar" aria-label="VNC 控制栏">
+                <button class="btn-sm" id="qualityBtn" data-vnc-icon="quality" type="button" title="切换性能/画质模式"><span id="qualityLabel">平衡</span></button>
+                <button class="btn-sm" id="fitBtn" data-vnc-icon="fit" type="button" title="切换适应/原始/拖拽视区"><span id="fitLabel">适应</span></button>
+                <button class="btn-sm" id="dragBtn" data-vnc-icon="joystick" type="button" title="拖动画面">视区</button>
+                <button class="btn-sm" id="clipboardBtn" data-vnc-icon="clipboard" type="button" title="打开跨设备剪贴板面板">剪贴板</button>
+                <button class="btn-sm" id="keyboardBtn" data-vnc-icon="keyboard" type="button" title="手机软键盘输入">键盘</button>
+                <button class="btn-sm" id="shortcutsBtn" data-vnc-icon="shortcuts" type="button" title="打开常用快捷键">快捷键</button>
+                <button class="btn-sm" id="cadBtn" data-vnc-icon="security" type="button" title="发送 Ctrl+Alt+Del">Ctrl+Alt+Del</button>
+                <button class="btn-sm" id="reconnectBtn" data-vnc-icon="reconnect" type="button" title="重新连接">重连</button>
+                <button class="btn-sm danger" id="disconnectBtn" data-vnc-icon="disconnect" type="button" title="断开连接">断开</button>
             </div>
-        </header>
+        </div>
 
-        <main class="novnc-stage" id="novncStage" tabindex="0">
-            <textarea id="mobileKeyboardInput" class="novnc-mobile-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text" enterkeyhint="done" aria-label="VNC 软键盘输入"></textarea>
+        <main class="novnc-stage rdp-stage" id="novncStage" tabindex="0">
+            <textarea id="mobileKeyboardInput" class="novnc-mobile-input rdp-mobile-keyboard-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text" enterkeyhint="done" aria-label="VNC 软键盘输入"></textarea>
 
-            <section class="novnc-screen-shell" id="screenShell" aria-label="VNC 画面区域">
+            <section class="novnc-screen-shell rdp-display-shell" id="screenShell" aria-label="VNC 画面区域">
                 <div class="novnc-screen-bg" aria-hidden="true"></div>
-                <div class="novnc-screen" id="screen"></div>
+                <div class="novnc-screen rdp-display" id="screen"></div>
             </section>
 
-            <div class="novnc-overlay" id="novncOverlay">
-                <div class="novnc-loader"><i></i><i></i><i></i></div>
-                <strong id="overlayTitle">正在建立 noVNC 连接</strong>
-                <span id="overlayMsg">通过 Zephyr 安全代理连接 VNC，密码不会发送到浏览器。</span>
+            <div class="terminal-overlay novnc-overlay" id="novncOverlay">
+                <div class="spinner"></div>
+                <span class="msg" id="overlayTitle">正在建立 VNC 连接</span>
+                <span class="msg subtle" id="overlayMsg">通过 Zephyr 安全代理连接 VNC，密码不会发送到浏览器。</span>
             </div>
 
-            <aside class="novnc-panel clipboard-panel" id="clipboardPanel" hidden>
-                <div class="novnc-panel-head">
-                    <strong>跨设备剪贴板</strong>
-                    <button class="novnc-panel-close" type="button" data-close-panel="clipboardPanel">×</button>
+            <div class="rdp-floating-panel novnc-panel clipboard-panel" id="clipboardPanel" hidden>
+                <div class="panel-drag-handle" data-drag-panel="clipboardPanel" title="拖动移动窗口">
+                    <button class="panel-traffic-btn" data-layout-panel="clipboardPanel" title="窗口布局"><span></span></button>
                 </div>
-                <label for="clipboardText">本机 → 远程</label>
-                <textarea id="clipboardText" placeholder="输入或粘贴文本，然后发送到 VNC 剪贴板"></textarea>
-                <div class="novnc-panel-actions">
-                    <button class="novnc-secondary" id="clipboardReadLocalBtn" type="button">读取本机</button>
-                    <button class="novnc-primary" id="clipboardSendBtn" type="button">发送到远程</button>
+                <div class="rdp-panel-content">
+                    <div class="rdp-panel-head panel-titlebar"><strong>跨设备剪贴板</strong></div>
+                    <label class="rdp-panel-label" for="clipboardText">本机 → 远程</label>
+                    <textarea id="clipboardText" class="rdp-panel-textarea" placeholder="输入或粘贴文本，然后发送到 VNC 剪贴板"></textarea>
+                    <div class="rdp-panel-actions">
+                        <button class="btn-sm" id="clipboardReadLocalBtn" type="button">读取本机</button>
+                        <button class="btn-sm active" id="clipboardSendBtn" type="button">发送到远程</button>
+                    </div>
+                    <label class="rdp-panel-label" for="remoteClipboardText">远程 → 本机</label>
+                    <textarea id="remoteClipboardText" class="rdp-panel-textarea" readonly placeholder="远程复制文本后会显示在这里"></textarea>
+                    <div class="rdp-panel-actions">
+                        <button class="btn-sm" id="clipboardCopyRemoteBtn" type="button">复制到本机</button>
+                        <span class="rdp-panel-hint" id="clipboardHint">等待远程剪贴板...</span>
+                    </div>
                 </div>
-                <label for="remoteClipboardText">远程 → 本机</label>
-                <textarea id="remoteClipboardText" readonly placeholder="远程复制文本后会显示在这里"></textarea>
-                <div class="novnc-panel-actions">
-                    <button class="novnc-secondary" id="clipboardCopyRemoteBtn" type="button">复制到本机</button>
-                    <span id="clipboardHint">等待远程剪贴板...</span>
-                </div>
-            </aside>
+                <div class="panel-resize-handle left" data-resize-panel="clipboardPanel" data-resize-edge="left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-resize-panel="clipboardPanel" data-resize-edge="right" title="拖动调整大小"></div>
+            </div>
 
-            <aside class="novnc-panel shortcuts-panel" id="shortcutsPanel" hidden>
-                <div class="novnc-panel-head">
-                    <strong>快捷键 / 手机辅助</strong>
-                    <button class="novnc-panel-close" type="button" data-close-panel="shortcutsPanel">×</button>
+            <div class="rdp-floating-panel novnc-panel shortcuts-panel" id="shortcutsPanel" hidden>
+                <div class="panel-drag-handle" data-drag-panel="shortcutsPanel" title="拖动移动窗口">
+                    <button class="panel-traffic-btn" data-layout-panel="shortcutsPanel" title="窗口布局"><span></span></button>
                 </div>
-                <div class="novnc-shortcut-grid" id="shortcutGrid">
-                    <button data-keyseq="esc">Esc</button><button data-keyseq="tab">Tab</button><button data-keyseq="enter">Enter</button><button data-keyseq="backspace">Backspace</button>
-                    <button data-keyseq="ctrl-alt-del">Ctrl+Alt+Del</button><button data-keyseq="super">Win</button><button data-keyseq="alt-tab">Alt+Tab</button><button data-keyseq="delete">Delete</button>
-                    <button data-keyseq="ctrl-a">Ctrl+A</button><button data-keyseq="ctrl-c">Ctrl+C</button><button data-keyseq="ctrl-v">Ctrl+V</button><button data-keyseq="ctrl-x">Ctrl+X</button>
-                    <button data-keyseq="up">↑</button><button data-keyseq="down">↓</button><button data-keyseq="left">←</button><button data-keyseq="right">→</button>
-                    <button data-keyseq="home">Home</button><button data-keyseq="end">End</button><button data-keyseq="pageup">PgUp</button><button data-keyseq="pagedown">PgDn</button>
-                    <button data-keyseq="f1">F1</button><button data-keyseq="f2">F2</button><button data-keyseq="f3">F3</button><button data-keyseq="f4">F4</button>
-                    <button data-keyseq="f5">F5</button><button data-keyseq="f6">F6</button><button data-keyseq="f7">F7</button><button data-keyseq="f8">F8</button>
-                    <button data-keyseq="f9">F9</button><button data-keyseq="f10">F10</button><button data-keyseq="f11">F11</button><button data-keyseq="f12">F12</button>
+                <div class="rdp-panel-content">
+                    <div class="rdp-panel-head panel-titlebar"><strong>快捷键 / 手机辅助</strong></div>
+                    <div class="rdp-shortcut-grid novnc-shortcut-grid" id="shortcutGrid">
+                        <button class="tool-btn" data-keyseq="esc">Esc</button><button class="tool-btn" data-keyseq="tab">Tab</button><button class="tool-btn" data-keyseq="enter">Enter</button><button class="tool-btn" data-keyseq="backspace">Backspace</button>
+                        <button class="tool-btn" data-keyseq="ctrl-alt-del">Ctrl+Alt+Del</button><button class="tool-btn" data-keyseq="super">Win</button><button class="tool-btn" data-keyseq="alt-tab">Alt+Tab</button><button class="tool-btn" data-keyseq="delete">Delete</button>
+                        <button class="tool-btn" data-keyseq="ctrl-a">Ctrl+A</button><button class="tool-btn" data-keyseq="ctrl-c">Ctrl+C</button><button class="tool-btn" data-keyseq="ctrl-v">Ctrl+V</button><button class="tool-btn" data-keyseq="ctrl-x">Ctrl+X</button>
+                        <button class="tool-btn" data-keyseq="up">↑</button><button class="tool-btn" data-keyseq="down">↓</button><button class="tool-btn" data-keyseq="left">←</button><button class="tool-btn" data-keyseq="right">→</button>
+                        <button class="tool-btn" data-keyseq="home">Home</button><button class="tool-btn" data-keyseq="end">End</button><button class="tool-btn" data-keyseq="pageup">PgUp</button><button class="tool-btn" data-keyseq="pagedown">PgDn</button>
+                        <button class="tool-btn" data-keyseq="f1">F1</button><button class="tool-btn" data-keyseq="f2">F2</button><button class="tool-btn" data-keyseq="f3">F3</button><button class="tool-btn" data-keyseq="f4">F4</button>
+                        <button class="tool-btn" data-keyseq="f5">F5</button><button class="tool-btn" data-keyseq="f6">F6</button><button class="tool-btn" data-keyseq="f7">F7</button><button class="tool-btn" data-keyseq="f8">F8</button>
+                        <button class="tool-btn" data-keyseq="f9">F9</button><button class="tool-btn" data-keyseq="f10">F10</button><button class="tool-btn" data-keyseq="f11">F11</button><button class="tool-btn" data-keyseq="f12">F12</button>
+                    </div>
+                    <div class="rdp-panel-hint novnc-panel-note">提示：中文/长文本会优先发送到远程剪贴板；普通 ASCII 字符会直接按键输入。</div>
                 </div>
-                <p class="novnc-panel-note">提示：中文/长文本会优先发送到远程剪贴板；普通 ASCII 字符会直接按键输入。</p>
-            </aside>
+                <div class="panel-resize-handle left" data-resize-panel="shortcutsPanel" data-resize-edge="left" title="拖动调整大小"></div>
+                <div class="panel-resize-handle right" data-resize-panel="shortcutsPanel" data-resize-edge="right" title="拖动调整大小"></div>
+            </div>
         </main>
     </div>
-    <script src="novnc.js?v=20260613-native-rdp" type="module"></script>
+    <script src="novnc.js?v=20260614-vnc-redesign" type="module"></script>
 </body>
 </html>

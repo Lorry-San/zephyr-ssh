@@ -8792,3 +8792,260 @@ body.app-body:not(.terminal-mode) .app-main {
 }
 .ai-md-toggle,
 #aiMarkdownPreviewBtn { display: none !important; }
+
+/* 20260614: noVNC rewritten to match SSH/RDP chrome */
+.novnc-page.rdp-page {
+    background: var(--bg) !important;
+    border: 1px solid var(--border) !important;
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+}
+.novnc-page .novnc-topbar.terminal-topbar {
+    position: relative;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    background: var(--surface);
+    border: 0;
+    border-radius: 0;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.08);
+    margin: 0;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+.novnc-page .novnc-topbar .status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 0 0 auto;
+    font-weight: 500;
+}
+.novnc-page .novnc-topbar .info {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.novnc-page .novnc-topbar .info strong {
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 600;
+}
+.novnc-page .novnc-toolbar.topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    padding-bottom: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+.novnc-page .novnc-toolbar.topbar-actions::-webkit-scrollbar { height: 0; }
+.novnc-page .novnc-toolbar.topbar-actions:hover { scrollbar-width: thin; }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon]::before {
+    content: '';
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    flex: 0 0 15px;
+    background: var(--vnc-toolbar-icon-color, currentColor);
+    -webkit-mask: var(--vnc-toolbar-icon) center / contain no-repeat;
+    mask: var(--vnc-toolbar-icon) center / contain no-repeat;
+}
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="quality"] { --vnc-toolbar-icon-color: #d9aa18; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="fit"] { --vnc-toolbar-icon-color: #4aa3df; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M4 4h7v2H7.4l4.1 4.1-1.4 1.4L6 7.4V11H4V4zm9 0h7v7h-2V7.4l-4.1 4.1-1.4-1.4L16.6 6H13V4zM4 13h2v3.6l4.1-4.1 1.4 1.4L7.4 18H11v2H4v-7zm14 0h2v7h-7v-2h3.6l-4.1-4.1 1.4-1.4 4.1 4.1V13z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="joystick"] { --vnc-toolbar-icon-color: #ffb14f; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 9h10a5 5 0 0 1 4.8 3.6l.8 3A3.5 3.5 0 0 1 19.2 20c-1 0-1.9-.4-2.6-1.1L14.7 17H9.3l-1.9 1.9A3.7 3.7 0 0 1 4.8 20a3.5 3.5 0 0 1-3.4-4.4l.8-3A5 5 0 0 1 7 9zm1 3H6v2H4v2h2v2h2v-2h2v-2H8v-2zm8.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM18 10a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM11 4h2v5h-2V4z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="clipboard"] { --vnc-toolbar-icon-color: #9a6a3a; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M9 3h6l1 2h3v16H5V5h3l1-2zm1 4h4l1-2h-6l1 2zm-3 1v11h10V8h-2v2H9V8H7z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="keyboard"] { --vnc-toolbar-icon-color: #6b7684; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 6h18v12H3V6zm2 2v8h14V8H5zm1 1h2v2H6V9zm3 0h2v2H9V9zm3 0h2v2h-2V9zm3 0h2v2h-2V9zM6 12h2v2H6v-2zm3 0h6v2H9v-2zm7 0h2v2h-2v-2z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="shortcuts"] { --vnc-toolbar-icon-color: #d9aa18; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M13 2 4 14h7l-1 8 10-13h-7l0-7z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="security"] { --vnc-toolbar-icon-color: #2f81f7; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 2 5 5v6c0 4.6 2.9 8.8 7 10 4.1-1.2 7-5.4 7-10V5l-7-3zm0 3.2 5 2.1V11c0 3.3-2 6.4-5 7.6-3-1.2-5-4.3-5-7.6V7.3l5-2.1zM11 8h2v5h-2V8zm0 7h2v2h-2v-2z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="reconnect"] { --vnc-toolbar-icon-color: #2f81f7; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-toolbar .btn-sm[data-vnc-icon="disconnect"] { --vnc-toolbar-icon-color: #f85149; --vnc-toolbar-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M7 3h10v2H7V3zm4 4h2v7h-2V7zm-5.6 3.2 1.5 1.3A6 6 0 1 0 17.1 11.5l1.5-1.3a8 8 0 1 1-13.2 0z'/%3E%3C/svg%3E"); }
+.novnc-page .novnc-stage.rdp-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 20% 0%, rgba(88,166,255,.12), transparent 30%),
+        radial-gradient(circle at 82% 10%, rgba(240,136,62,.10), transparent 30%),
+        #05070a;
+    display: grid;
+    place-items: center;
+    outline: none;
+    contain: layout paint;
+}
+.novnc-page .novnc-screen-shell.rdp-display-shell {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: none;
+    background:
+        linear-gradient(45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255,255,255,.025) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255,255,255,.025) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255,255,255,.025) 75%),
+        #05070a;
+    background-size: 28px 28px;
+    background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+}
+.novnc-page .novnc-screen-bg { display: none; }
+.novnc-page .novnc-screen.rdp-display {
+    position: relative;
+    min-width: 1px;
+    min-height: 1px;
+    display: grid;
+    place-items: center;
+    transform-origin: center center;
+    border-radius: 0;
+    overflow: visible;
+    box-shadow: none;
+    background: transparent;
+}
+.novnc-page .novnc-screen canvas {
+    display: block;
+    outline: none;
+    image-rendering: auto;
+}
+.novnc-page .novnc-overlay.terminal-overlay {
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: rgba(13,17,23,.86);
+}
+.novnc-page .novnc-overlay.terminal-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+.novnc-page .novnc-overlay .subtle {
+    max-width: 520px;
+    color: var(--text-secondary);
+    text-align: center;
+    line-height: 1.5;
+}
+.novnc-page .novnc-panel.rdp-floating-panel {
+    position: absolute;
+    z-index: 30;
+    min-width: 300px;
+    min-height: 240px;
+    padding: 0;
+    border: 1px solid rgba(139,148,158,.34);
+    border-radius: 22px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 92%, rgba(255,255,255,.12)), color-mix(in srgb, var(--surface) 82%, transparent)),
+        color-mix(in srgb, var(--surface) 88%, transparent);
+    box-shadow: 0 28px 90px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.11);
+    backdrop-filter: blur(28px) saturate(1.62);
+    -webkit-backdrop-filter: blur(28px) saturate(1.62);
+    overflow: hidden;
+    visibility: hidden;
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(.985);
+    transition:
+        opacity .24s ease,
+        visibility .24s ease,
+        transform .34s cubic-bezier(.16,1,.3,1),
+        box-shadow .24s ease,
+        left .34s cubic-bezier(.16,1,.3,1),
+        top .34s cubic-bezier(.16,1,.3,1),
+        width .34s cubic-bezier(.16,1,.3,1),
+        height .34s cubic-bezier(.16,1,.3,1);
+}
+.novnc-page .novnc-panel.rdp-floating-panel[hidden] {
+    display: flex !important;
+    pointer-events: none;
+}
+.novnc-page .novnc-panel.rdp-floating-panel.open {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate3d(0,0,0) scale(1);
+}
+.novnc-page .novnc-panel.rdp-floating-panel.front {
+    z-index: 42;
+    box-shadow: 0 34px 110px rgba(0,0,0,.54), inset 0 1px 0 rgba(255,255,255,.13);
+}
+.novnc-page .novnc-panel .panel-drag-handle {
+    height: 30px;
+    background: color-mix(in srgb, var(--border) 30%, rgba(255,255,255,.08));
+}
+.novnc-page .novnc-panel .rdp-panel-content {
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.novnc-page .novnc-panel .rdp-panel-textarea {
+    width: 100%;
+    min-height: 76px;
+    max-height: 160px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.45;
+    outline: none;
+    resize: vertical;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.novnc-page .novnc-panel .rdp-panel-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88,166,255,.12);
+}
+.novnc-page .novnc-panel .rdp-shortcut-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0,1fr));
+    gap: 6px;
+    overflow: auto;
+    min-height: 0;
+}
+.novnc-page .novnc-panel .rdp-shortcut-grid .tool-btn {
+    min-width: 0;
+    width: 100%;
+    min-height: 34px;
+    padding: 6px 7px;
+    font-size: 11px;
+    background: var(--bg);
+}
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    .novnc-page .novnc-topbar.terminal-topbar { padding: 6px 10px; }
+    .novnc-page .novnc-toolbar .btn-sm[data-vnc-icon] { gap: 0; }
+    .novnc-page .novnc-toolbar .btn-sm[data-vnc-icon]::before { width: 21px; height: 21px; flex-basis: 21px; }
+    .novnc-page .novnc-stage.rdp-stage { margin: 4px; border-radius: 10px; }
+    .novnc-page .novnc-panel.rdp-floating-panel { min-width: 260px; min-height: 220px; border-radius: 18px; }
+    .novnc-page .novnc-panel .rdp-panel-content { padding: 10px; }
+    .novnc-page .novnc-panel .rdp-shortcut-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
