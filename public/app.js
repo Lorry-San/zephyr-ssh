@@ -347,19 +347,51 @@ function requestSensitiveSecret(actionText = '查看已保存敏感信息') {
     console.debug('[secret-open]', 'sensitive reveal requested', { actionText, authType: usingTotp ? 'totp' : 'password' });
     return secret;
 }
+function syncTerminalSmartbarTop() {
+    const nav = $('.main-nav');
+    const smartbar = $('#sessionTabs');
+    if (!nav || !smartbar) return;
+    const smartbarTop = `${Math.round(nav.getBoundingClientRect().bottom)}px`;
+    smartbar.style.setProperty('--smartbar-top', smartbarTop);
+    document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
+}
+function scheduleTerminalSmartbarTopSync(reason = 'smartbar-top') {
+    if (Array.isArray(scheduleTerminalSmartbarTopSync._timers)) scheduleTerminalSmartbarTopSync._timers.forEach((timer) => window.clearTimeout(timer));
+    const run = () => requestAnimationFrame(syncTerminalSmartbarTop);
+    scheduleTerminalSmartbarTopSync._timers = [0, 40, 120, 240, 420, 680].map((delay) => window.setTimeout(run, delay));
+    console.debug('[terminal-smartbar]', 'scheduled top sync', { reason });
+}
+function closeTerminalSmartbarForViewLeave() {
+    window.clearTimeout(terminalSmartbarTimer);
+    window.clearTimeout(setTerminalSmartbarOpen._closeTimer);
+    terminalSmartbarOpen = false;
+    terminalSmartbarClosing = false;
+    terminalSmartbarPickerOpen = false;
+    document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
+    const pickerLayer = document.getElementById('smartbarPickerLayer');
+    if (pickerLayer) pickerLayer.innerHTML = '';
+    const root = $('#sessionTabs');
+    root?.classList.remove('open', 'closing');
+}
 function switchView(name) {
     const target = name === 'ai' ? 'dashboard' : name;
     $$('.nav-tab').forEach((b) => b.classList.toggle('active', b.dataset.view === target));
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${target}`));
     const wasTerminal = document.body.classList.contains('terminal-mode');
+    const enteringTerminal = target === 'terminal' && !wasTerminal;
+    const leavingTerminal = target !== 'terminal' && wasTerminal;
+    if (leavingTerminal) closeTerminalSmartbarForViewLeave();
     document.body.classList.toggle('terminal-mode', target === 'terminal');
-    document.body.classList.toggle('terminal-mode-entering', target === 'terminal' && !wasTerminal);
+    document.body.classList.toggle('terminal-mode-entering', enteringTerminal);
     window.clearTimeout(switchView._navTimer);
     if (target === 'terminal') {
+        renderTerminalSmartbar();
+        scheduleTerminalSmartbarTopSync(enteringTerminal ? 'switch-enter-terminal' : 'switch-terminal');
         switchView._navTimer = window.setTimeout(() => document.body.classList.remove('terminal-mode-entering'), 680);
         scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
     } else {
         document.body.classList.remove('terminal-mode-entering');
+        if (leavingTerminal) scheduleTerminalSmartbarTopSync('switch-leave-terminal');
     }
 }
 function parseTags(v) { return String(v || '').split(',').map((x) => x.trim()).filter(Boolean); }
@@ -1255,12 +1287,8 @@ function renderTerminalSmartbar() {
     })();
     pickerMount.innerHTML = picker;
     const smartbarRoot = $('#sessionTabs');
-    const navRectNow = $('.main-nav')?.getBoundingClientRect();
-    if (navRectNow) {
-        const smartbarTop = `${Math.round(navRectNow.bottom)}px`;
-        smartbarRoot.style.setProperty('--smartbar-top', smartbarTop);
-        document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
-    }
+    if (!smartbarRoot) return;
+    syncTerminalSmartbarTop();
     smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} ${terminalSmartbarClosing ? 'closing' : ''}`;
     smartbarRoot.innerHTML = `
         <button class="smartbar-handle" data-smartbar-toggle title="展开/收回 Dock"><span></span></button>
@@ -1275,10 +1303,7 @@ function renderTerminalSmartbar() {
         const smartbar = $('#sessionTabs');
         const panel = smartbar?.querySelector('.smartbar-panel');
         if (!nav || !smartbar || !panel) return;
-        const navRect = nav.getBoundingClientRect();
-        const smartbarTop = `${Math.round(navRect.bottom)}px`;
-        smartbar.style.setProperty('--smartbar-top', smartbarTop);
-        document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
+        syncTerminalSmartbarTop();
         positionSmartbarPicker();
     });
 }
