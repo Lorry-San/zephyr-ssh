@@ -2,7 +2,7 @@ import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
 
 const $ = (sel) => document.querySelector(sel);
-const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-connect-fix';
+const NOVNC_CLIENT_VERSION = '2026-06-14-vnc-touch-fix';
 console.info('[novnc-client]', 'script loaded', { version: NOVNC_CLIENT_VERSION });
 
 const statusDot = $('#statusDot');
@@ -231,14 +231,15 @@ async function connect() {
         screen.style.width = '100%';
         screen.style.height = '100%';
         rfb = new RFB(screen, wsUrl(), { shared: true, credentials: { password: '' } });
+        window.requestAnimationFrame(installDirectTouchFallback);
         rfb.background = 'transparent';
         rfb.focusOnClick = true;
         applyDisplayOptions();
         rfb.addEventListener('connect', () => {
             setStatus('connected', 'VNC 已连接');
             notifyParentActivity();
-            window.setTimeout(() => { refreshDisplaySize(); rfb?.focus?.(); }, 80);
-            window.setTimeout(refreshDisplaySize, 320);
+            window.setTimeout(() => { refreshDisplaySize(); installDirectTouchFallback(); rfb?.focus?.(); }, 80);
+            window.setTimeout(() => { refreshDisplaySize(); installDirectTouchFallback(); }, 320);
         });
         rfb.addEventListener('disconnect', (event) => {
             const clean = event?.detail?.clean;
@@ -374,6 +375,59 @@ function sendKey(keysym, code = '', down = undefined) {
 function tapKey(keysym, code = '') { sendKey(keysym, code); }
 function down(keysym, code = '') { sendKey(keysym, code, true); }
 function up(keysym, code = '') { sendKey(keysym, code, false); }
+
+function currentCanvas() { return screen?.querySelector?.('canvas') || null; }
+function touchToCanvasPoint(touch, canvas = currentCanvas()) {
+    const rect = canvas?.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    return {
+        x: Math.max(0, Math.min(rect.width - 1, Number(touch.clientX) - rect.left)),
+        y: Math.max(0, Math.min(rect.height - 1, Number(touch.clientY) - rect.top)),
+        rect,
+    };
+}
+function dispatchCanvasMouse(canvas, type, point, button = 0, buttons = 0) {
+    if (!canvas || !point) return;
+    canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: point.rect.left + point.x, clientY: point.rect.top + point.y, button, buttons }));
+}
+function installDirectTouchFallback() {
+    const canvas = currentCanvas();
+    if (!canvas || canvas.dataset.zephyrTouchFallback === '1') return;
+    canvas.dataset.zephyrTouchFallback = '1';
+    let state = null;
+    canvas.addEventListener('touchstart', (event) => {
+        if (event.defaultPrevented || !connected || fitMode === 'drag' || event.touches.length !== 1) return;
+        const point = touchToCanvasPoint(event.touches[0], canvas);
+        if (!point) return;
+        state = { id: event.touches[0].identifier, start: point, last: point, moved: false, at: Date.now() };
+    }, { passive: true });
+    canvas.addEventListener('touchmove', (event) => {
+        if (!state || fitMode === 'drag') return;
+        const touch = Array.from(event.changedTouches || []).find((item) => item.identifier === state.id);
+        if (!touch) return;
+        const point = touchToCanvasPoint(touch, canvas);
+        if (!point) return;
+        if (Math.hypot(point.x - state.start.x, point.y - state.start.y) > 8) state.moved = true;
+        state.last = point;
+    }, { passive: true });
+    canvas.addEventListener('touchend', (event) => {
+        if (!state || fitMode === 'drag') { state = null; return; }
+        const touch = Array.from(event.changedTouches || []).find((item) => item.identifier === state.id);
+        if (!touch) return;
+        const point = touchToCanvasPoint(touch, canvas) || state.last;
+        const isTap = !state.moved && Date.now() - state.at < 700;
+        state = null;
+        if (!isTap || !point) return;
+        dispatchCanvasMouse(canvas, 'mousemove', point, 0, 0);
+        dispatchCanvasMouse(canvas, 'mousedown', point, 0, 1);
+        window.setTimeout(() => {
+            dispatchCanvasMouse(canvas, 'mouseup', point, 0, 0);
+            dispatchCanvasMouse(canvas, 'click', point, 0, 0);
+        }, 18);
+        notifyParentActivity();
+    }, { passive: true });
+    canvas.addEventListener('touchcancel', () => { state = null; }, { passive: true });
+}
 
 function charKeysym(ch) {
     if (!ch) return 0;
