@@ -4107,7 +4107,7 @@ function closeAiAssistantPanel() {
     window.clearTimeout(aiPanelCloseTimer);
     window.clearTimeout(p._aiPanelMotionTimer);
     aiPanelState = 'closing';
-    p.classList.remove('open', 'panel-opening', 'ai-morph-open', 'ai-morph-settled');
+    p.classList.remove('panel-opening', 'ai-morph-open', 'ai-morph-settled');
     p.setAttribute('aria-hidden', 'true');
     $('#aiFloatingBtn')?.classList.remove('active');
     const finishClose = () => {
@@ -4121,8 +4121,13 @@ function closeAiAssistantPanel() {
         p.style.transition = '';
         p.style.boxShadow = '';
         p.style.borderRadius = '';
+        p.style.background = '';
+        p.style.borderColor = '';
+        p.style.color = '';
         p.classList.remove('panel-opening', 'panel-closing', 'ai-morphing', 'ai-morph-open', 'ai-morph-closing');
-        restoreAiMorphButton();
+        restoreAiMorphButton(aiPanelMorphOriginButton);
+        restoreAiMorphButton($('#aiFloatingBtn'));
+        restoreAiMorphButton($('#aiNavTab'));
         aiPanelState = 'closed';
         stopAiPanelWatchdog();
     };
@@ -4167,17 +4172,26 @@ function captureAiMorphButton(button) {
         width: rect.width,
         height: rect.height,
         radius: style.borderRadius || `${Math.round(rect.height / 2)}px`,
+        background: style.backgroundColor || style.background || 'var(--accent)',
+        borderColor: style.borderColor || 'transparent',
+        color: style.color || '#fff',
     };
 }
-function restoreAiMorphButton() {
-    const button = aiPanelMorphOriginButton || $('#aiFloatingBtn');
+function ghostAiMorphButton(button) {
     if (!button) return;
-    if (button.dataset.aiMorphOpacity != null) {
-        button.style.opacity = button.dataset.aiMorphOpacity;
-        delete button.dataset.aiMorphOpacity;
+    if (button.dataset.aiMorphOpacity == null) button.dataset.aiMorphOpacity = button.style.opacity || '';
+    button.setAttribute('data-ai-morph-source', '1');
+}
+function restoreAiMorphButton(button = null) {
+    const target = button || aiPanelMorphOriginButton || $('#aiFloatingBtn');
+    if (!target) return;
+    if (target.dataset.aiMorphOpacity != null) {
+        target.style.opacity = target.dataset.aiMorphOpacity;
+        delete target.dataset.aiMorphOpacity;
     } else {
-        button.style.removeProperty('opacity');
+        target.style.removeProperty('opacity');
     }
+    target.removeAttribute('data-ai-morph-source');
 }
 function animateAiPanelFromButton(panel, button, opening = true, onDone = null) {
     if (!panel) return false;
@@ -4186,10 +4200,12 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
     const closeDur = rootStyle.getPropertyValue('--ai-morph-dur-close') || '0.42s';
     const openSpring = rootStyle.getPropertyValue('--ai-morph-spring-open') || 'cubic-bezier(0.32, 0.72, 0, 1)';
     const closeSpring = rootStyle.getPropertyValue('--ai-morph-spring-close') || 'cubic-bezier(0.4, 0, 0.6, 1)';
-    const source = opening ? captureAiMorphButton(button) : (panel._aiMorphSourceRect || captureAiMorphButton(button));
+    const liveSource = captureAiMorphButton(button);
+    const source = liveSource || panel._aiMorphSourceRect;
     const currentRect = panel.getBoundingClientRect?.();
     if (!source || !currentRect || currentRect.width <= 1 || currentRect.height <= 1) {
         // Floating AI panel must not transform or blur the background.
+        restoreAiMorphButton(button);
         if (onDone) onDone();
         return false;
     }
@@ -4208,7 +4224,7 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
     }
     const finalStyle = opening ? (panel._aiMorphFinalStyle || measuredStyle) : measuredStyle;
     const finalRect = opening ? currentRect : (panel._aiMorphFinalRect || currentRect);
-    const finalRadius = getComputedStyle(panel).borderRadius || '18px';
+    const finalRadius = opening ? (getComputedStyle(panel).borderRadius || '18px') : (panel._aiMorphFinalRadius || getComputedStyle(panel).borderRadius || '18px');
     const finalLeft = opening ? (finalStyle.left || `${finalRect.left}px`) : `${source.left}px`;
     const finalTop = opening ? (finalStyle.top || `${finalRect.top}px`) : `${source.top}px`;
     const finalWidth = opening ? (finalStyle.width || `${finalRect.width}px`) : `${source.width}px`;
@@ -4221,11 +4237,12 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
     const endRadius = opening ? finalRadius : sourceRadius;
     const dur = opening ? openDur.trim() : closeDur.trim();
     const spring = opening ? openSpring.trim() : closeSpring.trim();
-    const fallbackMs = aiMorphCssTimeToMs(dur, opening ? 520 : 420) + 90;
+    const fallbackMs = aiMorphCssTimeToMs(dur, opening ? 520 : 420) + 110;
     if (opening) {
-        panel._aiMorphSourceRect = source;
+        panel._aiMorphSourceRect = { ...source };
         panel._aiMorphFinalRect = { left: finalRect.left, top: finalRect.top, width: finalRect.width, height: finalRect.height };
         panel._aiMorphFinalStyle = { ...finalStyle };
+        panel._aiMorphFinalRadius = finalRadius;
     }
     const originX = ((source.left + source.width / 2 - (opening ? finalRect.left : currentRect.left)) / (opening ? finalRect.width : currentRect.width)) * 100;
     const originY = ((source.top + source.height / 2 - (opening ? finalRect.top : currentRect.top)) / (opening ? finalRect.height : currentRect.height)) * 100;
@@ -4250,13 +4267,16 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
         height: startHeight,
         borderRadius: startRadius,
         boxShadow: opening ? 'var(--ai-morph-shadow-idle)' : 'var(--ai-morph-shadow-active)',
+        background: opening ? source.background : '',
+        borderColor: opening ? source.borderColor : '',
+        color: opening ? source.color : '',
         visibility: 'visible',
         pointerEvents: 'auto',
         opacity: '1',
         transform: 'translateZ(0)',
         filter: 'none',
     });
-    // Keep the top AI button visible; clicking it again toggles the floating panel closed.
+    if (opening) ghostAiMorphButton(button);
     void panel.offsetHeight;
     const finish = () => {
         if (panel._aiMorphMotionId !== motionId) return;
@@ -4268,9 +4288,23 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
             panel.style.transition = '';
             panel.style.boxShadow = '';
             panel.style.borderRadius = '';
+            panel.style.background = '';
+            panel.style.borderColor = '';
+            panel.style.color = '';
             panel.style.transform = '';
             panel.style.filter = '';
             panel.classList.remove('ai-morphing', 'ai-morph-open', 'ai-morph-closing');
+        } else {
+            panel.style.transition = '';
+            panel.style.boxShadow = '';
+            panel.style.borderRadius = '';
+            panel.style.background = '';
+            panel.style.borderColor = '';
+            panel.style.color = '';
+            panel.style.transform = '';
+            panel.style.filter = '';
+            panel.classList.remove('ai-morphing', 'ai-morph-open', 'ai-morph-closing');
+            restoreAiMorphButton(button);
         }
         if (onDone) onDone();
     };
@@ -4281,6 +4315,7 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
     panel._aiMorphTransitionEnd = onEnd;
     panel.addEventListener('transitionend', onEnd);
     requestAnimationFrame(() => {
+        if (panel._aiMorphMotionId !== motionId) return;
         panel.classList.toggle('ai-morph-open', opening);
         panel.classList.toggle('ai-morph-closing', !opening);
         panel.style.transition = `
@@ -4298,6 +4333,9 @@ function animateAiPanelFromButton(panel, button, opening = true, onDone = null) 
             height: finalHeight,
             borderRadius: endRadius,
             boxShadow: opening ? 'var(--ai-morph-shadow-active)' : 'var(--ai-morph-shadow-idle)',
+            background: opening ? '' : source.background,
+            borderColor: opening ? '' : source.borderColor,
+            color: opening ? '' : source.color,
         });
     });
     panel._aiPanelMotionTimer = window.setTimeout(finish, fallbackMs);

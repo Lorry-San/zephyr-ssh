@@ -8562,6 +8562,15 @@ body.app-body:not(.terminal-mode) .app-main {
 
 /* 20260609: AI true morph open/close. Floating window only; background stays interactive and unfiltered. */
 .nav-actions .ai-floating-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 42px;
+    height: 30px;
+    min-width: 42px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    transform: translateZ(0);
     will-change: transform, opacity, box-shadow;
     transition:
         transform .10s ease,
@@ -8569,6 +8578,12 @@ body.app-body:not(.terminal-mode) .app-main {
         background .18s ease,
         border-color .18s ease,
         box-shadow .18s ease !important;
+}
+.nav-actions .ai-floating-btn[data-ai-morph-source="1"] {
+    color: rgba(255,255,255,.4) !important;
+}
+.nav-actions .ai-floating-btn[data-ai-morph-source="1"]::before {
+    opacity: 0;
 }
 .nav-actions .ai-floating-btn:active {
     transform: scale(.92);
@@ -8583,11 +8598,32 @@ body.app-body:not(.terminal-mode) .app-main {
     transform-origin: center center;
     will-change: top, left, width, height, border-radius, box-shadow;
     contain: layout paint style;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 .ai-agent-panel.ai-morphing .panel-drag-handle,
 .ai-agent-panel.ai-morphing .ai-agent-window,
 .ai-agent-panel.ai-morphing .panel-resize-handle {
     transition: opacity .12s cubic-bezier(.4, 0, 1, 1), transform .12s ease !important;
+}
+.ai-agent-panel.ai-morphing::before {
+    content: 'AI';
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-weight: 900;
+    font-size: 12px;
+    line-height: 1;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity .10s ease;
+}
+.ai-agent-panel.ai-morphing.ai-morph-open::before,
+.ai-agent-panel.ai-morphing.ai-morph-closing::before {
+    opacity: 0;
 }
 .ai-agent-panel.ai-morphing .panel-drag-handle,
 .ai-agent-panel.ai-morphing .ai-agent-window,
