@@ -7172,7 +7172,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 
 /* Zephyr AI Agent */
-.ai-floating-btn { min-width: 42px; font-weight: 900; color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: 0 8px 22px rgba(31,111,235,.22); }
+.ai-floating-btn { min-width: 42px; font-weight: 900; color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: 0 8px 22px var(--accent-glow, rgba(88,166,255,.22)); }
 .ai-floating-btn.force-hidden { display: none !important; }
 .nav-tab-ai.force-hidden { display: none !important; }
 .ai-section-head { align-items: center; }
@@ -7494,7 +7494,7 @@ body.smartbar-trash-hover .smartbar-trash-target {
 }
 .ai-tool-btn:active,
 .ai-send-btn:active { transform: scale(.9); }
-.ai-send-btn { width: 46px; height: 46px; font-size: 20px; box-shadow: 0 8px 20px rgba(31,111,235,.24); }
+.ai-send-btn { width: 46px; height: 46px; font-size: 20px; box-shadow: 0 8px 20px var(--accent-glow, rgba(88,166,255,.24)); }
 .ai-input-box { min-height: 46px; border-radius: 23px; padding: 12px 15px; }
 .ai-agent-panel .panel-resize-handle { z-index: 4; opacity: .46; pointer-events: auto; }
 .ai-agent-panel .panel-resize-handle.right { right: 2px; }
@@ -8440,8 +8440,9 @@ body.app-body:not(.terminal-mode) .app-main {
     --ai-mac-input-border: rgba(255, 255, 255, 0.10);
     --ai-mac-field-bg: rgba(255, 255, 255, 0.10);
     --ai-mac-focus-bg: rgba(44, 44, 46, 0.94);
-    --ai-mac-primary: #007AFF;
-    --ai-mac-icon-color: #9898ED;
+    --ai-mac-primary: var(--accent);
+    --ai-mac-primary-shadow: var(--accent-glow, rgba(88,166,255,.28));
+    --ai-mac-icon-color: var(--accent-hover);
     --ai-mac-text: #ffffff;
     --ai-mac-placeholder: #636366;
 }
@@ -8472,8 +8473,8 @@ body.app-body:not(.terminal-mode) .app-main {
     transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
 }
 .ai-agent-panel .ai-input-area:focus-within {
-    border-color: rgba(0, 122, 255, 0.50) !important;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.05), 0 0 0 3px rgba(0,122,255,0.25);
+    border-color: var(--accent-soft-border, var(--accent)) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.05), 0 0 0 3px var(--ai-mac-primary-shadow);
     background: var(--ai-mac-focus-bg) !important;
 }
 .ai-agent-panel .ai-tool-btn {
@@ -8537,10 +8538,10 @@ body.app-body:not(.terminal-mode) .app-main {
     border-radius: 50% !important;
     background: var(--ai-mac-primary) !important;
     color: #fff !important;
-    box-shadow: 0 2px 6px rgba(0,122,255,0.30) !important;
+    box-shadow: 0 2px 6px var(--ai-mac-primary-shadow) !important;
     font-size: 0 !important;
 }
-.ai-agent-panel .ai-send-btn:hover { filter: brightness(1.05); box-shadow: 0 2px 6px rgba(0,122,255,0.30) !important; }
+.ai-agent-panel .ai-send-btn:hover { filter: brightness(1.05); box-shadow: 0 2px 6px var(--ai-mac-primary-shadow) !important; }
 .ai-agent-panel .ai-send-btn:active { transform: scale(.92); }
 .ai-agent-panel .ai-send-btn svg { width: 14px; height: 14px; display: block; }
 .ai-agent-panel .ai-send-btn.ai-stop-mode {
@@ -9246,7 +9247,7 @@ body.app-body:not(.terminal-mode) .app-main {
     color-scheme: dark;
     --bg: #0e0e11;
     --surface: #16161e;
-    --border: #3a3a4c;
+    --border: #4a2c35;
     --text: #f5f5f7;
     --text-secondary: #a4a4b8;
     --accent: #ff3b30;
@@ -9269,7 +9270,7 @@ body.app-body:not(.terminal-mode) .app-main {
     color-scheme: light;
     --bg: #fff7ed;
     --surface: #ffffff;
-    --border: #fed7aa;
+    --border: #e2a66d;
     --text: #431407;
     --text-secondary: #9a3412;
     --accent: #f97316;
