@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-snippet-panel-menu-fix';
+import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-terminal-ui-position-fix-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const errorBanner = $('#errorBanner');

@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-snippet-panel-menu-fix';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-terminal-ui-position-fix-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -1450,12 +1450,11 @@ function positionSmartbarPicker() {
     const addRect = addButton.getBoundingClientRect();
     const mobileFullscreen = isCompactTerminalWorkspace() && document.body.classList.contains('terminal-custom-fullscreen-open');
     const targetWidth = mobileFullscreen
-        ? Math.min(360, Math.max(240, vvWidth - 126))
+        ? Math.min(340, Math.max(240, vvWidth - margin * 2))
         : Math.min(360, Math.max(300, vvWidth - margin * 2));
     const anchorX = addRect.left + addRect.width / 2;
-    const left = mobileFullscreen
-        ? Math.min(Math.max(addRect.left - targetWidth - 18, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin)
-        : Math.min(Math.max(anchorX - targetWidth / 2, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin);
+    const desiredLeft = mobileFullscreen ? addRect.right + 12 : anchorX - targetWidth / 2;
+    const left = Math.min(Math.max(desiredLeft, vvLeft + margin), vvLeft + vvWidth - targetWidth - margin);
     const preferredTop = mobileFullscreen ? Math.round(addRect.top) : Math.round(addRect.bottom + 14);
     const maxTop = vvTop + Math.max(margin, vvHeight - 280 - margin);
     const top = Math.min(Math.max(preferredTop, vvTop + margin), maxTop);
@@ -1551,7 +1550,7 @@ function positionTerminalWindowMenu(titlebar, { collapsed = false, force = false
     const windowRect = titlebar.closest('.terminal-window')?.getBoundingClientRect() || titleRect;
     const menuWidth = Math.min(260, Math.max(220, titleRect.width - 16));
     const naturalHeight = 26 + itemCount * 45;
-    const targetHeight = naturalHeight;
+    const targetHeight = Math.min(naturalHeight, Math.max(120, windowRect.height - 12));
     const finalLeft = Math.min(Math.max(islandCenterX - titleRect.left - menuWidth / 2, 8), Math.max(8, titleRect.width - menuWidth - 8));
     const finalTop = Math.round(islandCenterY - titleRect.top - buttonRect.height / 2);
     const startWidth = Math.round(buttonRect.width);

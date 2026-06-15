@@ -1253,7 +1253,8 @@ body:not(.terminal-mode) .terminal-smartbar:not(.open):not(.closing) .smartbar-h
     -webkit-backdrop-filter: blur(28px) saturate(1.8);
     opacity: 0;
     pointer-events: none;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     transform: translate3d(0, 0, 0) scale(1);
     transform-origin: center center;
     filter: none;
@@ -2638,12 +2639,12 @@ html.keyboard-open .terminal-page {
     100% { opacity: 0; transform: translate(-50%, -50%) scale(12); }
 }
 
-/* ── Top command input (desktop hidden, mobile stable shows between topbar & terminal) ── */
+/* ── Top command input: desktop and mobile both show between topbar & terminal ── */
 .terminal-top-input {
-    display: none;
+    display: block;
     flex-shrink: 0;
     background: var(--surface);
-    padding: 4px 8px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border);
 }
 
@@ -2729,9 +2730,10 @@ html.keyboard-open .terminal-page {
 }
 
 /* 命令输入行 */
-.cmd-input-row { display: flex; align-items: center; gap: 4px; }
+.cmd-input-row { display: flex; align-items: center; gap: 12px; }
 .cmd-input {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
     min-height: 34px;
     max-height: 112px;
     padding: 7px 10px;
@@ -2743,14 +2745,15 @@ html.keyboard-open .terminal-page {
     background: var(--bg);
     color: var(--text);
     outline: none;
-    resize: vertical;
-    overflow-y: auto;
+    resize: none;
+    overflow-y: hidden;
     white-space: pre-wrap;
-    transition: border-color 0.2s, height 0.12s ease;
+    transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease;
 }
-.cmd-input:focus { border-color: var(--accent); }
+.cmd-input:focus { border-color: color-mix(in srgb, var(--accent) 44%, var(--border)); box-shadow: var(--focus-ring); }
 .cmd-send-btn {
-    padding: 6px 12px;
+    padding: 6px 14px;
+    min-width: 64px;
     font-size: 12px;
     font-weight: 600;
     border: 1px solid var(--accent);
@@ -5231,13 +5234,12 @@ body.smartbar-trash-hover .smartbar-trash-target {
         box-shadow: 0 16px 38px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.16);
     }
     body.terminal-custom-fullscreen-open .smartbar-picker {
-        right: max(100px, calc(env(safe-area-inset-right) + 100px));
-        left: auto !important;
+        right: auto !important;
         top: max(72px, env(safe-area-inset-top)) !important;
-        width: min(360px, calc(100vw - 126px));
+        width: min(340px, calc(100vw - 40px));
         min-height: 260px;
         max-height: calc(100dvh - 96px);
-        transform-origin: 100% 20px;
+        transform-origin: var(--smartbar-picker-origin-x, 50%) 20px;
     }
 
     .terminal-page .cmd-keyboard-btn {
@@ -5900,10 +5902,9 @@ body.smartbar-trash-hover .smartbar-trash-target {
         transform-origin: calc(100% - 27px) -11px !important;
     }
     body.terminal-custom-fullscreen-open .smartbar-picker {
-        left: max(12px, calc(100vw - 390px)) !important;
         right: auto !important;
         top: max(64px, calc(env(safe-area-inset-top) + 64px)) !important;
-        width: min(340px, calc(100vw - 112px)) !important;
+        width: min(340px, calc(100vw - 40px)) !important;
         min-height: 260px !important;
         max-height: calc(100dvh - 88px) !important;
         z-index: 1010 !important;
@@ -10150,8 +10151,12 @@ textarea,
         grid-area: mobile-input !important;
         display: block !important;
         min-height: 0 !important;
+        padding: 6px 8px !important;
         z-index: 4 !important;
     }
+    html.mobile-stable-input .cmd-input-row { gap: 10px !important; }
+    html.mobile-stable-input .cmd-input { min-width: 0 !important; resize: none !important; }
+    html.mobile-stable-input .cmd-send-btn { flex: 0 0 auto !important; min-width: 58px !important; }
     html.mobile-stable-input .terminal-container {
         grid-area: mobile-terminal !important;
         align-self: stretch !important;
