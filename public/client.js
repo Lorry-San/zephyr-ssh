@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-smartbar-shelf-lock';
+import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
 
 const $ = (sel) => document.querySelector(sel);
 const errorBanner = $('#errorBanner');

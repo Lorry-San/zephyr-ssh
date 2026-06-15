@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-smartbar-shelf-lock';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
 
 const $ = (sel) => document.querySelector(sel);
 const RDP_CLIENT_VERSION = '2026-06-14-theme-palettes';
