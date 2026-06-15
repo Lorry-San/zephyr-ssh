@@ -1771,9 +1771,11 @@ app.post('/api/ssh-http/connect', requireAuth, async (req, res) => {
         const initialRows = Number.isFinite(Number(body.rows)) ? Math.min(200, Math.max(2, Math.floor(Number(body.rows)))) : 24;
         const initialCols = Number.isFinite(Number(body.cols)) ? Math.min(500, Math.max(20, Math.floor(Number(body.cols)))) : 80;
         routed = await createRoutedSSHConnection(conn, 10000);
+        await new Promise((resolve, reject) => {
         routed.client.shell({ term: 'xterm-256color', rows: initialRows, cols: initialCols }, (err, stream) => {
             if (err) {
                 try { routed.client.end(); } catch {}
+                reject(err);
                 return;
             }
             const session = {
@@ -1816,6 +1818,8 @@ app.post('/api/ssh-http/connect', requireAuth, async (req, res) => {
                 if (!session.closed) destroySshTerminalSession(session, 'ssh-close');
             });
             if (body.init && typeof body.init === 'string' && body.init.trim()) stream.write(body.init + '\n');
+            resolve();
+        });
         });
         res.json({ ok: true, sessionId: requestedSessionId, cols: initialCols, rows: initialRows });
     } catch (err) {

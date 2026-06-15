@@ -178,6 +178,13 @@ const activeSftpUploads = new Map();
 const activeSftpDownloads = new Map();
 const imagePreviewPanelsByPath = new Map();
 let activeImagePreview = null;
+
+function hasOpenTerminalTransport() {
+    return Boolean(isConnected && (
+        wsConnection?.readyState === WebSocket.OPEN
+        || httpTerminalSessionId
+    ));
+}
 const mediaPreviewPanelsByPath = new Map();
 let activeMediaPreview = null;
 let transferPopover = null;
@@ -1344,8 +1351,28 @@ function forceTerminalLayoutSettle(reason = 'force-layout-settle', { focus = fal
     });
 }
 
+function syncReadyTerminalSize(serverCols, serverRows, reason = 'ready-pty', { attached = false } = {}) {
+    if (!term || !wtermWrapper) return;
+    const measured = getInitialTerminalSize();
+    const readyCols = Math.floor(Number(serverCols || measured.cols));
+    const readyRows = Math.floor(Number(serverRows || measured.rows));
+    const targetCols = Math.max(20, Math.floor(measured.cols || readyCols || 80));
+    const targetRows = Math.max(2, Math.floor(measured.rows || readyRows || 24));
+    const mobileStableReady = isMobileStableInputMode();
+    lastSentTerminalSize = { cols: readyCols || 0, rows: readyRows || 0 };
+    if (mobileStableReady) {
+        runWithMobileStableResizeBypass(() => resizeWTermSafely(targetCols, targetRows, reason));
+        rememberMobileStableKeyboardGrid(reason);
+    } else {
+        resizeWTermSafely(targetCols, targetRows, attached ? `${reason}:attached` : reason);
+    }
+    rememberTerminalFitSnapshot(reason);
+    sendTerminalResize(targetCols, targetRows, { reason: `${reason}:sync-visible-size`, force: true });
+    forceTerminalLayoutSettle(`${reason}:settle`, { focus: false });
+}
+
 function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {}) {
-    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+    if (!hasOpenTerminalTransport()) return;
     const explicitCols = Math.floor(Number(cols));
     const explicitRows = Math.floor(Number(rows));
 
@@ -1389,7 +1416,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
         }
         window.clearTimeout(pendingTerminalResize.timer);
         pendingTerminalResize = { cols: explicitCols, rows: explicitRows, reason, timer: window.setTimeout(() => {
-            if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
+            if (!hasOpenTerminalTransport()) return;
             if (!isEmbeddedTerminalFrameVisible()) return;
             const freshRect = wtermWrapper?.getBoundingClientRect?.();
             if (!freshRect || freshRect.width < TERMINAL_MIN_RESIZE_WIDTH || freshRect.height < TERMINAL_MIN_RESIZE_HEIGHT || document.visibilityState !== 'visible') return;
@@ -6496,7 +6523,7 @@ function getTerminalAltScreenActive() {
 }
 
 function sendTerminalAltScroll(deltaY) {
-    if (!getTerminalAltScreenActive() || !wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return false;
+    if (!getTerminalAltScreenActive() || !hasOpenTerminalTransport()) return false;
     if (hasLiveTerminalSelection()) return false;
     const now = Date.now();
     if (now - terminalLastWheelAt < TERMINAL_ALT_SCROLL_REPEAT_MS) return true;
@@ -6934,7 +6961,7 @@ function restoreMobileStableKeyboardGrid(reason = 'mobile-stable-grid-restore') 
     const previousTop = preserveHistory ? el.scrollTop : 0;
     const shouldFollow = !preserveHistory && (terminalAutoFollowEnabled || isMobileStableAtVisualBottom(el));
     if (gridChanged) runWithMobileStableResizeBypass(() => updateWTermLocalGridSize(nextCols, nextRows, `${reason}:local`));
-    if (sentChanged && wsConnection?.readyState === WebSocket.OPEN && isConnected) {
+    if (sentChanged && hasOpenTerminalTransport()) {
         lastSentTerminalSize = { cols: nextCols, rows: nextRows };
         sendTerminalMessage({ type: 'resize', rows: nextRows, cols: nextCols });
     }
@@ -8393,7 +8420,7 @@ function logTerminalPasteDiagnostics(source, text = '') {
 }
 
 function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFollow = false, applyModifiers = true } = {}) {
-    if (wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+    if (hasOpenTerminalTransport()) {
         const fromWTerm = source === 'wterm-onData';
         if (forceFollow) setTerminalAutoFollow(true, `${source}:force-follow`);
         // 官方 SSH 示例中 WTerm onData 只负责把数据发给后端，不参与外层滚动状态机。
@@ -8438,7 +8465,7 @@ function resizeCommandInput() {
 
 function sendCommand() {
     const text = cmdInput.value;
-    if (text && wsConnection && wsConnection.readyState === WebSocket.OPEN && isConnected) {
+    if (text && hasOpenTerminalTransport()) {
         logTerminalPasteDiagnostics('command-box-send', text);
         mobileStableLastActualInputAt = Date.now();
         if (isMobileStableInputMode()) {
@@ -9054,7 +9081,17 @@ function sendTerminalMessage(message) {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(message),
-    }).catch((err) => console.warn('[SSH-HTTP]', 'send failed', err));
+    }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }).catch((err) => {
+        console.warn('[SSH-HTTP]', 'send failed', err);
+        if (!userClosedConnection && httpTerminalSessionId) {
+            isConnected = false;
+            closeHttpTerminalOnly({ sendDisconnect: false });
+            setStatus('disconnected', 'HTTP terminal channel interrupted');
+            startAutoReconnect('HTTP terminal channel interrupted');
+        }
+    });
     return true;
 }
 
@@ -9281,24 +9318,7 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
                     case 'ready':
                         ready = true;
                         settled = true;
-                        if (msg.cols && msg.rows) {
-                            const readyCols = Math.floor(Number(msg.cols));
-                            const readyRows = Math.floor(Number(msg.rows));
-                            if (Number.isFinite(readyCols) && Number.isFinite(readyRows) && readyCols >= 20 && readyRows >= 2) {
-                                const measured = getInitialTerminalSize();
-                                const sameAsCurrentView = Math.abs(measured.cols - readyCols) <= 1 && Math.abs(measured.rows - readyRows) <= 1;
-                                const attachedReady = !!msg.attached;
-                                const mobileStableReady = isMobileStableInputMode();
-                                lastSentTerminalSize = { cols: readyCols, rows: readyRows };
-                                if (mobileStableReady) {
-                                    runWithMobileStableResizeBypass(() => resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty'));
-                                    rememberMobileStableKeyboardGrid('ready-pty');
-                                } else if (attachedReady || sameAsCurrentView) {
-                                    resizeWTermSafely(readyCols, readyRows, attachedReady ? 'attach-existing-pty' : 'ready-pty');
-                                }
-                                rememberTerminalFitSnapshot('ready-pty');
-                            }
-                        }
+                        syncReadyTerminalSize(msg.cols, msg.rows, msg.attached ? 'attach-existing-pty' : 'ready-pty', { attached: !!msg.attached });
                         setStatus('connected', '已连接');
                         if (!isMobileStableInputMode()) {
                             window.setTimeout(() => repairOversizedWTermRows('ready-oversized-rows', { force: true }), 120);
@@ -9417,8 +9437,7 @@ async function connectHttpTerminal(connectionToken = activeConnectionToken, { fo
                     isConnected = true;
                     const readyCols = Math.floor(Number(msg.cols || initialSize.cols));
                     const readyRows = Math.floor(Number(msg.rows || initialSize.rows));
-                    lastSentTerminalSize = { cols: readyCols, rows: readyRows };
-                    resizeWTermSafely(readyCols, readyRows, msg.attached ? 'http-attach-existing-pty' : 'http-ready-pty');
+                    syncReadyTerminalSize(readyCols, readyRows, msg.attached ? 'http-attach-existing-pty' : 'http-ready-pty', { attached: !!msg.attached });
                     setStatus('connected', '已连接（HTTP 兼容通道）');
                     if (!isTouchKeyboardDevice() && term?.focus) term.focus();
                     reconnectAttempts = 0;
@@ -9442,6 +9461,9 @@ async function connectHttpTerminal(connectionToken = activeConnectionToken, { fo
                 case 'close':
                     setStatus('disconnected', msg.message || '会话已关闭');
                     try { events.close(); } catch (_) {}
+                    if (httpTerminalEvents === events) httpTerminalEvents = null;
+                    httpTerminalSessionId = '';
+                    isConnected = false;
                     if (!userClosedConnection) startAutoReconnect(msg.message || 'HTTP terminal closed');
                     else if (embeddedMode) notifyParentCloseRequest('ssh-session-close');
                     break;
@@ -9454,7 +9476,12 @@ async function connectHttpTerminal(connectionToken = activeConnectionToken, { fo
                 reject(new Error('HTTP terminal event stream failed'));
                 return;
             }
-            if (!userClosedConnection) startAutoReconnect('HTTP terminal event stream disconnected');
+            if (!userClosedConnection) {
+                if (httpTerminalEvents === events) httpTerminalEvents = null;
+                httpTerminalSessionId = '';
+                isConnected = false;
+                startAutoReconnect('HTTP terminal event stream disconnected');
+            }
         };
     });
 }
