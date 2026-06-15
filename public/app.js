@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260614-mobile-terminal-fix';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-smartbar-shelf-lock';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -543,10 +543,22 @@ function syncTerminalSmartbarTop() {
     smartbar.style.setProperty('--smartbar-top', smartbarTop);
     document.documentElement.style.setProperty('--smartbar-top', smartbarTop);
 }
+function syncTerminalShelfLineState() {
+    const nav = $('.main-nav');
+    const smartbar = $('#sessionTabs');
+    if (!nav || !smartbar) return;
+    const dockInteractive = terminalSmartbarOpen || terminalSmartbarClosing;
+    const terminalActive = document.body.classList.contains('terminal-mode');
+    const shelfSettled = terminalActive;
+    nav.classList.toggle('terminal-shelf-settled', shelfSettled);
+    nav.classList.toggle('terminal-shelf-dock-open', terminalActive && dockInteractive);
+    smartbar.classList.toggle('shelf-line-active', shelfSettled);
+    smartbar.classList.toggle('dock-open', dockInteractive);
+}
 function scheduleTerminalSmartbarTopSync(reason = 'smartbar-top') {
     if (Array.isArray(scheduleTerminalSmartbarTopSync._timers)) scheduleTerminalSmartbarTopSync._timers.forEach((timer) => window.clearTimeout(timer));
-    const run = () => requestAnimationFrame(syncTerminalSmartbarTop);
-    scheduleTerminalSmartbarTopSync._timers = [0, 40, 120, 240, 420, 680].map((delay) => window.setTimeout(run, delay));
+    const run = () => requestAnimationFrame(() => { syncTerminalSmartbarTop(); syncTerminalShelfLineState(); });
+    scheduleTerminalSmartbarTopSync._timers = [0, 32, 80, 140, 220, 340, 500, 680].map((delay) => window.setTimeout(run, delay));
     console.debug('[terminal-smartbar]', 'scheduled top sync', { reason });
 }
 function closeTerminalSmartbarForViewLeave() {
@@ -559,7 +571,8 @@ function closeTerminalSmartbarForViewLeave() {
     const pickerLayer = document.getElementById('smartbarPickerLayer');
     if (pickerLayer) pickerLayer.innerHTML = '';
     const root = $('#sessionTabs');
-    root?.classList.remove('open', 'closing');
+    root?.classList.remove('open', 'closing', 'shelf-line-active', 'dock-open');
+    $('.main-nav')?.classList.remove('terminal-shelf-settled', 'terminal-shelf-dock-open');
 }
 function switchView(name) {
     const target = name === 'ai' ? 'dashboard' : name;
@@ -575,7 +588,11 @@ function switchView(name) {
     if (target === 'terminal') {
         renderTerminalSmartbar();
         scheduleTerminalSmartbarTopSync(enteringTerminal ? 'switch-enter-terminal' : 'switch-terminal');
-        switchView._navTimer = window.setTimeout(() => document.body.classList.remove('terminal-mode-entering'), 680);
+        switchView._navTimer = window.setTimeout(() => {
+            document.body.classList.remove('terminal-mode-entering');
+            syncTerminalSmartbarTop();
+            syncTerminalShelfLineState();
+        }, 680);
         scheduleTerminalLayoutStabilize('switch-view-terminal', { focus: true });
     } else {
         document.body.classList.remove('terminal-mode-entering');
@@ -1478,6 +1495,7 @@ function renderTerminalSmartbar() {
     if (!smartbarRoot) return;
     syncTerminalSmartbarTop();
     smartbarRoot.className = `terminal-smartbar ${terminalSmartbarOpen ? 'open' : ''} ${terminalSmartbarClosing ? 'closing' : ''}`;
+    syncTerminalShelfLineState();
     smartbarRoot.innerHTML = `
         <button class="smartbar-handle" data-smartbar-toggle title="展开/收回 Dock"><span></span></button>
         <div class="smartbar-panel">
@@ -1492,6 +1510,7 @@ function renderTerminalSmartbar() {
         const panel = smartbar?.querySelector('.smartbar-panel');
         if (!nav || !smartbar || !panel) return;
         syncTerminalSmartbarTop();
+        syncTerminalShelfLineState();
         positionSmartbarPicker();
     });
 }
@@ -2320,18 +2339,22 @@ function setTerminalSmartbarOpen(open) {
         terminalSmartbarPickerOpen = false;
         terminalSmartbarClosing = true;
         renderTerminalSmartbar();
+        syncTerminalShelfLineState();
         scheduleTerminalKeyboardReflow('smartbar-close');
         setTerminalSmartbarOpen._closeTimer = window.setTimeout(() => {
             terminalSmartbarClosing = false;
             renderTerminalSmartbar();
+            syncTerminalShelfLineState();
             scheduleTerminalKeyboardReflow('smartbar-close-settled');
         }, 760);
         return;
     }
     terminalSmartbarLastInnerPointerAt = Date.now();
+    $('.main-nav')?.classList.remove('terminal-shelf-settled', 'terminal-shelf-dock-open');
     terminalSmartbarClosing = false;
     terminalSmartbarOpen = true;
     renderTerminalSmartbar();
+    syncTerminalShelfLineState();
     scheduleTerminalKeyboardReflow('smartbar-open');
     scheduleTerminalSmartbarAutoClose();
 }
@@ -5269,6 +5292,15 @@ function bindEvents() {
         if (!terminalSmartbarOpen) document.querySelectorAll('#terminalWorkspace .terminal-frame').forEach((frame) => frame.style.pointerEvents = '');
     }, true);
     document.addEventListener('click', (e) => {
+        if (e.target.closest('.smartbar-handle')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (Date.now() - mobileDockToggleLastToggleAt > 180) {
+                mobileDockToggleLastToggleAt = Date.now();
+                setTerminalSmartbarOpen(!terminalSmartbarOpen);
+            }
+            return;
+        }
         if (e.target.closest('.mobile-fullscreen-dock-toggle')) {
             e.preventDefault();
             e.stopPropagation();
