@@ -1957,6 +1957,17 @@ body.terminal-custom-fullscreen-open .main-nav {
 .settings-panel { display: none; }
 .settings-panel.active { display: block; animation: fadeIn .24s ease-out; }
 .settings-form { display: grid; gap: 10px; max-width: 420px; margin-bottom: 14px; }
+.settings-form .form-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    margin-top: 12px;
+}
+.settings-form .form-actions .btn {
+    width: 100%;
+    min-height: 46px;
+    margin: 0 !important;
+}
 .brand-upload-row { display: grid; grid-template-columns: 58px 1fr; gap: 10px; align-items: center; }
 .brand-icon-preview { width: 58px; height: 58px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg); display: grid; place-items: center; font-size: 30px; overflow: hidden; }
 .brand-icon-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -4392,7 +4403,7 @@ html.keyboard-open .terminal-page {
 @media (max-width: 480px) and (hover: none) and (pointer: coarse) {
     .login-card { padding: 24px 16px 18px; border-radius: 12px; }
     .login-card h1 { font-size: 19px; }
-    .form-row { flex-direction: column; gap: 0; }
+    .form-row { flex-direction: column; gap: 10px; }
     .form-row .form-group.port-group { flex: 1; }
     .terminal-topbar { padding: 6px 10px; font-size: 11px; display: flex; flex-wrap: wrap; }
     .terminal-topbar .status { flex: 0 0 auto; }
@@ -5089,7 +5100,8 @@ body.smartbar-trash-hover .smartbar-trash-target {
 .shortcut-grid .tool-btn { min-width: 0; width: 100%; min-height: 36px; padding-inline: 6px; font-size: 11px; }
 .shortcut-grid .fn-key,
 .rdp-shortcut-grid .tool-btn[data-keyseq^="f"] { order: 20; }
-.snippet-form { max-width: min(720px, 100%); }
+.snippet-form { max-width: min(760px, 100%); }
+.snippet-form .form-actions { gap: 16px; margin-top: 14px; }
 .snippet-settings-list { display: grid; gap: 10px; margin-top: 12px; }
 .snippet-settings-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
 @media (max-width: 480px) and (pointer: coarse) {
