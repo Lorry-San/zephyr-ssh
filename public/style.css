@@ -10353,3 +10353,41 @@ body.terminal-mode .main-nav:not(.terminal-shelf-settled) ~ .app-main .terminal-
         transform-origin: top center !important;
     }
 }
+
+/* Final mobile fullscreen Dock placement: anchor the opened Dock to the right edge, next to the top-right dot. */
+@media (max-width: 700px) and (hover: none) and (pointer: coarse) {
+    body.terminal-custom-fullscreen-open .terminal-smartbar {
+        position: fixed !important;
+        top: calc(env(safe-area-inset-top) + 40px) !important;
+        right: max(8px, env(safe-area-inset-right)) !important;
+        left: auto !important;
+        bottom: auto !important;
+        width: 92px !important;
+        height: auto !important;
+        transform: none !important;
+        z-index: 1008 !important;
+        pointer-events: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-handle {
+        display: none !important;
+        pointer-events: none !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar .smartbar-panel {
+        top: 0 !important;
+        right: 0 !important;
+        left: auto !important;
+        width: 92px !important;
+        max-width: 92px !important;
+        max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 52px) !important;
+        overflow: hidden !important;
+        transform-origin: calc(100% - 25px) -18px !important;
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.open .smartbar-panel {
+        pointer-events: auto !important;
+        transform: translate3d(0, 0, 0) scale3d(1, 1, 1) !important;
+    }
+    body.terminal-custom-fullscreen-open .terminal-smartbar.closing .smartbar-panel {
+        transform: translate3d(18px, -18px, 0) scale3d(.22, .10, 1) !important;
+    }
+}
