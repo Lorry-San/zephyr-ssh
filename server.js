@@ -1081,7 +1081,7 @@ function normalizeSettingsInput(body) {
         const colorScheme = ['frost', 'lava', 'asagi', 'cyber', 'custom'].includes(body.appearance.colorScheme) ? body.appearance.colorScheme : (currentAppearance.colorScheme || 'frost');
         const customThemeMode = ['light', 'dark', 'auto'].includes(body.appearance.customThemeMode) ? body.appearance.customThemeMode : (currentAppearance.customThemeMode || 'dark');
         const theme = body.appearance.theme === 'light' || body.appearance.theme === 'dark' ? body.appearance.theme : 'auto';
-        const defaultColors = { bgMain: '#0d1117', bgCard: '#161b22', primary: '#58a6ff', primaryHover: '#79c0ff', text: '#e6edf3', textSecondary: '#8b949e', border: '#30363d', danger: '#f85149', success: '#3fb950', warning: '#d2991d' };
+        const defaultColors = { bgMain: '#101114', bgCard: '#1b1c20', primary: '#0a84ff', primaryHover: '#2997ff', text: '#f4f4f6', textSecondary: '#9a9ca3', border: '#303237', danger: '#ff453a', success: '#32d74b', warning: '#ffd60a' };
         const customColors = Object.fromEntries(Object.entries(defaultColors).map(([key, fallback]) => {
             const value = String(body.appearance.customColors?.[key] || currentAppearance.customColors?.[key] || fallback).trim();
             return [key, /^#[0-9a-f]{6}$/i.test(value) ? value : fallback];

@@ -2,23 +2,23 @@ const DEFAULT_BRAND_ICON = '🌬️';
 const SCHEME_IDS = new Set(['frost', 'lava', 'asagi', 'cyber', 'custom']);
 
 export const DEFAULT_CUSTOM_THEME_COLORS = Object.freeze({
-    bgMain: '#0d1117',
-    bgCard: '#161b22',
-    primary: '#58a6ff',
-    primaryHover: '#79c0ff',
-    text: '#e6edf3',
-    textSecondary: '#8b949e',
-    border: '#30363d',
-    danger: '#f85149',
-    success: '#3fb950',
-    warning: '#d2991d',
+    bgMain: '#101114',
+    bgCard: '#1b1c20',
+    primary: '#0a84ff',
+    primaryHover: '#2997ff',
+    text: '#f4f4f6',
+    textSecondary: '#9a9ca3',
+    border: '#303237',
+    danger: '#ff453a',
+    success: '#32d74b',
+    warning: '#ffd60a',
 });
 
 const ICON_PALETTES = Object.freeze({
-    frost: { main: '#e0f2fe', mid: '#93c5fd', dark: '#60a5fa', glow: 'rgba(147, 197, 253, 0.5)', title: '#60a5fa', dotA: '#60a5fa', dotB: '#93c5fd', midOffset: '60%', polar: false },
-    lava: { main: '#f97316', mid: '#dc2626', dark: '#7f1d1d', glow: 'rgba(249, 115, 22, 0.4)', title: '#dc2626', dotA: '#dc2626', dotB: '#f97316', midOffset: '60%', polar: false },
-    asagi: { main: '#a7f3d0', mid: '#6ee7b7', dark: '#10b981', glow: 'rgba(110, 231, 183, 0.4)', title: '#10b981', dotA: '#10b981', dotB: '#a7f3d0', midOffset: '60%', polar: false },
-    cyber: { main: '#111827', mid: '#0f172a', dark: '#00897b', glow: 'rgba(0, 137, 123, 0.4)', title: '#00897b', dotA: '#00897b', dotB: '#111827', midOffset: '10%', polar: true },
+    frost: { main: '#eef2f7', mid: '#a8b5c3', dark: '#6e7b88', glow: 'rgba(10, 132, 255, 0.18)', title: '#0a84ff', dotA: '#0a84ff', dotB: '#8e99a6', midOffset: '58%', polar: false },
+    lava: { main: '#f1e8df', mid: '#c79672', dark: '#8d5a3a', glow: 'rgba(191, 90, 31, 0.16)', title: '#bf5a1f', dotA: '#bf5a1f', dotB: '#a58a78', midOffset: '58%', polar: false },
+    asagi: { main: '#edf4f2', mid: '#9bbdb5', dark: '#5e8f83', glow: 'rgba(77, 156, 138, 0.15)', title: '#4d9c8a', dotA: '#4d9c8a', dotB: '#829b96', midOffset: '58%', polar: false },
+    cyber: { main: '#eef3f5', mid: '#9eb7bd', dark: '#5d858d', glow: 'rgba(79, 157, 166, 0.15)', title: '#4f9da6', dotA: '#4f9da6', dotB: '#7f9298', midOffset: '58%', polar: false },
 });
 
 const CUSTOM_COLOR_VARS = Object.freeze({

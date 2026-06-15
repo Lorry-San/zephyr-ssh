@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-macos-restraint-v2';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -6113,7 +6113,7 @@ const centerTextPlugin = {
         const centerY = (top + bottom) / 2 + (bottom - top) * 0.05;
         const value = chart.data.datasets[0].data[0] || 0;
         ctx.save();
-        const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#e6edf3';
+        const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || '#f4f4f6';
         ctx.font = 'bold 18px "JetBrains Mono", "Fira Code", monospace';
         ctx.fillStyle = textColor;
         ctx.textAlign = 'center';
@@ -7523,7 +7523,7 @@ function renderStats(d) {
                 <div class="doughnut-label">上传</div>
                 <div class="doughnut-text">${txMbps} Mbps</div>
                 <div class="sparkline-row">
-                    <canvas id="txLine" data-color="#58a6ff" class="line-canvas" height="30"></canvas>
+                    <canvas id="txLine" data-color="#0a84ff" class="line-canvas" height="30"></canvas>
                 </div>
             </div>
         </div>
@@ -9330,7 +9330,7 @@ disconnectBtn.addEventListener('click', () => {
     if (embeddedMode) {
         notifyParentStatus('closed');
         notifyParentCloseRequest('user-disconnect-button');
-        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">会话已断开，正在关闭此终端窗口...</div>';
+        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#9a9ca3">会话已断开，正在关闭此终端窗口...</div>';
     } else {
         window.location.href = '/';
     }

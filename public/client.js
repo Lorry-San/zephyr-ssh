@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
+import { applyZephyrColorScheme, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-macos-restraint-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const errorBanner = $('#errorBanner');

@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-macos-restraint-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const RDP_CLIENT_VERSION = '2026-06-14-theme-palettes';
@@ -2719,7 +2719,7 @@ disconnectBtn.addEventListener('click', () => {
     disconnect(true);
     if (embeddedMode) {
         notifyParentCloseRequest('user-disconnect-button');
-        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#8b949e">远程桌面已断开，正在关闭此窗口...</div>';
+        document.body.innerHTML = '<div class="terminal-placeholder" style="padding:24px;color:#9a9ca3">远程桌面已断开，正在关闭此窗口...</div>';
     } else {
         window.location.href = '/';
     }

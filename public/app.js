@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-smartbar-instant-hide';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-macos-restraint-v2';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -313,7 +313,7 @@ function syncAppearanceSchemeControls(appearance = getAppearance()) {
     if ($('#terminalBgOpacityValue')) $('#terminalBgOpacityValue').textContent = `${Math.round(Number(bg.opacity ?? 0.35) * 100)}%`;
     if ($('#terminalFontColorEnabled')) $('#terminalFontColorEnabled').checked = !!appearance.terminalFontColor;
     if ($('#terminalFontColor')) {
-        setColorPickerValue($('#terminalFontColor'), appearance.terminalFontColor || '#e6edf3');
+        setColorPickerValue($('#terminalFontColor'), appearance.terminalFontColor || '#f4f4f6');
         $('#terminalFontColor').disabled = !appearance.terminalFontColor;
         $('#terminalFontColor')?.closest('[data-color-picker]')?.classList.toggle('disabled', !appearance.terminalFontColor);
     }
@@ -330,7 +330,7 @@ function readCustomThemeColors() {
     return normalizeCustomThemeColors(out);
 }
 
-const COLOR_PICKER_PRESETS = ['#e0f2fe', '#93c5fd', '#60a5fa', '#f97316', '#dc2626', '#7f1d1d', '#a7f3d0', '#6ee7b7', '#10b981', '#111827', '#0f172a', '#00897b', '#0d1117', '#161b22', '#30363d', '#f5f5f7', '#8b949e', '#ff5252'];
+const COLOR_PICKER_PRESETS = ['#f5f5f7', '#ffffff', '#dedee3', '#1d1d1f', '#6e6e73', '#101114', '#1b1c20', '#303237', '#f7f3ef', '#e1d8cf', '#3f8f82', '#448e96', '#007aff', '#0a84ff', '#bf5a1f', '#ff453a', '#32d74b', '#ffd60a'];
 let activeColorPickerInput = null;
 function normalizeHexInputClient(value, fallback = '#000000') {
     const text = String(value || '').trim();
@@ -1984,7 +1984,7 @@ function animateTerminalWindowLayoutFrom(beforeRects, { reason = 'layout-change'
                     transform: 'translate3d(0, 0, 0) scale3d(1, 1, 1)',
                     filter: 'blur(0) saturate(1)',
                     boxShadow: el.classList.contains('active')
-                        ? '0 24px 70px rgba(0,0,0,.38), 0 0 0 3px rgba(88,166,255,.08)'
+                        ? '0 24px 70px rgba(0,0,0,.38), 0 0 0 3px rgba(10,132,255,.08)'
                         : '0 18px 52px rgba(0,0,0,.32), inset 0 0 0 1px rgba(255,255,255,.03)'
                 }
             ], {
