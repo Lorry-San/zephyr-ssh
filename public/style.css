@@ -257,6 +257,13 @@ select {
     transition-duration: 520ms !important;
     transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
+.theme-transitioning .wterm-wrapper .term-grid,
+.theme-transitioning .wterm-wrapper .term-grid *,
+.wterm-theme-transitioning .wterm-wrapper .term-grid,
+.wterm-theme-transitioning .wterm-wrapper .term-grid * {
+    transition: none !important;
+    animation: none !important;
+}
 
 body.app-body::before {
     content: '';
@@ -2842,7 +2849,7 @@ html.keyboard-open .terminal-page {
     background: var(--wterm-bg) !important;
     color: var(--wterm-fg) !important;
 }
-:root[data-wterm-theme="light"] .terminal-container .wterm-wrapper * {
+:root[data-wterm-theme="light"] .terminal-container .wterm-wrapper .term-grid {
     color: var(--wterm-fg);
 }
 :root[data-wterm-theme="light"] .terminal-container .wterm-wrapper ::selection {
@@ -2871,12 +2878,51 @@ html.keyboard-open .terminal-page {
     overflow-anchor: none;
     user-select: text;
     -webkit-user-select: text;
+    font-family: var(--term-font-family, var(--font-mono));
+    font-size: var(--term-font-size, var(--terminal-font-size));
+    line-height: var(--term-row-height);
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+    font-kerning: none;
+    text-rendering: optimizeSpeed;
+    transition: none !important;
+    animation: none !important;
 }
 
 .terminal-container .wterm-wrapper .term-row,
 .terminal-container .wterm-wrapper .term-scrollback-row {
     min-width: 100%;
     tab-size: 8;
+    height: var(--term-row-height);
+    line-height: var(--term-row-height);
+    white-space: pre;
+    letter-spacing: 0;
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+}
+.terminal-container .wterm-wrapper .term-row > span,
+.terminal-container .wterm-wrapper .term-scrollback-row > span {
+    display: inline-block;
+    height: var(--term-row-height);
+    line-height: var(--term-row-height);
+    vertical-align: top;
+    white-space: pre;
+    font-variant-ligatures: none;
+    font-kerning: none;
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+    filter: none !important;
+}
+.terminal-container .wterm-wrapper .term-block {
+    display: inline-block;
+    width: 1ch;
+    min-width: 1ch;
+    max-width: 1ch;
+    overflow: hidden;
+    color: transparent;
 }
 .terminal-container.terminal-follow-paused::before {
     content: '历史区';
@@ -9717,7 +9763,7 @@ textarea,
     background: color-mix(in srgb, var(--wterm-bg) 68%, transparent) !important;
     color: var(--wterm-custom-fg, var(--wterm-fg)) !important;
 }
-:root[data-wterm-theme="custom"][data-wterm-font-custom="1"] .terminal-container .wterm-wrapper * { color: var(--wterm-custom-fg, var(--wterm-fg)); }
+:root[data-wterm-theme="custom"][data-wterm-font-custom="1"] .terminal-container .wterm-wrapper .term-grid { color: var(--wterm-custom-fg, var(--wterm-fg)); }
 
 .zephyr-color-picker {
     --picker-color: #0a84ff;

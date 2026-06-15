@@ -1953,6 +1953,7 @@ function applyTerminalFontSize(size, { persist = true } = {}) {
     const wasAtBottom = isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD) || terminalAutoFollowEnabled;
     document.documentElement.style.setProperty('--terminal-font-size', `${terminalFontSize}px`);
     wtermWrapper.style.fontSize = `${terminalFontSize}px`;
+    wtermWrapper.style.setProperty('--term-font-size', `${terminalFontSize}px`);
     try { term?.setOption?.('fontSize', terminalFontSize); } catch (_) {}
     try { term?.options && (term.options.fontSize = terminalFontSize); } catch (_) {}
     try { term?._setRowHeight?.(); } catch (_) {}
