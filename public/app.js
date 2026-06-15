@@ -1488,6 +1488,7 @@ function syncVisualLayout({ preserve = true } = {}) {
 }
 function minimizeTerminalSession(id, { activateNext = true, animated = true } = {}) {
     const t = getTerminalSession(id); if (!t) return;
+    resetTerminalWorkspaceKeyboard({ force: true });
     if (animated && !t.minimized && !minimizingTerminalTabs.has(id)) {
         minimizingTerminalTabs.add(id);
         renderTerminalTabs({ rebuildWorkspace: false });
@@ -1512,6 +1513,7 @@ function restoreTerminalSession(id) {
 }
 function showTerminalSessionInWorkspace(id) {
     const t = getTerminalSession(id); if (!t) return;
+    resetTerminalWorkspaceKeyboard({ force: true });
     t.minimized = false;
     activeTerminalTab = id;
     touchTerminalSession(id);
@@ -1836,7 +1838,7 @@ function createTerminalWindowElement(t) {
     body.className = 'terminal-window-body';
     if (t.iframe) {
         const frame = document.createElement('iframe');
-        frame.className = 'terminal-frame active';
+        frame.className = 'terminal-frame';
         frame.dataset.frame = t.id;
         frame.src = t.page === 'rdp'
             ? `/rdp.html?embed=1&tabId=${encodeURIComponent(t.id)}&connectionId=${encodeURIComponent(t.connectionId || '')}`
@@ -1900,6 +1902,7 @@ function renderTerminalWorkspace() {
                 console.info('[terminal-keepalive]', 'create minimized keepalive iframe', { tabId: t.id, reason: 'no-visible' });
             }
             win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
+            win.querySelectorAll('.terminal-frame, .terminal-placeholder').forEach((frame) => frame.classList.remove('active'));
         });
         mountMobileDockToggle(workspace);
         return;
@@ -1923,7 +1926,9 @@ function renderTerminalWorkspace() {
         if (titlebar) {
             titlebar.innerHTML = terminalWindowTitlebarHtml(t);
         }
-        win.className = `terminal-window slot-${index + 1} ${t.id === activeTerminalTab ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''} ${dockLaunchAnimatingWindows.has(t.id) ? 'dock-launching' : ''}`;
+        const isActiveWindow = t.id === activeTerminalTab;
+        win.className = `terminal-window slot-${index + 1} ${isActiveWindow ? 'active' : 'background'} ${closingTerminalTabs.has(t.id) ? 'closing' : ''} ${minimizingTerminalTabs.has(t.id) ? 'minimizing' : ''} ${dockSwapAnimatingWindows.has(t.id) ? 'dock-swapping' : ''} ${dockLaunchAnimatingWindows.has(t.id) ? 'dock-launching' : ''}`;
+        win.querySelectorAll('.terminal-frame, .terminal-placeholder').forEach((frame) => frame.classList.toggle('active', isActiveWindow));
     });
     mountMobileDockToggle(workspace);
     keepAliveMinimized.forEach((t) => {
@@ -1934,6 +1939,7 @@ function renderTerminalWorkspace() {
             console.info('[terminal-keepalive]', 'create minimized keepalive iframe', { tabId: t.id, reason: 'hidden-minimized' });
         }
         win.className = `terminal-window minimized-keepalive ${closingTerminalTabs.has(t.id) ? 'closing' : ''}`;
+        win.querySelectorAll('.terminal-frame, .terminal-placeholder').forEach((frame) => frame.classList.remove('active'));
     });
     if (count === 2 || count === 3) {
         const splitterX = document.createElement('div');
@@ -1961,6 +1967,10 @@ function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
             el.classList.toggle('closing', closingTerminalTabs.has(el.dataset.window));
             el.classList.toggle('minimizing', minimizingTerminalTabs.has(el.dataset.window));
         });
+        $$('#terminalWorkspace .terminal-window').forEach((win) => {
+            const active = win.dataset.window === activeTerminalTab && !win.classList.contains('minimized-keepalive');
+            win.querySelectorAll('.terminal-frame, .terminal-placeholder').forEach((frame) => frame.classList.toggle('active', active));
+        });
         terminalTabs.forEach((t) => { $$(`[data-window-status="${t.id}"]`).forEach((el) => { el.textContent = t.status || ''; }); });
     }
     requestAnimationFrame(() => broadcastThemeToTerminals(document.documentElement.getAttribute('data-theme') || getPreferredTheme()));
@@ -1970,7 +1980,7 @@ function exitTerminalFullscreen() {
     const workspace = $('#terminalWorkspace');
     const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
     if (workspace?.classList.contains('custom-fullscreen')) {
-        resetTerminalWorkspaceKeyboard();
+        resetTerminalWorkspaceKeyboard({ force: true });
         workspace.classList.remove('custom-fullscreen');
         document.body.classList.remove('terminal-custom-fullscreen-open');
         renderTerminalTabs();
@@ -2120,9 +2130,9 @@ function animateTerminalWindowLayoutFrom(beforeRects, { reason = 'layout-change'
     });
 }
 
-function resetTerminalWorkspaceKeyboard() {
+function resetTerminalWorkspaceKeyboard({ force = false } = {}) {
     const workspace = $('#terminalWorkspace');
-    if (!workspace || (!appKeyboardOpen && !workspace.classList.contains('keyboard-open') && !workspace.classList.contains('keyboard-settling'))) return;
+    if (!workspace || (!force && !appKeyboardOpen && !workspace.classList.contains('keyboard-open') && !workspace.classList.contains('keyboard-settling'))) return;
     const wasOpen = appKeyboardOpen;
     appKeyboardOpen = false;
     appKeyboardBaseline = 0;
@@ -2139,10 +2149,34 @@ function resetTerminalWorkspaceKeyboard() {
     workspace.style.maxHeight = '';
     workspace.style.minHeight = '';
     workspace.style.marginBottom = '';
-    workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
-        frame.style.height = '';
-        frame.style.maxHeight = '';
-    });
+    const clearFrameKeyboardState = (reason = 'parent-workspace-reset') => {
+        workspace.querySelectorAll('.terminal-frame').forEach((frame) => {
+            frame.style.height = '';
+            frame.style.maxHeight = '';
+            frame.style.minHeight = '';
+            try { frame.contentWindow?.postMessage({ source: 'zephyr-app', type: 'reset-mobile-keyboard', reason }, '*'); } catch (_) {}
+        });
+    };
+    clearFrameKeyboardState('parent-workspace-reset');
+    if (force) {
+        [80, 220, 520, 900].forEach((delay) => window.setTimeout(() => {
+            appKeyboardOpen = false;
+            appKeyboardBaseline = 0;
+            appKeyboardPendingMetrics = null;
+            appKeyboardLastSignature = '';
+            workspace.classList.remove('keyboard-open', 'keyboard-settling');
+            document.documentElement.style.setProperty('--app-keyboard-inset', '0px');
+            document.documentElement.style.setProperty('--app-visual-vh', '100vh');
+            document.documentElement.style.setProperty('--app-visual-offset-top', '0px');
+            document.documentElement.style.setProperty('--app-keyboard-top', '100vh');
+            workspace.style.flex = '';
+            workspace.style.height = '';
+            workspace.style.maxHeight = '';
+            workspace.style.minHeight = '';
+            workspace.style.marginBottom = '';
+            clearFrameKeyboardState(`parent-workspace-reset:${delay}`);
+        }, delay));
+    }
     postTerminalKeyboardFreeze(true, 'parent-keyboard-reset-start', { settleMs: 900 });
     window.clearTimeout(appKeyboardFreezeReleaseTimer);
     appKeyboardFreezeReleaseTimer = window.setTimeout(() => postTerminalKeyboardFreeze(false, 'parent-keyboard-reset-settled'), 900);
@@ -2395,6 +2429,7 @@ async function fullscreenTerminalTab(tabId) {
     showFullscreenLoading(compact ? '正在进入移动端全屏...' : '正在切换为单窗口...');
     try {
         if (compact) {
+            resetTerminalWorkspaceKeyboard({ force: true });
             workspace.classList.toggle('custom-fullscreen');
             document.body.classList.toggle('terminal-custom-fullscreen-open', workspace.classList.contains('custom-fullscreen'));
             appKeyboardLastSignature = '';
@@ -5563,6 +5598,8 @@ function bindEvents() {
             return;
         }
         if (e.data.type === 'keyboard-metrics') {
+            const tabId = String(e.data.tabId || '');
+            if (tabId && tabId !== activeTerminalTab) return;
             applyTerminalWorkspaceKeyboard(e.data);
             return;
         }

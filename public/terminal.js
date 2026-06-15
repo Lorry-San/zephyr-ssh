@@ -421,9 +421,10 @@ function scheduleExitMobileTerminalSelectionMode(delay = 900) {
 function scheduleMobileLongPressSelectionGuard(reason = 'touchstart') {
     if (!isTouchKeyboardDevice()) return;
     window.clearTimeout(mobileTerminalSelectionTimer);
+    const delay = isMobileStableInputMode() ? 650 : 260;
     mobileTerminalSelectionTimer = window.setTimeout(() => {
         enterMobileTerminalSelectionMode(reason);
-    }, 260);
+    }, delay);
 }
 
 const viewportAnimationState = {
@@ -934,6 +935,18 @@ window.addEventListener('message', (e) => {
         resizeCommandInput();
         cmdInput.focus?.();
         if (e.data.run !== false) sendCommand();
+        return;
+    }
+    if (e.data.type === 'reset-mobile-keyboard') {
+        keyboardFocusLikely = false;
+        mobileKeyboardUserControlled = false;
+        try { mobileImeProxy?.blur?.(); } catch (_) {}
+        try { cmdInput?.blur?.(); } catch (_) {}
+        finalizeKeyboardClose({ force: true });
+        [80, 220, 520, 900].forEach((delay) => window.setTimeout(() => {
+            if (keyboardFocusLikely || mobileKeyboardUserControlled || document.activeElement === mobileImeProxy || document.activeElement === cmdInput) return;
+            finalizeKeyboardClose({ force: true });
+        }, delay));
         return;
     }
     if (e.data.type === 'keyboard-freeze') {
@@ -7233,7 +7246,13 @@ function updateViewportInsets() {
     const wasReadingHistory = isMobileTerminalAutoFollowLocked() || isTerminalUserReadingHistory();
     const wasAtBottom = isMobileStableAtVisualBottom() || terminalAutoFollowEnabled;
     const metrics = getViewportKeyboardMetrics();
-    const keyboardOpen = metrics.keyboardInset >= 80 && (mobileKeyboardUserControlled || isMobileStableInputMode());
+    const hiddenEmbeddedFrame = embeddedMode && window.innerWidth > 700 && isMobileStableInputMode();
+    if (hiddenEmbeddedFrame) {
+        if (mobileKeyboardOpen || document.documentElement.classList.contains('keyboard-open')) finalizeKeyboardClose({ force: true });
+        return;
+    }
+    const keyboardWantsAvoidance = mobileKeyboardUserControlled || keyboardFocusLikely || mobileKeyboardOpen || isKeyboardAvoidanceTarget();
+    const keyboardOpen = metrics.keyboardInset >= 80 && keyboardWantsAvoidance;
     if (mobileKeyboardUserControlled && !keyboardOpen && mobileKeyboardOpen) {
         // Android/浏览器返回键可能绕过按钮直接收起 IME。网页无法可靠取消系统返回键，
         // 这里至少立即恢复为按钮关闭态，避免状态半开和布局残留。
