@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-mobile-dock-right-open-only';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-visual-color-picker';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -332,11 +332,54 @@ function readCustomThemeColors() {
 
 const COLOR_PICKER_PRESETS = ['#f5f5f7', '#ffffff', '#dedee3', '#1d1d1f', '#6e6e73', '#101114', '#1b1c20', '#303237', '#f7f3ef', '#e1d8cf', '#3f8f82', '#448e96', '#007aff', '#0a84ff', '#bf5a1f', '#ff453a', '#32d74b', '#ffd60a'];
 let activeColorPickerInput = null;
+let activeColorPickerHsv = { h: 210, s: 1, v: 1 };
+function clampColorUnit(value) { return Math.max(0, Math.min(1, Number(value) || 0)); }
 function normalizeHexInputClient(value, fallback = '#000000') {
     const text = String(value || '').trim();
     if (/^#[0-9a-f]{6}$/i.test(text)) return text.toLowerCase();
     if (/^[0-9a-f]{6}$/i.test(text)) return `#${text.toLowerCase()}`;
     return fallback;
+}
+function hexToRgbClient(hex) {
+    const safe = normalizeHexInputClient(hex, '#000000').slice(1);
+    return { r: parseInt(safe.slice(0, 2), 16), g: parseInt(safe.slice(2, 4), 16), b: parseInt(safe.slice(4, 6), 16) };
+}
+function rgbToHexClient({ r, g, b }) {
+    const part = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+    return `#${part(r)}${part(g)}${part(b)}`;
+}
+function rgbToHsvClient(rgb) {
+    const r = (Number(rgb.r) || 0) / 255;
+    const g = (Number(rgb.g) || 0) / 255;
+    const b = (Number(rgb.b) || 0) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let h = 0;
+    if (delta) {
+        if (max === r) h = 60 * (((g - b) / delta) % 6);
+        else if (max === g) h = 60 * (((b - r) / delta) + 2);
+        else h = 60 * (((r - g) / delta) + 4);
+    }
+    if (h < 0) h += 360;
+    return { h, s: max ? delta / max : 0, v: max };
+}
+function hexToHsvClient(hex) { return rgbToHsvClient(hexToRgbClient(hex)); }
+function hsvToRgbClient(h, s, v) {
+    const hue = (((Number(h) || 0) % 360) + 360) % 360;
+    const sat = clampColorUnit(s);
+    const val = clampColorUnit(v);
+    const c = val * sat;
+    const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    const m = val - c;
+    let r = 0, g = 0, b = 0;
+    if (hue < 60) [r, g, b] = [c, x, 0];
+    else if (hue < 120) [r, g, b] = [x, c, 0];
+    else if (hue < 180) [r, g, b] = [0, c, x];
+    else if (hue < 240) [r, g, b] = [0, x, c];
+    else if (hue < 300) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
 }
 function setColorPickerValue(input, value, { dispatch = false } = {}) {
     if (!input) return;
@@ -347,21 +390,83 @@ function setColorPickerValue(input, value, { dispatch = false } = {}) {
     picker?.querySelector('[data-color-swatch]')?.style.setProperty('--picker-color', normalized);
     if (dispatch) input.dispatchEvent(new Event('input', { bubbles: true }));
 }
+function syncColorPickerPanel(color) {
+    const panel = document.getElementById('zephyrColorPickerPanel');
+    if (!panel) return;
+    const normalized = normalizeHexInputClient(color || activeColorPickerInput?.value, '#0a84ff');
+    const next = hexToHsvClient(normalized);
+    if (next.s === 0 && activeColorPickerHsv?.s > 0) next.h = activeColorPickerHsv.h;
+    activeColorPickerHsv = next;
+    panel.style.setProperty('--panel-hue', String(Math.round(next.h)));
+    panel.style.setProperty('--panel-color', normalized);
+    panel.style.setProperty('--panel-sv-x', `${Math.round(next.s * 1000) / 10}%`);
+    panel.style.setProperty('--panel-sv-y', `${Math.round((1 - next.v) * 1000) / 10}%`);
+    const hueInput = panel.querySelector('[data-color-hue]');
+    if (hueInput && document.activeElement !== hueInput) hueInput.value = String(Math.round(next.h));
+    const valueLabel = panel.querySelector('[data-color-value]');
+    if (valueLabel) valueLabel.textContent = normalized;
+}
+function commitActiveColorPickerHsv() {
+    if (!activeColorPickerInput) return;
+    const hex = rgbToHexClient(hsvToRgbClient(activeColorPickerHsv.h, activeColorPickerHsv.s, activeColorPickerHsv.v));
+    setColorPickerValue(activeColorPickerInput, hex, { dispatch: true });
+    syncColorPickerPanel(hex);
+}
+function updateActiveColorFromSvPointer(event, surface) {
+    if (!surface) return;
+    const rect = surface.getBoundingClientRect();
+    const s = clampColorUnit((event.clientX - rect.left) / Math.max(1, rect.width));
+    const v = clampColorUnit(1 - ((event.clientY - rect.top) / Math.max(1, rect.height)));
+    activeColorPickerHsv = { ...activeColorPickerHsv, s, v };
+    commitActiveColorPickerHsv();
+}
 function ensureColorPickerPanel() {
     let panel = document.getElementById('zephyrColorPickerPanel');
     if (panel) return panel;
     panel = document.createElement('div');
     panel.id = 'zephyrColorPickerPanel';
     panel.className = 'zephyr-color-panel hidden';
-    panel.innerHTML = `<div class="color-panel-grid">${COLOR_PICKER_PRESETS.map((color) => `<button type="button" data-color-preset="${color}" style="--preset-color:${color}" aria-label="${color}"></button>`).join('')}</div><div class="color-panel-actions"><button type="button" data-color-close>关闭</button></div>`;
+    panel.innerHTML = `
+        <div class="color-panel-current">
+            <span class="color-panel-current-swatch" data-color-current aria-hidden="true"></span>
+            <span class="color-panel-current-value" data-color-value>#0a84ff</span>
+        </div>
+        <div class="color-palette-sv" data-color-sv aria-label="拖动选择饱和度和明度" role="slider"><span class="color-palette-cursor" aria-hidden="true"></span></div>
+        <label class="color-hue-row"><span>色相</span><input type="range" min="0" max="360" step="1" value="210" data-color-hue aria-label="色相"></label>
+        <div class="color-panel-hint">拖动色盘/色相，或继续直接输入色号。</div>
+        <div class="color-panel-grid" aria-label="常用颜色">${COLOR_PICKER_PRESETS.map((color) => `<button type="button" data-color-preset="${color}" style="--preset-color:${color}" aria-label="选择 ${color}"></button>`).join('')}</div>
+        <div class="color-panel-actions"><button type="button" data-color-close>关闭</button></div>`;
     document.body.appendChild(panel);
     panel.addEventListener('click', (event) => {
         const preset = event.target.closest('[data-color-preset]')?.dataset.colorPreset;
         if (preset && activeColorPickerInput) {
             setColorPickerValue(activeColorPickerInput, preset, { dispatch: true });
+            syncColorPickerPanel(preset);
             return;
         }
         if (event.target.closest('[data-color-close]')) closeColorPickerPanel();
+    });
+    panel.addEventListener('input', (event) => {
+        const hue = event.target.closest('[data-color-hue]');
+        if (!hue || !activeColorPickerInput) return;
+        activeColorPickerHsv = { ...activeColorPickerHsv, h: Math.max(0, Math.min(360, Number(hue.value) || 0)) };
+        commitActiveColorPickerHsv();
+    });
+    panel.addEventListener('pointerdown', (event) => {
+        const surface = event.target.closest('[data-color-sv]');
+        if (!surface || !activeColorPickerInput) return;
+        event.preventDefault();
+        updateActiveColorFromSvPointer(event, surface);
+        surface.setPointerCapture?.(event.pointerId);
+        const onMove = (ev) => { ev.preventDefault(); updateActiveColorFromSvPointer(ev, surface); };
+        const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+        };
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', onUp, { once: true });
+        window.addEventListener('pointercancel', onUp, { once: true });
     });
     return panel;
 }
@@ -373,14 +478,16 @@ function openColorPickerPanel(input, anchor) {
     if (!input || input.disabled) return;
     activeColorPickerInput = input;
     const panel = ensureColorPickerPanel();
+    panel.classList.remove('hidden');
+    syncColorPickerPanel(input.value || '#000000');
     const rect = anchor.getBoundingClientRect();
     const margin = 10;
-    const width = 224;
+    const width = panel.offsetWidth || 288;
+    const height = panel.offsetHeight || 340;
     const left = Math.min(window.innerWidth - width - margin, Math.max(margin, rect.left));
-    const top = Math.min(window.innerHeight - 220 - margin, Math.max(margin, rect.bottom + 8));
+    const top = Math.min(window.innerHeight - height - margin, Math.max(margin, rect.bottom + 8));
     panel.style.left = `${left}px`;
     panel.style.top = `${top}px`;
-    panel.classList.remove('hidden');
 }
 function setupColorPickers() {
     if (setupColorPickers._bound) return;
@@ -389,9 +496,15 @@ function setupColorPickers() {
         setColorPickerValue(input, input.value || '#000000');
         input.addEventListener('input', () => {
             const text = String(input.value || '').trim();
-            if (/^#?[0-9a-f]{6}$/i.test(text)) setColorPickerValue(input, text);
+            if (/^#?[0-9a-f]{6}$/i.test(text)) {
+                setColorPickerValue(input, text);
+                if (activeColorPickerInput === input) syncColorPickerPanel(input.value);
+            }
         });
-        input.addEventListener('blur', () => setColorPickerValue(input, input.value || '#000000'));
+        input.addEventListener('blur', () => {
+            setColorPickerValue(input, input.value || '#000000');
+            if (activeColorPickerInput === input) syncColorPickerPanel(input.value);
+        });
     });
     document.addEventListener('click', (event) => {
         const swatch = event.target.closest('[data-color-swatch]');
@@ -400,8 +513,10 @@ function setupColorPickers() {
             openColorPickerPanel(input, swatch);
             return;
         }
+        if (activeColorPickerInput && event.target.closest('[data-color-picker]')?.querySelector('.color-hex-input') === activeColorPickerInput) return;
         if (!event.target.closest('#zephyrColorPickerPanel')) closeColorPickerPanel();
     });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeColorPickerPanel(); });
 }
 function readTerminalBackgroundAsDataUrl(file) {
     return new Promise((resolve, reject) => {
