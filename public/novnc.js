@@ -1,6 +1,6 @@
 import RFB from '/vendor/novnc/core/rfb.js';
 import KeyTable from '/vendor/novnc/core/input/keysym.js';
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-mobile-dock-right-fix';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-mobile-dock-right-open-only';
 
 const $ = (sel) => document.querySelector(sel);
 const NOVNC_CLIENT_VERSION = '2026-06-14-theme-palettes';
