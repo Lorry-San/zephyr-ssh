@@ -1,12 +1,17 @@
 name: Build Zephyr-SSH Docker Image
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: '镜像 tag'
-        required: true
-        default: 'v1.0.0'
+        description: Docker image tag. Leave empty to use main-<sha>.
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -28,10 +33,16 @@ jobs:
       - name: Set image names
         run: |
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          VERSION_TAG=${{ github.event.inputs.tag }}
-          echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=ghcr.io/${OWNER_LOWER}/zephyr-ssh:${VERSION_TAG}" >> $GITHUB_ENV
-          echo "IMAGE_LATEST=ghcr.io/${OWNER_LOWER}/zephyr-ssh:latest" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ]; then
+            VERSION_TAG="${{ github.event.inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION_TAG="${{ github.ref_name }}"
+          else
+            VERSION_TAG="main-${GITHUB_SHA::7}"
+          fi
+          echo "VERSION_TAG=${VERSION_TAG}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=ghcr.io/${OWNER_LOWER}/zephyr-ssh:${VERSION_TAG}" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=ghcr.io/${OWNER_LOWER}/zephyr-ssh:latest" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -45,44 +56,43 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build --build-arg ZEPHYR_VERSION="${VERSION_TAG}" -t $IMAGE_TAG -t $IMAGE_LATEST .
+          docker build --build-arg ZEPHYR_VERSION="${VERSION_TAG}" -t "$IMAGE_TAG" -t "$IMAGE_LATEST" .
 
       - name: Push Docker image
         run: |
-          docker push $IMAGE_TAG
-          docker push $IMAGE_LATEST
+          docker push "$IMAGE_TAG"
+          docker push "$IMAGE_LATEST"
 
       - name: Generate changelog
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         run: |
           git fetch --tags
-
-          CURRENT_TAG=${{ env.VERSION_TAG }}
-
+          CURRENT_TAG="${VERSION_TAG}"
           PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${CURRENT_TAG}$" | head -n 1)
-
           {
             echo "CHANGELOG<<EOF"
             echo ""
             if [ -z "$PREV_TAG" ]; then
-              echo "## 🚀 初始版本"
+              echo "## Initial release"
               echo ""
               git log --pretty=format:"- %s (%h)"
             else
-              echo "## 🚀 更新内容"
+              echo "## Changes"
               echo ""
-              echo "**对比**: \`$PREV_TAG\` → \`$CURRENT_TAG\`"
+              echo "**Compare**: \`$PREV_TAG\` -> \`$CURRENT_TAG\`"
               echo ""
-              git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)"
+              git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)"
             fi
             echo ""
             echo "EOF"
-          } >> $GITHUB_ENV
+          } >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_TAG }}
-          name: "Zephyr-SSH ${{ env.VERSION_TAG }}"
+          name: Zephyr-SSH ${{ env.VERSION_TAG }}
           body: ${{ env.CHANGELOG }}
           draft: false
           prerelease: false

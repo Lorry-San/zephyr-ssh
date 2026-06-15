@@ -79,6 +79,7 @@
                 <div class="settings-layout">
                     <div class="settings-menu">
                         <button class="settings-tab active" data-settings="security">安全设置</button>
+                        <button class="settings-tab" data-settings="users">用户管理</button>
                         <button class="settings-tab" data-settings="beian">备案信息</button>
                         <button class="settings-tab" data-settings="network">代理池</button>
                         <button class="settings-tab" data-settings="ssh-keys">SSH 密钥库</button>
@@ -103,6 +104,20 @@
                             <h2>Passkey</h2><button class="btn" id="addPasskeyBtn">添加 Passkey</button><div class="mini-list" id="passkeyList"></div>
                             <h2>IP 白名单与防爆破</h2><form id="securityPolicyForm" class="settings-form"><label class="check-line"><input type="checkbox" id="ipWhitelistEnabled"> 启用 IP 白名单</label><textarea id="ipWhitelist" placeholder="每行一个 IP 或 CIDR，例如 192.168.1.0/24"></textarea><label class="check-line"><input type="checkbox" id="bruteForceEnabled"> 启用防爆破封禁</label><input id="bruteForceMaxFailures" type="number" min="1" placeholder="失败次数"><input id="bruteForceBanMinutes" type="number" min="1" placeholder="封禁分钟"><button class="btn btn-primary">保存安全策略</button></form><div class="mini-list" id="ipBanList"></div>
                             <h2>CAPTCHA</h2><form id="captchaForm" class="settings-form"><label class="check-line"><input type="checkbox" id="captchaEnabled"> 启用 CAPTCHA</label><select id="captchaProvider"><option value="turnstile">Cloudflare Turnstile</option><option value="hcaptcha">hCaptcha</option><option value="google">Google reCAPTCHA v2</option><option value="tencent">腾讯云验证码</option><option value="aliyun">阿里云验证码 2.0</option></select><input id="captchaSiteKey" placeholder="Site Key / AppId / CaptchaId"><div class="form-group password-field"><input id="captchaSecretKey" type="password" placeholder="Secret Key / AppSecretKey"><button type="button" id="toggleCaptchaSecret" title="显示/隐藏 CAPTCHA 密钥">👁️</button></div><button type="button" class="link-btn" id="revealCaptchaSecret">查看已保存 CAPTCHA 密钥</button><p class="field-hint">默认隐藏已保存 CAPTCHA 密钥；留空或保持星号不会覆盖已保存密钥。查看时如已开启 TOTP 需输入动态验证码，否则输入当前登录密码。</p><button class="btn btn-primary">保存 CAPTCHA</button></form>
+                        </div>
+                        <div class="settings-panel" id="settings-users">
+                            <div class="panel-title-row"><h2>用户管理</h2><button class="btn" type="button" id="refreshUsersBtn">刷新</button></div>
+                            <form id="userForm" class="settings-form">
+                                <input type="hidden" id="userEditingName">
+                                <input id="userUsername" placeholder="用户名，2-32 位">
+                                <input id="userEmail" type="email" placeholder="邮箱（可选）">
+                                <input id="userPassword" type="password" placeholder="密码；编辑时留空不修改">
+                                <select id="userRole"><option value="user">普通用户</option><option value="admin">管理员</option></select>
+                                <label class="check-line"><input type="checkbox" id="userDisabled"> 禁用账号</label>
+                                <div class="form-actions"><button class="btn btn-primary" type="submit">保存用户</button><button class="btn" type="button" id="resetUserFormBtn">清空</button></div>
+                            </form>
+                            <p class="field-hint">当前版本先提供多账号登录与管理员维护。连接资产仍是全局共享，后续可继续做按用户隔离与共享权限。</p>
+                            <div class="mini-list" id="userList"></div>
                         </div>
                         <div class="settings-panel" id="settings-appearance">
                             <h2>外观设置</h2>

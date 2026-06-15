@@ -120,9 +120,13 @@ function appendSshSessionBuffer(session, data) {
 }
 
 function broadcastSshSession(session, obj) {
-    if (!session?.attachedWs) return;
+    if (!session) return;
     for (const targetWs of [...session.attachedWs]) {
         wsSendJSON(targetWs, obj);
+    }
+    for (const targetRes of [...(session.attachedSse || [])]) {
+        try { targetRes.write(`data: ${JSON.stringify(obj)}\n\n`); }
+        catch { session.attachedSse.delete(targetRes); }
     }
 }
 
@@ -163,7 +167,11 @@ function destroySshTerminalSession(sessionOrId, reason = 'session-destroy') {
     for (const targetWs of [...(session.attachedWs || [])]) {
         try { targetWs._sshTerminalSession = null; } catch {}
     }
+    for (const targetRes of [...(session.attachedSse || [])]) {
+        try { targetRes.end(); } catch {}
+    }
     session.attachedWs?.clear?.();
+    session.attachedSse?.clear?.();
     try { session.sshStream?.end?.(); } catch {}
     try { session.sshStream?.destroy?.(); } catch {}
     [...(session.sshClients || [])].reverse().forEach((client) => {
@@ -279,6 +287,34 @@ function requirePageAuth(req, res, next) {
     next();
 }
 
+function requireAdmin(req, res, next) {
+    const user = storage.getUser(req.session?.username);
+    if (!user || user.disabled) return res.status(401).json({ error: '未登录或账号已禁用' });
+    if (user.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+    req.currentUser = user;
+    next();
+}
+
+function safeUser(user) {
+    if (!user) return null;
+    return {
+        username: user.username,
+        email: user.email || '',
+        role: user.role || 'user',
+        disabled: !!user.disabled,
+        defaultPassword: !!user.defaultPassword,
+        totpEnabled: !!user.totpEnabled,
+        createdAt: user.createdAt || null,
+        updatedAt: user.updatedAt || null,
+    };
+}
+
+function validateUsername(username) {
+    const value = String(username || '').trim();
+    if (!/^[A-Za-z0-9_.@-]{2,32}$/.test(value)) throw new Error('用户名需为 2-32 位字母、数字或 ._@-');
+    return value;
+}
+
 function rejectSocket(socket, statusCode = 401, statusText = 'Unauthorized') {
     try { socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`); } catch {}
     try { socket.destroy(); } catch {}
@@ -330,16 +366,16 @@ function applyConnectionRouteFields(conn, body) {
 
 function verifySensitiveAccess(req, secretInput) {
     const user = storage.getUser(req.session?.username);
-    if (!user) throw new Error('未登录或会话已过期');
+    if (!user) throw new Error('Not authenticated or session expired');
+    if (user.disabled) throw new Error('Account disabled');
     const value = String(secretInput || '').trim();
     if (user.totpEnabled) {
-        if (!verifySync({ secret: user.totpSecret || '', token: value }).valid) throw new Error('动态验证码错误');
+        if (!verifySync({ secret: user.totpSecret || '', token: value }).valid) throw new Error('Invalid TOTP code');
         return { method: 'totp', username: user.username };
     }
-    if (!verifyPassword(value, user.passwordHash)) throw new Error('登录密码错误');
+    if (!verifyPassword(value, user.passwordHash)) throw new Error('Invalid login password');
     return { method: 'password', username: user.username };
 }
-
 function resolveSshKeyForConnection(conn) {
     if (!conn?.sshKeyId) return conn;
     const key = storage.getSshKeyRaw(conn.sshKeyId);
@@ -1511,21 +1547,79 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
-    res.json({ user: { username: req.session.username }, mustChangePassword: !!req.session.mustChangePassword });
+    res.json({ user: safeUser(storage.getUser(req.session.username)), mustChangePassword: !!req.session.mustChangePassword });
 });
 
 app.post('/api/auth/change-password', requireAuth, (req, res) => {
     const { currentPassword, newPassword } = req.body || {};
     if (!newPassword || String(newPassword).length < 4) return res.status(400).json({ error: '新密码至少 4 位' });
-    const data = readJSON(USERS_FILE, { users: [] });
-    const user = data.users.find((u) => u.username === req.session.username);
+    const user = storage.getUser(req.session.username);
     if (!user || !verifyPassword(currentPassword, user.passwordHash)) return res.status(400).json({ error: '当前密码错误' });
-    user.passwordHash = hashPassword(newPassword);
-    user.defaultPassword = false;
-    user.updatedAt = Date.now();
-    writeJSON(USERS_FILE, data);
+    storage.updateUser(user.username, { passwordHash: hashPassword(newPassword), defaultPassword: false });
     req.session.mustChangePassword = false;
     res.json({ ok: true });
+});
+
+app.get('/api/users', requireAuth, requireAdmin, (req, res) => {
+    res.json({ users: storage.getUsersStore().users.map(safeUser) });
+});
+
+app.post('/api/users', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const username = validateUsername(req.body?.username);
+        const password = String(req.body?.password || '');
+        if (password.length < 4) return res.status(400).json({ error: '密码至少 4 位' });
+        const user = storage.createUser({
+            username,
+            passwordHash: hashPassword(password),
+            defaultPassword: true,
+            email: String(req.body?.email || '').trim(),
+            role: req.body?.role === 'admin' ? 'admin' : 'user',
+            disabled: !!req.body?.disabled,
+        });
+        addActivity(`新增用户：${user.username}`);
+        res.json({ user: safeUser(user) });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '创建用户失败' });
+    }
+});
+
+app.put('/api/users/:username', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const username = String(req.params.username || '').trim();
+        const target = storage.getUser(username);
+        if (!target) return res.status(404).json({ error: '用户不存在' });
+        const values = {
+            email: String(req.body?.email || '').trim(),
+            role: req.body?.role === 'admin' ? 'admin' : 'user',
+            disabled: !!req.body?.disabled,
+        };
+        if (target.username === req.session.username && values.disabled) return res.status(400).json({ error: '不能禁用当前登录账号' });
+        if (target.username === req.session.username && values.role !== 'admin') return res.status(400).json({ error: '不能移除当前登录账号的管理员权限' });
+        if (req.body?.password) {
+            const password = String(req.body.password);
+            if (password.length < 4) return res.status(400).json({ error: '密码至少 4 位' });
+            values.passwordHash = hashPassword(password);
+            values.defaultPassword = true;
+        }
+        const user = storage.updateUser(username, values);
+        addActivity(`更新用户：${user.username}`);
+        res.json({ user: safeUser(user) });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '更新用户失败' });
+    }
+});
+
+app.delete('/api/users/:username', requireAuth, requireAdmin, (req, res) => {
+    try {
+        const username = String(req.params.username || '').trim();
+        if (username === req.session.username) return res.status(400).json({ error: '不能删除当前登录账号' });
+        storage.deleteUser(username);
+        addActivity(`删除用户：${username}`);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(400).json({ error: err.message || '删除用户失败' });
+    }
 });
 
 app.post('/api/security/totp/setup', requireAuth, async (req, res) => {
@@ -1643,6 +1737,141 @@ app.post('/api/connections/:id/open', requireAuth, (req, res) => {
     } catch (err) {
         res.status(403).json({ error: err.message || '验证失败' });
     }
+});
+
+function getConnectionForSession(req, body = {}) {
+    const { connectionId, host, port, username, password, privateKey } = body;
+    if (connectionId) {
+        const store = readJSON(CONNECTIONS_FILE, { connections: [] });
+        const conn = (store.connections || []).find((c) => c.id === connectionId);
+        if (!conn) throw new Error('连接不存在或已删除');
+        return conn;
+    }
+    return { host, port: port || 22, username, password: password || '', privateKey: privateKey || '', connectionMode: 'direct' };
+}
+
+function sseWrite(res, obj) {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+app.post('/api/ssh-http/connect', requireAuth, async (req, res) => {
+    const sessionUser = req.session;
+    const body = req.body || {};
+    const requestedSessionId = String(body.sessionId || body.terminalSessionId || body.tabId || body.connectionId || crypto.randomUUID());
+    const existingSession = sshTerminalSessions.get(requestedSessionId);
+    if (existingSession && !existingSession.closed) {
+        if (existingSession.username && existingSession.username !== sessionUser.username) return res.status(403).json({ error: '会话不属于当前用户' });
+        const pty = existingSession.pty || { rows: 24, cols: 80 };
+        return res.json({ ok: true, sessionId: existingSession.id, attached: true, cols: pty.cols, rows: pty.rows });
+    }
+    let routed;
+    try {
+        const conn = getConnectionForSession(req, body);
+        if (!conn.host || !conn.username) throw new Error('主机和用户名不能为空');
+        const initialRows = Number.isFinite(Number(body.rows)) ? Math.min(200, Math.max(2, Math.floor(Number(body.rows)))) : 24;
+        const initialCols = Number.isFinite(Number(body.cols)) ? Math.min(500, Math.max(20, Math.floor(Number(body.cols)))) : 80;
+        routed = await createRoutedSSHConnection(conn, 10000);
+        routed.client.shell({ term: 'xterm-256color', rows: initialRows, cols: initialCols }, (err, stream) => {
+            if (err) {
+                try { routed.client.end(); } catch {}
+                return;
+            }
+            const session = {
+                id: requestedSessionId,
+                connectionId: conn.id || body.connectionId || '',
+                sshClient: routed.client,
+                sshClients: routed.clients || [routed.client],
+                sshStream: stream,
+                attachedWs: new Set(),
+                attachedSse: new Set(),
+                pty: { rows: initialRows, cols: initialCols },
+                outputBuffer: [],
+                createdAt: Date.now(),
+                lastActive: Date.now(),
+                lastDetachedAt: 0,
+                username: sessionUser.username || '',
+                connectionConfig: conn,
+                closed: false,
+            };
+            sshTerminalSessions.set(session.id, session);
+            stream.on('data', (data) => {
+                const text = data.toString('utf-8');
+                appendSshSessionBuffer(session, text);
+                broadcastSshSession(session, { type: 'data', data: text });
+            });
+            stream.stderr.on('data', (data) => {
+                const text = data.toString('utf-8');
+                appendSshSessionBuffer(session, text);
+                broadcastSshSession(session, { type: 'data', data: text });
+            });
+            stream.on('close', (code) => {
+                broadcastSshSession(session, { type: 'close', message: `Shell closed (code=${code})` });
+                destroySshTerminalSession(session, `shell-close-${code ?? 'N/A'}`);
+            });
+            routed.client.on('error', (clientErr) => {
+                broadcastSshSession(session, { type: 'error', message: `SSH 连接失败: ${clientErr.message}` });
+                destroySshTerminalSession(session, 'ssh-error');
+            });
+            routed.client.on('close', () => {
+                if (!session.closed) destroySshTerminalSession(session, 'ssh-close');
+            });
+            if (body.init && typeof body.init === 'string' && body.init.trim()) stream.write(body.init + '\n');
+        });
+        res.json({ ok: true, sessionId: requestedSessionId, cols: initialCols, rows: initialRows });
+    } catch (err) {
+        try { routed?.client?.end?.(); } catch {}
+        res.status(400).json({ error: `SSH 连接失败: ${err.message}` });
+    }
+});
+
+app.get('/api/ssh-http/:sessionId/events', requireAuth, (req, res) => {
+    const session = sshTerminalSessions.get(String(req.params.sessionId || ''));
+    if (!session || session.closed) return res.status(404).end();
+    if (session.username && session.username !== req.session.username) return res.status(403).end();
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    session.attachedSse ||= new Set();
+    session.attachedSse.add(res);
+    const pty = session.pty || { rows: 24, cols: 80 };
+    sseWrite(res, { type: 'ready', sessionId: session.id, attached: true, cols: pty.cols, rows: pty.rows });
+    if (session.outputBuffer.length) sseWrite(res, { type: 'data', data: session.outputBuffer.join('') });
+    const ping = setInterval(() => {
+        try { res.write(': ping\n\n'); } catch {}
+    }, 25000);
+    req.on('close', () => {
+        clearInterval(ping);
+        session.attachedSse?.delete(res);
+    });
+});
+
+app.post('/api/ssh-http/:sessionId/input', requireAuth, (req, res) => {
+    const session = sshTerminalSessions.get(String(req.params.sessionId || ''));
+    if (!session || session.closed) return res.status(404).json({ error: '会话不存在' });
+    if (session.username && session.username !== req.session.username) return res.status(403).json({ error: '会话不属于当前用户' });
+    if (session.sshStream?.writable) session.sshStream.write(String(req.body?.data || ''));
+    session.lastActive = Date.now();
+    res.json({ ok: true });
+});
+
+app.post('/api/ssh-http/:sessionId/resize', requireAuth, (req, res) => {
+    const session = sshTerminalSessions.get(String(req.params.sessionId || ''));
+    if (!session || session.closed) return res.status(404).json({ error: '会话不存在' });
+    if (session.username && session.username !== req.session.username) return res.status(403).json({ error: '会话不属于当前用户' });
+    const rows = Math.floor(Number(req.body?.rows));
+    const cols = Math.floor(Number(req.body?.cols));
+    if (!Number.isFinite(rows) || !Number.isFinite(cols) || rows < 2 || cols < 20 || rows > 200 || cols > 500) return res.status(400).json({ error: '无效终端尺寸' });
+    session.sshStream?.setWindow?.(rows, cols, 0, 0);
+    session.pty = { rows, cols };
+    session.lastActive = Date.now();
+    res.json({ ok: true });
+});
+
+app.post('/api/ssh-http/:sessionId/disconnect', requireAuth, (req, res) => {
+    const session = sshTerminalSessions.get(String(req.params.sessionId || ''));
+    if (session && (!session.username || session.username === req.session.username)) destroySshTerminalSession(session, 'client-disconnect');
+    res.json({ ok: true });
 });
 
 app.get('/api/settings', requireAuth, (req, res) => res.json(safeSettings(storage.getSettings())));

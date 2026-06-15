@@ -167,6 +167,8 @@ const toolbar = topbarActions;  // mobile: original CSS-icon actions row
 // ---------- 全局变量 ----------
 let term = null;
 let wsConnection = null;
+let httpTerminalSessionId = '';
+let httpTerminalEvents = null;
 let isConnected = false;
 let sftpReady = false;
 let currentPath = '.';
@@ -1012,6 +1014,7 @@ window.addEventListener('message', (e) => {
             return;
         }
         requestStableTerminalLayout(reason, { includeResize: true, focus: !!e.data.focus });
+        forceTerminalLayoutSettle(`parent-layout:${reason}`, { focus: !!e.data.focus });
     }
 });
 
@@ -1325,6 +1328,22 @@ function requestStableTerminalLayout(reason = 'stable-layout', { includeResize =
     }, 24);
 }
 
+function forceTerminalLayoutSettle(reason = 'force-layout-settle', { focus = false } = {}) {
+    const wasAtBottom = terminalAutoFollowEnabled || isTerminalAtBottom(undefined, TERMINAL_XTERM_SCROLL_LOCK_THRESHOLD);
+    [0, 80, 180, 360, 720].forEach((delay) => {
+        window.setTimeout(() => {
+            if (!term || !wtermWrapper || document.visibilityState !== 'visible' || !isEmbeddedTerminalFrameVisible()) return;
+            normalizeWTermContainerLayout(`${reason}:phase-${delay}`);
+            repairWTermLayoutAfterVisibilityChange(`${reason}:phase-${delay}`, { sendResize: true, follow: wasAtBottom });
+            repairOversizedWTermRows(`${reason}:phase-${delay}:oversized`, { force: delay >= 180 });
+            if (wasAtBottom) requestTerminalAutoFollow(`${reason}:phase-${delay}:follow`);
+            if (focus && delay === 180 && !isTouchKeyboardDevice()) {
+                try { term?.focus?.(); } catch (_) {}
+            }
+        }, delay);
+    });
+}
+
 function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {}) {
     if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN || !isConnected) return;
     const explicitCols = Math.floor(Number(cols));
@@ -1381,7 +1400,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
             }
             if (lastSentTerminalSize.cols === explicitCols && lastSentTerminalSize.rows === explicitRows && !force) return;
             lastSentTerminalSize = { cols: explicitCols, rows: explicitRows };
-            wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
+            sendTerminalMessage({ type: 'resize', rows: explicitRows, cols: explicitCols });
             logTerminalLayoutDiagnostics('resize:sent', { reason, force, cols: explicitCols, rows: explicitRows });
         }, TERMINAL_RESIZE_DEBOUNCE_MS) };
         return;
@@ -1411,7 +1430,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
         }
         if (lastSentTerminalSize.cols === explicitCols && lastSentTerminalSize.rows === explicitRows && !force) return;
         lastSentTerminalSize = { cols: explicitCols, rows: explicitRows };
-        wsConnection.send(JSON.stringify({ type: 'resize', rows: explicitRows, cols: explicitCols }));
+        sendTerminalMessage({ type: 'resize', rows: explicitRows, cols: explicitCols });
         logTerminalLayoutDiagnostics('resize:sent', { reason, force, cols: explicitCols, rows: explicitRows });
         return;
     }
@@ -1430,7 +1449,7 @@ function sendTerminalResize(cols, rows, { reason = 'direct', force = false } = {
     const nextCols = measured.cols;
     const nextRows = measured.rows;
 
-    wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
+    sendTerminalMessage({ type: 'resize', rows: nextRows, cols: nextCols });
     logTerminalLayoutDiagnostics('resize:sent', {
         reason,
         force,
@@ -6917,7 +6936,7 @@ function restoreMobileStableKeyboardGrid(reason = 'mobile-stable-grid-restore') 
     if (gridChanged) runWithMobileStableResizeBypass(() => updateWTermLocalGridSize(nextCols, nextRows, `${reason}:local`));
     if (sentChanged && wsConnection?.readyState === WebSocket.OPEN && isConnected) {
         lastSentTerminalSize = { cols: nextCols, rows: nextRows };
-        wsConnection.send(JSON.stringify({ type: 'resize', rows: nextRows, cols: nextCols }));
+        sendTerminalMessage({ type: 'resize', rows: nextRows, cols: nextCols });
     }
     requestAnimationFrame(() => {
         normalizeWTermContainerLayout(`${reason}:raf`);
@@ -8381,7 +8400,7 @@ function sendData(data, { normalizeNewlines = false, source = 'unknown', forceFo
         // 本项目仍需 JSON 包装以匹配现有 /ssh 协议，但 payload 保持 WTerm 产生的原始字节序列。
         const payload = fromWTerm ? data : (normalizeNewlines ? normalizeTerminalInputNewlines(data) : data);
         const input = fromWTerm || !applyModifiers ? payload : processModifiers(payload);
-        wsConnection.send(JSON.stringify({ type: 'input', data: input }));
+        sendTerminalMessage({ type: 'input', data: input });
         if (forceFollow) requestTerminalAutoFollow(`${source}:sent`);
         else scheduleTerminalScrollbarUpdate();
     }
@@ -9002,12 +9021,50 @@ function closeWebSocketOnly(reason = '重建连接', { sendDisconnect = false } 
     } catch (_) {}
 }
 
+function closeHttpTerminalOnly({ sendDisconnect = false } = {}) {
+    const sessionId = httpTerminalSessionId;
+    try { httpTerminalEvents?.close?.(); } catch (_) {}
+    httpTerminalEvents = null;
+    httpTerminalSessionId = '';
+    if (sendDisconnect && sessionId) {
+        fetch(`/api/ssh-http/${encodeURIComponent(sessionId)}/disconnect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: '{}',
+            keepalive: true,
+        }).catch(() => {});
+    }
+}
+
+function sendTerminalMessage(message) {
+    if (wsConnection?.readyState === WebSocket.OPEN) {
+        wsConnection.send(JSON.stringify(message));
+        return true;
+    }
+    if (!httpTerminalSessionId) return false;
+    const endpoint = message.type === 'input'
+        ? 'input'
+        : message.type === 'resize'
+            ? 'resize'
+            : '';
+    if (!endpoint) return false;
+    fetch(`/api/ssh-http/${encodeURIComponent(httpTerminalSessionId)}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(message),
+    }).catch((err) => console.warn('[SSH-HTTP]', 'send failed', err));
+    return true;
+}
+
 function disconnect({ userInitiated = true, updateStatus = true, destroyTerminal = true } = {}) {
     userClosedConnection = userInitiated;
     reconnectInProgress = false;
     clearReconnectTimer();
     activeConnectionToken += 1;
     closeWebSocketOnly(userInitiated ? '用户主动断开' : '重建连接', { sendDisconnect: userInitiated });
+    closeHttpTerminalOnly({ sendDisconnect: userInitiated });
     if (destroyTerminal) destroyTerminalInstance();
     isConnected = false;
     sftpReady = false;
@@ -9026,6 +9083,12 @@ function syncFeaturePanelsAfterConnection() {
     if (dockerPullBtn) dockerPullBtn.disabled = false;
     
     // 现在重新初始化打开的面板
+    if (httpTerminalSessionId) {
+        if (fileManager?.classList.contains('open') || dockerPanel?.classList.contains('open')) {
+            showToast('当前使用 HTTP 兼容通道，文件管理和 Docker 面板需要 WebSocket。', 'info', 4200);
+        }
+        return;
+    }
     if (fileManager?.classList.contains('open')) {
         initSFTP();
     }
@@ -9055,7 +9118,13 @@ async function startFreshConnection({ message = '正在建立 SSH 连接...', re
     setStatus('connecting', message);
     if (resetAttempts) reconnectAttempts = 0;
     await initWTerm(token, { followOnConnect });
-    await connectWebSocket(token, { followOnConnect });
+    try {
+        await connectWebSocket(token, { followOnConnect });
+    } catch (err) {
+        console.warn('[SSH] WebSocket failed, trying HTTP fallback', err);
+        setStatus('connecting', 'WebSocket 不可用，正在切换 HTTP 兼容通道...');
+        await connectHttpTerminal(token, { followOnConnect });
+    }
     if (token !== activeConnectionToken) throw new Error('连接已被新的会话替换');
     syncFeaturePanelsAfterConnection();
     if (!isTouchKeyboardDevice()) scheduleTerminalResize();
@@ -9297,6 +9366,96 @@ function connectWebSocket(connectionToken = activeConnectionToken, { followOnCon
 
         if (connectionToken === activeConnectionToken) wsConnection = ws;
         else { try { ws.close(); } catch (_) {} }
+    });
+}
+
+async function connectHttpTerminal(connectionToken = activeConnectionToken, { followOnConnect = true } = {}) {
+    writeTerminalData._mobileFirstDataFlushed = false;
+    closeWebSocketOnly('http-fallback');
+    closeHttpTerminalOnly({ sendDisconnect: false });
+    const initialSize = getInitialTerminalSize();
+    const response = await fetch('/api/ssh-http/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            sessionId: params.tabId || params.sessionId || params.connectionId || '',
+            connectionId: params.connectionId || '',
+            host: params.host,
+            port: params.port,
+            username: params.username,
+            password: params.password || '',
+            privateKey: params.privateKey || '',
+            init: params.init || '',
+            cols: initialSize.cols,
+            rows: initialSize.rows,
+        }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'HTTP terminal connect failed');
+    if (connectionToken !== activeConnectionToken) throw new Error('connection cancelled');
+    httpTerminalSessionId = payload.sessionId || params.tabId || params.sessionId || params.connectionId || '';
+    if (!httpTerminalSessionId) throw new Error('HTTP terminal session id missing');
+    return new Promise((resolve, reject) => {
+        let ready = false;
+        const events = new EventSource(`/api/ssh-http/${encodeURIComponent(httpTerminalSessionId)}/events`);
+        httpTerminalEvents = events;
+        const timeout = window.setTimeout(() => {
+            if (!ready) {
+                try { events.close(); } catch (_) {}
+                reject(new Error('HTTP terminal ready timeout'));
+            }
+        }, 12000);
+        events.onmessage = (event) => {
+            if (connectionToken !== activeConnectionToken) return;
+            let msg;
+            try { msg = JSON.parse(event.data); } catch (_) { return; }
+            switch (msg.type) {
+                case 'ready': {
+                    ready = true;
+                    window.clearTimeout(timeout);
+                    isConnected = true;
+                    const readyCols = Math.floor(Number(msg.cols || initialSize.cols));
+                    const readyRows = Math.floor(Number(msg.rows || initialSize.rows));
+                    lastSentTerminalSize = { cols: readyCols, rows: readyRows };
+                    resizeWTermSafely(readyCols, readyRows, msg.attached ? 'http-attach-existing-pty' : 'http-ready-pty');
+                    setStatus('connected', '已连接（HTTP 兼容通道）');
+                    if (!isTouchKeyboardDevice() && term?.focus) term.focus();
+                    reconnectAttempts = 0;
+                    if (followOnConnect) requestAnimationFrame(() => requestTerminalAutoFollow('http-connect-ready'));
+                    requestInitialMobileRenderFlush('http-connect-ready');
+                    resolve(events);
+                    break;
+                }
+                case 'data':
+                case 'banner':
+                    writeTerminalData(msg.data || '');
+                    if (isTouchKeyboardDevice() && !writeTerminalData._mobileFirstDataFlushed) {
+                        writeTerminalData._mobileFirstDataFlushed = true;
+                        requestInitialMobileRenderFlush('http-first-data');
+                    }
+                    break;
+                case 'error':
+                    setStatus('error', msg.message || 'HTTP terminal error');
+                    if (!ready) reject(new Error(msg.message || 'HTTP terminal error'));
+                    break;
+                case 'close':
+                    setStatus('disconnected', msg.message || '会话已关闭');
+                    try { events.close(); } catch (_) {}
+                    if (!userClosedConnection) startAutoReconnect(msg.message || 'HTTP terminal closed');
+                    else if (embeddedMode) notifyParentCloseRequest('ssh-session-close');
+                    break;
+            }
+        };
+        events.onerror = () => {
+            if (connectionToken !== activeConnectionToken) return;
+            if (!ready) {
+                window.clearTimeout(timeout);
+                reject(new Error('HTTP terminal event stream failed'));
+                return;
+            }
+            if (!userClosedConnection) startAutoReconnect('HTTP terminal event stream disconnected');
+        };
     });
 }
 

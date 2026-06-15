@@ -234,7 +234,9 @@ function init({ hashPassword }) {
             passwordHash TEXT NOT NULL,
             defaultPassword INTEGER DEFAULT 0,
             createdAt INTEGER,
-            updatedAt INTEGER
+            updatedAt INTEGER,
+            role TEXT DEFAULT 'user',
+            disabled INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS connections (
             id TEXT PRIMARY KEY,
@@ -335,6 +337,8 @@ function init({ hashPassword }) {
     addColumnIfMissing('users', 'totpSecret', 'TEXT');
     addColumnIfMissing('users', 'failedLoginCount', 'INTEGER DEFAULT 0');
     addColumnIfMissing('users', 'lockedUntil', 'INTEGER');
+    addColumnIfMissing('users', 'role', "TEXT DEFAULT 'user'");
+    addColumnIfMissing('users', 'disabled', 'INTEGER DEFAULT 0');
     addColumnIfMissing('connections', 'jumpHostIds', "TEXT DEFAULT '[]'");
     addColumnIfMissing('connections', 'sshKeyId', 'TEXT');
     addColumnIfMissing('proxies', 'type', "TEXT DEFAULT 'socks5'");
@@ -343,8 +347,13 @@ function init({ hashPassword }) {
     if (db.prepare('SELECT COUNT(*) AS c FROM users').get().c === 0) {
         const legacy = readJSONFile(USERS_FILE, { users: [] });
         const users = legacy.users?.length ? legacy.users : [{ username: 'admin', passwordHash: hashPassword('admin'), defaultPassword: true, createdAt: now() }];
-        const stmt = db.prepare('INSERT OR REPLACE INTO users (username,passwordHash,defaultPassword,createdAt,updatedAt) VALUES (@username,@passwordHash,@defaultPassword,@createdAt,@updatedAt)');
-        users.forEach((u) => stmt.run({ username: u.username, passwordHash: u.passwordHash, defaultPassword: u.defaultPassword ? 1 : 0, createdAt: u.createdAt || now(), updatedAt: u.updatedAt || null }));
+        const stmt = db.prepare('INSERT OR REPLACE INTO users (username,passwordHash,defaultPassword,createdAt,updatedAt,role,disabled) VALUES (@username,@passwordHash,@defaultPassword,@createdAt,@updatedAt,@role,@disabled)');
+        users.forEach((u, index) => stmt.run({ username: u.username, passwordHash: u.passwordHash, defaultPassword: u.defaultPassword ? 1 : 0, createdAt: u.createdAt || now(), updatedAt: u.updatedAt || null, role: u.role || (index === 0 ? 'admin' : 'user'), disabled: u.disabled ? 1 : 0 }));
+    }
+    const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role='admin'").get().c;
+    if (!adminCount) {
+        const first = db.prepare('SELECT username FROM users ORDER BY createdAt LIMIT 1').get();
+        if (first?.username) db.prepare("UPDATE users SET role='admin' WHERE username=?").run(first.username);
     }
     if (db.prepare('SELECT COUNT(*) AS c FROM connections').get().c === 0) {
         const legacy = readJSONFile(CONNECTIONS_FILE, { connections: [], activities: [] });
@@ -456,15 +465,36 @@ function updateSettings(values) {
     return getSettings();
 }
 
-function normalizeUser(u) { const plain = decryptUser(u); return { ...plain, defaultPassword: !!plain.defaultPassword, totpEnabled: !!plain.totpEnabled }; }
+function normalizeUser(u) { const plain = decryptUser(u); return { ...plain, defaultPassword: !!plain.defaultPassword, totpEnabled: !!plain.totpEnabled, role: plain.role || 'user', disabled: !!plain.disabled }; }
 function getUsersStore() { return { users: db.prepare('SELECT * FROM users ORDER BY createdAt').all().map(normalizeUser) }; }
 function saveUsersStore(store) {
-    const tx = db.transaction((users) => { db.prepare('DELETE FROM users').run(); const stmt = db.prepare('INSERT INTO users (username,passwordHash,defaultPassword,createdAt,updatedAt,email,totpEnabled,totpSecret,failedLoginCount,lockedUntil) VALUES (@username,@passwordHash,@defaultPassword,@createdAt,@updatedAt,@email,@totpEnabled,@totpSecret,@failedLoginCount,@lockedUntil)'); users.forEach((u) => { const safe = encryptUser(u); stmt.run({ ...safe, email: safe.email || '', totpEnabled: safe.totpEnabled ? 1 : 0, totpSecret: safe.totpSecret || null, failedLoginCount: Number(safe.failedLoginCount) || 0, lockedUntil: safe.lockedUntil || null, defaultPassword: safe.defaultPassword ? 1 : 0 }); }); });
+    const tx = db.transaction((users) => { db.prepare('DELETE FROM users').run(); const stmt = db.prepare('INSERT INTO users (username,passwordHash,defaultPassword,createdAt,updatedAt,email,totpEnabled,totpSecret,failedLoginCount,lockedUntil,role,disabled) VALUES (@username,@passwordHash,@defaultPassword,@createdAt,@updatedAt,@email,@totpEnabled,@totpSecret,@failedLoginCount,@lockedUntil,@role,@disabled)'); users.forEach((u) => { const safe = encryptUser(u); stmt.run({ ...safe, email: safe.email || '', totpEnabled: safe.totpEnabled ? 1 : 0, totpSecret: safe.totpSecret || null, failedLoginCount: Number(safe.failedLoginCount) || 0, lockedUntil: safe.lockedUntil || null, defaultPassword: safe.defaultPassword ? 1 : 0, role: safe.role || 'user', disabled: safe.disabled ? 1 : 0 }); }); });
     tx(store.users || []);
 }
 function getUser(username) { const u = db.prepare('SELECT * FROM users WHERE username=?').get(username); return u ? normalizeUser(u) : null; }
 function getFirstUser() { const u = db.prepare('SELECT * FROM users ORDER BY createdAt LIMIT 1').get(); return u ? normalizeUser(u) : null; }
-function updateUser(username, values) { const old = getUser(username); if (!old) return null; const next = { ...old, ...values, updatedAt: now(), defaultPassword: values.defaultPassword ?? old.defaultPassword ? 1 : 0, totpEnabled: values.totpEnabled ?? old.totpEnabled ? 1 : 0 }; const safe = encryptUser(next); db.prepare('UPDATE users SET passwordHash=@passwordHash, defaultPassword=@defaultPassword, updatedAt=@updatedAt, email=@email, totpEnabled=@totpEnabled, totpSecret=@totpSecret, failedLoginCount=@failedLoginCount, lockedUntil=@lockedUntil WHERE username=@username').run({ ...safe, email: safe.email || '', totpSecret: safe.totpSecret || null, failedLoginCount: Number(safe.failedLoginCount) || 0, lockedUntil: safe.lockedUntil || null }); return getUser(username); }
+function updateUser(username, values) { const old = getUser(username); if (!old) return null; const next = { ...old, ...values, updatedAt: now(), defaultPassword: values.defaultPassword ?? old.defaultPassword ? 1 : 0, totpEnabled: values.totpEnabled ?? old.totpEnabled ? 1 : 0, disabled: values.disabled ?? old.disabled ? 1 : 0, role: values.role || old.role || 'user' }; const safe = encryptUser(next); db.prepare('UPDATE users SET passwordHash=@passwordHash, defaultPassword=@defaultPassword, updatedAt=@updatedAt, email=@email, totpEnabled=@totpEnabled, totpSecret=@totpSecret, failedLoginCount=@failedLoginCount, lockedUntil=@lockedUntil, role=@role, disabled=@disabled WHERE username=@username').run({ ...safe, email: safe.email || '', totpSecret: safe.totpSecret || null, failedLoginCount: Number(safe.failedLoginCount) || 0, lockedUntil: safe.lockedUntil || null, role: safe.role || 'user', disabled: safe.disabled ? 1 : 0 }); return getUser(username); }
+function createUser(user) {
+    const username = String(user?.username || '').trim();
+    if (!username) throw new Error('用户名不能为空');
+    if (getUser(username)) throw new Error('用户名已存在');
+    const safe = encryptUser({ username, passwordHash: user.passwordHash, defaultPassword: user.defaultPassword !== false, createdAt: now(), updatedAt: null, email: user.email || '', totpEnabled: false, totpSecret: null, failedLoginCount: 0, lockedUntil: null, role: user.role === 'admin' ? 'admin' : 'user', disabled: !!user.disabled });
+    db.prepare('INSERT INTO users (username,passwordHash,defaultPassword,createdAt,updatedAt,email,totpEnabled,totpSecret,failedLoginCount,lockedUntil,role,disabled) VALUES (@username,@passwordHash,@defaultPassword,@createdAt,@updatedAt,@email,@totpEnabled,@totpSecret,@failedLoginCount,@lockedUntil,@role,@disabled)').run({ ...safe, defaultPassword: safe.defaultPassword ? 1 : 0, totpEnabled: 0, disabled: safe.disabled ? 1 : 0, role: safe.role || 'user', email: safe.email || '', totpSecret: null, failedLoginCount: 0, lockedUntil: null });
+    return getUser(username);
+}
+function deleteUser(username) {
+    const user = getUser(username);
+    if (!user) return false;
+    const adminCount = db.prepare("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND disabled=0").get().c;
+    if (user.role === 'admin' && adminCount <= 1) throw new Error('不能删除最后一个启用的管理员');
+    const tx = db.transaction(() => {
+        db.prepare('DELETE FROM passkeys WHERE username=?').run(username);
+        db.prepare('DELETE FROM password_reset_codes WHERE username=?').run(username);
+        db.prepare('DELETE FROM users WHERE username=?').run(username);
+    });
+    tx();
+    return true;
+}
 function renameUser(oldUsername, newUsername) {
     const old = getUser(oldUsername);
     if (!old) return null;
@@ -525,4 +555,4 @@ function deletePasskey(username, id) { db.prepare('DELETE FROM passkeys WHERE us
 function rawDb() { return db; }
 function close() { if (db) { db.close(); db = null; } }
 
-module.exports = { init, getUsersStore, saveUsersStore, getUser, getFirstUser, updateUser, renameUser, getConnectionsStore, saveConnectionsStore, getSettings, updateSettings, addActivity, clearActivities, listProxies, getProxyRaw, saveProxy, deleteProxy, listSshKeys, getSshKeyRaw, saveSshKey, deleteSshKey, listJumpHosts, saveJumpHost, deleteJumpHost, addLoginEvent, listLoginEvents, clearLoginEvents, getIpBan, saveIpBan, clearIpBan, listIpBans, createResetCode, findResetCode, markResetCodeUsed, listPasskeys, savePasskey, getPasskeyByCredentialId, updatePasskeyCounter, deletePasskey, rawDb, close };
+module.exports = { init, getUsersStore, saveUsersStore, getUser, getFirstUser, updateUser, createUser, deleteUser, renameUser, getConnectionsStore, saveConnectionsStore, getSettings, updateSettings, addActivity, clearActivities, listProxies, getProxyRaw, saveProxy, deleteProxy, listSshKeys, getSshKeyRaw, saveSshKey, deleteSshKey, listJumpHosts, saveJumpHost, deleteJumpHost, addLoginEvent, listLoginEvents, clearLoginEvents, getIpBan, saveIpBan, clearIpBan, listIpBans, createResetCode, findResetCode, markResetCodeUsed, listPasskeys, savePasskey, getPasskeyByCredentialId, updatePasskeyCounter, deletePasskey, rawDb, close };

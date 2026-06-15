@@ -4,6 +4,8 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 let connections = [], activities = [], proxies = [], jumpHosts = [], sshKeys = [], settings = {};
+let currentUser = null;
+let users = [];
 let aiSettingsState = null;
 let aiChatSessions = [];
 let aiCurrentSessionId = null;
@@ -1954,6 +1956,9 @@ function renderTerminalWorkspace() {
         workspace.appendChild(splitterY);
     }
     scheduleTerminalLayoutStabilize('render-terminal-workspace', { focus: true });
+    [80, 220, 520, 900].forEach((delay) => {
+        window.setTimeout(() => scheduleTerminalLayoutStabilize(`render-terminal-workspace-settle-${delay}`, { focus: delay === 220 }), delay);
+    });
 }
 function renderTerminalTabs({ rebuildWorkspace = true } = {}) {
     syncVisualLayout({ preserve: true });
@@ -2030,6 +2035,10 @@ function closeTerminalTab(tabId, { reason = 'manual' } = {}) {
             switchView('terminal');
         }
         renderTerminalTabs();
+        scheduleTerminalLayoutStabilize(`close-terminal-tab:${reason}`, { focus: true, tabId: activeTerminalTab });
+        [120, 360, 760].forEach((delay) => {
+            window.setTimeout(() => scheduleTerminalLayoutStabilize(`close-terminal-tab-settle:${delay}`, { focus: delay === 360, tabId: activeTerminalTab }), delay);
+        });
     }, 260);
 }
 
@@ -5352,6 +5361,60 @@ function bindConnectionPressFeedback(root = document) {
     }, true);
 }
 
+function resetUserForm() {
+    $('#userForm')?.reset?.();
+    if ($('#userEditingName')) $('#userEditingName').value = '';
+    if ($('#userUsername')) $('#userUsername').disabled = false;
+    if ($('#userRole')) $('#userRole').value = 'user';
+    if ($('#userDisabled')) $('#userDisabled').checked = false;
+}
+
+function renderUsers() {
+    const tab = document.querySelector('.settings-tab[data-settings="users"]');
+    const panel = $('#settings-users');
+    const isAdmin = currentUser?.role === 'admin';
+    if (tab) tab.style.display = isAdmin ? '' : 'none';
+    if (panel && !isAdmin) panel.classList.remove('active');
+    const list = $('#userList');
+    if (!list) return;
+    if (!isAdmin) {
+        list.innerHTML = '<p class="muted">需要管理员权限。</p>';
+        return;
+    }
+    list.innerHTML = users.map((u) => `<div class="mini-item"><b>${escapeHtml(u.username)}</b><span>${escapeHtml(u.role === 'admin' ? '管理员' : '普通用户')} · ${u.disabled ? '已禁用' : '启用'}${u.defaultPassword ? ' · 首次登录需改密' : ''}${u.email ? ` · ${escapeHtml(u.email)}` : ''}</span><button data-edit-user="${escapeHtml(u.username)}">编辑</button><button data-delete-user="${escapeHtml(u.username)}" class="danger">删除</button></div>`).join('') || '<p class="muted">暂无用户</p>';
+}
+
+async function loadUsers() {
+    if (currentUser?.role !== 'admin') {
+        users = [];
+        renderUsers();
+        return;
+    }
+    const data = await api('/api/users').catch(() => ({ users: [] }));
+    users = data.users || [];
+    renderUsers();
+}
+
+async function saveUser(e) {
+    e.preventDefault();
+    const editingName = $('#userEditingName').value;
+    const payload = {
+        username: $('#userUsername').value.trim(),
+        email: $('#userEmail').value.trim(),
+        password: $('#userPassword').value,
+        role: $('#userRole').value,
+        disabled: $('#userDisabled').checked,
+    };
+    if (editingName && !payload.password) delete payload.password;
+    await api(editingName ? `/api/users/${encodeURIComponent(editingName)}` : '/api/users', {
+        method: editingName ? 'PUT' : 'POST',
+        body: JSON.stringify(payload),
+    });
+    resetUserForm();
+    await loadUsers();
+    toast(editingName ? '用户已更新' : '用户已创建');
+}
+
 function bindEvents() {
     bindConnectionPressFeedback();
     $$('.nav-tab').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -5665,6 +5728,30 @@ function bindEvents() {
         renderTerminalTabs();
     });
     $('#remoteExecForm').addEventListener('submit', remoteExecute); $('#beianForm').addEventListener('submit', saveBeian); $('#proxyForm').addEventListener('submit', saveProxy); $('#sshKeyForm').addEventListener('submit', saveSshKey); $('#resetSshKeyForm').addEventListener('click', resetSshKeyForm);
+    $('#userForm')?.addEventListener('submit', (e) => saveUser(e).catch((err) => toast(err.message || '保存用户失败')));
+    $('#resetUserFormBtn')?.addEventListener('click', resetUserForm);
+    $('#refreshUsersBtn')?.addEventListener('click', () => loadUsers().catch((err) => toast(err.message || '加载用户失败')));
+    $('#userList')?.addEventListener('click', async (e) => {
+        const editName = e.target.dataset.editUser;
+        const deleteName = e.target.dataset.deleteUser;
+        if (editName) {
+            const user = users.find((item) => item.username === editName);
+            if (!user) return;
+            $('#userEditingName').value = user.username;
+            $('#userUsername').value = user.username;
+            $('#userUsername').disabled = true;
+            $('#userEmail').value = user.email || '';
+            $('#userPassword').value = '';
+            $('#userRole').value = user.role || 'user';
+            $('#userDisabled').checked = !!user.disabled;
+            return;
+        }
+        if (deleteName && confirm(`确定删除用户 ${deleteName}？`)) {
+            await api(`/api/users/${encodeURIComponent(deleteName)}`, { method: 'DELETE' });
+            await loadUsers();
+            toast('用户已删除');
+        }
+    });
     setupAiAssistant();
     $('#brandIconFile').addEventListener('change', async (e) => { try { const dataUrl = await readImageAsDataUrl(e.target.files?.[0]); if (!dataUrl) return; pendingBrandIcon = dataUrl; $('#brandIconPreview').innerHTML = iconHtml(dataUrl); console.debug('[appearance-client]', 'brand icon file loaded', { size: e.target.files?.[0]?.size || 0, type: e.target.files?.[0]?.type || '' }); } catch (err) { e.target.value = ''; toast(err.message); } });
     setupAppearanceControls();
@@ -5690,5 +5777,5 @@ function bindEvents() {
     $('#clearLoginEventsBtn').addEventListener('click', async () => { if (!confirm('确定清理登录事件日志？')) return; await api('/api/security/login-events', { method: 'DELETE' }); await loadSecurityLists(); toast('登录事件已清理'); });
     $('#importDataForm').addEventListener('submit', async (e) => { e.preventDefault(); if (!confirm('导入会覆盖当前数据库，系统会先生成本地备份。继续？')) return; const fd = new FormData(); fd.append('backup', $('#backupFile').files[0]); fd.append('loginPassword', $('#importLoginPassword').value); fd.append('backupPassword', $('#backupPassword').value); const res = await fetch('/api/data/import', { method: 'POST', body: fd, credentials: 'same-origin' }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || '导入失败'); toast(data.message || '导入完成'); });
 }
-async function init() { applyTheme(getPreferredTheme()); try { const me = await api('/api/auth/me'); if (me.mustChangePassword) location.href = '/'; bindEvents(); await loadSettings(); await migrateLocalSnippetsToServer(); renderSnippetSettings(); await loadConnections(); await loadNetwork(); } catch { location.href = '/'; } }
+async function init() { applyTheme(getPreferredTheme()); try { const me = await api('/api/auth/me'); currentUser = me.user || null; if (me.mustChangePassword) location.href = '/'; bindEvents(); await loadSettings(); await loadUsers(); await migrateLocalSnippetsToServer(); renderSnippetSettings(); await loadConnections(); await loadNetwork(); } catch { location.href = '/'; } }
 init();
