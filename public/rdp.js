@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-macos-restraint-v3';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-snippet-panel-menu-fix';
 
 const $ = (sel) => document.querySelector(sel);
 const RDP_CLIENT_VERSION = '2026-06-14-theme-palettes';

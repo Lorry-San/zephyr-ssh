@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-macos-restraint-v3';
+import { applyZephyrColorScheme } from './theme-runtime.js?v=20260615-snippet-panel-menu-fix';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -6030,8 +6030,11 @@ function resetFeatureStateAfterReconnect() {
 }
 
 dockerBtn?.addEventListener('click', () => {
-    if (dockerPanel.classList.contains('open')) hideDockerPanel();
-    else showDockerPanel();
+    if (dockerPanel.classList.contains('open')) {
+        bringPanelToFront(dockerPanel);
+        return;
+    }
+    showDockerPanel();
 });
 dockerCloseBtn?.addEventListener('click', hideDockerPanel);
 dockerRefreshBtn?.addEventListener('click', () => checkDockerStatus({ force: true }));
@@ -8025,6 +8028,7 @@ function openPanelLayoutMenu(button, panel) {
         <button data-layout="close" class="panel-layout-close" title="关闭窗口" aria-label="关闭窗口"><span class="panel-layout-icon close"></span></button>
     `;
     menu.style.transition = 'none';
+    menu.style.zIndex = String(Math.max(10000, allocateFloatingPanelZIndex(panel) + 20));
     document.body.appendChild(menu);
     panelLayoutMenu = menu;
     positionPanelLayoutMenu(menu, button, { collapsed: true });
@@ -8034,6 +8038,7 @@ function openPanelLayoutMenu(button, panel) {
     void menu.offsetWidth;
     requestAnimationFrame(() => {
         menu.style.removeProperty('transition');
+        button?.classList.add('active-layout');
         menu.classList.add('island-open');
         positionPanelLayoutMenu(menu, button, { collapsed: false });
         window.setTimeout(() => {
@@ -8166,7 +8171,10 @@ function bringPanelToFront(panel) {
 
 function setupFloatingPanel(panel, options) {
     ensureFloatingPanel(panel, options);
-    panel.addEventListener('pointerdown', () => bringPanelToFront(panel));
+    panel.addEventListener('pointerdown', (event) => {
+        if (event.target.closest('.panel-traffic-btn, .panel-layout-menu')) return;
+        bringPanelToFront(panel);
+    });
 }
 
 function setupPanelDrag() {

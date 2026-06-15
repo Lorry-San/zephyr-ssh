@@ -1,4 +1,4 @@
-import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-macos-restraint-v3';
+import { applyZephyrColorScheme, DEFAULT_CUSTOM_THEME_COLORS, normalizeCustomThemeColors, zephyrBrandIconHtml, zephyrFaviconHref } from './theme-runtime.js?v=20260615-snippet-panel-menu-fix';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -5110,7 +5110,6 @@ async function saveSnippet(e) {
 }
 function setupSnippetSettings() {
     $('#snippetForm')?.addEventListener('submit', saveSnippet);
-    $('#addSnippetBtn')?.addEventListener('click', resetSnippetForm);
     $('#cancelSnippetEditBtn')?.addEventListener('click', resetSnippetForm);
     $('#snippetSettingsList')?.addEventListener('click', (e) => {
         const editId = e.target.closest('[data-edit-snippet]')?.dataset.editSnippet;

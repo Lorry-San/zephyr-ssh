@@ -3247,7 +3247,7 @@ html.keyboard-open .terminal-page {
 .panel-titlebar { cursor: default; user-select: none; }
 .panel-layout-menu {
     position: fixed;
-    z-index: 100;
+    z-index: var(--panel-layout-menu-z, 10020);
     width: var(--panel-island-menu-width, min(236px, calc(100vw - 16px)));
     height: var(--panel-island-menu-height, 50px);
     min-height: 0;

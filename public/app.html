@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Zephyr</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌬️</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20260615-macos-restraint-v3">
+    <link rel="stylesheet" href="style.css?v=20260615-snippet-panel-menu-fix">
 </head>
 <body class="app-body">
     <div class="app-shell">
@@ -224,8 +224,7 @@
                             <div class="mini-list" id="sshKeyList"></div>
                         </div>
                         <div class="settings-panel" id="settings-snippets">
-                            <div class="panel-title-row"><h2>SSH 代码片段</h2><button class="btn btn-primary" type="button" id="addSnippetBtn">添加片段</button></div>
-                            <p class="muted">类似 Termius Snippets：保存常用 Shell 命令，在 SSH 终端中一键填入或直接执行。</p>
+                            <div class="panel-title-row"><h2>SSH 代码片段</h2></div>
                             <form id="snippetForm" class="settings-form snippet-form">
                                 <input id="snippetId" type="hidden">
                                 <label>名称</label>
@@ -430,6 +429,6 @@
     </div>
 
     <div class="toast" id="toast"></div>
-    <script src="app.js?v=20260615-macos-restraint-v3" type="module"></script>
+    <script src="app.js?v=20260615-snippet-panel-menu-fix" type="module"></script>
 </body>
 </html>
